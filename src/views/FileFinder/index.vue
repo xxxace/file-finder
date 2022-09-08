@@ -8,7 +8,8 @@
 
             <n-space style="align-self: flex-end;" align="center">
                 <n-badge :value="fileList.length" />
-                <n-input ref="searchInput" placeholder="搜索" size="small" @input="handleFilter">
+                <n-input ref="searchInput" v-model:value="searchText" placeholder="搜索" size="small" clearable
+                    @input="handleFilter">
                     <template #prefix>
                         <n-icon :component="Search" />
                     </template>
@@ -27,11 +28,13 @@
                 <span :title="item.name">{{item.name}}</span>
             </div>
         </div>
-        <n-popover :show="popover.visible" :x="popover.x" :y="popover.y" trigger="manual" placement="bottom">
+        <n-popover :show="popover.visible" :x="popover.x" :y="popover.y" trigger="manual" placement="bottom"
+            @clickoutside="popover.visible = false">
             <n-space>
-                <div v-for="(item) in popover.files" class="file-item" :key="item" @dblclick="openFile()">
+                <div v-for="(item) in popover.files" class="file-item" :key="item" @dblclick="openFile(item)"
+                    :title="item">
                     <img :src="blankIcon" :alt="item" width="64">
-                    <span :title="item">{{item}}</span>
+                    <span>{{item}}</span>
                 </div>
             </n-space>
         </n-popover>
@@ -55,16 +58,20 @@ const popover = ref<{
     x: number;
     y: number;
     files: string[];
+    cover: FileInfo | undefined;
 }>({
     visible: false,
     x: 0,
     y: 0,
-    files: []
+    files: [],
+    cover: undefined
 });
+const searchText = ref('');
 const searchInput = ref<typeof NInput | null>(null);
 const dataSource = ref<FileInfo[]>([]);
 const fileList = ref<FileInfo[]>([]);
 const fetchCache: { [key: string]: FileInfo[] } = {};
+const searchStack = ref<string[]>([]);
 const openStack = ref<{ path: string; mode: 'folder' | 'cover' }[]>([]);
 const loading = useLoadingBar();
 
@@ -72,6 +79,7 @@ const handleOpen = (e: MouseEvent, item: FileInfo) => {
     if (item.type === 'folder') {
         const path = `${dir.value}/${item.name}`
         openStack.value.push({ path, mode: 'cover' });
+        searchStack.value.push(searchText.value);
         fetchFolder(path, 'cover');
     } else {
         if (e && item.files && item.files.length > 1) {
@@ -80,6 +88,7 @@ const handleOpen = (e: MouseEvent, item: FileInfo) => {
             popover.value.x = x;
             popover.value.y = y;
             popover.value.files = item.files;
+            popover.value.cover = item;
         } else {
             openFile(item);
         }
@@ -88,7 +97,8 @@ const handleOpen = (e: MouseEvent, item: FileInfo) => {
 const openFile = (item: FileInfo | string) => {
     let fullpath
     if (typeof item === 'string') {
-        fullpath = item;
+        const dir = openStack.value[openStack.value.length - 1].path;
+        fullpath = `${dir}/${popover.value.cover?.name}/"${item}"`;
     } else {
         let filename
         if (item.type !== 'image') {
@@ -108,6 +118,8 @@ const openFile = (item: FileInfo | string) => {
 const fetchFolder = (path: string, mode: 'cover' | 'folder') => {
     loading.start();
     const url = `http://localhost:3060/openFolder?path=${path}&mode=${mode}`;
+
+    searchText.value = '';
 
     if (fetchCache[url]) {
         dataSource.value = fetchCache[url];
@@ -141,6 +153,8 @@ const onBack = () => {
     if (openStack.value.length === 1) return;
     openStack.value.pop();
     fetchFolder(openStack.value[openStack.value.length - 1].path, 'folder');
+    searchText.value = searchStack.value.pop() || '';
+    handleFilter(searchText.value);
 }
 
 const handleFilter = (value: string) => {
@@ -216,7 +230,7 @@ onMounted(() => {
                         box-sizing: border-box;
                         padding: 7px;
                         height: 22px;
-                        line-height: 11px;
+                        line-height: 8px;
                         border: 1px solid #dbdbdb;
                         border-radius: 4px;
                         color: #a1a1a1;
@@ -251,6 +265,7 @@ onMounted(() => {
     align-items: center;
     box-sizing: border-box;
     transition: all .1s ease-in-out;
+    user-select: none;
 
     .n-image {
         height: calc(100% - 16px - 20px);
@@ -290,21 +305,44 @@ onMounted(() => {
         background-color: rgba(75, 83, 116, 0.16);
     }
 
-    @media screen and (max-width:1200px) {
-        --item-width: 25%;
-    }
+    // @media screen and (max-width:1200px) {
+    //     --item-width: 25%;
+    // }
 
-    @media screen and (max-width:800px) {
-        --item-width: 50%;
+    // @media screen and (max-width:800px) {
+    //     --item-width: 50%;
+    // }
+
+    @media screen and (max-width:600px) {
+        --item-width: 20%;
     }
 
     @media screen and (max-width:400px) {
+        --item-width: 33.33%;
+    }
+
+    @media screen and (max-width:300px) {
+        --item-width: 50%;
+    }
+
+    @media screen and (max-width:200px) {
         --item-width: 100%;
     }
 }
 
 .file-item {
-    width: 64px !important;
-    height: 64px !important;
+    width: 84px !important;
+    height: 84px !important;
+    max-height: 84px !important;
+
+    span {
+        display: inline-block;
+        max-height: 48px;
+        line-height: 16px;
+        font-size: 14px;
+        word-break: break-all;
+        text-overflow: ellipsis;
+        overflow: hidden;
+    }
 }
 </style>

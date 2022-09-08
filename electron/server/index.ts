@@ -163,6 +163,8 @@ function handleCover(path: string): Promise<FileInfo[]> {
                 }
 
                 info && folder.push(info);
+            } else {
+                folder.push(...(await readFolder(path, 'folder')));
             }
 
             resolve(folder);
