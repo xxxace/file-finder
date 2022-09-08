@@ -29,7 +29,7 @@
         </div>
         <n-popover :show="popover.visible" :x="popover.x" :y="popover.y" trigger="manual" placement="bottom">
             <n-space>
-                <div v-for="(item) in popover.files" class="file-item" :key="item">
+                <div v-for="(item) in popover.files" class="file-item" :key="item" @dblclick="openFile()">
                     <img :src="blankIcon" :alt="item" width="64">
                     <span :title="item">{{item}}</span>
                 </div>
@@ -85,17 +85,24 @@ const handleOpen = (e: MouseEvent, item: FileInfo) => {
         }
     }
 }
-const openFile = (item: FileInfo) => {
-    let filename
-    if (item.type !== 'image') {
-        filename = item.name + '.' + item.ext;
-    } else if (item.type === 'image') {
-        filename = item.files![0];
+const openFile = (item: FileInfo | string) => {
+    let fullpath
+    if (typeof item === 'string') {
+        fullpath = item;
     } else {
-        return
+        let filename
+        if (item.type !== 'image') {
+            filename = item.name + '.' + item.ext;
+        } else if (item.type === 'image') {
+            filename = item.files![0];
+        } else {
+            return
+        }
+        fullpath = `${item.dir}/"${filename}"`
     }
+
     // files加双引号是为了防止文件名出现空格导致cmd执行报错
-    ipcRenderer.send('execFile', `${item.dir}/"${filename}"`);
+    ipcRenderer.send('execFile', fullpath);
 }
 
 const fetchFolder = (path: string, mode: 'cover' | 'folder') => {
