@@ -64,3 +64,11 @@ electron({
 - [dependencies vs devDependencies](https://github.com/electron-vite/vite-plugin-electron/tree/main/packages/electron-renderer#dependencies-vs-devdependencies)
 - [Using C/C++ native addons in Electron-Renderer](https://github.com/electron-vite/vite-plugin-electron/tree/main/packages/electron-renderer#load-nodejs-cc-native-modules)
 - [Node.js ESM packages](https://github.com/electron-vite/vite-plugin-electron/tree/main/packages/electron-renderer#nodejs-esm-packages) (e.g. `execa` `node-fetch`)
+
+## ToDo
+
+1.操作记录
+2.视频第一帧当封面（只练习不一定用）√
+3.右键菜单(打开,详情信息)
+4.刷新当前文件夹功能
+5.显示当前文件夹名称（加载中显示）

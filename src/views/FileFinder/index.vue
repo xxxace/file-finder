@@ -21,8 +21,8 @@
         </div>
         <div class="image-box">
             <div v-for="(item) in fileList" :key="item.name" class="image-box-item" @dblclick="handleOpen($event,item)">
-                <n-image v-if="item.type === 'image'" :src="(item.base64 as string)" :alt="item.dir" :lazy="true"
-                    object-fit="contain" />
+                <n-image v-if="item.type === 'image'||item.type === 'video'" :src="(item.base64 as string)"
+                    :alt="item.dir" :lazy="true" object-fit="contain" />
                 <img v-else :src="(item.base64 as string)" :alt="item.dir"
                     :style="`width:${item.type === 'image'?'98%':'70%'}`">
                 <span :title="item.name">{{item.name}}</span>

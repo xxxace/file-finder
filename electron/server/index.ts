@@ -2,8 +2,13 @@ import url from 'node:url';
 import http from 'node:http';
 import events from 'node:events';
 import * as fsasync from 'node:fs/promises';
-import { Stats } from 'fs';
+import * as fs from 'fs';
 import path from 'node:path';
+import { mkthumbnial } from '../utils/ffmpeg';
+import { DiskType, FileFinderDockerManager } from '../utils/FileFinderDocker';
+
+const fileFinderDockerManager = new FileFinderDockerManager();
+fileFinderDockerManager.detect();
 
 const VIDEO_EXT = ['mp4', 'mkv', 'avi', 'wmv', 'flv', 'mpeg'];
 const IMAGE_EXT = ['jpg', 'jpeg', 'png', 'bmp', 'gif', 'svg', 'psd', 'webp'];
@@ -20,7 +25,7 @@ event.on('*', function (req: http.IncomingMessage, res: http.ServerResponse) {
     res.end('404 Not Found\n');
 });
 
-export type FileInfo = Stats & {
+export type FileInfo = fs.Stats & {
     dir: string;
     name: string;
     isDirectory: boolean;
@@ -31,11 +36,13 @@ export type FileInfo = Stats & {
 };
 
 function getBase64(path: string): Promise<string> {
+
     return new Promise(async resolve => {
         try {
             const file = await fsasync.readFile(path);
             resolve(`data:image/jpg;base64,${file.toString('base64')}`);
         } catch (e) {
+            console.log(e);
             resolve('');
         }
     });
@@ -59,6 +66,29 @@ function getFileType(ext?: string) {
 function getExt(filename: string) {
     if (filename.indexOf('.') === -1) return '';
     return filename ? filename.substring(filename.lastIndexOf('.') + 1) : filename;
+}
+
+async function getThumbnail(filepath: string): Promise<string> {
+
+    const fileInfo = path.parse(filepath);
+    let root = fileInfo.root.replace(/(:|\\|\/)/g, '') as DiskType;
+
+    if (!fileFinderDockerManager.hasDocker(root)) {
+        fileFinderDockerManager.mkdocker(root);
+    }
+
+    const fileDockerPath = fileFinderDockerManager.getFileDockerPath(root);
+
+    if (!fileFinderDockerManager.hasFile(root, fileInfo.name + '.png')) {
+        await mkthumbnial(filepath.replace(/\\/g, ''), {
+            timestamps: ['1%'],
+            filename: fileInfo.name + '.png',
+            folder: fileDockerPath,
+            // size: '320x240'
+        });
+    }
+
+    return await getBase64(`${fileDockerPath}/${fileInfo.name}.png`);
 }
 
 function readFolder(path, mode): Promise<FileInfo[]> {
@@ -92,7 +122,7 @@ function readFolder(path, mode): Promise<FileInfo[]> {
                         if (IMAGE_EXT.includes(ext)) {
                             info.base64 = await getBase64(filepath);
                         } else if (VIDEO_EXT.includes(ext)) {
-                            // dosomething
+                            info.base64 = await getThumbnail(filepath);
                         }
                     }
                 } else {
@@ -107,7 +137,7 @@ function readFolder(path, mode): Promise<FileInfo[]> {
                     if (IMAGE_EXT.includes(ext)) {
                         info.base64 = await getBase64(filepath);
                     } else if (VIDEO_EXT.includes(ext)) {
-                        // dosomething
+                        info.base64 = await getThumbnail(filepath);
                     }
                 }
 
@@ -199,5 +229,4 @@ const app = http.createServer((req: Req, res) => {
 });
 
 app.listen(3060);
-
 
