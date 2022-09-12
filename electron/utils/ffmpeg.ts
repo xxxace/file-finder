@@ -1,3 +1,5 @@
+// @ts-ignore
+process.env.FLUENTFFMPEG_COV = false;
 import ffmpeg from 'fluent-ffmpeg';
 import { path as ffmpegPath } from '@ffmpeg-installer/ffmpeg';
 import { path as ffprobePath } from '@ffprobe-installer/ffprobe';

@@ -9,6 +9,9 @@ rmSync('dist', { recursive: true, force: true }) // v14.14.0
 
 // https://vitejs.dev/config/
 export default defineConfig({
+  define: {
+    'process.env.FLUENTFFMPEG_COV': false
+  },
   plugins: [
     vue(),
     electron({
@@ -52,6 +55,7 @@ export default defineConfig({
   ],
   resolve: {
     alias: [
+      { find: './lib-cov/fluent-ffmpeg', replacement: './lib/fluent-ffmpeg' },
       { find: '@', replacement: path.resolve(__dirname, './src') },
       { find: 'vue', replacement: 'vue/dist/vue.esm-bundler.js' }
     ],
