@@ -246,6 +246,7 @@ onMounted(() => {
     display: flex;
     flex-flow: row wrap;
     overflow: hidden auto;
+    align-content: flex-start;
 }
 
 .image-box-item,

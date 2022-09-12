@@ -80,7 +80,7 @@ async function getThumbnail(filepath: string): Promise<string> {
     const fileDockerPath = fileFinderDockerManager.getFileDockerPath(root);
 
     if (!fileFinderDockerManager.hasFile(root, fileInfo.name + '.png')) {
-        await mkthumbnial(filepath.replace(/\\/g, ''), {
+        await mkthumbnial(filepath, {
             timestamps: ['1%'],
             filename: fileInfo.name + '.png',
             folder: fileDockerPath,
