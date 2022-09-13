@@ -9,9 +9,6 @@ rmSync('dist', { recursive: true, force: true }) // v14.14.0
 
 // https://vitejs.dev/config/
 export default defineConfig({
-  define: {
-    'process.env.FLUENTFFMPEG_COV': false
-  },
   plugins: [
     vue(),
     electron({
@@ -48,6 +45,9 @@ export default defineConfig({
           return [
             // C/C++ 原生模块
             'iconv-lite',
+            'fluent-ffmpeg',
+            '@ffmpeg-installer/ffmpeg',
+            '@ffprobe-installer/ffprobe',
           ]
         }
       },
@@ -55,11 +55,10 @@ export default defineConfig({
   ],
   resolve: {
     alias: [
-      { find: './lib-cov/fluent-ffmpeg', replacement: './lib/fluent-ffmpeg' },
       { find: '@', replacement: path.resolve(__dirname, './src') },
       { find: 'vue', replacement: 'vue/dist/vue.esm-bundler.js' }
     ],
-    extensions: ['.ts', '.d.ts', '.vue', '.js']
+    extensions: ['.ts', '.vue', '.js']
   },
   server: process.env.VSCODE_DEBUG ? {
     host: pkg.debug.env.VITE_DEV_SERVER_HOST,

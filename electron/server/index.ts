@@ -91,7 +91,7 @@ async function getThumbnail(filepath: string): Promise<string> {
     return await getBase64(`${fileDockerPath}/${fileInfo.name}.png`);
 }
 
-function readFolder(path, mode): Promise<FileInfo[]> {
+function readFolder(path: string, mode: string): Promise<FileInfo[]> {
     const dir = path;
     const folder: FileInfo[] = [];
 
@@ -206,16 +206,19 @@ function handleCover(path: string): Promise<FileInfo[]> {
 }
 
 type Req = http.IncomingMessage & { params?: URLSearchParams }
-event.on('/openFolder', async function (req: Req, res: http.ServerResponse) {
+
+async function openFolderController(req: Req, res: http.ServerResponse) {
     const path = req.params?.get('path');
-    const mode = req.params?.get('mode');
+    const mode = req.params?.get('mode') || 'folder';
+    const folder = path ? await readFolder(path, mode) : [];
 
     res.setHeader('Content-Type', 'application/json;charset=utf-8');
     res.setHeader('Access-Control-Allow-Origin', '*');
-    const folder = await readFolder(path, mode);
     res.setHeader('chartset', 'utf-8');
     res.end(JSON.stringify(folder));
-});
+}
+
+event.on('/openFolder', openFolderController);
 
 const app = http.createServer((req: Req, res) => {
     const u = url.parse(req.url!);
@@ -228,5 +231,7 @@ const app = http.createServer((req: Req, res) => {
     event.emit(path, req, res);
 });
 
-app.listen(3060);
+app.listen(3060, function () {
+    console.log(`Local Server: http://127.0.0.1:3060/`);
+});
 
