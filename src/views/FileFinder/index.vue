@@ -2,7 +2,14 @@
     <div class="file-finder">
         <div class="header-bar">
             <n-space>
-                <FolderSelector v-model="dir" />
+                <FolderSelector ref="folderSelector" v-model="dir" label="请选择文件夹(D)" @change="handleDirChange" />
+                <template v-for="(folder,index) in openStack">
+                    <n-tag v-if="!!folder.name" :key="folder.name" @click="handleJump(folder,index)"
+                        style="cursor:pointer">
+                        <span>{{folder.name}}</span>
+                        <n-spin v-if="loading" :size="12" style="margin-left: 8px;" />
+                    </n-tag>
+                </template>
                 <n-button v-if="dir" size="small" @click="onBack">返回</n-button>
             </n-space>
 
@@ -17,6 +24,13 @@
                         <span class="suffix-icon">S</span>
                     </template>
                 </n-input>
+                <n-button size="small" @click="onRefresh">
+                    <template #icon>
+                        <n-icon>
+                            <Refresh />
+                        </n-icon>
+                    </template>
+                </n-button>
             </n-space>
         </div>
         <div class="image-box">
@@ -45,12 +59,14 @@
 import blankIcon from '@/assets/fileTypeIcon/blank.svg';
 import useFileTypeIcon from '@/hooks/useFileTypeIcon';
 import usePinYin from '@/hooks/usePinYin';
-import { Search } from '@vicons/ionicons5';
-import { NButton, NBadge, NInput, NIcon, NImage, NPopover, NSpace, useLoadingBar } from 'naive-ui';
+import { Search, Refresh } from '@vicons/ionicons5';
+import { NButton, NBadge, NInput, NIcon, NImage, NTag, NPopover, NSpin, NSpace, useLoadingBar } from 'naive-ui';
 import FolderSelector from '@/components/FolderSelector/index.vue';
-import { ipcRenderer, shell } from 'electron';
+import { ipcRenderer } from 'electron';
 import { onMounted, ref } from 'vue';
 import { FileInfo } from '../../../electron/server/index';
+
+export interface IOpenInfo { name?: string; path: string; mode: 'folder' | 'cover' }
 
 const dir = ref('');
 const popover = ref<{
@@ -67,18 +83,21 @@ const popover = ref<{
     cover: undefined
 });
 const searchText = ref('');
+const folderSelector = ref<typeof FolderSelector | null>(null);
 const searchInput = ref<typeof NInput | null>(null);
 const dataSource = ref<FileInfo[]>([]);
 const fileList = ref<FileInfo[]>([]);
 const fetchCache: { [key: string]: FileInfo[] } = {};
 const searchStack = ref<string[]>([]);
-const openStack = ref<{ path: string; mode: 'folder' | 'cover' }[]>([]);
-const loading = useLoadingBar();
+const openStack = ref<IOpenInfo[]>([]);
+const loading = ref(false);
+const loadingBar = useLoadingBar();
 
 const handleOpen = (e: MouseEvent, item: FileInfo) => {
+    if (loading.value) return;
     if (item.type === 'folder') {
         const path = `${dir.value}/${item.name}`
-        openStack.value.push({ path, mode: 'cover' });
+        openStack.value.push({ path, mode: 'cover', name: item.name });
         searchStack.value.push(searchText.value);
         fetchFolder(path, 'cover');
     } else {
@@ -116,7 +135,8 @@ const openFile = (item: FileInfo | string) => {
 }
 
 const fetchFolder = (path: string, mode: 'cover' | 'folder') => {
-    loading.start();
+    loading.value = true;
+    loadingBar.start();
     const url = `http://localhost:3060/openFolder?path=${path}&mode=${mode}`;
 
     searchText.value = '';
@@ -124,7 +144,10 @@ const fetchFolder = (path: string, mode: 'cover' | 'folder') => {
     if (fetchCache[url]) {
         dataSource.value = fetchCache[url];
         fileList.value = fetchCache[url];
-        setTimeout(() => loading.finish(), 50);
+        setTimeout(() => {
+            loadingBar.finish()
+            loading.value = false;
+        }, 50);
     } else {
         fetch(url).then(res => {
             return res.json();
@@ -133,9 +156,11 @@ const fetchFolder = (path: string, mode: 'cover' | 'folder') => {
             fetchCache[url] = data;
             dataSource.value = data;
             fileList.value = data;
-            loading.finish();
+            loadingBar.finish();
         }).catch(err => {
-            loading.error();
+            loadingBar.error();
+        }).finally(() => {
+            loading.value = false;
         });
     }
 }
@@ -152,7 +177,43 @@ const setFileTypeIcon = async (data: FileInfo[]) => {
 const onBack = () => {
     if (openStack.value.length === 1) return;
     openStack.value.pop();
-    fetchFolder(openStack.value[openStack.value.length - 1].path, 'folder');
+    const to = openStack.value[openStack.value.length - 1];
+    fetchFolder(to.path, to.mode);
+    searchText.value = searchStack.value.pop() || '';
+    handleFilter(searchText.value);
+}
+
+const onRefresh = () => {
+    if (!loading.value && openStack.value.length) {
+        const to = openStack.value[openStack.value.length - 1];
+        const query = searchText.value;
+
+        fetchFolder(to!.path, to!.mode);
+        searchText.value = query;
+        handleFilter(searchText.value);
+    }
+}
+
+const handleDirChange = (value: string) => {
+    // 切换主目录时清空所有栈
+    if (!value) {
+        openStack.value = [];
+        searchStack.value = []
+    } else {
+        dir.value = value;
+        openStack.value = [];
+        searchStack.value = [];
+        openStack.value.push({ path: value, mode: 'folder' });
+        fetchFolder(value, 'folder');
+    }
+}
+
+const handleJump = (to: IOpenInfo, index: number) => {
+    if (index === openStack.value.length - 1) return;
+    openStack.value = openStack.value.slice(0, index + 1);
+    searchStack.value = searchStack.value.slice(0, index + 1);
+    console.log(to.path, openStack.value)
+    fetchFolder(to.path, to.mode);
     searchText.value = searchStack.value.pop() || '';
     handleFilter(searchText.value);
 }
@@ -189,16 +250,14 @@ const handleFilter = (value: string) => {
     fileList.value = result;
 }
 
-ipcRenderer.on('directory-changed', function (e, value) {
-    dir.value = value[0];
-    openStack.value.push({ path: value[0], mode: 'folder' });
-    fetchFolder(value[0], 'folder');
-});
-
 onMounted(() => {
     window.addEventListener('keyup', (e) => {
         if (e.key === 's' || e.key === 'S') {
             searchInput.value!.focus();
+        } else if (e.key === 'F5') {
+            onRefresh();
+        } else if (e.key.toUpperCase() === 'D') {
+            folderSelector.value!.handleClick();
         }
     })
 });
@@ -222,6 +281,7 @@ onMounted(() => {
 
         .n-input {
             &:deep(.n-input-wrapper) {
+                padding-top: 1px;
                 padding-right: 6px;
 
                 .n-input__suffix {
@@ -305,14 +365,6 @@ onMounted(() => {
         border-color: #525e72;
         background-color: rgba(75, 83, 116, 0.16);
     }
-
-    // @media screen and (max-width:1200px) {
-    //     --item-width: 25%;
-    // }
-
-    // @media screen and (max-width:800px) {
-    //     --item-width: 50%;
-    // }
 
     @media screen and (max-width:600px) {
         --item-width: 20%;
