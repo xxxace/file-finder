@@ -187,7 +187,8 @@ const onRefresh = () => {
     if (!loading.value && openStack.value.length) {
         const to = openStack.value[openStack.value.length - 1];
         const query = searchText.value;
-
+        const url = `http://localhost:3060/openFolder?path=${to!.path}&mode=${to!.mode}`;
+        if (fetchCache[url]) delete fetchCache[url];
         fetchFolder(to!.path, to!.mode);
         searchText.value = query;
         handleFilter(searchText.value);
