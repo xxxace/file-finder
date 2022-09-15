@@ -53,7 +53,7 @@ export default defineComponent({
         const folderPng: string = FolderPng;
 
         ipcRenderer.on('directory-changed', function (e, value) {
-            setValue(value[0]);
+            setValue(value ? value[0] : '');
         });
 
         return {
@@ -66,4 +66,5 @@ export default defineComponent({
 </script>
 
 <style>
+
 </style>
