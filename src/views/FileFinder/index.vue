@@ -63,7 +63,7 @@ import { Search, Refresh } from '@vicons/ionicons5';
 import { NButton, NBadge, NInput, NIcon, NImage, NTag, NPopover, NSpin, NSpace, useLoadingBar } from 'naive-ui';
 import FolderSelector from '@/components/FolderSelector/index.vue';
 import { ipcRenderer } from 'electron';
-import { onMounted, ref } from 'vue';
+import { onMounted, onUnmounted, ref } from 'vue';
 import { FileInfo } from '../../../electron/server/index';
 
 export interface IOpenInfo { name?: string; path: string; mode: 'folder' | 'cover' }
@@ -212,7 +212,7 @@ const handleJump = (to: IOpenInfo, index: number) => {
     if (index === openStack.value.length - 1) return;
     openStack.value = openStack.value.slice(0, index + 1);
     searchStack.value = searchStack.value.slice(0, index + 1);
-    console.log(to.path, openStack.value)
+
     fetchFolder(to.path, to.mode);
     searchText.value = searchStack.value.pop() || '';
     handleFilter(searchText.value);
@@ -251,16 +251,24 @@ const handleFilter = (value: string) => {
 }
 
 onMounted(() => {
-    window.addEventListener('keyup', (e) => {
-        if (e.key === 's' || e.key === 'S') {
+    const handler = (e: KeyboardEvent) => {
+        if (e.key.toUpperCase() === 'S') {
             searchInput.value!.focus();
         } else if (e.key === 'F5') {
             onRefresh();
         } else if (e.key.toUpperCase() === 'D') {
             folderSelector.value!.handleClick();
         }
-    })
+    };
+
+    window.addEventListener('keyup', handler);
+
+    onUnmounted(() => {
+        window.removeEventListener('keyup', handler);
+    });
 });
+
+
 </script>
 
 <style lang="less" scoped>
