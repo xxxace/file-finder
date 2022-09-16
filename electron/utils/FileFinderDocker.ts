@@ -28,23 +28,19 @@ export class FileFinderDockerManager {
         for (let i = 0; i < manageList.length; i++) {
             const name = manageList[i];
             const fullname = manageList[i] + ':/';
-            try {
-                let hasDocker = false;
-                const dockerPatch = `${fullname}/file-docker`
-                fs.statSync(fullname);
+            const dockerPatch = `${fullname}/file-docker`;
+            let hasDocker = false;
 
-                try {
-                    fs.statSync(dockerPatch);
-                    hasDocker = true;
-                } catch (err) { }
-
+            if (fs.existsSync(fullname)) {
+                if (fs.existsSync(dockerPatch)) hasDocker = true;
                 this.diskMap[name] = { name, hasDocker };
-            } catch (err) { }
+            }
         }
     }
 
     hasDocker(diskname: DiskType): boolean {
-        return this.diskMap[diskname].hasDocker;
+        let diskInfo = this.diskMap[diskname];
+        return diskInfo ? diskInfo.hasDocker : false;
     }
 
     mkdocker(diskname: DiskType): boolean {
@@ -62,12 +58,7 @@ export class FileFinderDockerManager {
 
     hasFile(diskname: DiskType, filename: string): boolean {
         const filepath = `${diskname}:/file-docker/${filename}`;
-        try {
-            fs.statSync(filepath);
-            return true;
-        } catch (err) {
-            return false;
-        }
+        return fs.existsSync(filepath);
     }
 
     getFileDockerPath(diskname: DiskType): string {
