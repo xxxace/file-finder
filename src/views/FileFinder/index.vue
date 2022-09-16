@@ -119,7 +119,7 @@ const openFile = (item: FileInfo | string) => {
     let fullpath
     if (typeof item === 'string') {
         const dir = openStack.value[openStack.value.length - 1].path;
-        fullpath = `${dir}/${popover.value.cover?.name}/"${item}"`;
+        fullpath = `${dir}/"${popover.value.cover?.name}"/"${item}"`;
     } else {
         let filename
         if (item.type !== 'image') {
@@ -133,6 +133,9 @@ const openFile = (item: FileInfo | string) => {
     }
 
     // files加双引号是为了防止文件名出现空格导致cmd执行报错
+    const formatPath = fullpath.split('/');
+    formatPath[formatPath.length - 2] = `"${formatPath[formatPath.length - 2]}"`
+    fullpath = formatPath.join("/");
     ipcRenderer.send('execFile', fullpath);
 }
 
@@ -327,7 +330,7 @@ onMounted(() => {
 .file-item {
     --item-gap: 10px;
     --item-width: calc(100% / 6);
-    --item-height: 1rem;
+    --item-height: 1.5rem;
     display: flex;
     flex-direction: column;
     flex-grow: 0;
@@ -352,7 +355,6 @@ onMounted(() => {
 
         &:deep(img) {
             width: 100%;
-
         }
     }
 
@@ -366,7 +368,7 @@ onMounted(() => {
     span {
         display: inline-block;
         width: 100%;
-        height: 38px;
+        height: 38px !important;
         line-height: 1em;
         font-size: 1em;
         color: #000;
