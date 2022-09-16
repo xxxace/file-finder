@@ -34,12 +34,14 @@
             </n-space>
         </div>
         <div class="image-box">
-            <div v-for="(item) in fileList" :key="item.name" class="image-box-item" @dblclick="handleOpen($event,item)">
+            <div v-for="(item) in fileList" :key="item.name" class="image-box-item" @dblclick="handleOpen($event,item)"
+                :title="item.name">
                 <n-image v-if="item.type === 'image'||item.type === 'video'" :src="(item.base64 as string)"
                     :alt="item.dir" :lazy="true" object-fit="contain" />
-                <img v-else :src="(item.base64 as string)" :alt="item.dir"
-                    :style="`width:${item.type === 'image'?'98%':'70%'}`">
-                <span :title="item.name">{{item.name}}</span>
+                <img v-else-if="item.type === 'folder'" :src="folderIcon" :alt="item.dir" :style="`width:70%`">
+                <div v-else :alt="item.dir" :class="`file-cover fiv-cla fiv-icon-${item.ext}`"
+                    :style="`width:70%;font-size: .6rem`"></div>
+                <span>{{item.name}}</span>
             </div>
         </div>
         <n-popover :show="popover.visible" :x="popover.x" :y="popover.y" trigger="manual" placement="bottom"
@@ -47,7 +49,7 @@
             <n-space>
                 <div v-for="(item) in popover.files" class="file-item" :key="item" @dblclick="openFile(item)"
                     :title="item">
-                    <img :src="blankIcon" :alt="item" width="64">
+                    <div class="file-cover" :alt="item" width="64"></div>
                     <span>{{item}}</span>
                 </div>
             </n-space>
@@ -56,8 +58,8 @@
 </template>
 
 <script setup lang="ts">
-import blankIcon from '@/assets/fileTypeIcon/blank.svg';
-import useFileTypeIcon from '@/hooks/useFileTypeIcon';
+import folderIcon from '@/assets/fileTypeIcon/folder.png';
+// import useFileTypeIcon from '@/hooks/useFileTypeIcon';
 import usePinYin from '@/hooks/usePinYin';
 import { Search, Refresh } from '@vicons/ionicons5';
 import { NButton, NBadge, NInput, NIcon, NImage, NTag, NPopover, NSpin, NSpace, useLoadingBar } from 'naive-ui';
@@ -152,7 +154,7 @@ const fetchFolder = (path: string, mode: 'cover' | 'folder') => {
         fetch(url).then(res => {
             return res.json();
         }).then(async data => {
-            await setFileTypeIcon(data);
+            // await setFileTypeIcon(data);
             fetchCache[url] = data;
             dataSource.value = data;
             fileList.value = data;
@@ -165,14 +167,14 @@ const fetchFolder = (path: string, mode: 'cover' | 'folder') => {
     }
 }
 
-const setFileTypeIcon = async (data: FileInfo[]) => {
-    for (let i = 0; i < data.length; i++) {
-        const item = data[i];
-        if (!item.base64) {
-            item.base64 = await useFileTypeIcon(`${item.ext}`);
-        }
-    }
-}
+// const setFileTypeIcon = async (data: FileInfo[]) => {
+//     for (let i = 0; i < data.length; i++) {
+//         const item = data[i];
+//         if (!item.base64) {
+//             item.base64 = await useFileTypeIcon(`${item.ext}`);
+//         }
+//     }
+// }
 
 const onBack = () => {
     if (openStack.value.length === 1) return;
@@ -253,12 +255,14 @@ const handleFilter = (value: string) => {
 
 onMounted(() => {
     const handler = (e: KeyboardEvent) => {
-        if (e.key.toUpperCase() === 'S') {
-            searchInput.value!.focus();
-        } else if (e.key === 'F5') {
-            onRefresh();
-        } else if (e.key.toUpperCase() === 'D') {
-            folderSelector.value!.handleClick();
+        if (e.target === document.body) {
+            if (e.key.toUpperCase() === 'S') {
+                searchInput.value!.focus();
+            } else if (e.key === 'F5') {
+                onRefresh();
+            } else if (e.key.toUpperCase() === 'D') {
+                folderSelector.value!.handleClick();
+            }
         }
     };
 
@@ -361,12 +365,16 @@ onMounted(() => {
 
     span {
         display: inline-block;
-        max-height: 16px;
-        line-height: 16px;
+        width: 100%;
+        height: 38px;
+        line-height: 1em;
         font-size: 1em;
-        word-break: break-all;
         color: #000;
         font-weight: bold;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+        text-align: center;
     }
 
     &:hover {
@@ -380,7 +388,7 @@ onMounted(() => {
         background-color: rgba(75, 83, 116, 0.16);
     }
 
-    @media screen and (max-width:780px) {
+    @media screen and (max-width:1100px) {
         font-size: 12px;
     }
 
@@ -415,5 +423,13 @@ onMounted(() => {
         text-overflow: ellipsis;
         overflow: hidden;
     }
+}
+
+.file-cover {
+    display: block;
+    margin: 10px 0;
+    object-fit: contain;
+    overflow: hidden;
+    background-image: url(@/assets/fileTypeIcon/blank.svg);
 }
 </style>
