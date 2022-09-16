@@ -315,27 +315,32 @@ onMounted(() => {
     display: flex;
     flex-flow: row wrap;
     overflow: hidden auto;
+    justify-content: flex-start;
     align-content: flex-start;
 }
 
 .image-box-item,
 .file-item {
+    --item-gap: 10px;
     --item-width: calc(100% / 6);
+    --item-height: 1rem;
     display: flex;
     flex-direction: column;
     flex-grow: 0;
     flex-shrink: 0;
-    width: calc(var(--item-width) - 4px);
-    height: 25vh !important;
-    max-height: 25vh !important;
+    width: calc(var(--item-width) - var(--item-gap));
+    min-height: 80px !important;
+    height: var(--item-height) !important;
+    max-height: var(--item-height) !important;
     padding: 0 2px 10px;
-    margin: 10px 2px 50px;
+    margin: 10px 5px 0px;
     border: 1px solid transparent;
     justify-content: flex-end;
     align-items: center;
     box-sizing: border-box;
     transition: all .1s ease-in-out;
     user-select: none;
+    font-size: 16px;
 
     .n-image {
         height: calc(100% - 16px - 20px);
@@ -358,7 +363,7 @@ onMounted(() => {
         display: inline-block;
         max-height: 16px;
         line-height: 16px;
-        font-size: 16px;
+        font-size: 1em;
         word-break: break-all;
         color: #000;
         font-weight: bold;
@@ -373,6 +378,10 @@ onMounted(() => {
     &:active {
         border-color: #525e72;
         background-color: rgba(75, 83, 116, 0.16);
+    }
+
+    @media screen and (max-width:780px) {
+        font-size: 12px;
     }
 
     @media screen and (max-width:600px) {
