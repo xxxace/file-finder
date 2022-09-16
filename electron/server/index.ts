@@ -6,6 +6,7 @@ import * as fs from 'fs';
 import path from 'node:path';
 import { mkthumbnial } from '../utils/ffmpeg';
 import { DiskType, FileFinderDockerManager } from '../utils/FileFinderDocker';
+import { indexOf } from 'lodash';
 
 const fileFinderDockerManager = new FileFinderDockerManager();
 fileFinderDockerManager.detect();
@@ -14,16 +15,6 @@ const VIDEO_EXT = ['mp4', 'mkv', 'avi', 'wmv', 'flv', 'mpeg'];
 const IMAGE_EXT = ['jpg', 'jpeg', 'png', 'bmp', 'gif', 'svg', 'psd', 'webp'];
 const excludedFiles = ['System Volume Information', '$RECYCLE.BIN', 'Config.Msi', 'found.000', 'found.001'];
 const event = new events.EventEmitter();
-
-event.on('/', function (req, res) {
-    req.headers['content-type'] = 'text/plain';
-    res.end('hi! i`m ace.');
-});
-
-event.on('*', function (req: http.IncomingMessage, res: http.ServerResponse) {
-    res.writeHead(404, { 'Content-Type': 'text/plain' });
-    res.end('404 Not Found\n');
-});
 
 export type FileInfo = fs.Stats & {
     dir: string;
@@ -101,7 +92,8 @@ function readFolder(path: string, mode: string): Promise<FileInfo[]> {
 
             for (let i = 0; i < files.length; i++) {
                 const file = files[i];
-                if (excludedFiles.includes(file)) continue;
+
+                if (file.indexOf('.') === 0 || excludedFiles.includes(file)) continue;
                 const filepath = dir + '/' + file;
                 const stat = await fsasync.stat(filepath);
                 let info!: FileInfo
@@ -219,6 +211,16 @@ async function openFolderController(req: Req, res: http.ServerResponse) {
 }
 
 event.on('/openFolder', openFolderController);
+
+event.on('/', function (req, res) {
+    req.headers['content-type'] = 'text/plain';
+    res.end('hi! i`m ace.');
+});
+
+event.on('*', function (req: http.IncomingMessage, res: http.ServerResponse) {
+    res.writeHead(404, { 'Content-Type': 'text/plain' });
+    res.end('404 Not Found\n');
+});
 
 const app = http.createServer((req: Req, res) => {
     const u = url.parse(req.url!);
