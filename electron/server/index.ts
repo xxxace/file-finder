@@ -12,7 +12,7 @@ fileFinderDockerManager.detect();
 
 const VIDEO_EXT = ['mp4', 'mkv', 'avi', 'wmv', 'flv', 'mpeg'];
 const IMAGE_EXT = ['jpg', 'jpeg', 'png', 'bmp', 'gif', 'svg', 'psd', 'webp'];
-
+const excludedFiles = ['System Volume Information', '$RECYCLE.BIN', 'Config.Msi', 'found.000', 'found.001'];
 const event = new events.EventEmitter();
 
 event.on('/', function (req, res) {
@@ -101,7 +101,7 @@ function readFolder(path: string, mode: string): Promise<FileInfo[]> {
 
             for (let i = 0; i < files.length; i++) {
                 const file = files[i];
-                if (file === 'System Volume Information' || file === '$RECYCLE.BIN') continue;
+                if (excludedFiles.includes(file)) continue;
                 const filepath = dir + '/' + file;
                 const stat = await fsasync.stat(filepath);
                 let info!: FileInfo
