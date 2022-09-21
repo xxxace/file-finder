@@ -118,7 +118,6 @@ ipcMain.on('openDirectory', function () {
 });
 
 ipcMain.on('execFile', function (e, fullpath) {
-  console.log(fullpath)
   fullpath && child_process.exec(`${fullpath}`, (err) => {
     console.log(err)
   });

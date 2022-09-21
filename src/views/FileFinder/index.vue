@@ -134,7 +134,7 @@ const openFile = (item: FileInfo | string) => {
 
     // files加双引号是为了防止文件名出现空格导致cmd执行报错
     const formatPath = fullpath.split('/');
-    formatPath[formatPath.length - 2] = `"${formatPath[formatPath.length - 2]}"`
+    if (formatPath.length > 2) formatPath[formatPath.length - 2] = `"${formatPath[formatPath.length - 2]}"`;
     fullpath = formatPath.join("/");
     ipcRenderer.send('execFile', fullpath);
 }
