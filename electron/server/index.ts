@@ -6,7 +6,6 @@ import * as fs from 'fs';
 import path from 'node:path';
 import { mkthumbnial } from '../utils/ffmpeg';
 import { DiskType, FileFinderDockerManager } from '../utils/FileFinderDocker';
-import { indexOf } from 'lodash';
 
 const fileFinderDockerManager = new FileFinderDockerManager();
 fileFinderDockerManager.detect();
@@ -99,24 +98,8 @@ function readFolder(path: string, mode: string): Promise<FileInfo[]> {
                 let info!: FileInfo
                 const ext = getExt(file);
 
-                if (mode === 'cover') {
-                    if (stat.isDirectory()) {
-                        folder.push(...(await handleCover(filepath)));
-                    } else {
-                        info = Object.assign({}, stat, {
-                            dir: dir,
-                            name: getFilename(file),
-                            isDirectory: false,
-                            ext: ext,
-                            type: getFileType(ext)
-                        });
-
-                        if (IMAGE_EXT.includes(ext)) {
-                            info.base64 = await getBase64(filepath);
-                        } else if (VIDEO_EXT.includes(ext)) {
-                            info.base64 = await getThumbnail(filepath);
-                        }
-                    }
+                if (mode === 'cover' && stat.isDirectory()) {
+                    folder.push(...(await handleCover(filepath)));
                 } else {
                     info = Object.assign({}, stat, {
                         dir: dir,
@@ -236,4 +219,3 @@ const app = http.createServer((req: Req, res) => {
 app.listen(3060, function () {
     console.log(`Local Server: http://127.0.0.1:3060/`);
 });
-

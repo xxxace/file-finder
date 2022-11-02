@@ -10,16 +10,18 @@ function makePy(str: string) {
     if (typeof (str) != "string") {
         throw new Error("\u51fd\u6570makePy\u9700\u8981\u5b57\u7b26\u4e32\u7c7b\u578b\u53c2\u6570!");
     }
+
     let arrResult = new Array(); //保存中间结果的数组
+
     for (let i = 0, len = str.length; i < len; i++) {
         //获得unicode码
         let ch = str.charAt(i);
         //检查该unicode码是否在处理范围之内,在则返回该码对映汉字的拼音首字母,不在则调用其它函数处理
         arrResult.push(checkCh(ch));
     }
+
     //处理arrResult,返回所有可能的拼音首字母串数组
     return mkRslt(arrResult);
-
 }
 
 function checkCh(ch: string) {
