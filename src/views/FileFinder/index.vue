@@ -3,10 +3,10 @@
         <div class="header-bar">
             <n-space>
                 <FolderSelector ref="folderSelector" v-model="dir" label="请选择文件夹(D)" @change="handleDirChange" />
-                <template v-for="(folder,index) in openStack">
-                    <n-tag v-if="!!folder.name" :key="folder.name" @click="handleJump(folder,index)"
+                <template v-for="(folder, index) in openStack">
+                    <n-tag v-if="!!folder.name" :key="folder.name" @click="handleJump(folder, index)"
                         style="cursor:pointer">
-                        <span>{{folder.name}}</span>
+                        <span>{{ folder.name }}</span>
                         <n-spin v-if="loading" :size="12" style="margin-left: 8px;" />
                     </n-tag>
                 </template>
@@ -34,14 +34,14 @@
             </n-space>
         </div>
         <div class="image-box">
-            <div v-for="(item) in fileList" :key="item.name" class="image-box-item" @dblclick="handleOpen($event,item)"
-                :title="item.name">
-                <n-image v-if="item.type === 'image'||item.type === 'video'" :src="(item.base64 as string)"
+            <div v-for="(item) in fileList" :key="item.name" class="image-box-item" @dblclick="handleOpen($event, item)"
+                :title="item.name + ' ' + getSize(item.size) || ''">
+                <n-image v-if="item.type === 'image' || item.type === 'video'" :src="(item.base64 as string)"
                     :alt="item.dir" :lazy="true" object-fit="contain" />
                 <img v-else-if="item.type === 'folder'" :src="folderIcon" :alt="item.dir" :style="`width:70%`">
                 <div v-else :alt="item.dir" :class="`file-cover fiv-cla fiv-icon-${item.ext}`"
                     :style="`width:70%;font-size: .6rem`"></div>
-                <span>{{item.name}}</span>
+                <span>{{ item.name }}</span>
             </div>
         </div>
         <n-popover :show="popover.visible" :x="popover.x" :y="popover.y" trigger="manual" placement="bottom"
@@ -50,7 +50,7 @@
                 <div v-for="(item) in popover.files" class="file-item" :key="item" @dblclick="openFile(item)"
                     :title="item">
                     <div class="file-cover" :alt="item" width="64"></div>
-                    <span>{{item}}</span>
+                    <span>{{ item }}</span>
                 </div>
             </n-space>
         </n-popover>
@@ -58,6 +58,7 @@
 </template>
 
 <script setup lang="ts">
+import { parseSize } from '@/utils';
 import folderIcon from '@/assets/fileTypeIcon/folder.png';
 // import useFileTypeIcon from '@/hooks/useFileTypeIcon';
 import usePinYin from '@/hooks/usePinYin';
@@ -67,6 +68,7 @@ import FolderSelector from '@/components/FolderSelector/index.vue';
 import { ipcRenderer } from 'electron';
 import { onMounted, onUnmounted, ref } from 'vue';
 import { FileInfo } from '../../../electron/server/index';
+import { id } from 'date-fns/locale';
 
 export interface IOpenInfo { name?: string; path: string; mode: 'folder' | 'cover' }
 
@@ -94,6 +96,16 @@ const searchStack = ref<string[]>([]);
 const openStack = ref<IOpenInfo[]>([]);
 const loading = ref(false);
 const loadingBar = useLoadingBar();
+
+const getSize = (size: number | undefined) => {
+    if (size) {
+        const s = parseSize(size);
+        let str = '';
+        if (s.gb) return `${s.gb.toFixed(2)}GB`;
+        if (s.mb) return `${s.mb.toFixed(2)}MB`;
+        if (s.kb) return `${s.kb.toFixed(2)}KB`;
+    }
+}
 
 const handleOpen = (e: MouseEvent, item: FileInfo) => {
     if (loading.value) return;
