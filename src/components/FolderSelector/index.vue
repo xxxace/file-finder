@@ -1,10 +1,10 @@
 <template>
     <div>
         <n-space>
-            <n-button v-if="!modelValue" @click="handleClick" size="small">{{label}}</n-button>
+            <n-button v-if="!modelValue" @click="handleClick" size="small">{{ label }}</n-button>
             <n-tag v-else>
                 <div>
-                    <span>{{modelValue}}</span>
+                    <span>{{ modelValue }}</span>
                     <n-button size="tiny" style="margin-left:6px" @click="onClear">x</n-button>
                 </div>
                 <template #avatar>
@@ -17,7 +17,7 @@
 
 <script lang="ts">
 import FolderPng from '@/assets/folder.png';
-import { defineComponent } from 'vue';
+import { defineComponent, ref } from 'vue';
 import { NButton, NTag, NAvatar, NSpace } from 'naive-ui';
 import { ipcRenderer } from 'electron';
 
@@ -37,7 +37,9 @@ export default defineComponent({
         }
     },
     setup(props, { emit }) {
+        const isFocus = ref(false);
         const handleClick = () => {
+            isFocus.value = true;
             ipcRenderer.send('openDirectory');
         };
 
@@ -46,6 +48,7 @@ export default defineComponent({
         }
 
         const setValue = (value: string) => {
+            isFocus.value = false;
             emit('update:modelValue', value);
             emit('change', value);
         }
@@ -53,7 +56,7 @@ export default defineComponent({
         const folderPng: string = FolderPng;
 
         ipcRenderer.on('directory-changed', function (e, value) {
-            setValue(value ? value[0] : '');
+            if (isFocus.value) setValue(value ? value[0] : '');
         });
 
         return {

@@ -180,6 +180,36 @@ function handleCover(path: string): Promise<FileInfo[]> {
     });
 }
 
+function collectCodeList(root: string): any[] {
+    function traverse(path: string, level: number) {
+        const result: Record<string, any>[] = [];
+        const dir = fs.readdirSync(path);
+        dir.forEach(d => {
+            const sub: Record<string, any> = {}
+            const absolutePath = path + '/' + d
+            sub.name = d;
+            sub.level = level;
+            if (fs.statSync(absolutePath).isDirectory()) {
+                sub.children = traverse(absolutePath, level + 1);
+            }
+            result.push(sub);
+        })
+        return result;
+    }
+
+    return traverse(root, 0);
+}
+
+function getVideoCodeList(req: Req, res: http.ServerResponse) {
+    const path = req.params?.get('path');
+    const result = collectCodeList(path as string);
+
+    res.setHeader('Content-Type', 'application/json;charset=utf-8');
+    res.setHeader('Access-Control-Allow-Origin', '*');
+    res.setHeader('chartset', 'utf-8');
+    res.end(JSON.stringify(result));
+}
+
 type Req = http.IncomingMessage & { params?: URLSearchParams }
 
 async function openFolderController(req: Req, res: http.ServerResponse) {
@@ -193,8 +223,8 @@ async function openFolderController(req: Req, res: http.ServerResponse) {
     res.end(JSON.stringify(folder));
 }
 
+event.on('/getFileTree', getVideoCodeList);
 event.on('/openFolder', openFolderController);
-
 event.on('/', function (req, res) {
     req.headers['content-type'] = 'text/plain';
     res.end('hi! i`m ace.');

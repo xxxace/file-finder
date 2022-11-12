@@ -12,7 +12,9 @@
                 </template>
                 <n-button v-if="dir" size="small" @click="onBack">返回</n-button>
             </n-space>
-
+            <n-space>
+                <FolderSelector v-model="dirRoot" label="请选择文件夹2(D)" @change="handleDirRootChange" />
+            </n-space>
             <n-space style="align-self: flex-end;" align="center">
                 <n-badge :value="fileList.length" />
                 <n-input ref="searchInput" v-model:value="searchText" placeholder="搜索" size="small" clearable
@@ -68,11 +70,12 @@ import FolderSelector from '@/components/FolderSelector/index.vue';
 import { ipcRenderer } from 'electron';
 import { onMounted, onUnmounted, ref } from 'vue';
 import { FileInfo } from '../../../electron/server/index';
-import { id } from 'date-fns/locale';
+import { da } from 'date-fns/locale';
 
 export interface IOpenInfo { name?: string; path: string; mode: 'folder' | 'cover' }
 
 const dir = ref('');
+const dirRoot = ref('');
 const popover = ref<{
     visible: boolean;
     x: number;
@@ -182,6 +185,51 @@ const fetchFolder = (path: string, mode: 'cover' | 'folder') => {
     }
 }
 
+const handleDirRootChange = (value: string) => {
+    if (!value) return
+    const url = `http://localhost:3060/getFileTree?path=${value}`;
+    fetch(url).then(res => {
+        return res.json();
+    }).then(async data => {
+        // printTree(data, 0, 2, ``)
+        console.log(encodeURIComponent(printTree(data, 0, 2, ``)))
+        loadingBar.finish();
+    }).catch(err => {
+        loadingBar.error();
+    }).finally(() => {
+        loading.value = false;
+    });
+}
+
+interface file {
+    name: string;
+    children?: file[];
+}
+function getSpace(length: number, tab: number) {
+    let space = ``;
+    for (let j = 0; j < tab; j++) {
+        space += ` `;
+    }
+
+    return space;
+}
+const printTree = (tree: file[], level: number, tab: number = 2, treeStr: string) => {
+    for (let i = 0; i < tree.length; i++) {
+        const sub = tree[i]
+
+        for (let t = 0; t < level; t++) {
+            treeStr += `|${getSpace(level, tab)}`
+        }
+
+        treeStr += `|--${sub.name}\n`;
+        if (sub.children) treeStr = printTree(sub.children, level + 1, tab, treeStr)
+        // if (level && !sub.children) {
+        //     treeStr += `|\n`
+        // }
+    }
+
+    return treeStr;
+}
 // const setFileTypeIcon = async (data: FileInfo[]) => {
 //     for (let i = 0; i < data.length; i++) {
 //         const item = data[i];
