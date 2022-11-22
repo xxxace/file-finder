@@ -60,7 +60,7 @@
 </template>
 
 <script setup lang="ts">
-import { parseSize } from '@/utils';
+import { parseSize, printTree } from '@/utils';
 import folderIcon from '@/assets/fileTypeIcon/folder.png';
 // import useFileTypeIcon from '@/hooks/useFileTypeIcon';
 import usePinYin from '@/hooks/usePinYin';
@@ -192,6 +192,7 @@ const handleDirRootChange = (value: string) => {
         return res.json();
     }).then(async data => {
         // printTree(data, 0, 2, ``)
+        // console.log(printTree(data, 0, 2, ``))
         console.log(encodeURIComponent(printTree(data, 0, 2, ``)))
         loadingBar.finish();
     }).catch(err => {
@@ -201,35 +202,6 @@ const handleDirRootChange = (value: string) => {
     });
 }
 
-interface file {
-    name: string;
-    children?: file[];
-}
-function getSpace(length: number, tab: number) {
-    let space = ``;
-    for (let j = 0; j < tab; j++) {
-        space += ` `;
-    }
-
-    return space;
-}
-const printTree = (tree: file[], level: number, tab: number = 2, treeStr: string) => {
-    for (let i = 0; i < tree.length; i++) {
-        const sub = tree[i]
-
-        for (let t = 0; t < level; t++) {
-            treeStr += `|${getSpace(level, tab)}`
-        }
-
-        treeStr += `|--${sub.name}\n`;
-        if (sub.children) treeStr = printTree(sub.children, level + 1, tab, treeStr)
-        // if (level && !sub.children) {
-        //     treeStr += `|\n`
-        // }
-    }
-
-    return treeStr;
-}
 // const setFileTypeIcon = async (data: FileInfo[]) => {
 //     for (let i = 0; i < data.length; i++) {
 //         const item = data[i];
