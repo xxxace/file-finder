@@ -70,7 +70,6 @@ import FolderSelector from '@/components/FolderSelector/index.vue';
 import { ipcRenderer } from 'electron';
 import { onMounted, onUnmounted, ref } from 'vue';
 import { FileInfo } from '../../../electron/server/index';
-import { da } from 'date-fns/locale';
 
 export interface IOpenInfo { name?: string; path: string; mode: 'folder' | 'cover' }
 
@@ -103,7 +102,6 @@ const loadingBar = useLoadingBar();
 const getSize = (size: number | undefined) => {
     if (size) {
         const s = parseSize(size);
-        let str = '';
         if (s.gb) return `${s.gb.toFixed(2)}GB`;
         if (s.mb) return `${s.mb.toFixed(2)}MB`;
         if (s.kb) return `${s.kb.toFixed(2)}KB`;
