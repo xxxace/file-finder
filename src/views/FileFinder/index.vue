@@ -35,7 +35,7 @@
                 </n-button>
             </n-space>
         </div>
-        <div class="image-box">
+        <div class="image-box" ref="imageBox">
             <div v-for="(item) in fileList" :key="item.name" class="image-box-item" @dblclick="handleOpen($event, item)"
                 :title="item.name + ' ' + getSize(item.size) || ''">
                 <n-image v-if="item.type === 'image' || item.type === 'video'" :src="(item.base64 as string)"
@@ -71,7 +71,7 @@ import { ipcRenderer } from 'electron';
 import { onMounted, onUnmounted, ref } from 'vue';
 import { FileInfo } from '../../../electron/server/index';
 
-export interface IOpenInfo { name?: string; path: string; mode: 'folder' | 'cover' }
+export interface IOpenInfo { name?: string; path: string; mode: 'folder' | 'cover', scrollY?: number }
 
 const dir = ref('');
 const dirRoot = ref('');
@@ -89,6 +89,7 @@ const popover = ref<{
     cover: undefined
 });
 const searchText = ref('');
+const imageBox = ref<HTMLDivElement | null>(null)
 const folderSelector = ref<typeof FolderSelector | null>(null);
 const searchInput = ref<typeof NInput | null>(null);
 const dataSource = ref<FileInfo[]>([]);
@@ -112,6 +113,10 @@ const handleOpen = (e: MouseEvent, item: FileInfo) => {
     if (loading.value) return;
     if (item.type === 'folder') {
         const path = `${dir.value}/${item.name}`
+        if (openStack.value.length) {
+            openStack.value[openStack.value.length - 1].scrollY = imageBox.value?.scrollTop
+        }
+
         openStack.value.push({ path, mode: 'cover', name: item.name });
         searchStack.value.push(searchText.value);
         fetchFolder(path, 'cover');
@@ -216,6 +221,9 @@ const onBack = () => {
     fetchFolder(to.path, to.mode);
     searchText.value = searchStack.value.pop() || '';
     handleFilter(searchText.value);
+    if (to.scrollY) {
+        setTimeout(() => imageBox.value?.scrollTo(0, to.scrollY || 0), 10)
+    }
 }
 
 const onRefresh = () => {
