@@ -1,11 +1,13 @@
 import url from 'node:url';
 import http from 'node:http';
 import events from 'node:events';
+import util from 'node:util';
 import * as fsasync from 'node:fs/promises';
 import * as fs from 'fs';
 import path from 'node:path';
 import { mkthumbnial } from '../utils/ffmpeg';
 import { DiskType, FileFinderDockerManager } from '../utils/FileFinderDocker';
+import nedb, { SearchCache } from './nedb';
 
 const fileFinderDockerManager = new FileFinderDockerManager();
 fileFinderDockerManager.detect();
@@ -24,6 +26,12 @@ export type FileInfo = fs.Stats & {
     files?: string[];
     type: string;
 };
+function isImage(ext: string) {
+    return ext ? IMAGE_EXT.includes(ext.toLocaleLowerCase()) : false
+}
+function isVideo(ext: string) {
+    return ext ? VIDEO_EXT.includes(ext.toLocaleLowerCase()) : false
+}
 
 function getBase64(path: string): Promise<string> {
 
@@ -48,8 +56,8 @@ function getFilename(filename: string) {
 
 function getFileType(ext?: string) {
     if (!ext) return 'folder';
-    if (VIDEO_EXT.includes(ext)) return 'video';
-    if (IMAGE_EXT.includes(ext)) return 'image';
+    if (isVideo(ext)) return 'video';
+    if (isImage(ext)) return 'image';
     return 'file';
 }
 
@@ -109,9 +117,9 @@ function readFolder(path: string, mode: string): Promise<FileInfo[]> {
                         type: getFileType(ext)
                     });
 
-                    if (IMAGE_EXT.includes(ext)) {
+                    if (isImage(ext)) {
                         info.base64 = await getBase64(filepath);
-                    } else if (VIDEO_EXT.includes(ext)) {
+                    } else if (isVideo(ext)) {
                         info.base64 = await getThumbnail(filepath);
                     }
                 }
@@ -152,7 +160,7 @@ function handleCover(path: string): Promise<FileInfo[]> {
                 const stat = await fsasync.stat(filepath);
                 const ext = getExt(file);
 
-                if (!VIDEO_EXT.includes(ext)) {
+                if (!isVideo(ext)) {
                     files.splice(index, 1);
 
                     info = Object.assign({}, stat, {
@@ -211,15 +219,56 @@ function getVideoCodeList(req: Req, res: http.ServerResponse) {
 }
 
 type Req = http.IncomingMessage & { params?: URLSearchParams }
+const findOneAsync = util.promisify(nedb.findOne.bind(nedb));
+// 封装缓存查询函数
+async function searchCache(path: string) {
+    try {
+        const doc = await findOneAsync({ path }) as unknown as SearchCache;
+        if (doc) {
+            return doc.data;
+        }
+    } catch (err) {
+        console.error(err);
+    }
+    return null;
+}
 
+const insertAsync = util.promisify<SearchCache, Error>(nedb.insert.bind(nedb));
+// 封装读取文件夹信息函数
+async function readFolderInfo(path: string, mode: string): Promise<FileInfo[]> {
+    try {
+        const folder = await readFolder(path, mode);
+        const newDoc = { path, data: folder };
+        // 使用 Promise 包装 insert 函数
+        await insertAsync(newDoc);
+        return folder;
+    } catch (err) {
+        console.error(err);
+        return [];
+    }
+}
+
+const removeAsync = util.promisify<any, any, (error: Error, numRemoved: number) => void>(nedb.remove.bind(nedb))
 async function openFolderController(req: Req, res: http.ServerResponse) {
-    const path = req.params?.get('path');
+    let folder: FileInfo[] = [];
+    let path = req.params?.get('path');
     const mode = req.params?.get('mode') || 'folder';
-    const folder = path ? await readFolder(path, mode) : [];
+    const noCache = req.params?.get('noCache');
 
     res.setHeader('Content-Type', 'application/json;charset=utf-8');
     res.setHeader('Access-Control-Allow-Origin', '*');
     res.setHeader('chartset', 'utf-8');
+
+    if (path) {
+        path = path.replace('&noCache=(true|false)', '');
+        if (noCache) {
+            await removeAsync({ path }, {})
+            folder = await readFolderInfo(path, mode)
+        } else {
+            folder = await searchCache(path) || await readFolderInfo(path, mode);
+        }
+    }
+
     res.end(JSON.stringify(folder));
 }
 
