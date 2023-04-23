@@ -41,7 +41,7 @@
                 <n-image v-if="item.type === 'image' || item.type === 'video'" :src="(item.base64 as string)"
                     :alt="item.dir" :lazy="true" objectFit="contain" />
                 <img v-else-if="item.type === 'folder'" :src="folderIcon" :alt="item.dir" :style="`width:70%`">
-                <div v-else :alt="item.dir" :class="`file-cover fiv-cla fiv-icon-${item.ext}`"
+                <div v-else :title="item.dir" :class="`file-cover fiv-cla fiv-icon-${item.ext}`"
                     :style="`width:70%;font-size: .6rem`"></div>
                 <span>{{ item.name }}</span>
             </div>
@@ -50,7 +50,7 @@
             @clickoutside="popover.visible = false">
             <n-space>
                 <div v-for="(item) in popover.files" class="file-item" :key="item" @dblclick="openFile(item)" :title="item">
-                    <div class="file-cover" :alt="item" width="64"></div>
+                    <div class="file-cover" :title="item"></div>
                     <span>{{ item }}</span>
                 </div>
             </n-space>
