@@ -49,8 +49,7 @@
         <n-popover :show="popover.visible" :x="popover.x" :y="popover.y" trigger="manual" placement="bottom"
             @clickoutside="popover.visible = false">
             <n-space>
-                <div v-for="(item) in popover.files" class="file-item" :key="item" @dblclick="openFile(item)"
-                    :title="item">
+                <div v-for="(item) in popover.files" class="file-item" :key="item" @dblclick="openFile(item)" :title="item">
                     <div class="file-cover" :alt="item" width="64"></div>
                     <span>{{ item }}</span>
                 </div>
@@ -157,7 +156,7 @@ const openFile = (item: FileInfo | string) => {
     ipcRenderer.send('execFile', fullpath);
 }
 
-const fetchFolder = (path: string, mode: 'cover' | 'folder') => {
+const fetchFolder = (path: string, mode: 'cover' | 'folder', noCache?: boolean) => {
     loading.value = true;
     loadingBar.start();
     const url = `http://localhost:3060/openFolder?path=${path}&mode=${mode}`;
@@ -172,7 +171,7 @@ const fetchFolder = (path: string, mode: 'cover' | 'folder') => {
             loading.value = false;
         }, 50);
     } else {
-        fetch(url).then(res => {
+        fetch(noCache ? url + '&noCache=true' : url).then(res => {
             return res.json();
         }).then(async data => {
             // await setFileTypeIcon(data);
@@ -232,7 +231,7 @@ const onRefresh = () => {
         const query = searchText.value;
         const url = `http://localhost:3060/openFolder?path=${to!.path}&mode=${to!.mode}`;
         if (fetchCache[url]) delete fetchCache[url];
-        fetchFolder(to!.path, to!.mode);
+        fetchFolder(to!.path, to!.mode, true);
         searchText.value = query;
         handleFilter(searchText.value);
     }
