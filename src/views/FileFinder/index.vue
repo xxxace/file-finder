@@ -39,7 +39,7 @@
             <div v-for="(item) in fileList" :key="item.name" class="image-box-item" @dblclick="handleOpen($event, item)"
                 :title="item.name + ' ' + getSize(item.size) || ''">
                 <n-image v-if="item.type === 'image' || item.type === 'video'" :src="(item.base64 as string)"
-                    :alt="item.dir" :lazy="true" object-fit="contain" />
+                    :alt="item.dir" :lazy="true" objectFit="contain" />
                 <img v-else-if="item.type === 'folder'" :src="folderIcon" :alt="item.dir" :style="`width:70%`">
                 <div v-else :alt="item.dir" :class="`file-cover fiv-cla fiv-icon-${item.ext}`"
                     :style="`width:70%;font-size: .6rem`"></div>
