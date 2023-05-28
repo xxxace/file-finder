@@ -49,9 +49,10 @@
         <n-popover :show="popover.visible" :x="popover.x" :y="popover.y" trigger="manual" placement="bottom"
             @clickoutside="popover.visible = false">
             <n-space>
-                <div v-for="(item) in popover.files" class="file-item" :key="item" @dblclick="openFile(item)" :title="item">
-                    <div class="file-cover" :title="item"></div>
-                    <span>{{ item }}</span>
+                <div v-for="(item) in popover.files" class="file-item" :key="item" @dblclick="openFile(item.name)"
+                    :title="item.name + ` ${getSize(item.size)}`">
+                    <div class="file-cover" :title="item.name"></div>
+                    <span>{{ item.name }}</span>
                 </div>
             </n-space>
         </n-popover>
@@ -68,7 +69,7 @@ import { NButton, NBadge, NInput, NIcon, NImage, NTag, NPopover, NSpin, NSpace, 
 import FolderSelector from '@/components/FolderSelector/index.vue';
 import { ipcRenderer } from 'electron';
 import { onMounted, onUnmounted, ref } from 'vue';
-import { FileInfo } from '../../../electron/server/index';
+import { FileInfo, FileInfoFiles } from '../../../electron/server/index';
 
 export interface IOpenInfo { name?: string; path: string; mode: 'folder' | 'cover', scrollY?: number }
 
@@ -78,7 +79,7 @@ const popover = ref<{
     visible: boolean;
     x: number;
     y: number;
-    files: string[];
+    files: FileInfoFiles[];
     cover: FileInfo | undefined;
 }>({
     visible: false,
@@ -120,6 +121,7 @@ const handleOpen = (e: MouseEvent, item: FileInfo) => {
         searchStack.value.push(searchText.value);
         fetchFolder(path, 'cover');
     } else {
+        console.log(item)
         if (e && item.files && item.files.length > 1) {
             const { x, y } = e;
             popover.value.visible = true;
@@ -135,6 +137,7 @@ const handleOpen = (e: MouseEvent, item: FileInfo) => {
 const openFile = (item: FileInfo | string) => {
     let fullpath
     if (typeof item === 'string') {
+        popover.value.visible = false;
         const dir = openStack.value[openStack.value.length - 1].path;
         fullpath = `${dir}/"${popover.value.cover?.name}"/"${item}"`;
     } else {
@@ -142,7 +145,7 @@ const openFile = (item: FileInfo | string) => {
         if (item.type !== 'image') {
             filename = item.name + '.' + item.ext;
         } else if (item.type === 'image') {
-            filename = item.files![0];
+            filename = item.files![0].name;
         } else {
             return
         }

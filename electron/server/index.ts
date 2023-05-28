@@ -7,7 +7,7 @@ import * as fs from 'fs';
 import path from 'node:path';
 import { mkthumbnial } from '../utils/ffmpeg';
 import { DiskType, FileFinderDockerManager } from '../utils/FileFinderDocker';
-import nedb, { SearchCache } from './nedb';
+import nedb, { SearchCache, getHistoryList } from './nedb';
 
 const fileFinderDockerManager = new FileFinderDockerManager();
 fileFinderDockerManager.detect();
@@ -17,13 +17,15 @@ const IMAGE_EXT = ['jpg', 'jpeg', 'png', 'bmp', 'gif', 'svg', 'psd', 'webp'];
 const excludedFiles = ['System Volume Information', '$RECYCLE.BIN', 'Config.Msi', 'found.000', 'found.001'];
 const event = new events.EventEmitter();
 
+export type FileInfoFiles = fs.Stats & { name: string };
+
 export type FileInfo = fs.Stats & {
     dir: string;
     name: string;
     isDirectory: boolean;
     base64?: string | boolean;
     ext?: string;
-    files?: string[];
+    files?: FileInfoFiles[];
     type: string;
 };
 function isImage(ext: string) {
@@ -145,30 +147,40 @@ function handleCover(path: string): Promise<FileInfo[]> {
         try {
             let index = -1;
             let info!: FileInfo;
-            const files = await fsasync.readdir(dir);
+            let size = 0;
+            let filenames = await fsasync.readdir(dir);
+            let files: FileInfoFiles[] = [];
 
-            files.some((file, i) => {
-                if (/\.(jpe?g|png|bmp|gif|svg|psd|webp)$/.test(file)) {
+            for (let i = 0; i < filenames.length; i++) {
+                const file = filenames[i];
+                if (index === -1 && /\.(jpe?g|png|bmp|gif|svg|psd|webp)$/.test(file as string)) {
                     index = i;
-                    return true;
+                    continue;
+                } else {
+                    const filepath = dir + '/' + file;
+                    const filestat = await fsasync.stat(filepath)
+                    size += filestat.size;
+                    files.push({
+                        name: file,
+                        ...filestat
+                    });
                 }
-            });
+            }
 
             if (index !== -1) {
-                const file = files[index];
+                const file = filenames[index];
                 const filepath = dir + '/' + file;
                 const stat = await fsasync.stat(filepath);
                 const ext = getExt(file);
-
+                size += stat.size;
                 if (!isVideo(ext)) {
-                    files.splice(index, 1);
-
                     info = Object.assign({}, stat, {
                         dir: dir,
                         name: getFilename(file),
                         isDirectory: false,
                         ext: ext,
                         files: files,
+                        size,
                         type: getFileType(ext)
                     });
 
@@ -272,6 +284,27 @@ async function openFolderController(req: Req, res: http.ServerResponse) {
     res.end(JSON.stringify(folder));
 }
 
+async function getHistory(req: Req, res: http.ServerResponse) {
+    const path = req.params?.get('path');
+    const pageNo = req.params?.get('pageNo') as number | undefined;
+    const pageSize = req.params?.get('pageSize') as number | undefined;
+
+    res.setHeader('Content-Type', 'application/json;charset=utf-8');
+    res.setHeader('Access-Control-Allow-Origin', '*');
+    res.setHeader('chartset', 'utf-8');
+
+    try {
+        const ret = await getHistoryList(path, pageNo, pageSize);
+        res.end(JSON.stringify(ret));
+    } catch (e) {
+        res.end(JSON.stringify({
+            code: 500,
+            error: e
+        }));
+    }
+}
+
+event.on('/getHistory', getHistory);
 event.on('/getFileTree', getVideoCodeList);
 event.on('/openFolder', openFolderController);
 event.on('/', function (req, res) {
