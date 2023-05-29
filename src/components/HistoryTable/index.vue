@@ -132,8 +132,8 @@ const onRefresh = () => {
 const openDir = (item: Partial<SearchCache>) => {
     setShowModal(false);
     setTimeout(() => {
-        if (item.path && item.mode) {
-            emits('openDir', item.path, item.mode);
+        if (item.path) {
+            emits('openDir', item.path, item.mode || 'cover');
         }
     }, 300)
 }

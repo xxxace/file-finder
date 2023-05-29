@@ -26,8 +26,8 @@ const nedb = new Nedb<SearchCache>({ filename: 'searchCache.db' });
 nedb.loadDatabase();
 
 export function getHistoryList(path: string | null | undefined, pageNo?: number, pageSize?: number): Promise<BrowseHistoryWithPagination> {
-    const current = pageNo || 1;
-    const size = pageSize || 10;
+    const current = Number(pageNo) || 1;
+    const size = Number(pageSize) || 10;
 
     return new Promise((resolve, reject) => {
         nedb.count({}, function (err, count) {
