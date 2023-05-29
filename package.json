@@ -46,6 +46,7 @@
   "dependencies": {
     "@ffmpeg-installer/ffmpeg": "^1.1.0",
     "@ffprobe-installer/ffprobe": "^1.4.1",
+    "dayjs": "^1.11.7",
     "fluent-ffmpeg": "^2.1.2",
     "iconv-lite": "^0.6.3",
     "less": "^4.1.3",
