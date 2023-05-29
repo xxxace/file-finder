@@ -54,7 +54,7 @@
         <n-popover :show="popover.visible" :x="popover.x" :y="popover.y" trigger="manual" placement="bottom"
             @clickoutside="popover.visible = false">
             <n-space>
-                <div v-for="(item) in popover.files" class="file-item" :key="item" @dblclick="openFile(item.name)"
+                <div v-for="(item) in popover.files" class="file-item" :key="item.name" @dblclick="openFile(item.name)"
                     :title="item.name + ` ${getSize(item.size)}`">
                     <div class="file-cover" :title="item.name"></div>
                     <span>{{ item.name }}</span>

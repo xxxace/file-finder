@@ -60,7 +60,7 @@
 import { onMounted, ref, watch } from 'vue';
 import useNotify from '@/hooks/useNotify';
 import { NInput, NForm, NButton, NFormItem, FormInst, NCard, NModal, NPagination, NTable, NSpin } from 'naive-ui'
-import type { SearchCache, BrowseHistoryWithPagination } from 'electron/server/nedb';
+import type { SearchCache, BrowseHistoryWithPagination, OpenMode } from 'electron/server/nedb';
 
 export type HistoryQuery = {
     path: string;
@@ -70,7 +70,7 @@ export type HistoryQuery = {
 }
 
 const emits = defineEmits<{
-    (e: 'openDir', path: string, mode: string): void
+    (e: 'openDir', path: string, mode: OpenMode): void
 }>();
 const notify = useNotify();
 const formRef = ref<FormInst | null>(null);
