@@ -128,7 +128,6 @@ const handleOpen = (e: MouseEvent, item: FileInfo) => {
         const path = `${dir.value}/${item.name}`
         openFolderInCover(path, item.name);
     } else {
-        console.log(item)
         if (e && item.files && item.files.length > 1) {
             const { x, y } = e;
             popover.value.visible = true;
@@ -281,7 +280,6 @@ const handleJump = (to: IOpenInfo, index: number) => {
 }
 
 const openHistory = (path: string, mode: OpenMode) => {
-    console.log(path, mode)
     if (mode === 'folder') {
         handleDirChange(path);
     } else {
