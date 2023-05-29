@@ -12,11 +12,16 @@
                 </template>
                 <n-button v-if="dir" size="small" @click="onBack">返回</n-button>
             </n-space>
-            <n-space>
+            <!-- <n-space>
                 <FolderSelector v-model="dirRoot" label="请选择文件夹2(D)" @change="handleDirRootChange" />
-            </n-space>
+            </n-space> -->
             <n-space style="align-self: flex-end;" align="center">
-                <n-badge :value="fileList.length" />
+                <n-button size="small" @click="showHistory">
+                    <template #icon>
+                        <FootstepsOutline />
+                    </template>
+                </n-button>
+                <n-badge v-if="fileList.length" :value="fileList.length" />
                 <n-input ref="searchInput" v-model:value="searchText" placeholder="搜索" size="small" clearable
                     @input="handleFilter">
                     <template #prefix>
@@ -56,6 +61,7 @@
                 </div>
             </n-space>
         </n-popover>
+        <HistoryTable ref="historyTable" @openDir="openHistory" />
     </div>
 </template>
 
@@ -64,16 +70,19 @@ import { parseSize, printTree } from '@/utils';
 import folderIcon from '@/assets/fileTypeIcon/folder.png';
 // import useFileTypeIcon from '@/hooks/useFileTypeIcon';
 import usePinYin from '@/hooks/usePinYin';
-import { Search, Refresh } from '@vicons/ionicons5';
-import { NButton, NBadge, NInput, NIcon, NImage, NTag, NPopover, NSpin, NSpace, useLoadingBar } from 'naive-ui';
+import { Search, Refresh, FootstepsOutline } from '@vicons/ionicons5';
+import { NButton, NBadge, NInput, NIcon, NImage, NTag, NPopover, NSpin, NSpace, useLoadingBar, FormInst } from 'naive-ui';
 import FolderSelector from '@/components/FolderSelector/index.vue';
+import HistoryTable from '@/components/HistoryTable/index.vue';
 import { ipcRenderer } from 'electron';
 import { onMounted, onUnmounted, ref } from 'vue';
 import { FileInfo, FileInfoFiles } from '../../../electron/server/index';
+import { OpenMode } from 'electron/server/nedb';
 
 export interface IOpenInfo { name?: string; path: string; mode: 'folder' | 'cover', scrollY?: number }
 
 const dir = ref('');
+const historyTable = ref<typeof HistoryTable | null>(null)
 const dirRoot = ref('');
 const popover = ref<{
     visible: boolean;
@@ -109,17 +118,15 @@ const getSize = (size: number | undefined) => {
     }
 }
 
+const showHistory = () => {
+    historyTable.value!.setShowModal(true);
+}
+
 const handleOpen = (e: MouseEvent, item: FileInfo) => {
     if (loading.value) return;
     if (item.type === 'folder') {
         const path = `${dir.value}/${item.name}`
-        if (openStack.value.length) {
-            openStack.value[openStack.value.length - 1].scrollY = imageBox.value?.scrollTop
-        }
-
-        openStack.value.push({ path, mode: 'cover', name: item.name });
-        searchStack.value.push(searchText.value);
-        fetchFolder(path, 'cover');
+        openFolderInCover(path, item.name);
     } else {
         console.log(item)
         if (e && item.files && item.files.length > 1) {
@@ -133,6 +140,15 @@ const handleOpen = (e: MouseEvent, item: FileInfo) => {
             openFile(item);
         }
     }
+}
+const openFolderInCover = (path: string, name?: string) => {
+    if (openStack.value.length) {
+        openStack.value[openStack.value.length - 1].scrollY = imageBox.value?.scrollTop
+    }
+
+    openStack.value.push({ path, mode: 'cover', name });
+    searchStack.value.push(searchText.value);
+    fetchFolder(path, 'cover');
 }
 const openFile = (item: FileInfo | string) => {
     let fullpath
@@ -159,7 +175,7 @@ const openFile = (item: FileInfo | string) => {
     ipcRenderer.send('execFile', fullpath);
 }
 
-const fetchFolder = (path: string, mode: 'cover' | 'folder', noCache?: boolean) => {
+const fetchFolder = (path: string, mode: OpenMode, noCache?: boolean) => {
     loading.value = true;
     loadingBar.start();
     const url = `http://localhost:3060/openFolder?path=${path}&mode=${mode}`;
@@ -262,6 +278,15 @@ const handleJump = (to: IOpenInfo, index: number) => {
     fetchFolder(to.path, to.mode);
     searchText.value = searchStack.value.pop() || '';
     handleFilter(searchText.value);
+}
+
+const openHistory = (path: string, mode: OpenMode) => {
+    console.log(path, mode)
+    if (mode === 'folder') {
+        handleDirChange(path);
+    } else {
+        openFolderInCover(path);
+    }
 }
 
 const handleFilter = (value: string) => {

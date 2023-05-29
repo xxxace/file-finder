@@ -1,9 +1,13 @@
 import Nedb from 'nedb';
 import { FileInfo } from './index';
 
+export type OpenMode = 'cover' | 'folder'
+
 export interface SearchCache {
     path: string;
-    data: FileInfo[]
+    data: FileInfo[];
+    create_at: string;
+    mode: OpenMode;
 }
 
 export interface Pagination {
@@ -13,16 +17,15 @@ export interface Pagination {
 }
 
 export interface BrowseHistory {
-    records: string[]
+    records: Partial<SearchCache>[]
 }
 
+export type BrowseHistoryWithPagination = Pagination & BrowseHistory
 
-
-export
-    const nedb = new Nedb<SearchCache>({ filename: 'searchCache.db' });
+const nedb = new Nedb<SearchCache>({ filename: 'searchCache.db' });
 nedb.loadDatabase();
 
-export function getHistoryList(path: string | null | undefined, pageNo?: number, pageSize?: number): Promise<Pagination & BrowseHistory> {
+export function getHistoryList(path: string | null | undefined, pageNo?: number, pageSize?: number): Promise<BrowseHistoryWithPagination> {
     const current = pageNo || 1;
     const size = pageSize || 10;
 
@@ -36,7 +39,7 @@ export function getHistoryList(path: string | null | undefined, pageNo?: number,
                         reject(e);
                     } else {
                         resolve({
-                            records: docs.map(d => d.path),
+                            records: docs.map(d => ({ path: d.path, mode: d.mode, create_at: d.create_at })),
                             total: count,
                             current: current,
                             size: size

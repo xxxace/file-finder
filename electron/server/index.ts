@@ -7,7 +7,8 @@ import * as fs from 'fs';
 import path from 'node:path';
 import { mkthumbnial } from '../utils/ffmpeg';
 import { DiskType, FileFinderDockerManager } from '../utils/FileFinderDocker';
-import nedb, { SearchCache, getHistoryList } from './nedb';
+import nedb, { OpenMode, SearchCache, getHistoryList } from './nedb';
+import dayjs from 'dayjs';
 
 const fileFinderDockerManager = new FileFinderDockerManager();
 fileFinderDockerManager.detect();
@@ -247,10 +248,10 @@ async function searchCache(path: string) {
 
 const insertAsync = util.promisify<SearchCache, Error>(nedb.insert.bind(nedb));
 // 封装读取文件夹信息函数
-async function readFolderInfo(path: string, mode: string): Promise<FileInfo[]> {
+async function readFolderInfo(path: string, mode: OpenMode): Promise<FileInfo[]> {
     try {
         const folder = await readFolder(path, mode);
-        const newDoc = { path, data: folder };
+        const newDoc = { path, mode, data: folder, create_at: dayjs().format('YYYY-MM-DD HH:mm:ss') };
         // 使用 Promise 包装 insert 函数
         await insertAsync(newDoc);
         return folder;
@@ -264,7 +265,7 @@ const removeAsync = util.promisify<any, any, (error: Error, numRemoved: number) 
 async function openFolderController(req: Req, res: http.ServerResponse) {
     let folder: FileInfo[] = [];
     let path = req.params?.get('path');
-    const mode = req.params?.get('mode') || 'folder';
+    const mode: OpenMode = (req.params?.get('mode') || 'folder') as OpenMode;
     const noCache = req.params?.get('noCache');
 
     res.setHeader('Content-Type', 'application/json;charset=utf-8');
