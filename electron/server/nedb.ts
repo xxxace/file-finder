@@ -1,5 +1,7 @@
 import Nedb from 'nedb';
 import { FileInfo } from './index';
+import config from '../config';
+import path from 'node:path';
 
 export type OpenMode = 'cover' | 'folder'
 
@@ -22,7 +24,7 @@ export interface BrowseHistory {
 
 export type BrowseHistoryWithPagination = Pagination & BrowseHistory
 
-const nedb = new Nedb<SearchCache>({ filename: 'searchCache.db' });
+const nedb = new Nedb<SearchCache>({ filename: path.join(config.userBasePath, 'searchCache.db') });
 nedb.loadDatabase();
 
 export function getHistoryList(path: string | null | undefined, pageNo?: number, pageSize?: number): Promise<BrowseHistoryWithPagination> {
