@@ -41,7 +41,6 @@
                 </n-table>
             </n-spin>
             <template #footer>
-                <!-- {{ model }} -->
                 <div style="display: flex;justify-content: flex-end;">
                     <n-pagination size="small" v-model:page="model.pageNo" v-model:page-size="model.pageSize"
                         :disabled="loading" :item-count="model.total" show-size-picker show-quick-jumper :page-slot="7"
@@ -137,14 +136,17 @@ const openDir = (item: Partial<SearchCache>) => {
         }
     }, 300)
 }
+
 const handlePageChange = (page: number) => {
     model.value.pageNo = page;
     getHistrotyList();
 }
+
 const handlePageSizeChange = (pageSize: number) => {
     model.value.pageSize = pageSize;
     getHistrotyList();
 }
+
 onMounted(() => {
     const unwatch = watch(showModal, (val) => {
         if (val && !isFirstRender.value) {
