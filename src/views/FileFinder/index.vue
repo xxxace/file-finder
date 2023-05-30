@@ -66,12 +66,13 @@
 </template>
 
 <script setup lang="ts">
-import { parseSize, printTree } from '@/utils';
+import { parseSize } from '@/utils';
+// import { parseSize, priree } from '@/utils';
 import folderIcon from '@/assets/fileTypeIcon/folder.png';
 // import useFileTypeIcon from '@/hooks/useFileTypeIcon';
 import usePinYin from '@/hooks/usePinYin';
 import { Search, Refresh, FootstepsOutline } from '@vicons/ionicons5';
-import { NButton, NBadge, NInput, NIcon, NImage, NTag, NPopover, NSpin, NSpace, useLoadingBar, FormInst } from 'naive-ui';
+import { NButton, NBadge, NInput, NIcon, NImage, NTag, NPopover, NSpin, NSpace, useLoadingBar } from 'naive-ui';
 import FolderSelector from '@/components/FolderSelector/index.vue';
 import HistoryTable from '@/components/HistoryTable/index.vue';
 import { ipcRenderer } from 'electron';
@@ -83,7 +84,7 @@ export interface IOpenInfo { name?: string; path: string; mode: 'folder' | 'cove
 
 const dir = ref('');
 const historyTable = ref<typeof HistoryTable | null>(null)
-const dirRoot = ref('');
+// const dirRoot = ref('');
 const popover = ref<{
     visible: boolean;
     x: number;
@@ -205,22 +206,22 @@ const fetchFolder = (path: string, mode: OpenMode, noCache?: boolean) => {
     }
 }
 
-const handleDirRootChange = (value: string) => {
-    if (!value) return
-    const url = `http://localhost:3060/getFileTree?path=${value}`;
-    fetch(url).then(res => {
-        return res.json();
-    }).then(async data => {
-        // printTree(data, 0, 2, ``)
-        // console.log(printTree(data, 0, 2, ``))
-        console.log(encodeURIComponent(printTree(data, 0, 2, ``)))
-        loadingBar.finish();
-    }).catch(err => {
-        loadingBar.error();
-    }).finally(() => {
-        loading.value = false;
-    });
-}
+// const handleDirRootChange = (value: string) => {
+//     if (!value) return
+//     const url = `http://localhost:3060/getFileTree?path=${value}`;
+//     fetch(url).then(res => {
+//         return res.json();
+//     }).then(async data => {
+//         // printTree(data, 0, 2, ``)
+//         // console.log(printTree(data, 0, 2, ``))
+//         console.log(encodeURIComponent(printTree(data, 0, 2, ``)))
+//         loadingBar.finish();
+//     }).catch(err => {
+//         loadingBar.error();
+//     }).finally(() => {
+//         loading.value = false;
+//     });
+// }
 
 // const setFileTypeIcon = async (data: FileInfo[]) => {
 //     for (let i = 0; i < data.length; i++) {
