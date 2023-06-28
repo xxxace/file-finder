@@ -28,6 +28,7 @@ export type FileInfo = fs.Stats & {
     ext?: string;
     files?: FileInfoFiles[];
     type: string;
+    [key: string]: any
 };
 function isImage(ext: string) {
     return ext ? IMAGE_EXT.includes(ext.toLocaleLowerCase()) : false
@@ -107,11 +108,14 @@ function readFolder(path: string, mode: string): Promise<FileInfo[]> {
                 const filepath = dir + '/' + file;
                 const stat = await fsasync.stat(filepath);
                 let info!: FileInfo
-                const ext = getExt(file);
+
 
                 if (mode === 'cover' && stat.isDirectory()) {
                     folder.push(...(await handleCover(filepath)));
                 } else {
+                    if (mode === 'cover' && file === 'avatar.jpg') continue
+                    const ext = getExt(file);
+
                     info = Object.assign({}, stat, {
                         dir: dir,
                         name: getFilename(file),
@@ -119,6 +123,10 @@ function readFolder(path: string, mode: string): Promise<FileInfo[]> {
                         ext: ext,
                         type: getFileType(ext)
                     });
+
+                    if (info.type === 'folder') {
+                        info.avatar = await getBase64(filepath + '/' + 'avatar.jpg');
+                    }
 
                     if (isImage(ext)) {
                         info.base64 = await getBase64(filepath);
@@ -332,3 +340,7 @@ const app = http.createServer((req: Req, res) => {
 app.listen(3060, function () {
     console.log(`Local Server: http://127.0.0.1:3060/`);
 });
+
+function imageController(req: any, res: any) {
+    throw new Error('Function not implemented.');
+}
