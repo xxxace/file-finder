@@ -45,7 +45,9 @@
                 :title="item.name + ' ' + getSize(item.size) || ''">
                 <n-image v-if="item.type === 'image' || item.type === 'video'" :src="(item.base64 as string)"
                     :alt="item.dir" :lazy="true" objectFit="contain" />
-                <img v-else-if="item.type === 'folder'" :src="folderIcon" :alt="item.dir" :style="`width:70%`">
+                <n-image v-else-if="!!item.avatar" :src="(item.avatar as string)" :alt="item.dir || ''" :lazy="true"
+                    objectFit="contain" :style="`width:70%;height:70%`" preview-disabled />
+                <img v-else-if="item.type === 'folder'" :src="folderIcon" :alt="item.dir || ''" :style="`width:70%`">
                 <div v-else :title="item.dir" :class="`file-cover fiv-cla fiv-icon-${item.ext}`"
                     :style="`width:70%;font-size: .6rem`"></div>
                 <span>{{ item.name }}</span>
@@ -55,8 +57,8 @@
             @clickoutside="popover.visible = false">
             <n-space>
                 <div v-for="(item) in popover.files" class="file-item" :key="item.name" @dblclick="openFile(item.name)"
-                    :title="item.name + ` ${getSize(item.size)}`">
-                    <div class="file-cover" :title="item.name"></div>
+                    :title="item.name + ` ${getSize(item.size) || ''}`">
+                    <div class="file-cover" :title="item.name || ''"></div>
                     <span>{{ item.name }}</span>
                 </div>
             </n-space>
@@ -116,6 +118,8 @@ const getSize = (size: number | undefined) => {
         if (s.gb) return `${s.gb.toFixed(2)}GB`;
         if (s.mb) return `${s.mb.toFixed(2)}MB`;
         if (s.kb) return `${s.kb.toFixed(2)}KB`;
+    } else {
+        return size
     }
 }
 
