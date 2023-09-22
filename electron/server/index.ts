@@ -7,8 +7,9 @@ import * as fs from 'fs';
 import path from 'node:path';
 import { mkthumbnial } from '../utils/ffmpeg';
 import { DiskType, FileFinderDockerManager } from '../utils/FileFinderDocker';
-import nedb, { OpenMode, SearchCache, getHistoryList } from './nedb';
+import nedb, { OpenMode, SearchCache, getHistoryList, findAllByPath } from './nedb';
 import dayjs from 'dayjs';
+import pLimit, { LimitFunction } from 'p-limit';
 
 const fileFinderDockerManager = new FileFinderDockerManager();
 fileFinderDockerManager.detect();
@@ -313,9 +314,64 @@ async function getHistory(req: Req, res: http.ServerResponse) {
     }
 }
 
+const limit = pLimit(4);
+function updatePathOrDir(cache: SearchCache): Promise<string | undefined> {
+    return new Promise((resolve, reject) => {
+        nedb.update({ _id: cache._id }, { $set: { path: cache.path, data: cache.data } }, {}, function (err) {
+            if (err) {
+                reject(cache._id)
+                console.log(err)
+            } else {
+                resolve(cache._id)
+            }
+        })
+    })
+}
+
+
+function updateDrive(req: Req, response: http.ServerResponse) {
+    const targetDrive = req.params?.get('targetDrive')
+    const replaceDrive = req.params?.get('replaceDrive')
+    if (!targetDrive || !replaceDrive) {
+        response.end(JSON.stringify({
+            code: 500,
+            error: "参数 targetDrive 或 replaceDrive 不能为空"
+        }));
+        return;
+    }
+
+    findAllByPath(targetDrive).then(res => {
+        const updatePrefix = (cache: SearchCache): SearchCache => {
+            const newCache: SearchCache = JSON.parse(JSON.stringify(cache));
+            newCache.path = cache.path.replace(targetDrive, replaceDrive);
+            if (newCache.data) {
+                newCache.data.forEach(nc => {
+                    nc.dir = nc.dir.replace(targetDrive, replaceDrive);
+                });
+            }
+            return newCache;
+        }
+
+        const tasks = res.map(r => {
+            const copy = updatePrefix(r);
+            return limit(() => updatePathOrDir(copy));
+        });
+
+        Promise.all(tasks).then((res) => {
+            response.end(JSON.stringify(res));
+        }).catch(err => {
+            response.end(JSON.stringify({
+                code: 500,
+                error: err
+            }));
+        });
+    })
+}
+
 event.on('/getHistory', getHistory);
 event.on('/getFileTree', getVideoCodeList);
 event.on('/openFolder', openFolderController);
+event.on('/updateDrive', updateDrive);
 event.on('/', function (req, res) {
     req.headers['content-type'] = 'text/plain';
     res.end('hi! i`m ace.');

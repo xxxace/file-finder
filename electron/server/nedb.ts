@@ -6,6 +6,7 @@ import path from 'node:path';
 export type OpenMode = 'cover' | 'folder'
 
 export interface SearchCache {
+    _id?: string;
     path: string;
     data: FileInfo[];
     create_at: string;
@@ -48,6 +49,18 @@ export function getHistoryList(path: string | null | undefined, pageNo?: number,
                         });
                     }
                 })
+            }
+        })
+    })
+}
+
+export function findAllByPath(path: string | null | undefined): Promise<Array<SearchCache>> {
+    return new Promise((resolve, reject) => {
+        nedb.find({ path: new RegExp(path || '') }).sort({ path: 1 }).exec(function (e, docs) {
+            if (e) {
+                reject(e)
+            } else {
+                resolve(docs)
             }
         })
     })
