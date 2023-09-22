@@ -19,6 +19,7 @@
                 <template #description>
                     数据加载中...
                 </template>
+                <n-button size="small" style="margin-bottom: 10px;" @click="handleDriveChangerShow">盘符变更</n-button>
                 <n-table :single-line="false" size="small">
                     <thead>
                         <tr>
@@ -54,12 +55,14 @@
             </template>
         </n-card>
     </n-modal>
+    <drive-changer ref="driveChanger" />
 </template>
 <script lang="ts" setup>
 import { onMounted, ref, watch } from 'vue';
 import useNotify from '@/hooks/useNotify';
 import { NInput, NForm, NButton, NFormItem, FormInst, NCard, NModal, NPagination, NTable, NSpin } from 'naive-ui'
 import type { SearchCache, BrowseHistoryWithPagination, OpenMode } from 'electron/server/nedb';
+import DriveChanger from "@/components/DriveChanger/index.vue";
 
 export type HistoryQuery = {
     path: string;
@@ -145,6 +148,11 @@ const handlePageChange = (page: number) => {
 const handlePageSizeChange = (pageSize: number) => {
     model.value.pageSize = pageSize;
     getHistrotyList();
+}
+
+const driveChanger = ref<typeof DriveChanger>()
+const handleDriveChangerShow = () => {
+    driveChanger.value?.setShowModal(true)
 }
 
 onMounted(() => {
