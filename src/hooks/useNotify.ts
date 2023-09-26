@@ -1,7 +1,7 @@
 import { useNotification, NotificationType } from 'naive-ui';
 
-const notification = useNotification();
 export default function useNotify() {
+    const notification = useNotification();
     return function (type: NotificationType, title?: string, message?: string) {
         notification[type]({
             content: title,
