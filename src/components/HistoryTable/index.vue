@@ -1,6 +1,7 @@
 <template>
     <n-modal v-model:show="showModal">
-        <n-card style="width: 600px" title="历史记录" :bordered="false" size="huge" role="dialog" aria-modal="true">
+        <n-card style="width: 800px; margin-top: 100px" title="历史记录" :bordered="false" size="huge" role="dialog"
+            aria-modal="true">
             <template #header-extra>
                 <n-form inline ref="formRef" :model="model" label-placement="left" label-width="auto"
                     require-mark-placement="right-hanging" size="small" :disabled="loading">
@@ -19,8 +20,11 @@
                 <template #description>
                     数据加载中...
                 </template>
+                <n-button v-if="checkedRowKeysRef.length > 0" type="error" size="small"
+                    style="margin-bottom: 10px;margin-right: 10px;" @click="handleRemove">删除({{ checkedRowKeysRef.length
+                    }})</n-button>
                 <n-button size="small" style="margin-bottom: 10px;" @click="handleDriveChangerShow">盘符变更</n-button>
-                <n-table :single-line="false" size="small">
+                <!-- <n-table :single-line="false" size="small">
                     <thead>
                         <tr>
                             <th>路径</th>
@@ -39,7 +43,9 @@
                             </tr>
                         </template>
                     </tbody>
-                </n-table>
+                </n-table> -->
+                <n-data-table :columns="columns" :data="tableData" :row-key="(row: RowData) => row._id"
+                    @update:checked-row-keys="handleCheck" />
             </n-spin>
             <template #footer>
                 <div style="display: flex;justify-content: flex-end;">
@@ -58,11 +64,13 @@
     <drive-changer ref="driveChanger" />
 </template>
 <script lang="ts" setup>
-import { onMounted, ref, watch } from 'vue';
+import { onMounted, ref, toRaw, watch } from 'vue';
 import useNotify from '@/hooks/useNotify';
-import { NInput, NForm, NButton, NFormItem, FormInst, NCard, NModal, NPagination, NTable, NSpin } from 'naive-ui'
+import { NInput, NForm, NButton, NFormItem, FormInst, NCard, NModal, NPagination, NDataTable, NSpin } from 'naive-ui'
+import type { DataTableColumns, DataTableRowKey } from 'naive-ui'
 import type { SearchCache, BrowseHistoryWithPagination, OpenMode } from 'electron/server/nedb';
 import DriveChanger from "@/components/DriveChanger/index.vue";
+import { deletAction } from '@/utils/request';
 
 export type HistoryQuery = {
     path: string;
@@ -70,7 +78,17 @@ export type HistoryQuery = {
     pageSize: number;
     total: number;
 }
-
+type RowData = { key: number; _id: string; path: string; create_at: string; }
+const columns = ref<DataTableColumns<RowData>>([{
+    type: 'selection'
+}, {
+    title: '路径',
+    key: 'path'
+}, {
+    title: '日期',
+    key: 'create_at'
+}])
+const tableData = ref<Partial<SearchCache>[]>([])
 const emits = defineEmits<{
     (e: 'openDir', path: string, mode: OpenMode): void
 }>();
@@ -82,7 +100,6 @@ const model = ref<HistoryQuery>({
     pageSize: 10,
     total: 0
 })
-const historyList = ref<Partial<SearchCache>[]>([]);
 const showModal = ref(false);
 const loading = ref(false);
 const isFirstRender = ref(false);
@@ -111,7 +128,7 @@ const getHistrotyList = () => {
     fetch(`http://127.0.0.1:3060/getHistory${toQueryStr(model.value)}`).then(res => {
         return res.json();
     }).then(async (data: BrowseHistoryWithPagination) => {
-        historyList.value = data.records
+        tableData.value = data.records
         model.value.total = data.total
     }).catch(err => {
         notify('error', '错误', `获取历史数据列表错误！${err}`)
@@ -153,6 +170,30 @@ const handlePageSizeChange = (pageSize: number) => {
 const driveChanger = ref<typeof DriveChanger>()
 const handleDriveChangerShow = () => {
     driveChanger.value?.setShowModal(true)
+}
+
+const checkedRowKeysRef = ref<DataTableRowKey[]>([])
+const handleCheck = (rowKeys: DataTableRowKey[]) => {
+    checkedRowKeysRef.value = rowKeys
+
+}
+
+const handleRemove = async () => {
+    loading.value = true;
+
+    try {
+        const ids = toRaw(checkedRowKeysRef.value)
+        await deletAction('http://localhost:3060/removeHistoryBatch?ids=' + ids.join(','))
+        notify('success', '成功', `删除成功`)
+        setTimeout(() => {
+            handleCheck([])
+            onRefresh()
+        }, 500)
+    } catch (err) {
+        notify('error', '错误', `删除失败:${err}`)
+    }
+
+    loading.value = false;
 }
 
 onMounted(() => {

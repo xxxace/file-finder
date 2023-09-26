@@ -240,7 +240,7 @@ function getVideoCodeList(req: Req, res: http.ServerResponse) {
     res.end(JSON.stringify(result));
 }
 
-type Req = http.IncomingMessage & { params?: URLSearchParams }
+type Req<T = any> = http.IncomingMessage & { params?: URLSearchParams, body?: T }
 const findOneAsync = util.promisify(nedb.findOne.bind(nedb));
 // 封装缓存查询函数
 async function searchCache(path: string) {
@@ -329,16 +329,19 @@ function updatePathOrDir(cache: SearchCache): Promise<string | undefined> {
 }
 
 
-function updateDrive(req: Req, response: http.ServerResponse) {
-    const targetDrive = req.params?.get('targetDrive')
-    const replaceDrive = req.params?.get('replaceDrive')
-    if (!targetDrive || !replaceDrive) {
+function updateDrive(req: Req<{ targetDrive: string; replaceDrive: string; }>, response: http.ServerResponse) {
+    const targetDriveName = req.body?.targetDrive
+    const replaceDriveName = req.body?.replaceDrive
+    if (!targetDriveName || !replaceDriveName) {
         response.end(JSON.stringify({
             code: 500,
             error: "参数 targetDrive 或 replaceDrive 不能为空"
         }));
         return;
     }
+
+    const targetDrive = targetDriveName + ':'
+    const replaceDrive = replaceDriveName + ':'
 
     findAllByPath(targetDrive).then(res => {
         const updatePrefix = (cache: SearchCache): SearchCache => {
@@ -358,13 +361,51 @@ function updateDrive(req: Req, response: http.ServerResponse) {
         });
 
         Promise.all(tasks).then((res) => {
-            response.end(JSON.stringify(res));
+            response.writeHead(200, { 'Content-Type': 'application/json' });
+            response.end(JSON.stringify({
+                code: 200,
+                result: res
+            }));
         }).catch(err => {
+            response.writeHead(200, { 'Content-Type': 'application/json' });
             response.end(JSON.stringify({
                 code: 500,
                 error: err
             }));
         });
+    }).catch(err => {
+        response.writeHead(200, { 'Content-Type': 'application/json' });
+        response.end(JSON.stringify({
+            code: 500,
+            error: err
+        }));
+    })
+}
+
+function removeHistoryBatch(req: Req, response: http.ServerResponse) {
+    const ids = req.params?.get('ids');
+    if (!ids) {
+        response.end(JSON.stringify({
+            code: 500,
+            error: "参数 ids 不能为空"
+        }));
+        return
+    }
+
+    nedb.remove({ _id: { $in: ids.split(',') } }, { multi: true }, function (err, numRemoved) {
+        if (err) {
+            response.writeHead(500, { 'Content-Type': 'application/json' });
+            response.end(JSON.stringify({
+                code: 500,
+                error: err
+            }))
+        } else {
+            response.writeHead(200, { 'Content-Type': 'application/json' });
+            response.end(JSON.stringify({
+                code: 200,
+                message: `${numRemoved} 条数据已删除`
+            }))
+        }
     })
 }
 
@@ -372,6 +413,7 @@ event.on('/getHistory', getHistory);
 event.on('/getFileTree', getVideoCodeList);
 event.on('/openFolder', openFolderController);
 event.on('/updateDrive', updateDrive);
+event.on('/removeHistoryBatch', removeHistoryBatch);
 event.on('/', function (req, res) {
     req.headers['content-type'] = 'text/plain';
     res.end('hi! i`m ace.');
@@ -383,15 +425,43 @@ event.on('*', function (req: http.IncomingMessage, res: http.ServerResponse) {
 });
 
 const app = http.createServer((req: Req, res) => {
+    cors(res)
     const u = url.parse(req.url!);
+    const method = req.method?.toUpperCase();
     req.params = new URLSearchParams(u.search!);
     let path: string = u.pathname!;
-    const listener = events.getEventListeners(event, path);
 
-    if (!listener.length) path = '*';
+    const next = () => {
+        const listener = events.getEventListeners(event, path);
+        if (!listener.length) path = '*';
+        event.emit(path, req, res);
+    }
 
-    event.emit(path, req, res);
+    if (method === 'OPTIONS') {
+        res.writeHead(200);
+        res.end();
+    } else {
+        if (method === 'POST') {
+            let requestBody = '';
+            req.on('data', function (chunk) {
+                requestBody += chunk;
+            })
+            req.on('end', function () {
+                req.body = JSON.parse(requestBody)
+                next()
+            })
+        } else if (method === 'GET' || method === 'DELETE') {
+            next()
+        }
+    }
 });
+
+function cors(res: http.ServerResponse) {
+    res.setHeader('Access-Control-Allow-Origin', '*');
+    res.setHeader('Access-Control-Allow-Methods', 'OPTIONS, GET, POST, PUT, DELETE');
+    res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization, token');
+    res.setHeader('Access-Control-Allow-Credentials', 'true');
+}
 
 app.listen(3060, function () {
     console.log(`Local Server: http://127.0.0.1:3060/`);

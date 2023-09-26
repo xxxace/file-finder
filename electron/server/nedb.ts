@@ -42,7 +42,7 @@ export function getHistoryList(path: string | null | undefined, pageNo?: number,
                         reject(e);
                     } else {
                         resolve({
-                            records: docs.map(d => ({ path: d.path, mode: d.mode, create_at: d.create_at })),
+                            records: docs.map(d => ({ _id: d._id, path: d.path, mode: d.mode, create_at: d.create_at })),
                             total: count,
                             current: current,
                             size: size
