@@ -1,6 +1,6 @@
 <template>
     <n-modal v-model:show="showModal">
-        <n-card style="width: 800px; margin-top: 100px" title="历史记录" :bordered="false" size="huge" role="dialog"
+        <n-card style="width: 800px; margin-top: 10px" title="历史记录" :bordered="false" size="huge" role="dialog"
             aria-modal="true">
             <template #header-extra>
                 <n-form inline ref="formRef" :model="model" label-placement="left" label-width="auto"
@@ -64,7 +64,7 @@
     <drive-changer ref="driveChanger" />
 </template>
 <script lang="ts" setup>
-import { onMounted, ref, toRaw, watch } from 'vue';
+import { h, onMounted, ref, toRaw, watch } from 'vue';
 import useNotify from '@/hooks/useNotify';
 import { NInput, NForm, NButton, NFormItem, FormInst, NCard, NModal, NPagination, NDataTable, NSpin } from 'naive-ui'
 import type { DataTableColumns, DataTableRowKey } from 'naive-ui'
@@ -83,7 +83,19 @@ const columns = ref<DataTableColumns<RowData>>([{
     type: 'selection'
 }, {
     title: '路径',
-    key: 'path'
+    key: 'path',
+    render(row) {
+        return h(
+            NButton,
+            {
+                size: 'small',
+                type: 'info',
+                quaternary: true,
+                ondblclick: () => openDir(row)
+            },
+            { default: () => row.path }
+        )
+    }
 }, {
     title: '日期',
     key: 'create_at'
