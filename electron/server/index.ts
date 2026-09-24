@@ -5,14 +5,15 @@ import * as fs from 'node:fs';
 import * as fsasync from 'node:fs/promises';
 import dayjs from 'dayjs';
 import { imageThumb, videoThumb } from '../utils/thumbnail';
-import { newThumbKey, putThumb, getThumb, stripThumbData } from '../utils/thumbStore';
+import { newThumbKey, putThumb, getThumb } from '../utils/thumbStore';
 import {
     findDriveByLetter, findDuplicatedSerials, getDrives, offlineSerials,
     splitPath, syncRegistry, toFullPath,
 } from '../utils/driveIdentity';
 import type { DriveInfo } from '../utils/driveIdentity';
 import {
-    CACHE_VERSION, cacheBackup, dropLegacyRecords, findCache, insertCache, loadMeta,
+    BEFORE_RESTORE_PATH, CACHE_DB_PATH, CACHE_VERSION, beginRestore, cacheBackup, endRestore,
+    findCache, insertCache, loadMeta, readExternalCache, reloadFromDisk,
     removeByIds, removeCache,
 } from './nedb';
 import type { CacheMeta, OpenMode, SearchCache } from './nedb';
@@ -88,7 +89,7 @@ export interface FileInfo {
     size: number;
     /** 缩略图 key。渲染层拿它请求 /thumb?k= */
     thumb?: string;
-    /** 缩略图的 data URI。只存不发，下发前被 stripThumbData 剥掉 */
+    /** 缩略图的 data URI。只存不发，下发前被 `wire()` 的白名单重建丢掉 */
     thumbData?: string;
     /** 目录封面（目录下的 avatar.jpg）的缩略图 key */
     avatar?: string;
@@ -221,7 +222,19 @@ async function readFolder(diskDir: string, mode: string, serial: string, storeDi
         files = await fsasync.readdir(diskDir);
     } catch (e) {
         console.error('[readFolder] 读取目录失败:', diskDir, e);
-        return [];
+        // ⚠️ **「读不到」不等于「空目录」—— 必须抛出去，绝不能 `return []`。**
+        // 返回 [] 会一路走到 scanAndCache，被当成"这一层就是空的"写进缓存，
+        // 把那条真实记录覆盖成 count:0；而"为什么读不到"（I/O 错误 / 权限 /
+        // 盘没就绪 / UNC 瞬时断）就此永久消失。用户看到空网格 + 零提示，只会以为数据丢了。
+        // 实测复现（ACL 拒绝读目录 = EPERM）见 docs/UX-DESIGN-INPUT-2026-09-24.md §2.3。
+        // 只有 readdir **成功且返回 0 项** 才是"真的空目录" —— 那种情况才该走下面的空数组。
+        const code = (e as NodeJS.ErrnoException)?.code ?? 'UNKNOWN';
+        // `kind` 是给前端用的**机器可读**分类，由 `route()` 原样透传、
+        // 由 `request.ts` 的 ApiError 接住。前端据此决定横幅文案与"要不要让他重试"，
+        // **不是**去 match 这里的文案 —— 那样文案改一个字，判别就静默失效。
+        const err = new Error(`读不到这个文件夹（${code}）`) as Error & { kind?: string };
+        err.kind = 'unreadable';
+        throw err;
     }
 
     const folder: FileInfo[] = [];
@@ -303,7 +316,12 @@ async function handleCover(diskDir: string, serial: string, storeDir: string): P
         filenames = await fsasync.readdir(diskDir);
     } catch (e) {
         console.error('[handleCover] 读取目录失败:', diskDir, e);
-        return [];
+        // ⚠️ 返回 `null`（="我没法收敛它，按普通目录列出"），**不要返回 `[]`**。
+        // 调用方写的是 `if (converged) { ...; continue; }` —— **空数组是 truthy**，
+        // 于是这个子目录会被 `continue` 静默跳过：既没收敛、也没当成目录，
+        // **连名字都不出现在列表里**。用户会以为那个文件夹不存在。
+        // 返回 null 才会落到下面按普通目录列出 —— 降级成"没有封面"，而不是"不存在"。
+        return null;
     }
 
     // 第一关：里面还有子目录吗？
@@ -438,17 +456,63 @@ async function getFileTree(req: Req, res: http.ServerResponse) {
 }
 
 /**
- * 登记缩略图 + 剥掉只存不发的内部字段。
+ * 下发态的条目：比存储态少了两个"只存不发"的字段。
+ *
+ * 类型上必须真的把它们减掉，不能写成 `FileInfo` —— 那等于让类型撒谎
+ * （调用方会以为那两坨 base64 还在）。原来的 `stripThumbData` 就是用
+ * `Omit<...>` 表达这件事的，白名单重建把这层含义接管了过来。
+ */
+export type WiredFileInfo = Omit<FileInfo, 'thumbData' | 'avatarThumbData'>;
+
+/**
+ * 条目 → 下发态：**按白名单重建**，只放行 `FileInfo` 里"会下发"的那 9 个字段。
+ *
+ * 为什么必须是白名单，而不是"把已知的内部字段解构掉"（原来这里是 `stripThumbData`）：
+ * 黑名单是"我知道哪些要剥掉" —— 将来 `FileInfo` 少一个字段、或者库里的旧记录多一个字段，
+ * 剥离表就漏，而漏的方式是**静默下发**。白名单是"我只认识这些"，之后字段怎么变都漏不出去。
+ *
+ * 这不是假想的问题。旧记录里每条都把整个 `fs.Stats` 序列化进去过，实测能漏出 17 个
+ * 渲染层一个字都不看的字段（`dev` / `ino` / `nlink` / `atime*` / `mtime*` / …），
+ * 其中 **`dev` 是扫描那一刻的卷序列号** —— 正是"盘符不是身份、序列号才是"这条设计
+ * 明令不许进数据的东西。
+ *
+ * `files[]` 也必须重建：v1 里 `FileInfoFiles = fs.Stats & { name }`，
+ * 每一项同样带着整包 stat。只清顶层等于只修一半。
+ *
+ * ⚠️ **别把 `thumbData` / `avatarThumbData` 也放进来** —— 它们是 `FileInfo` 的字段，
+ * 但属于"只存不发"：base64 由 `wire()` 登记进内存索引、渲染层只拿 `thumb` 这个 key
+ * 去 `/thumb` 取。放进来就等于把这个机制撤销了，payload 又回到几百 KB
+ * （第一版白名单就踩了这个：实测下发 JSON 里真的出现了 base64）。
+ */
+export function pickFileInfo(raw: FileInfo): WiredFileInfo {
+    return {
+        dir: raw.dir,
+        name: raw.name,
+        isDirectory: raw.isDirectory,
+        ext: raw.ext,
+        files: raw.files?.map(f => ({ name: f.name, size: f.size })),
+        type: raw.type,
+        size: raw.size,
+        thumb: raw.thumb,
+        avatar: raw.avatar,
+    };
+}
+
+/**
+ * 登记缩略图 + 按白名单重建条目。
  *
  * **所有**下发路径都必须过这里，且只留这一处。上一版只有"缓存命中"那条路走 `toWire`，
  * 非盘符路径（UNC、网络位置）直接 `sendJson(readFolder(...))` 就出去了 ——
  * 缩略图压根没登记，前端拿到的 key 请求 /thumb 全是 404，整个网格是白框。
+ *
+ * 所以白名单也放在这里、而不是只放在"取缓存"那一支：**出口只有一个**，
+ * 谁都不需要记得自己清一遍。fresh 扫出来的条目本来就是干净的，过一遍只是幂等。
  */
-function wire(items: FileInfo[]): FileInfo[] {
+function wire(items: FileInfo[]): WiredFileInfo[] {
     return items.map(item => {
         registerThumb(item.thumb, item.thumbData);
         registerThumb(item.avatar, item.avatarThumbData);
-        return stripThumbData(item);
+        return pickFileInfo(item);
     });
 }
 
@@ -457,8 +521,90 @@ function wire(items: FileInfo[]): FileInfo[] {
  *
  * 这一步是整套设计的关键：缓存里不存盘符，所以同一块盘今天挂 H:、明天挂 K: 都不用改数据。
  */
-function toWire(items: FileInfo[], drive: string): FileInfo[] {
+function toWire(items: FileInfo[], drive: string): WiredFileInfo[] {
     return wire(items).map(item => ({ ...item, dir: toFullPath(drive, item.dir) }));
+}
+
+/**
+ * 只读锚点 —— 用「序列号 + 盘内相对路径」直接寻址一份缓存，**完全不碰盘**。
+ *
+ * 为什么需要它：拔盘之后缓存其实好端端躺在库里，但按路径寻址（`H:/x`）走不通 ——
+ * `findDriveByLetter('H')` 给 null，而且没有任何办法从一个盘符反推"它当初属于哪块盘"。
+ * 而**盘符不是身份、序列号才是**（见 driveIdentity.ts 开头那段），
+ * 所以一块不在的盘，它唯一正确的地址本来就不是路径，是 `(serial, relPath)`。
+ *
+ * 为什么写成字符串 `#<serial>/<relPath>`、而不是给接口加一组参数：
+ * 渲染层的导航栈、面包屑、双击下钻全都只认一个字符串（`item.dir + '/' + name`）。
+ * 让锚点长得像路径，**导航那一整块代码一行都不用改** —— 也不会出现"路径寻址"和
+ * "序列号寻址"两套并行的导航。`#` 在 Windows 路径里永远不合法，撞不上真路径。
+ *
+ * ⚠️ 锚点**只能读缓存**：不扫盘、不写缓存、忽略 `noCache`。这不是省事，是"只读"的定义 ——
+ * 盘都没插，界面里就不该有任何一路再去碰盘。缓存里没有的那一层 → `kind:'notCached'`。
+ * ⚠️ `/raw` 天然拒绝锚点（`splitPath` 拆不开 `#` 开头的串）→ 锚点**没有任何**
+ * 能读到磁盘文件的通道。离线看大图走缩略图（前端 `previewUrl` 已按只读层降级）。
+ */
+const ANCHOR_PREFIX = '#';
+
+function parseAnchor(raw: string): { serial: string; relPath: string } | null {
+    if (!raw.startsWith(ANCHOR_PREFIX)) return null;
+    const rest = raw.slice(ANCHOR_PREFIX.length);
+    const cut = rest.indexOf('/');
+    if (cut === -1) return { serial: rest, relPath: '' };
+    return { serial: rest.slice(0, cut), relPath: rest.slice(cut + 1) };
+}
+
+/** 和 `toFullPath` 同构：relPath 为空表示那块盘的根，此时不留尾斜杠 */
+function toAnchorPath(serial: string, relPath: string): string {
+    return relPath ? `${ANCHOR_PREFIX}${serial}/${relPath}` : `${ANCHOR_PREFIX}${serial}`;
+}
+
+/**
+ * 存储态 → 只读下发态。和 `toWire` 逐字同构，只是把盘符换成锚点。
+ *
+ * 前缀补的是**条目自己的 `dir`**（不是请求里那一层），和 `toWire` 用 `item.dir` 同一个理由：
+ * 条目所在目录才是它的地址。这样下钻拼出的 `#serial/a/b` 和当初写进缓存时的 `relPath`
+ * 逐字符一致（大小写也一样）—— `findCache` 是精确匹配，差一个字母就是未命中。
+ */
+function toAnchor(items: FileInfo[], serial: string): WiredFileInfo[] {
+    return wire(items).map(item => ({ ...item, dir: toAnchorPath(serial, item.dir) }));
+}
+
+/**
+ * 同主键写入链 —— 「删旧 + 插新」必须当成**一个整体**。
+ *
+ * 为什么需要：`removeCache + insertCache` 是两步非原子的。后台批量扫描（P1）期间
+ * 用户随时可能点进同一个目录，两次调用会交错成
+ *   扫描A.remove → 用户B.remove → 扫描A.insert → 用户B.insert
+ * 于是同一主键**留下两条记录**（insert 不查重），留下一条属于旧时刻的，或者出现
+ * "缓存被删了但还没插回来"的空窗（并发读者会当未命中，再触发一次扫描）。
+ * 以前只是偶发（要用户恰好点进正在扫的那个目录），加了批量扫描就变成必然。
+ *
+ * 为什么做成队列，而不是给每个调用方各加一道锁：`scanAndCache` 是这套缓存**唯一**的
+ * 写入入口，把两步收进它内部，约束就长在写入这件事自己身上；加锁则是"每个调用方都得
+ * 记得锁"—— 以后新增一个写缓存的入口（比如 F5 那条）立刻复发。这和 `wire()` 是唯一
+ * 下发出口、`apiUrl()` 是唯一 URL 出口、口令校验挂在唯一请求入口是同一个思路。
+ *
+ * 键是 `(serial, relPath, mode)`：不同目录之间**不**互相同步 —— 否则扫一整块盘会退化
+ * 成"全库串行"。同一个键上一条链，前一个任务失败也照样接着跑（`then(task, task)`），
+ * 一条链被一次失败卡死的话，那个目录之后就再也写不进缓存了。
+ */
+const writeChains = new Map<string, Promise<void>>();
+
+function queueCacheWrite<T>(serial: string, relPath: string, mode: OpenMode, task: () => Promise<T>): Promise<T> {
+    // 分隔符用 \u0000：Windows 文件名里不可能出现，不会有 A|B 和 A|B 撞键的歧义
+    const key = `${serial}\u0000${relPath}\u0000${mode}`;
+    const prev = writeChains.get(key) ?? Promise.resolve();
+    const run = prev.then(task, task);
+
+    // 链上挂的必须是**不会 reject** 的尾巴：否则一次失败会让后面每个 then(task, task) 都走 onRejected
+    const tail = run.then(() => undefined, () => undefined);
+    writeChains.set(key, tail);
+    // 链跑空就把槽位收掉，不然这个 Map 会随浏览过的目录数一直长
+    void tail.then(() => {
+        if (writeChains.get(key) === tail) writeChains.delete(key);
+    });
+
+    return run;
 }
 
 /**
@@ -478,10 +624,15 @@ async function scanAndCache(serial: string, drive: string, relPath: string, mode
         create_at: dayjs().format('YYYY-MM-DD HH:mm:ss'),
     };
 
-    // 先删后插：nedb 是 append-only，直接 insert 会在文件里留下两份，
-    // 而且 findCache 会取到旧的那份
-    await removeCache(serial, relPath, mode);
-    await insertCache(doc);
+    // 「先删后插」两步收进同主键的串行队列 —— 见 queueCacheWrite。
+    // 读盘（readFolder）留在队列外面：它慢，而且两个并发扫描各读各的没有危害，
+    // 真正会互相破坏的只有"写"这一段。后写的整条覆盖先写的，这正是想要的语义
+    await queueCacheWrite(serial, relPath, mode, async () => {
+        // 先删后插：nedb 是 append-only，直接 insert 会在文件里留下两份，
+        // 而且 findCache 会取到旧的那份
+        await removeCache(serial, relPath, mode);
+        await insertCache(doc);
+    });
 
     return doc;
 }
@@ -502,24 +653,57 @@ async function openFolderController(req: Req, res: http.ServerResponse) {
 
     if (!raw) return sendJson(res, []);
 
+    // ⓪ 只读锚点（`#序列号/盘内路径`）—— 拔盘之后看缓存走这条。
+    //    必须放在最前面：锚点不是路径，`splitPath` 拆不开它，
+    //    更不能让它流到下面任何一支去（那支会拿它当 UNC 去真读盘）。
+    const anchor = parseAnchor(raw);
+    if (anchor) {
+        // `noCache` 在这里没有意义：只读视图的"源"就是缓存，没有第二种读法。
+        // 忽略它（而不是报错），前端的「刷新」在只读层上因此是个安全的空动作。
+        const cached = await findCache(anchor.serial, anchor.relPath, mode);
+        // 抛而不是 return：`route()` 那个咽喉点会把它变成 `500 + kind`，
+        // 和 `readFolder` 抛错走同一条路（这也是当初做咽喉点的原因）。
+        if (!cached) {
+            const err = new Error('这一层没缓存过，只读视图读不到它') as Error & { kind?: string };
+            err.kind = 'notCached';
+            throw err;
+        }
+        return sendJson(res, toAnchor(cached.data, anchor.serial));
+    }
+
     // 路径 → 盘身份。拿不到序列号（UNC、网络位置、虚拟盘）就退化成"每次真读、不缓存"：
     // 这类路径不存在"拔了再插盘符会变"的问题，也就没有归属问题
     const parts = splitPath(raw);
     const disk = parts ? await findDriveByLetter(parts.drive) : null;
 
-    if (!parts || !disk) {
-        if (!parts) console.warn('[openFolder] 路径不是盘符开头，本次跳过缓存:', raw);
-        // 不缓存，但**必须过 wire()** —— 缩略图是在这一步才登记进内存索引的，漏了它
-        // 前端拿到的 key 请求 /thumb 全是 404。dir 原样保留完整路径：
-        // 这类路径不存在"拔了再插盘符会变"的问题，也就不需要拆出盘内相对路径
+    // ① 路径压根不是盘符开头（UNC / 网络位置 / 虚拟盘）→ **合法路径**，只是没法缓存。
+    //    这类路径不存在"拔了再插盘符会变"的问题，也就没有归属问题。
+    //    不缓存，但**必须过 wire()** —— 缩略图是在这一步才登记进内存索引的，漏了它
+    //    前端拿到的 key 请求 /thumb 全是 404。dir 原样保留完整路径。
+    if (!parts) {
+        console.warn('[openFolder] 路径不是盘符开头，本次跳过缓存:', raw);
         return sendJson(res, wire(await readFolder(raw, mode, '', raw)));
+    }
+
+    // ② 是盘符，但**这个盘现在不在**（拔了 / 光驱空仓 / 还没就绪）。
+    //    必须**报错**，不能读一把、返回一个空数组 ——
+    //    空数组到了前端就是"这个目录是空的"：用户对着空网格拿不到任何解释，
+    //    只会以为资料丢了；而缓存其实好端端躺在库里（按路径取不到 serial，
+    //    但**从「缓存记录」进来看仍然能看到它** —— 那条入口给的是锚点，见 ⓪）。
+    //    `findDriveByLetter` 是**实时 stat** 盘符，所以"盘在不在"这个判断是准的。
+    if (!disk) {
+        return sendJson(res, { code: 500, error: `盘 ${parts.drive}: 现在不在`, kind: 'offline' }, 500);
     }
 
     const { serial, drive } = disk;
     const relPath = parts.relPath;
 
-    if (noCache) await removeCache(serial, relPath, mode);
-
+    // 这里原来还有一句 `if (noCache) await removeCache(...)` —— 已删。
+    // 它是多余的：noCache 时 cached 必为 null，下面必然走 scanAndCache，
+    // 而 scanAndCache 自己就会 removeCache + insertCache。留着它等于在队列之外
+    // 又开一个写同一主键的口，那两步就不再是一个整体了（见 queueCacheWrite）。
+    // 顺带修掉一个更隐蔽的形态：原来那句会在**真读盘之前**就把旧缓存删掉，
+    // 读盘期间并发进来的读者会看到"这个目录没缓存"。
     const cached = noCache ? null : await findCache(serial, relPath, mode);
     const doc = cached ?? (await scanAndCache(serial, drive, relPath, mode));
 
@@ -632,8 +816,16 @@ async function listDisksController(_req: Req, res: http.ServerResponse) {
 }
 
 interface HistoryRow extends CacheMeta {
-    /** 当前完整路径。盘没插时为 null */
-    path: string | null;
+    /**
+     * 打开这一行用的地址。
+     *
+     * 盘在线 → 完整路径（`H:/x`，实时视图）；盘不在 → **只读锚点**（`#序列号/x`）。
+     * 以前这里盘不在时给 `null`，前端据此置灰（"不给一个点不开的路径"）——
+     * 现在锚点是点得开的（读缓存、不碰盘），所以两种盘都有地址，前端不再需要按
+     * `online` 决定能不能点。**注意它已经不等于"磁盘上的路径"了**，
+     * 展示上别拿它当盘符用（面板里那枚盘符标签用的是 `online ? path.slice(0,2) : '??'`）。
+     */
+    path: string;
     online: boolean;
 }
 
@@ -657,8 +849,10 @@ async function getHistory(req: Req, res: http.ServerResponse) {
                 const drive = letterOf.get(m.serial);
                 return {
                     ...m,
-                    // 盘不在线时给 null —— 前端据此置灰，而不是给一个点不开的路径
-                    path: drive ? toFullPath(drive, m.relPath) : null,
+                    // 盘在线 → 实时路径；盘不在 → 只读锚点（`#serial/relPath`）。
+                    // 托盘符没有意义：`H:` 现在可能是另一块盘，拿它当地址等于在编造身份。
+                    // 锚点是 `(serial, relPath)`，正是这条缓存记录的主键 —— 唯一准确的地址。
+                    path: drive ? toFullPath(drive, m.relPath) : toAnchorPath(m.serial, m.relPath),
                     online: !!drive,
                 };
             });
@@ -693,15 +887,186 @@ async function backup(_req: Req, res: http.ServerResponse) {
     }
 }
 
-event.on('/getHistory', getHistory);
-event.on('/openFolder', openFolderController);
-event.on('/thumb', thumbController);
-event.on('/raw', rawController);
-event.on('/getDisks', listDisksController);
-event.on('/getFileTree', getFileTree);
-event.on('/removeHistoryBatch', removeHistoryBatch);
-event.on('/backup', backup);
-event.on('/', function (_req, res) {
+/** POST body 里取一个非空路径。取不到就抛 —— 由 route() 兜住变成 500 */
+function bodyPath(req: Req): string {
+    const p = (req.body as { path?: unknown } | undefined)?.path;
+    if (typeof p !== 'string' || !p) {
+        throw new Error('参数 path 不能为空');
+    }
+    return p;
+}
+
+/**
+ * 「备份到文件…」—— 把主库整个复制到用户挑的位置。
+ *
+ * 为什么不是"生成一份导出格式"：**主库文件本身就是这份数据的完整、自描述形态**
+ * （键是 `(serial, relPath, mode)`，盘符不落数据 —— 见 nedb.ts 的 `SearchCache`）。
+ * 再包一层导出格式只会多一种"格式不对就废掉"的文件，而没有一个字节的新信息。
+ *
+ * 所以这里就是 `copyFile`，一个操作、没有中间态、失败也不留半个文件。
+ */
+async function backupToFile(req: Req, res: http.ServerResponse) {
+    const target = bodyPath(req);
+    await fsasync.copyFile(CACHE_DB_PATH, target);
+    sendJson(res, { code: 200, message: 'ok' });
+}
+
+/**
+ * 「从文件还原…」—— 整份顶掉主库，然后**就地重新加载**。
+ *
+ * 三步，缺一不可：
+ *
+ * 1. **先快照**（独立槽位 `BEFORE_RESTORE_PATH`）—— 还原是不可逆的整体覆盖，
+ *    而 `cacheBackup()` 那个名字是按天同名覆盖的，关键时刻靠不住（见 nedb.ts 注释）。
+ * 2. **覆盖主库**。
+ * 3. **重新加载**（`reloadFromDisk`）—— 这一步是**必须**的：
+ *    nedb 启动时把整库读进内存，**运行时内存才是真相源**；而且实测运行中的主库文件
+ *    **没有独占锁**（`r+` 能打开），所以光覆盖文件**不会报任何错**，会被内存态静默冲掉。
+ *    实测二次 `loadDatabase` 能完整换成新内容、且 executor 不会变僵尸
+ *    （探针 `%TEMP%/ff-enc-probe/reload.cjs`，6/6 PASS）→ 因此**不需要重启应用**。
+ *
+ * 失败就**尽力回滚**：把快照复制回去、再加载一次。回滚也失败时不再挣扎 ——
+ * 那时 `loadError` 已经挂着，闸门（`assertUsable`）会让所有请求响亮地报错，
+ * 而不是继续拿一份半坏的内存态对外服务。
+ */
+async function restoreFromFile(req: Req, res: http.ServerResponse) {
+    const source = bodyPath(req);
+
+    beginRestore();
+    // 覆盖是否已经开始过 —— 只有它才决定"要不要回滚"。
+    // 快照那一步失败时主库还没被动过，回滚反而是拿一份旧快照去盖好的库。
+    let overwritten = false;
+
+    try {
+        await fsasync.copyFile(CACHE_DB_PATH, BEFORE_RESTORE_PATH);
+        overwritten = true;
+        await fsasync.copyFile(source, CACHE_DB_PATH);
+        await reloadFromDisk();
+    } catch (e) {
+        if (!overwritten) throw new Error(`还原失败：${e}`);
+
+        let note: string;
+        try {
+            await fsasync.copyFile(BEFORE_RESTORE_PATH, CACHE_DB_PATH);
+            await reloadFromDisk();
+            note = '已回滚到还原前的状态。';
+        } catch (e2) {
+            note = `回滚也失败了（${e2}）。请手动把 ${BEFORE_RESTORE_PATH} 复制成 ${CACHE_DB_PATH}`;
+        }
+        throw new Error(`还原失败，选中的文件不是一份可用的缓存库。${note}`);
+    } finally {
+        endRestore();
+    }
+
+    sendJson(res, { code: 200, message: 'ok' });
+}
+
+/**
+ * 「合并缓存…」—— 把用户选中的另一份库**并进来**（不是顶掉）。
+ *
+ * 与「还原」的分界：还原 = 整份替换（本机独有的记录会消失）；
+ * 合并 = 两边都留（适合"两台机器各扫了一半的盘"）。
+ *
+ * 冲突规则：同一个主键 `(serial, relPath, mode)` 上，**取 `create_at` 新的那份**。
+ * 比 `>=` 而不是 `>`：本地与外部时间戳完全相等时没必要白删白插一遍。
+ *
+ * 只并 `v === CACHE_VERSION` 的记录：版本不同的记录形状就不对（v1 里
+ * `files[]` 带整包 fs.Stats、条目用完整路径当键），并进来是污染而不是补充。
+ * **不删外部文件**，也不改动它（`readExternalCache` 读的是副本）。
+ *
+ * 每一步都走 `queueCacheWrite` —— 和 `scanAndCache` **同一条写入链**。
+ * 这是必须的：合并可能和后台批量扫描撞在同一个主键上，绕过那条链就等于
+ * 在"唯一写入点"之外又开一个口（见 queueCacheWrite 的注释）。
+ */
+async function mergeCache(req: Req, res: http.ServerResponse) {
+    const source = bodyPath(req);
+    const incoming = await readExternalCache(source);
+
+    let added = 0, replaced = 0, skipped = 0;
+
+    for (const doc of incoming) {
+        if (doc.v !== CACHE_VERSION) {
+            skipped += 1;
+            continue;
+        }
+
+        const current = await findCache(doc.serial, doc.relPath, doc.mode);
+        if (current && current.create_at >= doc.create_at) {
+            skipped += 1;
+            continue;
+        }
+
+        // 丢掉外来的 _id，让本库自己发一个新的。
+        // 理由：`_id` 是**这一份库**内部的身份，不是数据的一部分；
+        // 带着它插进来，万一和本地某条别的记录撞上（_id 是随机串，理论上会撞），
+        // `insert` 会因 `_id` 唯一索引直接抛错，整个合并就断在半路。
+        // 主键是 `(serial, relPath, mode)`，丢掉 `_id` 不损失任何语义。
+        const payload: SearchCache = { ...doc };
+        delete payload._id;
+
+        await queueCacheWrite(doc.serial, doc.relPath, doc.mode, async () => {
+            await removeCache(doc.serial, doc.relPath, doc.mode);
+            await insertCache(payload);
+        });
+
+        current ? (replaced += 1) : (added += 1);
+    }
+
+    sendJson(res, { code: 200, added, replaced, skipped, total: incoming.length });
+}
+
+/**
+ * 路由注册的**唯一入口** —— 顺带把所有 async handler 的抛错兜住。
+ *
+ * 为什么必须有它：`event.emit(route, req, res)` 是**同步**调用，而下面这些 handler
+ * 全是 `async` —— 它们返回的 Promise 一旦 reject，**没有任何人接**：
+ * 不会变成 500、也不会关连接，而是变成 unhandledRejection，**请求永久不响应**
+ * （前端 `fetch` 一直挂着、`loading` 永远 true，界面卡死）。
+ *
+ * 以前每个 handler 各写各的 try/catch —— `getHistory` / `removeHistoryBatch` / `backup`
+ * 写了，而 `openFolderController` / `getFileTree` / `rawController` / `listDisksController`
+ * **没写**，它们抛错就是一个个"请求黑洞"。收成一个咽喉点之后，以后新增 handler
+ * **不可能再漏**。和 `wire()` 是唯一下发出口、`apiUrl()` 是唯一 URL 出口、
+ * 口令校验挂在唯一请求入口，是同一个思路。
+ *
+ * 顺带解决了"前端怎么知道失败了"：`sendJson` 带出的 `error` 字段会被
+ * `src/utils/request.ts` 的 `assertOk` 直接 `throw` 出去，
+ * `fetchFolder` 的 catch 里本来就有 `notify('error', …, String(err))`。
+ *
+ * `kind` 是**机器可读的失败分类**（handler 在 Error 上挂的，见 `readFolder`）。
+ * 前端要分成「盘不在 → 插上再来」和「读不到 → 稍后再试」两种提示，
+ * 靠文案匹配会随文案失效，所以让分类跟着错误对象一路走到前端。
+ * 没挂的分类一律是 `unknown`，前端按"其他失败"处理。
+ */
+function route(path: string, handler: (req: Req, res: http.ServerResponse) => unknown) {
+    event.on(path, (req: Req, res: http.ServerResponse) => {
+        Promise.resolve(handler(req, res)).catch((e: unknown) => {
+            console.error(`[route] ${path} 处理失败:`, e);
+            if (res.headersSent) {
+                res.end();
+                return;
+            }
+            sendJson(res, {
+                code: 500,
+                error: e instanceof Error ? e.message : String(e),
+                kind: (e as { kind?: string })?.kind ?? 'unknown',
+            }, 500);
+        });
+    });
+}
+
+route('/getHistory', getHistory);
+route('/openFolder', openFolderController);
+route('/thumb', thumbController);
+route('/raw', rawController);
+route('/getDisks', listDisksController);
+route('/getFileTree', getFileTree);
+route('/removeHistoryBatch', removeHistoryBatch);
+route('/backup', backup);
+route('/backupToFile', backupToFile);
+route('/restoreFromFile', restoreFromFile);
+route('/mergeCache', mergeCache);
+route('/', function (_req, res) {
     res.end('hi! i`m ace.');
 });
 
@@ -805,6 +1170,8 @@ app.listen(3060, '127.0.0.1', function () {
     }
 });
 
-// 旧格式缓存（没有盘序列号的那批）没法归属到任何一块盘，而且存的是原图 base64。
-// 清理前会先备份一份。放在 listen 之后，不拖慢启动
-dropLegacyRecords().catch(e => console.error('[server] 清理旧缓存失败:', e));
+// 这里原来有一句「启动时清理旧格式缓存」（dropLegacyRecords）—— 已删除。
+// 它的判据是 `{ v: { $ne: 2 } }`，而 nedb 的 `$ne` 连"字段不存在"也匹配，
+// 于是一次误删掉了"格式正确、只是没打版本号"的记录；而删除本身就意味着要碰盘。
+// 现在版本不符的记录**不会被删**，只在 findCache 里被当作未命中，
+// 下次浏览那个目录时被新记录自然覆盖（见 electron/server/nedb.ts）。

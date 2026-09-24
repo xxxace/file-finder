@@ -1,0 +1,49 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>工具条布局对照（真浏览器测量）</title>
+<style>
+    * { box-sizing: border-box; }
+    body { margin: 0; background: #fff; font-family: system-ui, "Segoe UI", "Microsoft YaHei", Arial, sans-serif; }
+    .case { margin-bottom: 18px; }
+    .case > h3 { font-size: 13px; font-weight: 500; margin: 8px 10px 4px; color: #333; }
+    .case > .note { font-size: 12px; margin: 0 10px 6px; color: #888; }
+
+    /* ↓↓↓ 以下四条与 src/views/FileFinder/index.vue 的 <style> 逐条对应 ↓↓↓ */
+    .finder { display: flex; flex-flow: column; padding: 10px 10px 0 10px; box-sizing: border-box; }
+    .header-bar { display: flex; padding: 4px; margin-bottom: 4px; border-radius: 4px;
+        box-shadow: 1px 0 6px rgba(113, 147, 192, 0.25); justify-content: space-between; }
+    .header-bar .n-input { }
+    .header-bar .n-input .n-input-wrapper { padding-top: 1px; padding-right: 6px; }
+    .header-bar .n-input .n-input__suffix .suffix-icon { display: inline-block; box-sizing: border-box;
+        padding: 7px; height: 22px; line-height: 8px; border: 1px solid #dbdbdb; border-radius: 4px; color: #a1a1a1; }
+    .hstack { display: flex; flex-wrap: wrap; align-items: center; gap: 12px; }
+    .toolbar { display: flex; flex-wrap: nowrap; align-items: center; gap: 12px; }
+    /* 修复本身：给搜索框固定宽度。只有变体 c（修后）带这条 —— 变体 a/b 是"没有它"的状态 */
+    .variant-c .header-bar .n-input { width: 200px; }
+    /* 左侧那一组的替身，宽度取自截图 x30–159 */
+    .leftstub { width: 130px; height: 28px; display: flex; align-items: center; font-size: 14px; color: #333; }
+</style>
+</head>
+<body>
+<div id="cases">
+    <div class="case">
+        <h3>变体 a —— 最初：n-space 原样（每个子项被包一层 div）</h3>
+        <div class="note">参考基线。n-space 的包装 div 恰好把搜索框的 width:100% 关在盒子里。</div>
+        <div id="a"></div>
+    </div>
+    <div class="case">
+        <h3>变体 b —— 中间态：换成裸 .hstack（用户截图那一屏）</h3>
+        <div class="note">搜索框 width:100% 直接生效 → 独霸一行，把「刷新」挤到第三行。</div>
+        <div id="b"></div>
+    </div>
+    <div class="case">
+        <h3>变体 c —— 修后：.toolbar（nowrap）+ 搜索框 200px</h3>
+        <div class="note">工具条恒为一行。</div>
+        <div id="c"></div>
+    </div>
+</div>
+<script src="./layout-bundle.js"></script>
+</body>
+</html>

@@ -1,0 +1,254 @@
+diff --git a/electron/server/index.ts b/electron/server/index.ts
+index 8f5f9ec..814afa2 100644
+--- a/electron/server/index.ts
++++ b/electron/server/index.ts
+@@ -5,14 +5,14 @@ import * as fs from 'node:fs';
+ import * as fsasync from 'node:fs/promises';
+ import dayjs from 'dayjs';
+ import { imageThumb, videoThumb } from '../utils/thumbnail';
+-import { newThumbKey, putThumb, getThumb, stripThumbData } from '../utils/thumbStore';
++import { newThumbKey, putThumb, getThumb } from '../utils/thumbStore';
+ import {
+     findDriveByLetter, findDuplicatedSerials, getDrives, offlineSerials,
+     splitPath, syncRegistry, toFullPath,
+ } from '../utils/driveIdentity';
+ import type { DriveInfo } from '../utils/driveIdentity';
+ import {
+-    CACHE_VERSION, cacheBackup, dropLegacyRecords, findCache, insertCache, loadMeta,
++    CACHE_VERSION, cacheBackup, findCache, insertCache, loadMeta,
+     removeByIds, removeCache,
+ } from './nedb';
+ import type { CacheMeta, OpenMode, SearchCache } from './nedb';
+@@ -88,7 +88,7 @@ export interface FileInfo {
+     size: number;
+     /** 缩略图 key。渲染层拿它请求 /thumb?k= */
+     thumb?: string;
+-    /** 缩略图的 data URI。只存不发，下发前被 stripThumbData 剥掉 */
++    /** 缩略图的 data URI。只存不发，下发前被 `wire()` 的白名单重建丢掉 */
+     thumbData?: string;
+     /** 目录封面（目录下的 avatar.jpg）的缩略图 key */
+     avatar?: string;
+@@ -438,17 +438,63 @@ async function getFileTree(req: Req, res: http.ServerResponse) {
+ }
+ 
+ /**
+- * 登记缩略图 + 剥掉只存不发的内部字段。
++ * 下发态的条目：比存储态少了两个"只存不发"的字段。
++ *
++ * 类型上必须真的把它们减掉，不能写成 `FileInfo` —— 那等于让类型撒谎
++ * （调用方会以为那两坨 base64 还在）。原来的 `stripThumbData` 就是用
++ * `Omit<...>` 表达这件事的，白名单重建把这层含义接管了过来。
++ */
++export type WiredFileInfo = Omit<FileInfo, 'thumbData' | 'avatarThumbData'>;
++
++/**
++ * 条目 → 下发态：**按白名单重建**，只放行 `FileInfo` 里"会下发"的那 9 个字段。
++ *
++ * 为什么必须是白名单，而不是"把已知的内部字段解构掉"（原来这里是 `stripThumbData`）：
++ * 黑名单是"我知道哪些要剥掉" —— 将来 `FileInfo` 少一个字段、或者库里的旧记录多一个字段，
++ * 剥离表就漏，而漏的方式是**静默下发**。白名单是"我只认识这些"，之后字段怎么变都漏不出去。
++ *
++ * 这不是假想的问题。旧记录里每条都把整个 `fs.Stats` 序列化进去过，实测能漏出 17 个
++ * 渲染层一个字都不看的字段（`dev` / `ino` / `nlink` / `atime*` / `mtime*` / …），
++ * 其中 **`dev` 是扫描那一刻的卷序列号** —— 正是"盘符不是身份、序列号才是"这条设计
++ * 明令不许进数据的东西。
++ *
++ * `files[]` 也必须重建：v1 里 `FileInfoFiles = fs.Stats & { name }`，
++ * 每一项同样带着整包 stat。只清顶层等于只修一半。
++ *
++ * ⚠️ **别把 `thumbData` / `avatarThumbData` 也放进来** —— 它们是 `FileInfo` 的字段，
++ * 但属于"只存不发"：base64 由 `wire()` 登记进内存索引、渲染层只拿 `thumb` 这个 key
++ * 去 `/thumb` 取。放进来就等于把这个机制撤销了，payload 又回到几百 KB
++ * （第一版白名单就踩了这个：实测下发 JSON 里真的出现了 base64）。
++ */
++export function pickFileInfo(raw: FileInfo): WiredFileInfo {
++    return {
++        dir: raw.dir,
++        name: raw.name,
++        isDirectory: raw.isDirectory,
++        ext: raw.ext,
++        files: raw.files?.map(f => ({ name: f.name, size: f.size })),
++        type: raw.type,
++        size: raw.size,
++        thumb: raw.thumb,
++        avatar: raw.avatar,
++    };
++}
++
++/**
++ * 登记缩略图 + 按白名单重建条目。
+  *
+  * **所有**下发路径都必须过这里，且只留这一处。上一版只有"缓存命中"那条路走 `toWire`，
+  * 非盘符路径（UNC、网络位置）直接 `sendJson(readFolder(...))` 就出去了 ——
+  * 缩略图压根没登记，前端拿到的 key 请求 /thumb 全是 404，整个网格是白框。
++ *
++ * 所以白名单也放在这里、而不是只放在"取缓存"那一支：**出口只有一个**，
++ * 谁都不需要记得自己清一遍。fresh 扫出来的条目本来就是干净的，过一遍只是幂等。
+  */
+-function wire(items: FileInfo[]): FileInfo[] {
++function wire(items: FileInfo[]): WiredFileInfo[] {
+     return items.map(item => {
+         registerThumb(item.thumb, item.thumbData);
+         registerThumb(item.avatar, item.avatarThumbData);
+-        return stripThumbData(item);
++        return pickFileInfo(item);
+     });
+ }
+ 
+@@ -457,7 +503,7 @@ function wire(items: FileInfo[]): FileInfo[] {
+  *
+  * 这一步是整套设计的关键：缓存里不存盘符，所以同一块盘今天挂 H:、明天挂 K: 都不用改数据。
+  */
+-function toWire(items: FileInfo[], drive: string): FileInfo[] {
++function toWire(items: FileInfo[], drive: string): WiredFileInfo[] {
+     return wire(items).map(item => ({ ...item, dir: toFullPath(drive, item.dir) }));
+ }
+ 
+@@ -805,6 +851,8 @@ app.listen(3060, '127.0.0.1', function () {
+     }
+ });
+ 
+-// 旧格式缓存（没有盘序列号的那批）没法归属到任何一块盘，而且存的是原图 base64。
+-// 清理前会先备份一份。放在 listen 之后，不拖慢启动
+-dropLegacyRecords().catch(e => console.error('[server] 清理旧缓存失败:', e));
++// 这里原来有一句「启动时清理旧格式缓存」（dropLegacyRecords）—— 已删除。
++// 它的判据是 `{ v: { $ne: 2 } }`，而 nedb 的 `$ne` 连"字段不存在"也匹配，
++// 于是一次误删掉了"格式正确、只是没打版本号"的记录；而删除本身就意味着要碰盘。
++// 现在版本不符的记录**不会被删**，只在 findCache 里被当作未命中，
++// 下次浏览那个目录时被新记录自然覆盖（见 electron/server/nedb.ts）。
+diff --git a/electron/server/nedb.ts b/electron/server/nedb.ts
+index c9fb08f..657b5f9 100644
+--- a/electron/server/nedb.ts
++++ b/electron/server/nedb.ts
+@@ -10,10 +10,17 @@ export type OpenMode = 'cover' | 'folder';
+ /**
+  * 缓存记录的**格式版本**。
+  *
+- * 任何让旧记录"读出来语义就不对"的改动都必须 +1，旧记录会在下次启动时被回收
+- * （见 dropLegacyRecords）。否则会出现这种事：新代码写的是干净记录，而库里躺着
+- * 一批上一版写进去的胖记录（每条多带 17 个 fs.Stats 字段，还夹着扫描当刻的卷序列号 dev），
+- * 它们既不会报错也不会自己消失，只是悄悄违反"缓存里不存盘身份"这条不变量。
++ * 任何让旧记录"读出来语义就不对"的改动都必须 +1。
++ *
++ * **但版本对不上的记录不会被删**，只在读取时当作未命中（见 `findCache`）——
++ * 下次浏览那个目录时 `scanAndCache` 会把它覆盖掉，自然回收。
++ * 原来这里靠"启动时删一遍"，而判据是 `{ v: { $ne: 2 } }`，而 nedb 的 `$ne` 连
++ * **字段不存在**也匹配 → 实际判据是"没有 v 就删"，等于把"格式完全正确、只是没打
++ * 版本号"的记录一起干掉了（实测：备份里就有这么一条，字段集与 v2 逐字相同）。
++ * 规则：**任何"格式变化 → 删数据"的逻辑都是错的。**
++ *
++ * 也别把"不删"当成够用：光有版本判断只能挡住 `findCache` 这一条路，
++ * 条目本身还必须按白名单重建（见 `server/index.ts` 的 `pickFileInfo`）。
+  *
+  * v1：拿完整路径当键、没有 serial，每条内嵌整个 fs.Stats + 原图 base64
+  * v2：键改成 (serial, relPath, mode)，条目只留渲染层会用到的字段，缩略图 480px
+@@ -84,7 +91,17 @@ export async function cacheBackup() {
+     await fsasync.writeFile(cachePath.replace('.db', `${dayjs().format('-YYYYMMDD')}.db`), input);
+ }
+ 
+-/** 取单条缓存。命中返回整条文档（含 data），未命中返回 null */
++/**
++ * 取单条缓存。命中返回整条文档（含 data），未命中返回 null。
++ *
++ * **版本对不上的一律当未命中**，而不是删掉它：
++ *   - 删要碰盘，而且删掉的是别人将来可能想读的东西（比如一份还没写的迁移工具）
++ *   - 不认它就已经够了 —— 下次浏览那个目录时 `scanAndCache` 自己会 `removeCache + insertCache`
++ *     把同一主键整条换掉，旧的（不管什么版本）被 remove 一并带走
++ *
++ * 判断只需要 `v`：主键 `(serial, relPath, mode)` 是记录自己的身份，
++ * 版本只决定"这份主键上的内容还算不算数"。
++ */
+ export function findCache(serial: string, relPath: string, mode: OpenMode): Promise<SearchCache | null> {
+     return new Promise((resolve) => {
+         nedb.findOne({ serial, relPath, mode }, (err, doc) => {
+@@ -92,7 +109,8 @@ export function findCache(serial: string, relPath: string, mode: OpenMode): Prom
+                 console.error('[nedb] 查询缓存失败:', err);
+                 resolve(null);
+             } else {
+-                resolve((doc as SearchCache) || null);
++                const found = (doc as SearchCache) || null;
++                resolve(found && found.v === CACHE_VERSION ? found : null);
+             }
+         });
+     });
+@@ -150,6 +168,10 @@ export function loadMeta(): Promise<CacheMeta[]> {
+  * （实测：两个字段都取不到）。而它的公开 compactDatafile() 现在**收回调**，内部走的
+  * 就是同一条队列（`executor.pushAsync(persistCachedDatabaseAsync)`），所以直接用公开 API，
+  * 不再引用任何私有字段。
++ *
++ * ⚠️ 现在**没有调用方**：原来唯一的调用者是 `dropLegacyRecords()`（已删 —— 任何
++ * "格式变化就删数据"的逻辑都不该存在）。保留它是为了它上面这段换库取证，
++ * 以及将来做维护入口（"/compact" 之类）时不必重新踩一遍。
+  */
+ export function compact(): Promise<void> {
+     return new Promise((resolve, reject) => {
+@@ -157,40 +179,4 @@ export function compact(): Promise<void> {
+     });
+ }
+ 
+-/**
+- * 一次性清理：删掉**格式过时**的缓存记录。
+- *
+- * 判断条件只写 `v !== CACHE_VERSION` 一个：旧记录连 v 字段都没有，而 nedb 的 `$ne`
+- * 会匹配"字段不存在"的文档（已用真实 nedb 验过），所以一个条件同时覆盖了
+- * "从没有过版本号的旧库"和"以后版本再变"两种情况。
+- *
+- * 旧记录不能用，有两个原因：
+- *   1. 拿完整路径当键、没有 serial —— 盘符一拔一插就变了，它们归属不到任何一块盘
+- *   2. 每条把整个 fs.Stats 序列化了进去，包含扫描那一刻的**卷序列号 dev**
+- * 而且它们存的是**原图** base64，正是数据文件涨到 100 MB 的原因。
+- *
+- * 删之前先备份一份，后悔了还能捞回来；删完 compact 一次，把 append-only 累积的旧版本收掉。
+- *
+- * 返回删除条数，0 表示没有旧记录（正常情况）。
+- */
+-export async function dropLegacyRecords(): Promise<number> {
+-    const legacy: number = await new Promise((resolve) => {
+-        nedb.count({ v: { $ne: CACHE_VERSION } }, (err, n) => resolve(err ? 0 : n));
+-    });
+-
+-    if (!legacy) return 0;
+-
+-    console.warn(`[nedb] 发现 ${legacy} 条旧格式缓存（版本不是 v${CACHE_VERSION}），先备份再清理`);
+-    await cacheBackup();
+-
+-    const removed: number = await new Promise((resolve) => {
+-        nedb.remove({ v: { $ne: CACHE_VERSION } }, { multi: true }, (err, n) => resolve(err ? 0 : n));
+-    });
+-
+-    await compact();
+-    console.warn(`[nedb] 已清理 ${removed} 条旧缓存，数据文件已压缩`);
+-
+-    return removed;
+-}
+-
+ export default nedb;
+diff --git a/electron/utils/thumbStore.ts b/electron/utils/thumbStore.ts
+index 1d9f9df..9efee4e 100644
+--- a/electron/utils/thumbStore.ts
++++ b/electron/utils/thumbStore.ts
+@@ -47,17 +47,12 @@ export function getThumb(key: string): string | undefined {
+ }
+ 
+ /**
+- * 渲染层拿到的条目里，缩略图只保留 `thumb`（key），
+- * `thumbData` / `avatarThumbData` 这两个内部字段必须剥掉。
++ * 这里原来有个 `stripThumbData(item)`：把 `thumbData` / `avatarThumbData` 解构掉再下发。
+  *
+- * 返回类型写成 `Omit<...>` 而不是 `T`：剥完之后它本来就不是同一个东西了，
+- * 写成 `T` 是让类型撒谎（调用方会以为那两坨 base64 还在）。
+- * 顺带也就不需要 `Record<string, any>` 那个约束了 —— interface 没有隐式索引签名，
+- * 硬套 `Record<string, any>` 反而会把结构化类型卡住。
++ * 已删除 —— 它是**黑名单**："我知道哪些要剥掉"。而条目可以来自上一版写进库里的记录，
++ * 黑名单对"我不认识的多余字段"一律放行（实测：旧记录会把 17 个 `fs.Stats` 字段、
++ * 含扫描当刻的卷序列号 `dev`，原样发给渲染层）。
++ *
++ * 现在改由 `electron/server/index.ts` 的 `pickFileInfo()` **按白名单重建**条目，
++ * 并且放在唯一的下发出口 `wire()` 里。别在这里重新加一个"剥字段"的函数。
+  */
+-export function stripThumbData<T extends { thumbData?: string; avatarThumbData?: string }>(
+-    item: T
+-): Omit<T, 'thumbData' | 'avatarThumbData'> {
+-    const { thumbData, avatarThumbData, ...rest } = item;
+-    return rest;
+-}

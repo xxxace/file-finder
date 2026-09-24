@@ -4,6 +4,7 @@ import { join, win32 } from 'path'
 import '../server';
 import '../utils/ffmpeg';
 import { LOCAL_TOKEN } from '../server/token';
+import config from '../config';
 
 // Disable GPU Acceleration for Windows 7
 if (release().startsWith('6.1')) app.disableHardwareAcceleration()
@@ -139,4 +140,65 @@ ipcMain.handle('openFile', async function (_e, target: string) {
   if (!target) return '';
   // 渲染层拼路径用的是 `/`，这里归一化成 Windows 形式再交给 ShellExecute
   return shell.openPath(win32.normalize(target));
+});
+
+/**
+ * 打开缓存数据目录。
+ *
+ * 这就是这套缓存**全部**的「导出 / 导入」手段：数据就是 `searchCache.db` 一个文件，
+ * 拷走 = 导出，覆盖回去 = 导入。所以这里只做"带你去那个文件夹"，复制/替换交给
+ * 系统文件管理器 —— 它自带回收站和撤销，比在应用内做一个"覆盖全库"的按钮安全得多
+ * （理由见 docs/DESIGN-CONVERGED-2026-09-24.md §三）。
+ *
+ * 复用 `shell.openPath`：它对目录会开资源管理器、对文件才用默认程序 ——
+ * 和上面的 openFile 是同一条路，不新增机制。失败同样返回错误描述（成功是空串）。
+ */
+ipcMain.handle('openDataDir', async function () {
+  return shell.openPath(config.userBasePath);
+});
+
+/**
+ * 让用户挑一个「把缓存备份到哪」。
+ *
+ * 这里**只负责选路径**，复制由服务端的 `/backupToFile` 做 —— 主进程碰不到
+ * nedb 那个模块的状态，硬在这里复制就等于把"库在哪 / 怎么改库"再抄一份出来。
+ * 分工跟 `openDirectory`（IPC 选目录 → HTTP 真读）完全一致：**需要系统能力的那一步
+ * 才进主进程，数据本身的操作留在服务端**。
+ *
+ * 用异步版 `showSaveDialog`：同步版会在对话框开着的整段时间按住事件循环，
+ * 那期间 3060 上任何请求都得不到响应 —— 和 `openDirectory` 是同一个理由。
+ *
+ * `handle` 而不是 `send`：结果要**回传给点按钮的那一次调用**，
+ * 否则渲染层只能靠一个全局事件去猜"这次对话框是给谁的"。
+ */
+ipcMain.handle('pickCacheSavePath', async function () {
+  const target = win;
+  if (!target) return { canceled: true, filePath: '' };
+
+  const { canceled, filePath } = await dialog.showSaveDialog(target, {
+    title: '把缓存备份到文件',
+    defaultPath: join(config.userBasePath, 'searchCache.db'),
+    filters: [{ name: '缓存库', extensions: ['db'] }],
+  });
+
+  return { canceled, filePath: canceled ? '' : filePath };
+});
+
+/**
+ * 让用户挑一个「要读进来的缓存文件」。还原和合并共用它 ——
+ * 两者的差别只在**读进来之后怎么办**，选文件这一步逐字相同，分成两个 handler
+ * 只会多一份要同步维护的对话框配置。
+ */
+ipcMain.handle('pickCacheOpenPath', async function () {
+  const target = win;
+  if (!target) return { canceled: true, filePath: '' };
+
+  const { canceled, filePaths } = await dialog.showOpenDialog(target, {
+    title: '选择缓存文件',
+    defaultPath: config.userBasePath,
+    properties: ['openFile'],
+    filters: [{ name: '缓存库', extensions: ['db'] }],
+  });
+
+  return { canceled, filePath: canceled ? '' : (filePaths[0] || '') };
 });

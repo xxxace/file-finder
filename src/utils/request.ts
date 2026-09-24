@@ -43,9 +43,33 @@ export function apiUrl(url: string): string {
  * `tableData.value = undefined`，界面上一点提示都没有。
  * 检查散落多少份，就会漏多少份；收成一个咽喉点才不会再漏。
  */
+/**
+ * 本地服务返回的业务错误。
+ *
+ * **为什么不让 `assertOk` 继续 `throw` 一个字符串**：前端要区分「盘不在」（插上盘再试）
+ * 和「读不到」（只能等）—— 那是两种不同的用户动作，对应两套不同的提示。
+ * 用字符串就得 match 文案，服务端改一个字，判别就静默失效、提示说错话。
+ * 分类放进结构化字段，文案怎么改都不影响判别。
+ *
+ * `toString()` 覆盖成只返回 message：调用方一贯写 `String(err)` 直接当提示文案，
+ * 覆盖之后行为和"抛字符串"**逐字一致**，它们一行都不用改。
+ */
+export class ApiError extends Error {
+    /** 服务端给的机器可读分类（`kind`）：'offline' | 'unreadable' | 'unknown' … */
+    readonly kind: string;
+    constructor(message: string, kind: string) {
+        super(message);
+        this.kind = kind;
+    }
+    toString() {
+        return this.message;
+    }
+}
+
 function assertOk(response: Response, json: any) {
     if (!response.ok || (json && json.code && json.code !== 200)) {
-        throw (json && json.error) ? json.error : `请求失败(${response.status})`
+        const message = (json && json.error) ? json.error : `请求失败(${response.status})`
+        throw new ApiError(message, (json && json.kind) || 'unknown')
     }
     return json
 }

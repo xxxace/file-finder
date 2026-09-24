@@ -1,0 +1,48 @@
+(node:2312) [MODULE_TYPELESS_PACKAGE_JSON] Warning: Module type of file:///D:/code/file-finder/electron/utils/thumbnail.ts is not specified and it doesn't parse as CommonJS.
+Reparsing as ES module because module syntax was detected. This incurs a performance overhead.
+To eliminate this warning, add "type": "module" to D:\code\file-finder\package.json.
+(Use `node --trace-warnings ...` to show where the warning was created)
+素材: C:\Users\<user>\AppData\Local\Temp\ffprobe-fix-normal.mp4 (143369 B, 42s)
+[thumbnail] ffprobe 超时，已终止子进程: pipe:0
+[thumbnail] ffprobe 超时，已终止子进程: pipe:0
+{
+  "0_钩子自检": {
+    "ESM 侧 spawn 与 CJS 侧(被钩子替换后)是同一个函数": true,
+    "ESM 侧 spawn 不是原版": true
+  },
+  "A_正常文件回归": {
+    "返回类型": "Buffer(14 B)",
+    "抽帧耗时(ms)": 735,
+    "ffprobe 被 spawn 次数": 1,
+    "ffmpeg 被 spawn 次数": 3,
+    "抽帧命令里的 -ss 值": "0.42",
+    "0.42 开头 = 时长的 1%，而不是 \"1%\"": true,
+    "抽帧命令完整参数": "-ss 0.42 -i C:\\Users\\<user>\\AppData\\Local\\Temp\\ffprobe-fix-normal.mp4 -y -filter_complex split=1[screen0] -vframes 1 -map [screen0] C:\\Users\\<user>\\AppData\\Local\\Temp\\ff-frame-2312-1790241683827-675wen.jpg",
+    "判定": "✅ 出图；位置=时长的 1%；只有 1 个 ffprobe（我们自己那个）"
+  },
+  "B_超时杀进程_第1轮": {
+    "卡住期间 ffprobe pid": 24684,
+    "卡住期间 pid 存活(钩子)": true,
+    "卡住期间 tasklist 计数(OS)": -1,
+    "超时到点耗时(ms)": 20048,
+    "超时后同一 pid 存活(钩子)": false,
+    "超时后 tasklist 计数(OS)": -1,
+    "本次 tasklist 基线": -1,
+    "返回值": "null",
+    "ffmpeg 是否被 spawn(应为 0)": 0,
+    "判定": "✅ 超时真的杀掉了 ffprobe；无孤儿；未起 ffmpeg"
+  },
+  "B_超时杀进程_第2轮": {
+    "卡住期间 ffprobe pid": 22348,
+    "卡住期间 pid 存活(钩子)": true,
+    "卡住期间 tasklist 计数(OS)": -1,
+    "超时到点耗时(ms)": 20031,
+    "超时后同一 pid 存活(钩子)": false,
+    "超时后 tasklist 计数(OS)": -1,
+    "本次 tasklist 基线": -1,
+    "返回值": "null",
+    "ffmpeg 是否被 spawn(应为 0)": 0,
+    "判定": "✅ 超时真的杀掉了 ffprobe；无孤儿；未起 ffmpeg"
+  }
+}
+最终 tasklist ffprobe 计数: -1

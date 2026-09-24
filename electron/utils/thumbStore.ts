@@ -47,17 +47,12 @@ export function getThumb(key: string): string | undefined {
 }
 
 /**
- * 渲染层拿到的条目里，缩略图只保留 `thumb`（key），
- * `thumbData` / `avatarThumbData` 这两个内部字段必须剥掉。
+ * 这里原来有个 `stripThumbData(item)`：把 `thumbData` / `avatarThumbData` 解构掉再下发。
  *
- * 返回类型写成 `Omit<...>` 而不是 `T`：剥完之后它本来就不是同一个东西了，
- * 写成 `T` 是让类型撒谎（调用方会以为那两坨 base64 还在）。
- * 顺带也就不需要 `Record<string, any>` 那个约束了 —— interface 没有隐式索引签名，
- * 硬套 `Record<string, any>` 反而会把结构化类型卡住。
+ * 已删除 —— 它是**黑名单**："我知道哪些要剥掉"。而条目可以来自上一版写进库里的记录，
+ * 黑名单对"我不认识的多余字段"一律放行（实测：旧记录会把 17 个 `fs.Stats` 字段、
+ * 含扫描当刻的卷序列号 `dev`，原样发给渲染层）。
+ *
+ * 现在改由 `electron/server/index.ts` 的 `pickFileInfo()` **按白名单重建**条目，
+ * 并且放在唯一的下发出口 `wire()` 里。别在这里重新加一个"剥字段"的函数。
  */
-export function stripThumbData<T extends { thumbData?: string; avatarThumbData?: string }>(
-    item: T
-): Omit<T, 'thumbData' | 'avatarThumbData'> {
-    const { thumbData, avatarThumbData, ...rest } = item;
-    return rest;
-}

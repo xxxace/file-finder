@@ -1,7 +1,13 @@
 <template>
     <div class="file-finder">
         <div class="header-bar">
-            <n-space>
+            <!-- 裸 flex 容器，**故意不用 n-space**。
+                 naive-ui 2.45.3 的 Space 会给**每一个**子项写死同一个 key（`key: 1`），
+                 子元素个数一变，Vue 的 keyed diff 就会让两个旧节点认领同一个新槽位：
+                 界面上凭空多出重复节点、按钮点了没反应。这一组的子元素是**会增减**的
+                 （openStack 的 v-for + 「返回」的 v-if），所以必须换掉。
+                 详见 docs/FIX-2026-09-24-nspace-duplicate-keys.md -->
+            <div class="hstack">
                 <FolderSelector ref="folderSelector" v-model="dir" label="请选择文件夹(D)" @change="handleDirChange" />
                 <template v-for="(folder, index) in openStack">
                     <n-tag v-if="!!folder.name" :key="folder.path" @click="handleJump(folder, index)"
@@ -11,11 +17,33 @@
                     </n-tag>
                 </template>
                 <n-button v-if="dir" size="small" @click="onBack">返回</n-button>
-            </n-space>
+            </div>
             <!-- <n-space>
                 <FolderSelector v-model="dirRoot" label="请选择文件夹2(D)" @change="handleDirRootChange" />
             </n-space> -->
-            <n-space style="align-self: flex-end;" align="center">
+            <div class="toolbar" style="align-self: flex-end">
+                <!-- 工具条 = PC 文件管理器那套：**动作常驻，忙碌时只置灰，绝不消失、绝不换形**。
+                     原来扫描中把两个入口"就地换成"进度+取消，于是工具条的子元素个数随
+                     `scanning` 变化 —— 叠加 n-space 的重复 key 问题，界面上会多出重复按钮，
+                     点着还没反应。现在进度和取消都搬到网格下方的状态条（见 .scan-bar），
+                     工具条这一组**一个字都不随状态变**（子元素个数恒定）。
+                     两个入口仍然**平铺**，不拿下拉藏（这条特性没动）。
+                     顺序上「补全」在前（命中缓存就不碰盘，是默认动作），
+                     「重读」在后且带确认（唯一会整片真读一遍的主动作）。 -->
+                <n-button size="small" :disabled="scanning || !openStack.length || readOnlyLevel" @click="startScan(false)">
+                    补全这一片
+                </n-button>
+                <!-- 只有「重读」带确认：它会忽略缓存、把整片真读一遍，是本组里唯一
+                     大面积碰盘的主动作。而「补全」命中缓存就不碰盘，「刷新」只影响一层 ——
+                     门槛 ∝ 不可逆 × 范围，那两个再弹窗只会烦人（对高频操作尤甚）。
+                     扫描中靠**按钮自身 disabled** 挡住：disabled 的 <button> 不派发 click，
+                     确认框自然弹不出来，不需要再给 popconfirm 加一层 v-if。 -->
+                <n-popconfirm positive-text="重读" negative-text="取消" @positive-click="startScan(true)">
+                    <template #trigger>
+                        <n-button size="small" :disabled="scanning || !openStack.length || readOnlyLevel">重读这一片</n-button>
+                    </template>
+                    忽略缓存，把这一片重新读一遍硬盘。确定吗？
+                </n-popconfirm>
                 <n-button size="small" @click="showHistory">
                     <template #icon>
                         <FootstepsOutline />
@@ -30,15 +58,33 @@
                         <span class="suffix-icon">S</span>
                     </template>
                 </n-input>
-                <n-button size="small" @click="onRefresh">
-                    <template #icon>
-                        <n-icon>
-                            <Refresh />
-                        </n-icon>
+                <!-- tooltip 只为说清它和「重读这一片」的分工：它只重读**当前这一层**，
+                     那个是整片。名字沿用用户已经在用的"刷新"，不改名（改名有认知成本）。
+                     扫描期间禁掉：它带 noCache、会真的再读一次盘，和正在跑的整片扫描
+                     叠在一起就是两路并发读盘 —— 那正是"串行、一次一块盘"要挡的事。
+                     只读层（盘不在）也禁掉：只读视图的源就是缓存，没有"重读"这回事。 -->
+                <n-tooltip>
+                    <template #trigger>
+                        <n-button size="small" :disabled="scanning || readOnlyLevel" @click="onRefresh">
+                            <template #icon>
+                                <n-icon>
+                                    <Refresh />
+                                </n-icon>
+                            </template>
+                        </n-button>
                     </template>
-                </n-button>
-            </n-space>
+                    重新读取当前文件夹
+                </n-tooltip>
+            </div>
         </div>
+        <!-- 失败横幅：和"空目录"那行浅灰小字是**两件事**，绝不能混成一件事。
+             空 = 这里本来就没有东西；横幅 = 这里应该有东西、但现在读不到。
+             不做 closable：它的寿命由取数结果管（下一次成功就自动消失）——
+             手动关掉只会让"我读不到"这个事实重新变回一片空白，那是在骗人。
+             文案来自服务端给的 kind（ApiError.kind），不是 match 错误文本。 -->
+        <n-alert v-if="banner.text" :type="banner.type" style="margin-bottom: 4px">
+            {{ banner.text }}
+        </n-alert>
         <div class="image-box" ref="imageBox">
             <!-- key 不能只用 item.name：封面条目的 name 取的是**封面图文件名**，
                  同一层的两个文件夹若都叫 cover.jpg，就会生成两个 key="cover"。
@@ -58,15 +104,33 @@
             <!-- 空状态：只有一行浅灰小字。不加边框、不加图标、不加按钮 —— 保持极简观感 -->
             <div v-if="emptyTip" class="empty-tip">{{ emptyTip }}</div>
         </div>
+        <!-- 扫描状态条。PC 文件管理器的做法：**进度和「取消」成对待在独立的一条里**，
+             不挤进工具条、不顶掉任何按钮（工具条那边只把动作置灰）。
+             为什么不再"就地换"：那样工具条的子元素个数会随 `scanning` 变，
+             而 naive-ui 的 n-space 在子元素个数变化时会重复 key、错位复用节点 ——
+             界面上就出现了两个「重读这一片」和一个点了没反应的「取消」。
+             现在这一条整条出现/消失，工具条一个字都不动。
+             取消**点了立刻有反馈**：按钮当场变「正在取消…」并置灰。
+             ⚠️ 取消只在**目录边界**生效（当前这个目录会扫完）—— 那是刻意的：
+             半途中断会留下写了一半的缓存。所以文案要说"当前这个扫完就停"，
+             不能让用户以为点了就应该立刻停。 -->
+        <div v-if="scanning" class="scan-bar">
+            <span class="scan-progress">已扫 {{ scanDone }} / 待扫 {{ scanPending }}</span>
+            <n-button size="small" :disabled="cancelling" @click="onScanCancel">
+                {{ cancelling ? '正在取消…' : '取消' }}
+            </n-button>
+            <span v-if="cancelling" class="scan-hint">当前这个目录扫完就停</span>
+        </div>
         <n-popover :show="popover.visible" :x="popover.x" :y="popover.y" trigger="manual" placement="bottom"
             @clickoutside="popover.visible = false">
-            <n-space>
+            <!-- 同理换掉 n-space：这里 v-for 的是文件列表，个数天生会变 -->
+            <div class="hstack">
                 <div v-for="(item) in popover.files" class="file-item" :key="item.name" @dblclick="openFile(item.name)"
                     :title="item.name + ` ${getSize(item.size) || ''}`">
                     <div class="file-cover" :title="item.name || ''"></div>
                     <span>{{ item.name }}</span>
                 </div>
-            </n-space>
+            </div>
         </n-popover>
         <HistoryTable ref="historyTable" @openDir="openHistory" />
     </div>
@@ -74,12 +138,12 @@
 
 <script setup lang="ts">
 import { parseSize } from '@/utils';
-import { apiUrl, getAction } from '@/utils/request';
+import { apiUrl, getAction, ApiError } from '@/utils/request';
 import folderIcon from '@/assets/fileTypeIcon/folder.png';
 import usePinYin from '@/hooks/usePinYin';
 import useNotify from '@/hooks/useNotify';
 import { Search, Refresh, FootstepsOutline } from '@vicons/ionicons5';
-import { NButton, NBadge, NInput, NIcon, NImage, NTag, NPopover, NSpin, NSpace, useLoadingBar } from 'naive-ui';
+import { NButton, NBadge, NInput, NIcon, NImage, NTag, NPopover, NSpin, NAlert, NPopconfirm, NTooltip, useLoadingBar } from 'naive-ui';
 import FolderSelector from '@/components/FolderSelector/index.vue';
 import HistoryTable from '@/components/HistoryTable/index.vue';
 import { ipcRenderer } from 'electron';
@@ -142,8 +206,13 @@ const rawUrl = (item: FileInfo) => apiUrl(`${API_BASE}/raw?p=${encodeURIComponen
  * 视频的"预览"就复用它的缩略图：那本来就是 ffmpeg 抽出来的静止帧（JPEG）。
  * 要真播放，双击那条路会交给系统播放器。
  */
-const previewUrl = (item: FileInfo) =>
-    item.type === 'video' ? thumbUrl(item.thumb) : rawUrl(item);
+const previewUrl = (item: FileInfo) => {
+    // 只读层（盘不在，看的是缓存）没有原图可读：`/raw` 走的是磁盘路径，
+    // 而只读层的地址是锚点（`#序列号/…`），服务端会直接拒掉它。
+    // 降级成缩略图 —— 和视频同一个姿态：宁可看小图，不报错、也不去碰一块不在的盘。
+    if (item.type === 'video' || readOnlyLevel.value) return thumbUrl(item.thumb);
+    return rawUrl(item);
+};
 
 const dir = ref('');
 const historyTable = ref<typeof HistoryTable | null>(null)
@@ -179,14 +248,31 @@ const searchStack = ref<string[]>([]);
 const openStack = ref<IOpenInfo[]>([]);
 const loading = ref(false);
 /**
- * 上一次取数是不是失败了。
+ * 上一次取数失败的**分类**。空串 = 没失败。
  *
- * 加它只为了一件事：**别让空状态替失败背锅**。目录真的空、搜索没匹配到、请求失败，
+ * 为什么要分类：失败原来只有一个「打开失败」的 toast，而它会自己消失 ——
+ * 用户对着一片空白，分不清是「盘被拔了」（他能自己解决：插回去）
+ * 还是「读不到」（只能等）。分类来自服务端（`kind` → `ApiError.kind`），
+ * **不是** match 错误文案，所以文案怎么改都不会让这里判别错。
+ */
+/**
+ * 能被横幅接住的失败分类。**新增一种失败时只改这一处** ——
+ * 原来那个 `err.kind === 'offline' || err.kind === 'unreadable'` 的条件写在 fetchFolder 里，
+ * 多一种分类就要在那儿再加一个 `||`（漏了就是"失败了却什么都不说"）。
+ */
+const BANNER_KINDS = ['offline', 'unreadable', 'notCached'];
+
+const failKind = ref('');
+
+/**
+ * 上一次取数是不是失败了。**由 `failKind` 派生** —— 两个各自赋值的变量迟早会不一致。
+ *
+ * 留着它只为了一件事：**别让空状态替失败背锅**。目录真的空、搜索没匹配到、请求失败，
  * 这三种情况在界面上本来长得一模一样（一片空白）。前两种该给文字提示，
  * 第三种已经有错误通知了（见 fetchFolder 的 catch），空白处再写一句"这个目录是空的"
  * 就是**在骗人**。所以失败时必须把它排除掉。
  */
-const loadFailed = ref(false);
+const loadFailed = computed(() => failKind.value !== '');
 /**
  * 空状态提示。空串 = 不显示。
  *
@@ -200,6 +286,50 @@ const emptyTip = computed(() => {
     if (!dir.value) return '';
     return '这个目录是空的';
 });
+
+/**
+ * 当前这一层是不是**只读层**（盘不在，看的是缓存）。
+ *
+ * 判据只是路径前缀 `#` —— 那是服务端给离线盘的「只读锚点」（`#序列号/盘内路径`，
+ * 见 `electron/server/index.ts` 的 ANCHOR_PREFIX）。为什么不额外传一个状态字段：
+ * 导航栈里流动的只有 `path` 这一个字符串（面包屑、双击下钻、返回全靠它），
+ * 锚点自带这个信息 —— 两边就不会出现"状态说在线、地址却是锚点"这种不一致。
+ * 渲染层不解析锚点内容，只认这一个前缀。
+ */
+const isReadOnlyPath = (path: string) => path.startsWith('#');
+
+/** 只看栈顶那一层：用户眼下看到的这屏是不是只读的 */
+const readOnlyLevel = computed(() => isReadOnlyPath(openStack.value[openStack.value.length - 1]?.path ?? ''));
+
+/**
+ * 失败横幅的内容。`text` 为空 = 不显示。
+ *
+ * 返回空对象而不是 `null`：模板里的 `v-if` 收窄不了 computed 的类型，
+ * 用"有没有文案"当开关既躲开 `banner.type` 可能为 null 的告警，语义也更直白。
+ *
+ * 顺序 = 优先级：**失败先说**（"该有内容却读不到"比"这是只读视图"更急），
+ * 然后是只读说明。只读那条不是失败，别和失败混成一件事。
+ *
+ * 三句话都**告诉用户下一步做什么**：盘不在他自己能解决（插回去按 F5），
+ * 读不到只能等，没缓存过就插上盘重扫。只说一句"失败了"等于没说。
+ */
+const banner = computed(() => {
+    if (failKind.value === 'offline') {
+        return { type: 'warning' as const, text: '移动硬盘不在（被拔出或还没就绪）—— 插好后按 F5 重读' };
+    }
+    if (failKind.value === 'unreadable') {
+        return { type: 'error' as const, text: '这个文件夹读不到（可能被占用或权限不足）—— 稍后再试' };
+    }
+    // 只读层才会出现：当时没扫到过这一层。只读视图不会为了它去碰盘 —— 那是"只读"的定义
+    if (failKind.value === 'notCached') {
+        return { type: 'warning' as const, text: '这一层当时没缓存过 —— 只读视图不去读盘。插上盘按 F5 重新扫这一片' };
+    }
+    if (readOnlyLevel.value) {
+        return { type: 'info' as const, text: '只读视图：这块盘现在不在，显示的是缓存内容（缩略图可用，打不开原文件）。要看实时的，插上盘后从「缓存记录」重新打开' };
+    }
+    return { type: 'default' as const, text: '' };
+});
+
 const loadingBar = useLoadingBar();
 const notify = useNotify();
 
@@ -316,6 +446,13 @@ const openFile = async (item: FileInfo | string) => {
 
     if (!target) return;
 
+    // 只读层的地址是锚点（`#序列号/…`）—— 磁盘上不存在这个路径，交给 shell 只会回一句
+    // 看不懂的"找不到文件"。这里直接说清楚，也**不去碰盘**（盘根本不在）。
+    if (isReadOnlyPath(target)) {
+        notify('warning', '只读视图', '这块盘现在不在，打不开原文件。插上盘后从「缓存记录」重新打开。');
+        return;
+    }
+
     const err = await ipcRenderer.invoke('openFile', target);
     // openPath 成功返回空串，失败返回错误描述。失败必须说出来
     if (err) notify('error', '打开失败', err);
@@ -353,7 +490,7 @@ let fetchSeq = 0;
 const fetchFolder = (path: string, mode: OpenMode, noCache?: boolean) => {
     const seq = ++fetchSeq;
     loading.value = true;
-    loadFailed.value = false;
+    failKind.value = '';
     loadingBar.start();
     // path 必须编码：中文/空格/&/#/+ 会让 query 被截断或误解析
     const url = `${API_BASE}/openFolder?path=${encodeURIComponent(path)}&mode=${mode}`;
@@ -368,7 +505,11 @@ const fetchFolder = (path: string, mode: OpenMode, noCache?: boolean) => {
     }).catch(err => {
         if (seq !== fetchSeq) return;
         console.error('[openFolder] 请求失败:', err);
-        loadFailed.value = true;
+        // 只认服务端在 `BANNER_KINDS` 里明确给的那几种分类；其余（网络断、服务没起来、
+        // 路径非法）统一算「其他失败」—— 不显示横幅，靠那条 toast 就够了
+        failKind.value = err instanceof ApiError && BANNER_KINDS.includes(err.kind)
+            ? err.kind
+            : 'other';
         loadingBar.error();
         // 取数失败**必须说出来**：原来只有顶部进度条闪一下红，而 dataSource 会保留
         // 上一个目录的列表 —— 面包屑已经切到新目录、格子里却是旧内容，
@@ -415,7 +556,9 @@ const onBack = async () => {
 }
 
 const onRefresh = () => {
-    if (loading.value || !openStack.value.length) return;
+    // 只读层没有"重读"这回事：它的源就是缓存，盘不在，F5 也读不出新东西。
+    // 拦住而不是让服务端静默回一份缓存 —— 静默最坏（用户以为他重读过了）。
+    if (loading.value || !openStack.value.length || readOnlyLevel.value) return;
     const to = openStack.value[openStack.value.length - 1];
     // F5 = 重新扫盘，要带 noCache 让服务端把这条缓存删掉真去读盘，
     // 不然"刷新"只是把同一份缓存又发了一遍。
@@ -472,6 +615,221 @@ const handleJump = (to: IOpenInfo, index: number) => {
 const openHistory = (path: string) => {
     handleDirChange(path);
 }
+
+/**
+ * 批量扫描「这一片」（P1）。两个入口共用它，`rescan` 是唯一差别：
+ *   · 「补全这一片」→ 只扫还没缓存的目录
+ *   · 「重读这一片」→ 忽略缓存，整片重读一遍
+ *
+ * 一句话：把「还没缓存的目录」排队扫完 —— 串行、可取消、带进度、每批让一次。
+ *
+ * 为什么要有它：目标树是「80+ 子目录、还嵌套、合计 500–1000 部片子」，一个个点开不现实。
+ * 但"主动读"必须**串行 + 分批** —— 这不是性能优化，是硬件保护：2.5″ 移动盘铭牌
+ * 5V/1A，而 USB 3.0 口只有 0.9A，长时间连续读最容易掉压掉盘
+ * （见 docs/UPGRADE-PLAN-2026-09-24.md §1.3）。
+ *
+ * ⚠️ 下面这一整块**绝不碰** `dataSource` / `loading` / `loadingBar`。那三个是
+ * "用户眼下正在看的这一层"的状态；后台扫到哪个目录就往那里写一次，用户眼前的网格
+ * 会被扫过的目录反复顶掉（方案 §16.1 第 1 条点名的坑）。
+ */
+
+/** 扫描一律用 cover 模式：界面三条入口（选文件夹 / 缓存记录 / 网格下钻）全都用 cover */
+const SCAN_MODE: OpenMode = 'cover';
+
+/**
+ * 每扫这么多个目录，主动让出一次事件循环。
+ * 挡住 USB 供电峰值的主力是**串行**（一次一个目录）；让出是为了别让主进程长时间
+ * 不给界面机会 —— 也才有响应"取消"的窗口。
+ */
+const SCAN_BATCH = 20;
+
+const scanning = ref(false);
+/** 已真扫的目录数。**缓存命中的不算** —— 那种没有碰盘 */
+const scanDone = ref(0);
+/** 待扫的目录数。**动态的**：每展开一层，新发现的子目录就加进来 */
+const scanPending = ref(0);
+
+/**
+ * 「已经按过取消，正在等当前这个目录扫完」。
+ *
+ * 取消是**软取消**：只在目录边界生效（`scanCancelled` 那条注释解释了为什么不做硬中断），
+ * 而一个目录在冷态移动硬盘上可能要好几个 10 秒 —— 点击之后界面上毫无动静，
+ * 用户只会得出"这个按钮没用"的结论。这个状态就是用来把那段时间**说出来**的：
+ * 按钮当场变「正在取消…」并置灰（防重复点），旁边补一句"当前这个目录扫完就停"。
+ *
+ * 它是**渲染态**（要显示），所以是 ref —— 和纯循环标志 `scanCancelled` 分工不同。
+ */
+const cancelling = ref(false);
+
+/**
+ * 取消标志。
+ * 用普通变量而不是 ref：它只在这个组件的扫描循环里读写，不参与渲染，
+ * 而每个目录边界都要重新读一次 —— 用 ref 只是多一层解包。
+ */
+let scanCancelled = false;
+
+/**
+ * 批量扫描专用的取数：**只往返，不写任何界面状态**。
+ *
+ * 为什么不复用 `fetchFolder`（方案 §16.1 第 1 条）：那个函数会写
+ * `dataSource` / `loading` / `loadingBar`。后台每扫一个目录就写一次，
+ * 用户正在看的网格会被那个目录的内容顶掉，进度条也会跟着乱闪。
+ */
+const requestFolder = (path: string, noCache: boolean) =>
+    getAction(`${API_BASE}/openFolder?path=${encodeURIComponent(path)}&mode=${SCAN_MODE}${noCache ? '&noCache=true' : ''}`) as Promise<FileInfo[]>;
+
+/**
+ * 把 `盘符:路径` 拆成「盘符 + 盘内相对路径」。
+ *
+ * 渲染层不能从 `electron/utils/driveIdentity` 导入 `splitPath` —— 那会把 `node:fs`
+ * 拖进渲染层（和上面 `VIDEO_EXT_RE` 不能从 server 导入值是同一个原因），所以这里重写一份。
+ */
+const splitDrive = (fullPath: string) => {
+    const m = /^([A-Za-z]):[\\/]?(.*)$/.exec(fullPath);
+    return m ? { drive: m[1].toUpperCase(), relPath: (m[2] || '').replace(/\\/g, '/') } : null;
+};
+
+/**
+ * 开扫之前先取两样东西：
+ *   · 已缓存集合 —— `/getHistory` 分页取全，键是 `(serial, relPath)`
+ *   · 盘符 → 卷序列号 —— 缓存键里存的是序列号，盘符只是"当前挂载点"
+ *
+ * 拼不出序列号（UNC / 网络位置 / 虚拟盘）的目录一律当"没缓存"处理，见下面 `keyOf`。
+ */
+const fetchScanContext = async () => {
+    const disks = await getAction(`${API_BASE}/getDisks`);
+    const serialOf: Record<string, string> = {};
+    for (const d of disks?.disks ?? []) {
+        if (d.drive) serialOf[String(d.drive).toUpperCase()] = d.serial;
+    }
+
+    const keys = new Set<string>();
+    const PAGE = 200;
+    for (let pageNo = 1; ; pageNo++) {
+        const res = await getAction(`${API_BASE}/getHistory?pageNo=${pageNo}&pageSize=${PAGE}`);
+        for (const r of res?.records ?? []) {
+            // 统一转小写：NTFS 不区分大小写，而 relPath 是从用户给的路径里切出来的，
+            // 大小写未必和当初写进缓存的那一次一致（relPath 大小写未归一化是已知观察项）
+            keys.add(`${r.serial}|${r.relPath}`.toLowerCase());
+        }
+        if (pageNo * PAGE >= (Number(res?.total) || 0)) break;
+    }
+
+    return { serialOf, keys };
+};
+
+/**
+ * 跑一轮扫描。`rescan` 就是两个模式的**全部**差别（方案 §16.1：同一套队列多一个 flag）。
+ *   · false →「补全这一片」：不带 noCache，服务端命中有缓存就只回缓存、不碰盘
+ *   · true  →「重读这一片」：每层都带 noCache=true，忽略缓存重新读一遍
+ *     —— 这就是"目录增删改之后"的答案，不需要去做变更检测
+ *
+ * ⚠️ **"跳过已缓存"这件事由服务端那一个出口保证**（`openFolder` 里的 `findCache`），
+ * 上面那份集合只用来把"已扫 n"数准。不在前端"看到已缓存就跳过整个子树"是有意的：
+ * 已缓存的目录下面**仍然可能有没缓存的子目录**，把子树剪掉就永远补不全。
+ * （实测：`E:/sample/videos/示例演员E` 已缓存，而它自己下面还有 2 个子目录从未被扫过。）
+ */
+const startScan = async (rescan: boolean) => {
+    const root = openStack.value[openStack.value.length - 1]?.path;
+    if (!root || scanning.value) return;
+
+    scanning.value = true;
+    scanCancelled = false;
+    cancelling.value = false;
+    scanDone.value = 0;
+
+    // 深度优先。队列里放**完整路径** —— 服务端要的就是这个（它自己会拆成盘内相对路径）
+    const queue: string[] = [root];
+    /**
+     * 已入过队的目录（小写归一化）。
+     *
+     * 防的是**目录软链 / 联接点成环**：Windows 上 `stat` 会跟进重解析点，一个指回祖先的
+     * junction 会让队列无限增长。手动点时最多是用户自己点晕，批量扫就变成**永不停机**。
+     * 同一目录被两条路径指到也只会扫一次 —— 这正是想要的。
+     */
+    const visited = new Set<string>([root.toLowerCase()]);
+    scanPending.value = 1;
+    let processed = 0;
+
+    try {
+        const { serialOf, keys } = await fetchScanContext();
+        const keyOf = (dir: string) => {
+            const parts = splitDrive(dir);
+            if (!parts) return null;
+            const serial = serialOf[parts.drive];
+            return serial ? `${serial}|${parts.relPath}`.toLowerCase() : null;
+        };
+
+        while (queue.length) {
+            // 取消只在**目录边界**检查：一个目录已经开始扫就让它扫完，
+            // 半途中断只会留下一个写了一半的缓存
+            if (scanCancelled) break;
+
+            const dir = queue.shift()!;
+            // +1：正在扫的这个也算"待扫"，否则会短暂显示成"待扫 0"
+            scanPending.value = queue.length + 1;
+
+            try {
+                // 补全模式不带 noCache：命中缓存时服务端只回缓存，不碰盘
+                const items = await requestFolder(dir, rescan);
+
+                const key = keyOf(dir);
+                if (rescan || key === null || !keys.has(key)) scanDone.value += 1;
+
+                for (const item of items) {
+                    // 只认 `type`：是不是目录由服务端用 stat 判定过，不靠名字里有没有点猜
+                    if (item.type !== 'folder') continue;
+
+                    // 成环保护：见过的不再入队（见上面 visited）
+                    const child = fullPathOf(item);
+                    const norm = child.toLowerCase();
+                    if (visited.has(norm)) continue;
+                    visited.add(norm);
+                    queue.push(child);
+                }
+            } catch (err) {
+                // 单个目录失败不中断整轮 —— 和 readFolder 里"逐项 try/catch"同一个原则
+                console.error('[批量扫描] 目录失败:', dir, err);
+            }
+
+            scanPending.value = queue.length;
+
+            processed += 1;
+            if (processed % SCAN_BATCH === 0) await new Promise(r => setTimeout(r, 0));
+        }
+    } catch (err) {
+        // 连已缓存集合/盘列表都取不到（服务没起来）—— 再往下扫也没意义，直接报错收工
+        console.error('[批量扫描] 准备失败:', err);
+        notify('error', rescan ? '重读失败' : '补全失败', String(err));
+    } finally {
+        scanning.value = false;
+        // 退场时把"正在取消"一起清掉：否则下次开扫前那几百毫秒里，
+        // 状态条会先按"正在取消"的样子闪一下
+        cancelling.value = false;
+        scanPending.value = 0;
+
+        // 「重读这一片」扫的恰好包含**你正在看的这一层** —— 不刷一下的话网格还是旧的，
+        // 看起来像"这个按钮没生效"。
+        // ⚠️ 这里**不带 noCache**：刚写好的新缓存就在库里，再真读一次盘是纯浪费，
+        // 而"少碰移动硬盘"是这一整批的硬要求。补全模式下当前层本来就有缓存、不会变，所以不刷。
+        if (rescan) {
+            const top = openStack.value[openStack.value.length - 1];
+            if (top) fetchFolder(top.path, top.mode);
+        }
+    }
+};
+
+/**
+ * 取消这一轮扫描。
+ *
+ * 只置两个标志，不做硬中断：`scanCancelled` 给循环读（目录边界），`cancelling` 给界面读
+ * （按钮当场变「正在取消…」）。真正的收尾在 `startScan` 的 finally 里统一做。
+ * 只置标志的另一个原因：中途掐断一个正在写的目录会留下写了一半的缓存。
+ */
+const onScanCancel = () => {
+    cancelling.value = true;
+    scanCancelled = true;
+};
 
 /**
  * 按关键词过滤。
@@ -553,6 +911,14 @@ onUnmounted(() => {
         justify-content: space-between;
 
         .n-input {
+            /* ⚠️ 这一行不能删。n-input 天生 `width: 100%`（为表单布局设计的），
+               而这里是 flex 行 —— 100% 会把它撑成整行宽、独霸一行，把「刷新」
+               挤到下一行，工具条从一行涨到三行（实测 1805px 窗口下头部高 ~150px）。
+               原来 n-space 会给每个子项包一层 div，恰好把这个 100% 关在盒子里；
+               换成裸容器之后就露出来了（见 docs/FIX-2026-09-24-nspace-duplicate-keys.md）。
+               搜索框本来就该是固定宽度 —— 资源管理器里它也是固定的一小段。 */
+            width: 200px;
+
             &:deep(.n-input-wrapper) {
                 padding-top: 1px;
                 padding-right: 6px;
@@ -571,6 +937,59 @@ onUnmounted(() => {
                 }
             }
         }
+
+        /* 批量扫描的进度文字。颜色沿用搜索框后缀图标那个灰 */
+    }
+}
+
+/**
+ * 横向单行容器 —— 顶替 naive-ui 的 `n-space`。
+ *
+ * 不是审美选择，是**避开一个真 bug**：naive-ui 2.45.3 的 Space 给每个子项硬编码
+ * 同一个 key（`key: 1`），子元素个数变化时 Vue 的 keyed diff 会让两个旧节点认领
+ * 同一个新槽位，界面上就多出重复节点。用裸 flex + `gap` 之后子元素按位置 patch，
+ * 根本没有 key 可比 —— 这类错位在结构上不可能发生。
+ *
+ * 12px 就是 n-space 默认 size（medium）的间距，所以观感与原来一致。
+ * 见 docs/FIX-2026-09-24-nspace-duplicate-keys.md
+ */
+.hstack {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 12px;
+}
+
+/**
+ * 头部右侧那一组：**单行，永不换行**。
+ *
+ * 它和 `.hstack` 只差一个 `flex-wrap` —— 但这一条就是"工具条有几行高"的全部答案。
+ * 里面的搜索框是 `width: 100%`（见下面 `.header-bar .n-input` 的注释），
+ * 在会换行的容器里它必然独霸一行。`nowrap` 把"工具条永远只有一行"变成结构保证，
+ * 以后往这一组里加东西也不会再长高。
+ */
+.toolbar {
+    display: flex;
+    flex-wrap: nowrap;
+    align-items: center;
+    gap: 12px;
+}
+
+/* 扫描状态条：贴着网格下方一条，整条随 scanning 出现/消失 */
+.scan-bar {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    padding: 4px 4px 8px;
+
+    .scan-progress {
+        font-size: 12px;
+        color: #a1a1a1;
+    }
+
+    .scan-hint {
+        font-size: 12px;
+        color: #a1a1a1;
     }
 }
 

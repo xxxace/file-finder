@@ -1,0 +1,318 @@
+# P1 批量扫描（任务 A）—— 本批改动 diff
+#
+# 生成方式：git diff -U3 <文件>，再按内容特征裁掉不属于本批的 hunk。
+# electron/server/index.ts 的工作区里同时躺着**已落地的 P0**（pickFileInfo 白名单、删 dropLegacyRecords 等）。
+# 那些不属于本批，已剔除 4 个 hunk；所以 index.ts 的 @@ 行号是相对【P0 之后】那个状态的，不是相对 HEAD。
+# index.vue 的 diff 是完整的（该文件本批独占，HEAD 版本没被前面几批动过）。
+# 完整 P0 diff 见 docs/P0-diff-2026-09-24.diff。
+
+diff --git a/electron/server/index.ts b/electron/server/index.ts
+index 8f5f9ec..8a949dc 100644
+--- a/electron/server/index.ts
++++ b/electron/server/index.ts
+@@ -457,10 +503,48 @@ function wire(items: FileInfo[]): FileInfo[] {
+  *
+  * 这一步是整套设计的关键：缓存里不存盘符，所以同一块盘今天挂 H:、明天挂 K: 都不用改数据。
+  */
+-function toWire(items: FileInfo[], drive: string): FileInfo[] {
++function toWire(items: FileInfo[], drive: string): WiredFileInfo[] {
+     return wire(items).map(item => ({ ...item, dir: toFullPath(drive, item.dir) }));
+ }
+ 
++/**
++ * 同主键写入链 —— 「删旧 + 插新」必须当成**一个整体**。
++ *
++ * 为什么需要：`removeCache + insertCache` 是两步非原子的。后台批量扫描（P1）期间
++ * 用户随时可能点进同一个目录，两次调用会交错成
++ *   扫描A.remove → 用户B.remove → 扫描A.insert → 用户B.insert
++ * 于是同一主键**留下两条记录**（insert 不查重），留下一条属于旧时刻的，或者出现
++ * "缓存被删了但还没插回来"的空窗（并发读者会当未命中，再触发一次扫描）。
++ * 以前只是偶发（要用户恰好点进正在扫的那个目录），加了批量扫描就变成必然。
++ *
++ * 为什么做成队列，而不是给每个调用方各加一道锁：`scanAndCache` 是这套缓存**唯一**的
++ * 写入入口，把两步收进它内部，约束就长在写入这件事自己身上；加锁则是"每个调用方都得
++ * 记得锁"—— 以后新增一个写缓存的入口（比如 F5 那条）立刻复发。这和 `wire()` 是唯一
++ * 下发出口、`apiUrl()` 是唯一 URL 出口、口令校验挂在唯一请求入口是同一个思路。
++ *
++ * 键是 `(serial, relPath, mode)`：不同目录之间**不**互相同步 —— 否则扫一整块盘会退化
++ * 成"全库串行"。同一个键上一条链，前一个任务失败也照样接着跑（`then(task, task)`），
++ * 一条链被一次失败卡死的话，那个目录之后就再也写不进缓存了。
++ */
++const writeChains = new Map<string, Promise<void>>();
++
++function queueCacheWrite<T>(serial: string, relPath: string, mode: OpenMode, task: () => Promise<T>): Promise<T> {
++    // 分隔符用 \u0000：Windows 文件名里不可能出现，不会有 A|B 和 A|B 撞键的歧义
++    const key = `${serial}\u0000${relPath}\u0000${mode}`;
++    const prev = writeChains.get(key) ?? Promise.resolve();
++    const run = prev.then(task, task);
++
++    // 链上挂的必须是**不会 reject** 的尾巴：否则一次失败会让后面每个 then(task, task) 都走 onRejected
++    const tail = run.then(() => undefined, () => undefined);
++    writeChains.set(key, tail);
++    // 链跑空就把槽位收掉，不然这个 Map 会随浏览过的目录数一直长
++    void tail.then(() => {
++        if (writeChains.get(key) === tail) writeChains.delete(key);
++    });
++
++    return run;
++}
++
+ /**
+  * 扫目录并把结果写进缓存。
+  * 存储态里 dir 是盘内相对路径，不含盘符。
+@@ -478,10 +562,15 @@ async function scanAndCache(serial: string, drive: string, relPath: string, mode
+         create_at: dayjs().format('YYYY-MM-DD HH:mm:ss'),
+     };
+ 
+-    // 先删后插：nedb 是 append-only，直接 insert 会在文件里留下两份，
+-    // 而且 findCache 会取到旧的那份
+-    await removeCache(serial, relPath, mode);
+-    await insertCache(doc);
++    // 「先删后插」两步收进同主键的串行队列 —— 见 queueCacheWrite。
++    // 读盘（readFolder）留在队列外面：它慢，而且两个并发扫描各读各的没有危害，
++    // 真正会互相破坏的只有"写"这一段。后写的整条覆盖先写的，这正是想要的语义
++    await queueCacheWrite(serial, relPath, mode, async () => {
++        // 先删后插：nedb 是 append-only，直接 insert 会在文件里留下两份，
++        // 而且 findCache 会取到旧的那份
++        await removeCache(serial, relPath, mode);
++        await insertCache(doc);
++    });
+ 
+     return doc;
+ }
+@@ -518,8 +607,12 @@ async function openFolderController(req: Req, res: http.ServerResponse) {
+     const { serial, drive } = disk;
+     const relPath = parts.relPath;
+ 
+-    if (noCache) await removeCache(serial, relPath, mode);
+-
++    // 这里原来还有一句 `if (noCache) await removeCache(...)` —— 已删。
++    // 它是多余的：noCache 时 cached 必为 null，下面必然走 scanAndCache，
++    // 而 scanAndCache 自己就会 removeCache + insertCache。留着它等于在队列之外
++    // 又开一个写同一主键的口，那两步就不再是一个整体了（见 queueCacheWrite）。
++    // 顺带修掉一个更隐蔽的形态：原来那句会在**真读盘之前**就把旧缓存删掉，
++    // 读盘期间并发进来的读者会看到"这个目录没缓存"。
+     const cached = noCache ? null : await findCache(serial, relPath, mode);
+     const doc = cached ?? (await scanAndCache(serial, drive, relPath, mode));
+ 
+diff --git a/src/views/FileFinder/index.vue b/src/views/FileFinder/index.vue
+index 17d73a7..5fabaff 100644
+--- a/src/views/FileFinder/index.vue
++++ b/src/views/FileFinder/index.vue
+@@ -16,6 +16,16 @@
+                 <FolderSelector v-model="dirRoot" label="请选择文件夹2(D)" @change="handleDirRootChange" />
+             </n-space> -->
+             <n-space style="align-self: flex-end;" align="center">
++                <!-- 批量补全缓存：入口只有这一个按钮，第二个模式（重扫）挂在悬停下拉里。
++                     放在网格上方的这条工具条上，和刷新/历史同一组 —— 都是"对当前这一层做什么"。
++                     点击 = 补全（默认动作，直接挂在按钮上）；下拉是 trigger="hover"，
++                     所以点它不会顺手把菜单也弹开 -->
++                <n-dropdown v-if="!scanning" trigger="hover" :options="scanMenu" @select="onScanSelect">
++                    <n-button size="small" :disabled="!openStack.length" @click="startScan(false)">补全缓存</n-button>
++                </n-dropdown>
++                <!-- 扫描中就地把按钮换成进度 + 取消，不再多占一行 -->
++                <span v-if="scanning" class="scan-progress">已扫 {{ scanDone }} / 待扫 {{ scanPending }}</span>
++                <n-button v-if="scanning" size="small" @click="onScanCancel">取消</n-button>
+                 <n-button size="small" @click="showHistory">
+                     <template #icon>
+                         <FootstepsOutline />
+@@ -79,7 +89,7 @@ import folderIcon from '@/assets/fileTypeIcon/folder.png';
+ import usePinYin from '@/hooks/usePinYin';
+ import useNotify from '@/hooks/useNotify';
+ import { Search, Refresh, FootstepsOutline } from '@vicons/ionicons5';
+-import { NButton, NBadge, NInput, NIcon, NImage, NTag, NPopover, NSpin, NSpace, useLoadingBar } from 'naive-ui';
++import { NButton, NBadge, NInput, NIcon, NImage, NTag, NPopover, NSpin, NSpace, NDropdown, useLoadingBar } from 'naive-ui';
+ import FolderSelector from '@/components/FolderSelector/index.vue';
+ import HistoryTable from '@/components/HistoryTable/index.vue';
+ import { ipcRenderer } from 'electron';
+@@ -473,6 +483,177 @@ const openHistory = (path: string) => {
+     handleDirChange(path);
+ }
+ 
++/**
++ * 批量补全缓存（P1）。
++ *
++ * 一句话：把「还没缓存的目录」排队扫完 —— 串行、可取消、带进度、每批让一次。
++ *
++ * 为什么要有它：目标树是「80+ 子目录、还嵌套、合计 500–1000 部片子」，一个个点开不现实。
++ * 但"主动读"必须**串行 + 分批** —— 这不是性能优化，是硬件保护：2.5″ 移动盘铭牌
++ * 5V/1A，而 USB 3.0 口只有 0.9A，长时间连续读最容易掉压掉盘
++ * （见 docs/UPGRADE-PLAN-2026-09-24.md §1.3）。
++ *
++ * ⚠️ 下面这一整块**绝不碰** `dataSource` / `loading` / `loadingBar`。那三个是
++ * "用户眼下正在看的这一层"的状态；后台扫到哪个目录就往那里写一次，用户眼前的网格
++ * 会被扫过的目录反复顶掉（方案 §16.1 第 1 条点名的坑）。
++ */
++
++/** 扫描一律用 cover 模式：界面三条入口（选文件夹 / 缓存记录 / 网格下钻）全都用 cover */
++const SCAN_MODE: OpenMode = 'cover';
++
++/**
++ * 每扫这么多个目录，主动让出一次事件循环。
++ * 挡住 USB 供电峰值的主力是**串行**（一次一个目录）；让出是为了别让主进程长时间
++ * 不给界面机会 —— 也才有响应"取消"的窗口。
++ */
++const SCAN_BATCH = 20;
++
++const scanning = ref(false);
++/** 已真扫的目录数。**缓存命中的不算** —— 那种没有碰盘 */
++const scanDone = ref(0);
++/** 待扫的目录数。**动态的**：每展开一层，新发现的子目录就加进来 */
++const scanPending = ref(0);
++
++/**
++ * 取消标志。
++ * 用普通变量而不是 ref：它只在这个组件的扫描循环里读写，不参与渲染，
++ * 而每个目录边界都要重新读一次 —— 用 ref 只是多一层解包。
++ */
++let scanCancelled = false;
++
++/**
++ * 批量扫描专用的取数：**只往返，不写任何界面状态**。
++ *
++ * 为什么不复用 `fetchFolder`（方案 §16.1 第 1 条）：那个函数会写
++ * `dataSource` / `loading` / `loadingBar`。后台每扫一个目录就写一次，
++ * 用户正在看的网格会被那个目录的内容顶掉，进度条也会跟着乱闪。
++ */
++const requestFolder = (path: string, noCache: boolean) =>
++    getAction(`${API_BASE}/openFolder?path=${encodeURIComponent(path)}&mode=${SCAN_MODE}${noCache ? '&noCache=true' : ''}`) as Promise<FileInfo[]>;
++
++/**
++ * 把 `盘符:路径` 拆成「盘符 + 盘内相对路径」。
++ *
++ * 渲染层不能从 `electron/utils/driveIdentity` 导入 `splitPath` —— 那会把 `node:fs`
++ * 拖进渲染层（和上面 `VIDEO_EXT_RE` 不能从 server 导入值是同一个原因），所以这里重写一份。
++ */
++const splitDrive = (fullPath: string) => {
++    const m = /^([A-Za-z]):[\\/]?(.*)$/.exec(fullPath);
++    return m ? { drive: m[1].toUpperCase(), relPath: (m[2] || '').replace(/\\/g, '/') } : null;
++};
++
++/**
++ * 开扫之前先取两样东西：
++ *   · 已缓存集合 —— `/getHistory` 分页取全，键是 `(serial, relPath)`
++ *   · 盘符 → 卷序列号 —— 缓存键里存的是序列号，盘符只是"当前挂载点"
++ *
++ * 拼不出序列号（UNC / 网络位置 / 虚拟盘）的目录一律当"没缓存"处理，见下面 `keyOf`。
++ */
++const fetchScanContext = async () => {
++    const disks = await getAction(`${API_BASE}/getDisks`);
++    const serialOf: Record<string, string> = {};
++    for (const d of disks?.disks ?? []) {
++        if (d.drive) serialOf[String(d.drive).toUpperCase()] = d.serial;
++    }
++
++    const keys = new Set<string>();
++    const PAGE = 200;
++    for (let pageNo = 1; ; pageNo++) {
++        const res = await getAction(`${API_BASE}/getHistory?pageNo=${pageNo}&pageSize=${PAGE}`);
++        for (const r of res?.records ?? []) {
++            // 统一转小写：NTFS 不区分大小写，而 relPath 是从用户给的路径里切出来的，
++            // 大小写未必和当初写进缓存的那一次一致（relPath 大小写未归一化是已知观察项）
++            keys.add(`${r.serial}|${r.relPath}`.toLowerCase());
++        }
++        if (pageNo * PAGE >= (Number(res?.total) || 0)) break;
++    }
++
++    return { serialOf, keys };
++};
++
++/**
++ * 跑一轮扫描。`rescan` 就是两个模式的**全部**差别（方案 §16.1：同一套队列多一个 flag）。
++ *   · false →「补全缓存」：不带 noCache，服务端命中有缓存就只回缓存、不碰盘
++ *   · true  →「重扫这一片」：每层都带 noCache=true，忽略缓存重新读一遍
++ *     —— 这就是"目录增删改之后"的答案，不需要去做变更检测
++ *
++ * ⚠️ **"跳过已缓存"这件事由服务端那一个出口保证**（`openFolder` 里的 `findCache`），
++ * 上面那份集合只用来把"已扫 n"数准。不在前端"看到已缓存就跳过整个子树"是有意的：
++ * 已缓存的目录下面**仍然可能有没缓存的子目录**，把子树剪掉就永远补不全。
++ * （实测：`E:/sample/videos/示例演员E` 已缓存，而它自己下面还有 2 个子目录从未被扫过。）
++ */
++const startScan = async (rescan: boolean) => {
++    const root = openStack.value[openStack.value.length - 1]?.path;
++    if (!root || scanning.value) return;
++
++    scanning.value = true;
++    scanCancelled = false;
++    scanDone.value = 0;
++
++    // 深度优先。队列里放**完整路径** —— 服务端要的就是这个（它自己会拆成盘内相对路径）
++    const queue: string[] = [root];
++    scanPending.value = 1;
++    let processed = 0;
++
++    try {
++        const { serialOf, keys } = await fetchScanContext();
++        const keyOf = (dir: string) => {
++            const parts = splitDrive(dir);
++            if (!parts) return null;
++            const serial = serialOf[parts.drive];
++            return serial ? `${serial}|${parts.relPath}`.toLowerCase() : null;
++        };
++
++        while (queue.length) {
++            // 取消只在**目录边界**检查：一个目录已经开始扫就让它扫完，
++            // 半途中断只会留下一个写了一半的缓存
++            if (scanCancelled) break;
++
++            const dir = queue.shift()!;
++            // +1：正在扫的这个也算"待扫"，否则会短暂显示成"待扫 0"
++            scanPending.value = queue.length + 1;
++
++            try {
++                // 补全模式不带 noCache：命中缓存时服务端只回缓存，不碰盘
++                const items = await requestFolder(dir, rescan);
++
++                const key = keyOf(dir);
++                if (rescan || key === null || !keys.has(key)) scanDone.value += 1;
++
++                for (const item of items) {
++                    // 只认 `type`：是不是目录由服务端用 stat 判定过，不靠名字里有没有点猜
++                    if (item.type === 'folder') queue.push(fullPathOf(item));
++                }
++            } catch (err) {
++                // 单个目录失败不中断整轮 —— 和 readFolder 里"逐项 try/catch"同一个原则
++                console.error('[批量扫描] 目录失败:', dir, err);
++            }
++
++            scanPending.value = queue.length;
++
++            processed += 1;
++            if (processed % SCAN_BATCH === 0) await new Promise(r => setTimeout(r, 0));
++        }
++    } catch (err) {
++        // 连已缓存集合/盘列表都取不到（服务没起来）—— 再往下扫也没意义，直接报错收工
++        console.error('[批量扫描] 准备失败:', err);
++        notify('error', rescan ? '重扫失败' : '补全失败', String(err));
++    } finally {
++        scanning.value = false;
++        scanPending.value = 0;
++    }
++};
++
++const onScanCancel = () => {
++    scanCancelled = true;
++};
++
++const scanMenu = [{ label: '重扫这一片', key: 'rescan' }];
++
++const onScanSelect = (key: string | number) => {
++    if (key === 'rescan') startScan(true);
++};
++
+ /**
+  * 按关键词过滤。
+  *
+@@ -571,6 +752,12 @@ onUnmounted(() => {
+                 }
+             }
+         }
++
++        /* 批量扫描的进度文字。颜色沿用搜索框后缀图标那个灰 */
++        .scan-progress {
++            font-size: 12px;
++            color: #a1a1a1;
++        }
+     }
+ }
+ 

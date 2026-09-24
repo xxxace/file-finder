@@ -1,0 +1,16 @@
+{
+  "1_传数字(修复后的写法：42 秒 × 0.01)": {
+    "传入的时间点": "0.42",
+    "内部 ffprobe 是否被调用": false,
+    "最终命令行里的 -ss 值": "0.42",
+    "命令行里是否出现 % 百分比": false,
+    "完整命令行": "-ss 0.42 -i C:\\Users\\<user>\\AppData\\Local\\Temp\\ffprobe-branch-dummy.mp4 -y -filter_complex split=1[screen0] -vframes 1 -map [screen0] C:\\Users\\<user>\\AppData\\Local\\Temp\\ffprobe-branch-out\\branch.jpg"
+  },
+  "2_传字符串百分比(修复前的写法)": {
+    "传入的时间点": "\"1%\"",
+    "内部 ffprobe 是否被调用": true,
+    "最终命令行里的 -ss 值": "(命令行里没有 -ss)",
+    "命令行里是否出现 % 百分比": false,
+    "完整命令行": "-i C:\\Users\\<user>\\AppData\\Local\\Temp\\ffprobe-branch-dummy.mp4"
+  }
+}
