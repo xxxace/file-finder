@@ -1,7 +1,9 @@
 import Nedb from 'nedb';
+import * as fsasync from 'node:fs/promises';
 import { FileInfo } from './index';
 import config from '../config';
 import path from 'node:path';
+import dayjs from 'dayjs';
 
 export type OpenMode = 'cover' | 'folder'
 
@@ -24,9 +26,14 @@ export interface BrowseHistory {
 }
 
 export type BrowseHistoryWithPagination = Pagination & BrowseHistory
-
-const nedb = new Nedb<SearchCache>({ filename: path.join(config.userBasePath, 'searchCache.db') });
+const cachePath = path.join(config.userBasePath, 'searchCache.db')
+const nedb = new Nedb<SearchCache>({ filename: cachePath });
 nedb.loadDatabase();
+
+export async function cacheBackup() {
+    const input = await fsasync.readFile(cachePath)
+    await fsasync.writeFile(cachePath.replace('.db', `${dayjs().format('-YYYYMMDD')}.db`), input)
+}
 
 export function getHistoryList(path: string | null | undefined, pageNo?: number, pageSize?: number): Promise<BrowseHistoryWithPagination> {
     const current = Number(pageNo) || 1;

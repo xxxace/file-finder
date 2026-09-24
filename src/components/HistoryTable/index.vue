@@ -1,5 +1,5 @@
 <template>
-    <n-modal v-model:show="showModal">
+    <n-modal v-model:show="showModal" :on-after-leave="onHide">
         <n-card style="width: 800px; margin-top: 10px" title="历史记录" :bordered="false" size="huge" role="dialog"
             aria-modal="true">
             <template #header-extra>
@@ -17,12 +17,15 @@
                 </n-form>
             </template>
             <n-spin :show="loading">
+
                 <template #description>
                     数据加载中...
                 </template>
                 <n-button v-if="checkedRowKeysRef.length > 0" type="error" size="small"
                     style="margin-bottom: 10px;margin-right: 10px;" @click="handleRemove">删除({{ checkedRowKeysRef.length
                     }})</n-button>
+                <n-button size="small" style="margin-bottom: 10px;margin-right: 10px;"
+                    @click="handleDriveBackup">备份</n-button>
                 <n-button size="small" style="margin-bottom: 10px;" @click="handleDriveChangerShow">盘符变更</n-button>
                 <!-- <n-table :single-line="false" size="small">
                     <thead>
@@ -47,6 +50,7 @@
                 <n-data-table :columns="columns" :data="tableData" :row-key="(row: RowData) => row._id"
                     @update:checked-row-keys="handleCheck" />
             </n-spin>
+
             <template #footer>
                 <div style="display: flex;justify-content: flex-end;">
                     <n-pagination size="small" v-model:page="model.pageNo" v-model:page-size="model.pageSize"
@@ -63,10 +67,11 @@
     </n-modal>
     <drive-changer ref="driveChanger" />
 </template>
+
 <script lang="ts" setup>
 import { h, onMounted, ref, toRaw, watch } from 'vue';
 import useNotify from '@/hooks/useNotify';
-import { NInput, NForm, NButton, NFormItem, FormInst, NCard, NModal, NPagination, NDataTable, NSpin } from 'naive-ui'
+import { NInput, NForm, NButton, NFormItem, FormInst, NCard, NModal, NPagination, NDataTable, NSpin, useDialog } from 'naive-ui'
 import type { DataTableColumns, DataTableRowKey } from 'naive-ui'
 import type { SearchCache, BrowseHistoryWithPagination, OpenMode } from 'electron/server/nedb';
 import DriveChanger from "@/components/DriveChanger/index.vue";
@@ -105,6 +110,7 @@ const emits = defineEmits<{
     (e: 'openDir', path: string, mode: OpenMode): void
 }>();
 const notify = useNotify();
+const dialog = useDialog();
 const formRef = ref<FormInst | null>(null);
 const model = ref<HistoryQuery>({
     path: '',
@@ -191,6 +197,19 @@ const handleCheck = (rowKeys: DataTableRowKey[]) => {
 }
 
 const handleRemove = async () => {
+    dialog.info({
+        title: '删除',
+        content: '你确定要删除选中数据吗？',
+        positiveText: '确定',
+        negativeText: '取消',
+        maskClosable: false,
+        onPositiveClick() {
+            onRemove()
+        }
+    })
+}
+
+const onRemove = async () => {
     loading.value = true;
 
     try {
@@ -206,6 +225,35 @@ const handleRemove = async () => {
     }
 
     loading.value = false;
+}
+const handleDriveBackup = async () => {
+    dialog.info({
+        title: '备份',
+        content: '你确定要备份吗？',
+        positiveText: '确定',
+        negativeText: '取消',
+        maskClosable: false,
+        onPositiveClick() {
+            onDriveBackup()
+        }
+    })
+}
+
+const onDriveBackup = async () => {
+    loading.value = true;
+
+    try {
+        await deletAction('http://localhost:3060/backup')
+        notify('success', '成功', `备份成功`)
+    } catch (err) {
+        notify('error', '错误', `备份失败:${err}`)
+    }
+
+    loading.value = false;
+}
+
+const onHide = () => {
+    checkedRowKeysRef.value = []
 }
 
 onMounted(() => {

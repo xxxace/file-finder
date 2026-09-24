@@ -77,10 +77,10 @@ const handleValidateButtonClick = function () {
             const postData = toRaw(model.value)
             try {
                 const res = await postAction('http://localhost:3060/updateDrive', postData)
-                message.success(`变更成功,共影响${res.result.length}条数据！`)
+                message.success(res.message)
             } catch (e) {
                 console.log(e)
-                message.error("变更失败！")
+                message.error(`变更错误：${JSON.stringify(e)}`)
             }
             loading.value = false
         }

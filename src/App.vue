@@ -1,12 +1,14 @@
 <template>
   <n-config-provider :locale="locale" :date-locale="dateLocale">
-    <n-notification-provider>
-      <n-message-provider>
-        <n-loading-bar-provider>
-          <FileFinder />
-        </n-loading-bar-provider>
-      </n-message-provider>
-    </n-notification-provider>
+    <n-dialog-provider>
+      <n-notification-provider>
+        <n-message-provider>
+          <n-loading-bar-provider>
+            <FileFinder />
+          </n-loading-bar-provider>
+        </n-message-provider>
+      </n-notification-provider>
+    </n-dialog-provider>
   </n-config-provider>
 </template>
 
@@ -15,7 +17,7 @@
 // Check out https://vuejs.org/api/sfc-script-setup.html#script-setup
 import { ref } from 'vue';
 import FileFinder from './views/FileFinder/index.vue';
-import { NConfigProvider, NLoadingBarProvider, NMessageProvider, NNotificationProvider, zhCN, dateZhCN } from 'naive-ui';
+import { NConfigProvider, NLoadingBarProvider, NMessageProvider, NNotificationProvider, NDialogProvider, zhCN, dateZhCN } from 'naive-ui';
 import type { NLocale, NDateLocale } from 'naive-ui';
 
 const locale = ref<NLocale | null>(zhCN);

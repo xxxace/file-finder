@@ -7,7 +7,7 @@ import * as fs from 'fs';
 import path from 'node:path';
 import { mkthumbnial } from '../utils/ffmpeg';
 import { DiskType, FileFinderDockerManager } from '../utils/FileFinderDocker';
-import nedb, { OpenMode, SearchCache, getHistoryList, findAllByPath } from './nedb';
+import nedb, { OpenMode, SearchCache, getHistoryList, findAllByPath, cacheBackup } from './nedb';
 import dayjs from 'dayjs';
 import pLimit, { LimitFunction } from 'p-limit';
 
@@ -329,7 +329,7 @@ function updatePathOrDir(cache: SearchCache): Promise<string | undefined> {
 }
 
 
-function updateDrive(req: Req<{ targetDrive: string; replaceDrive: string; }>, response: http.ServerResponse) {
+async function updateDrive(req: Req<{ targetDrive: string; replaceDrive: string; }>, response: http.ServerResponse) {
     const targetDriveName = req.body?.targetDrive
     const replaceDriveName = req.body?.replaceDrive
     if (!targetDriveName || !replaceDriveName) {
@@ -343,44 +343,98 @@ function updateDrive(req: Req<{ targetDrive: string; replaceDrive: string; }>, r
     const targetDrive = targetDriveName + ':'
     const replaceDrive = replaceDriveName + ':'
 
-    findAllByPath(targetDrive).then(res => {
+    async function swap(searchCache: SearchCache[], from: string, to: string) {
+        if (!searchCache || searchCache.length === 0) return
         const updatePrefix = (cache: SearchCache): SearchCache => {
             const newCache: SearchCache = JSON.parse(JSON.stringify(cache));
-            newCache.path = cache.path.replace(targetDrive, replaceDrive);
+            newCache.path = cache.path.replace(from, to);
             if (newCache.data) {
                 newCache.data.forEach(nc => {
-                    nc.dir = nc.dir.replace(targetDrive, replaceDrive);
+                    nc.dir = nc.dir.replace(from, to);
                 });
             }
             return newCache;
         }
 
-        const tasks = res.map(r => {
-            const copy = updatePrefix(r);
+        const tasks = searchCache.map(item => {
+            const copy = updatePrefix(item);
             return limit(() => updatePathOrDir(copy));
         });
 
-        Promise.all(tasks).then((res) => {
-            response.writeHead(200, { 'Content-Type': 'application/json' });
-            response.end(JSON.stringify({
-                code: 200,
-                result: res
-            }));
-        }).catch(err => {
-            response.writeHead(200, { 'Content-Type': 'application/json' });
-            response.end(JSON.stringify({
-                code: 500,
-                error: err
-            }));
-        });
-    }).catch(err => {
+        await Promise.all(tasks)
+    }
+
+    try {
+        const targetList = await findAllByPath(targetDrive)
+        const replaceList = await findAllByPath(replaceDrive)
+        await swap(targetList, targetDrive, replaceDrive)
+        await swap(replaceList, replaceDrive, targetDrive)
+        response.writeHead(200, { 'Content-Type': 'application/json' });
+        response.end(JSON.stringify({
+            code: 200,
+            message: 'update dirver success'
+        }));
+    } catch (e) {
         response.writeHead(200, { 'Content-Type': 'application/json' });
         response.end(JSON.stringify({
             code: 500,
-            error: err
+            error: e
         }));
-    })
+    }
 }
+
+// function updateDrive(req: Req<{ targetDrive: string; replaceDrive: string; }>, response: http.ServerResponse) {
+//     const targetDriveName = req.body?.targetDrive
+//     const replaceDriveName = req.body?.replaceDrive
+//     if (!targetDriveName || !replaceDriveName) {
+//         response.end(JSON.stringify({
+//             code: 500,
+//             error: "参数 targetDrive 或 replaceDrive 不能为空"
+//         }));
+//         return;
+//     }
+
+//     const targetDrive = targetDriveName + ':'
+//     const replaceDrive = replaceDriveName + ':'
+
+//     findAllByPath(targetDrive).then(res => {
+//         const updatePrefix = (cache: SearchCache): SearchCache => {
+//             const newCache: SearchCache = JSON.parse(JSON.stringify(cache));
+//             newCache.path = cache.path.replace(targetDrive, replaceDrive);
+//             if (newCache.data) {
+//                 newCache.data.forEach(nc => {
+//                     nc.dir = nc.dir.replace(targetDrive, replaceDrive);
+//                 });
+//             }
+//             return newCache;
+//         }
+
+//         const tasks = res.map(r => {
+//             const copy = updatePrefix(r);
+//             return limit(() => updatePathOrDir(copy));
+//         });
+
+//         Promise.all(tasks).then((res) => {
+//             response.writeHead(200, { 'Content-Type': 'application/json' });
+//             response.end(JSON.stringify({
+//                 code: 200,
+//                 result: res
+//             }));
+//         }).catch(err => {
+//             response.writeHead(200, { 'Content-Type': 'application/json' });
+//             response.end(JSON.stringify({
+//                 code: 500,
+//                 error: err
+//             }));
+//         });
+//     }).catch(err => {
+//         response.writeHead(200, { 'Content-Type': 'application/json' });
+//         response.end(JSON.stringify({
+//             code: 500,
+//             error: err
+//         }));
+//     })
+// }
 
 function removeHistoryBatch(req: Req, response: http.ServerResponse) {
     const ids = req.params?.get('ids');
@@ -409,11 +463,28 @@ function removeHistoryBatch(req: Req, response: http.ServerResponse) {
     })
 }
 
+async function backup(req: Req<{ targetDrive: string; replaceDrive: string; }>, response: http.ServerResponse) {
+    try {
+        await cacheBackup()
+        response.writeHead(200, { 'Content-Type': 'application/json' });
+        response.end(JSON.stringify({
+            code: 200,
+            message: "backup success"
+        }));
+    } catch (e) {
+        response.end(JSON.stringify({
+            code: 500,
+            error: e
+        }));
+    }
+}
+
 event.on('/getHistory', getHistory);
 event.on('/getFileTree', getVideoCodeList);
 event.on('/openFolder', openFolderController);
 event.on('/updateDrive', updateDrive);
 event.on('/removeHistoryBatch', removeHistoryBatch);
+event.on('/backup', backup)
 event.on('/', function (req, res) {
     req.headers['content-type'] = 'text/plain';
     res.end('hi! i`m ace.');
@@ -465,6 +536,7 @@ function cors(res: http.ServerResponse) {
 
 app.listen(3060, function () {
     console.log(`Local Server: http://127.0.0.1:3060/`);
+
 });
 
 function imageController(req: any, res: any) {
