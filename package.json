@@ -8,26 +8,27 @@
   "private": true,
   "scripts": {
     "dev": "chcp 65001 && vite",
-    "build": "vue-tsc --noEmit && vite build && electron-builder"
+    "typecheck": "vue-tsc --noEmit && tsc -p tsconfig.electron.json",
+    "build": "npm run typecheck && vite build && electron-builder"
   },
   "engines": {
-    "node": "^14.18.0 || >=16.0.0"
+    "node": ">=22.12.0"
   },
   "devDependencies": {
-    "@types/fluent-ffmpeg": "^2.1.20",
-    "@types/nedb": "^1.8.13",
-    "@vicons/ionicons5": "^0.12.0",
-    "@vicons/material": "^0.12.0",
-    "@vitejs/plugin-vue": "^3.0.1",
-    "electron": "^20.0.0",
-    "electron-builder": "^23.3.3",
+    "@types/fluent-ffmpeg": "^2.1.28",
+    "@types/node": "^24.9.0",
+    "@vicons/ionicons5": "^0.13.0",
+    "@vitejs/plugin-vue": "^6.0.9",
+    "electron": "^44.4.5",
+    "electron-builder": "^26.15.3",
     "file-icon-vectors": "^1.0.0",
-    "naive-ui": "^2.34.4",
-    "typescript": "^4.7.4",
-    "vite": "^3.0.8",
-    "vite-plugin-electron": "^0.9.1",
-    "vue": "^3.2.37",
-    "vue-tsc": "^1.0.9"
+    "naive-ui": "^2.45.3",
+    "typescript": "^5.9.3",
+    "vite": "^7.3.6",
+    "vite-plugin-electron": "^0.29.1",
+    "vite-plugin-electron-renderer": "^0.14.7",
+    "vue": "^3.5.43",
+    "vue-tsc": "^3.3.11"
   },
   "debug": {
     "env": {
@@ -45,13 +46,10 @@
   ],
   "dependencies": {
     "@ffmpeg-installer/ffmpeg": "^1.1.0",
-    "@ffprobe-installer/ffprobe": "^1.4.1",
-    "dayjs": "^1.11.7",
-    "fluent-ffmpeg": "^2.1.2",
-    "iconv-lite": "^0.6.3",
-    "less": "^4.1.3",
-    "nedb": "^1.8.0",
-    "p-limit": "^4.0.0",
-    "shelljs": "^0.8.5"
+    "@ffprobe-installer/ffprobe": "^2.1.2",
+    "@seald-io/nedb": "^4.1.2",
+    "dayjs": "^1.11.23",
+    "fluent-ffmpeg": "^2.1.3",
+    "less": "^4.9.1"
   }
 }

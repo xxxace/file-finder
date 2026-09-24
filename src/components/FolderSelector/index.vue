@@ -21,11 +21,6 @@ import { defineComponent, ref } from 'vue';
 import { NButton, NTag, NAvatar, NSpace } from 'naive-ui';
 import { ipcRenderer } from 'electron';
 
-export interface ItemFrameProps {
-    modelValue?: string;
-    label?: string | number;
-}
-
 export default defineComponent({
     components: { NButton, NTag, NAvatar, NSpace },
     emits: ['change', 'update:modelValue'],

@@ -25,3 +25,8 @@ dist-ssr
 
 release
 .vscode/.debug.env
+
+# 依赖升级回滚备份
+.deps-backup/
+
+release-verify/

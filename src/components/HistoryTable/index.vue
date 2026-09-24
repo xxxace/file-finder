@@ -1,53 +1,35 @@
 <template>
     <n-modal v-model:show="showModal" :on-after-leave="onHide">
-        <n-card style="width: 800px; margin-top: 10px" title="历史记录" :bordered="false" size="huge" role="dialog"
+        <n-card style="width: 900px; margin-top: 10px" title="缓存记录" :bordered="false" size="huge" role="dialog"
             aria-modal="true">
             <template #header-extra>
-                <n-form inline ref="formRef" :model="model" label-placement="left" label-width="auto"
-                    require-mark-placement="right-hanging" size="small" :disabled="loading">
-                    <n-form-item path="path">
-                        <n-input v-model:value="model.path" placeholder="输入路径过滤" clearable />
-                    </n-form-item>
-                    <n-form-item>
-                        <n-button size="small" @click="onSearch">查询</n-button>
-                    </n-form-item>
-                    <n-form-item>
-                        <n-button size="small" @click="onRefresh">刷新</n-button>
-                    </n-form-item>
-                </n-form>
+                <n-space align="center">
+                    <n-select v-model:value="model.serial" :options="diskOptions" :loading="diskLoading"
+                        style="width: 320px" size="small" :on-update:value="onSearch" />
+                    <n-input v-model:value="model.path" placeholder="路径关键词过滤" clearable size="small"
+                        style="width: 170px" @keyup.enter="onSearch" />
+                    <n-button size="small" @click="onSearch">查询</n-button>
+                    <n-button size="small" @click="onRefresh">刷新</n-button>
+                </n-space>
             </template>
             <n-spin :show="loading">
-
                 <template #description>
                     数据加载中...
                 </template>
+
+                <n-alert v-if="duplicated.length" type="warning" :show-icon="true" style="margin-bottom: 10px">
+                    <template #header>检测到克隆盘</template>
+                    有 {{ duplicated.length }} 组移动硬盘的卷序列号完全一样（用 Ghost 之类整盘克隆会这样）。
+                    序列号是这套缓存区分硬盘的唯一依据，两者会互相串 —— 建议重新格式化其中一块。
+                </n-alert>
+
                 <n-button v-if="checkedRowKeysRef.length > 0" type="error" size="small"
                     style="margin-bottom: 10px;margin-right: 10px;" @click="handleRemove">删除({{ checkedRowKeysRef.length
                     }})</n-button>
-                <n-button size="small" style="margin-bottom: 10px;margin-right: 10px;"
-                    @click="handleDriveBackup">备份</n-button>
-                <n-button size="small" style="margin-bottom: 10px;" @click="handleDriveChangerShow">盘符变更</n-button>
-                <!-- <n-table :single-line="false" size="small">
-                    <thead>
-                        <tr>
-                            <th>路径</th>
-                            <th>创建日期</th>
-                        </tr>
-                    </thead>
-                    <tbody>
-                        <template v-for="(item) in historyList" :key="item.path">
-                            <tr>
-                                <td>
-                                    <n-button quaternary type="info" @dblclick="openDir(item)">
-                                        {{ item.path }}
-                                    </n-button>
-                                </td>
-                                <td>{{ item.create_at }}</td>
-                            </tr>
-                        </template>
-                    </tbody>
-                </n-table> -->
-                <n-data-table :columns="columns" :data="tableData" :row-key="(row: RowData) => row._id"
+                <n-button size="small" style="margin-bottom: 10px;" @click="handleDriveBackup">备份</n-button>
+
+                <n-data-table :columns="columns" :data="tableData"
+                    :row-key="(row: RowData) => row._id || row.serial + '/' + row.relPath"
                     @update:checked-row-keys="handleCheck" />
             </n-spin>
 
@@ -65,54 +47,86 @@
             </template>
         </n-card>
     </n-modal>
-    <drive-changer ref="driveChanger" />
 </template>
 
 <script lang="ts" setup>
-import { h, onMounted, ref, toRaw, watch } from 'vue';
+import { h, ref, toRaw, watch } from 'vue';
 import useNotify from '@/hooks/useNotify';
-import { NInput, NForm, NButton, NFormItem, FormInst, NCard, NModal, NPagination, NDataTable, NSpin, useDialog } from 'naive-ui'
+import {
+    NInput, NButton, NCard, NModal, NPagination, NDataTable, NSpin, NSelect, NSpace, NAlert, NTag, useDialog,
+} from 'naive-ui'
 import type { DataTableColumns, DataTableRowKey } from 'naive-ui'
-import type { SearchCache, BrowseHistoryWithPagination, OpenMode } from 'electron/server/nedb';
-import DriveChanger from "@/components/DriveChanger/index.vue";
-import { deletAction } from '@/utils/request';
+import type { BrowseHistoryWithPagination, OpenMode } from 'electron/server/nedb';
+import { deletAction, getAction } from '@/utils/request';
 
-export type HistoryQuery = {
+// 统一写 127.0.0.1 而不是 localhost，避免个别机器把 localhost 解析到 ::1（服务端只绑 IPv4）
+const API_BASE = 'http://127.0.0.1:3060';
+
+type HistoryQuery = {
+    serial: string;
     path: string;
     pageNo: number;
     pageSize: number;
     total: number;
 }
-type RowData = { key: number; _id: string; path: string; create_at: string; }
+
+/** /getDisks 回来的一行 */
+type DiskRow = {
+    serial: string;
+    drive: string;
+    label: string;
+    online: boolean;
+    folders: number;
+    covers: number;
+    lastScanAt: string;
+};
+
+/** /getHistory 回来的一行：缓存元数据 + 这块盘此刻在不在线 */
+type RowData = BrowseHistoryWithPagination['records'][number];
+
 const columns = ref<DataTableColumns<RowData>>([{
     type: 'selection'
 }, {
-    title: '路径',
+    title: '盘 / 路径',
     key: 'path',
     render(row) {
-        return h(
-            NButton,
-            {
-                size: 'small',
-                type: 'info',
-                quaternary: true,
-                ondblclick: () => openDir(row)
-            },
-            { default: () => row.path }
-        )
+        const offline = !row.online;
+        const letter = row.path ? row.path.slice(0, 2) : '??';
+        return h('div', { style: 'display:flex;align-items:center;gap:6px;min-width:0' }, [
+            h(NTag, { size: 'small', bordered: false, type: offline ? 'default' : 'success' },
+                { default: () => letter }),
+            h(NButton,
+                {
+                    size: 'small',
+                    type: 'info',
+                    quaternary: true,
+                    disabled: offline,
+                    ondblclick: () => openDir(row),
+                },
+                { default: () => row.relPath || '/' }),
+            offline
+                ? h('span', { style: 'color:#999;font-size:12px;flex-shrink:0' }, '（盘未插入）')
+                : null,
+        ]);
     }
 }, {
+    title: '封面',
+    key: 'count',
+    width: 80,
+}, {
     title: '日期',
-    key: 'create_at'
+    key: 'create_at',
+    width: 170,
 }])
-const tableData = ref<Partial<SearchCache>[]>([])
+
+const tableData = ref<RowData[]>([])
 const emits = defineEmits<{
     (e: 'openDir', path: string, mode: OpenMode): void
 }>();
 const notify = useNotify();
 const dialog = useDialog();
-const formRef = ref<FormInst | null>(null);
 const model = ref<HistoryQuery>({
+    serial: '',
     path: '',
     pageNo: 1,
     pageSize: 10,
@@ -120,18 +134,22 @@ const model = ref<HistoryQuery>({
 })
 const showModal = ref(false);
 const loading = ref(false);
-const isFirstRender = ref(false);
+const diskLoading = ref(false);
+const diskOptions = ref<{ label: string; value: string }[]>([{ label: '全部盘', value: '' }]);
+const duplicated = ref<string[]>([]);
+
 const setShowModal = function (val: boolean) {
     showModal.value = val;
 }
 
 function toQueryStr(val: Record<string, any>) {
-    if (typeof val !== 'object' || null) return `?_t=${+new Date()}`
+    if (!val || typeof val !== 'object') return `?_t=${+new Date()}`
 
     let queryStr = Object.keys(val).map(key => {
         const value = String(val[key] !== undefined ? val[key] : '');
         if (value) {
-            return `${key}=${value}`
+            // 必须编码：路径里的 & 会被当成参数分隔符，# 会被当成 fragment
+            return `${key}=${encodeURIComponent(value)}`
         } else {
             return
         }
@@ -140,12 +158,44 @@ function toQueryStr(val: Record<string, any>) {
     return queryStr ? `?${queryStr}&_t=${+new Date()}` : `?_t=${+new Date()}`
 }
 
+function diskLabel(d: DiskRow) {
+    const where = d.online ? `${d.drive}:` : '未插入';
+    const name = d.label ? ` ${d.label}` : '';
+    return `${where}${name} · ${d.folders} 个目录 / ${d.covers} 张封面`;
+}
+
+/**
+ * 拉一次盘列表。
+ *
+ * 这是这套缓存的分组维度：先说清楚"这些缓存属于哪块盘"，再去列那块盘缓存过哪些目录。
+ * 盘符只是当前挂载点，所以列表里显示的是盘符和卷标，真正的身份是序列号。
+ */
+const loadDisks = async () => {
+    diskLoading.value = true;
+    try {
+        // 走 getAction 而不是裸 fetch：响应检查只在 request.ts 里做一次就够了。
+        // 原来这里是 `fetch(...).then(res => res.json())`，不判 res.ok 也不判 body 里的 code，
+        // 于是 `{code:500}` 会被当成正常数据一路用下去。
+        const data = await getAction(`${API_BASE}/getDisks`);
+        const disks: DiskRow[] = data.disks || [];
+        diskOptions.value = [
+            { label: `全部盘 · ${disks.reduce((n, d) => n + d.folders, 0)} 个目录`, value: '' },
+            ...disks.map(d => ({ label: diskLabel(d), value: d.serial })),
+        ];
+        duplicated.value = data.duplicated || [];
+    } catch (err) {
+        notify('error', '错误', `获取磁盘列表失败！${err}`)
+    } finally {
+        diskLoading.value = false;
+    }
+}
+
 const getHistrotyList = () => {
     if (loading.value) return
     loading.value = true;
-    fetch(`http://127.0.0.1:3060/getHistory${toQueryStr(model.value)}`).then(res => {
-        return res.json();
-    }).then(async (data: BrowseHistoryWithPagination) => {
+    // 同上：走统一出口。这里尤其要紧 —— 服务端出错时返回的是 **HTTP 200 + {code:500}**，
+    // 裸 fetch 时 promise 是 resolve 的，进不了 catch，于是没有提示、还把 undefined 写进了表格
+    getAction(`${API_BASE}/getHistory${toQueryStr(model.value)}`).then(async (data: BrowseHistoryWithPagination) => {
         tableData.value = data.records
         model.value.total = data.total
     }).catch(err => {
@@ -163,15 +213,19 @@ const onSearch = () => {
 
 const onRefresh = () => {
     if (loading.value) return
+    loadDisks();
     getHistrotyList();
 }
 
-const openDir = (item: Partial<SearchCache>) => {
+const openDir = (item: RowData) => {
+    const target = item.path;
+    if (!item.online || !target) {
+        notify('warning', '盘未插入', `这块盘（序列号 ${item.serial}）现在不在。插上之后重新打开这个面板即可。`)
+        return;
+    }
     setShowModal(false);
     setTimeout(() => {
-        if (item.path) {
-            emits('openDir', item.path, item.mode || 'cover');
-        }
+        emits('openDir', target, item.mode || 'cover');
     }, 300)
 }
 
@@ -183,11 +237,6 @@ const handlePageChange = (page: number) => {
 const handlePageSizeChange = (pageSize: number) => {
     model.value.pageSize = pageSize;
     getHistrotyList();
-}
-
-const driveChanger = ref<typeof DriveChanger>()
-const handleDriveChangerShow = () => {
-    driveChanger.value?.setShowModal(true)
 }
 
 const checkedRowKeysRef = ref<DataTableRowKey[]>([])
@@ -214,7 +263,7 @@ const onRemove = async () => {
 
     try {
         const ids = toRaw(checkedRowKeysRef.value)
-        await deletAction('http://localhost:3060/removeHistoryBatch?ids=' + ids.join(','))
+        await deletAction(API_BASE + '/removeHistoryBatch?ids=' + ids.join(','))
         notify('success', '成功', `删除成功`)
         setTimeout(() => {
             handleCheck([])
@@ -243,7 +292,7 @@ const onDriveBackup = async () => {
     loading.value = true;
 
     try {
-        await deletAction('http://localhost:3060/backup')
+        await deletAction(API_BASE + '/backup')
         notify('success', '成功', `备份成功`)
     } catch (err) {
         notify('error', '错误', `备份失败:${err}`)
@@ -256,14 +305,15 @@ const onHide = () => {
     checkedRowKeysRef.value = []
 }
 
-onMounted(() => {
-    const unwatch = watch(showModal, (val) => {
-        if (val && !isFirstRender.value) {
-            unwatch();
-            getHistrotyList();
-            isFirstRender.value = true;
-        }
-    })
+// 每次打开都刷新。原来是"只在第一次打开时查一次"（isFirstRender 守卫），
+// 结果第二次打开看到的是上一次的旧列表。
+// 顺带把 watch 从 onMounted 里挪出来 —— 写在 onMounted 内部注册的 watcher，
+// 组件卸载时不会被回收
+watch(showModal, (val) => {
+    if (val) {
+        loadDisks();
+        getHistrotyList();
+    }
 });
 
 defineExpose({
