@@ -1,0 +1,356 @@
+
+  Policy set or a policy with "unsafe-eval" enabled. This exposes users of
+  this app to unnecessary security risks.
+
+This warning will not show up
+{
+  "viewport": [
+    1903,
+    1063
+  ],
+  "small__none": {
+    "natural": [
+      480,
+      270
+    ],
+    "box": [
+      480,
+      270
+    ],
+    "content": [
+      480,
+      270
+    ],
+    "boxEqualsContent": true,
+    "boxLeft": 712,
+    "boxTop": 397,
+    "padX": 0,
+    "padY": 0,
+    "objectFit": "fill",
+    "clickInPaddingGap": "n/a(盒子=图，没有假空白)",
+    "clickOnImageCenter": {
+      "hitWhat": "img",
+      "closed": false
+    }
+  },
+  "small__stretch": {
+    "natural": [
+      480,
+      270
+    ],
+    "box": [
+      1871,
+      1031
+    ],
+    "content": [
+      1833,
+      1031
+    ],
+    "boxEqualsContent": false,
+    "boxLeft": 16,
+    "boxTop": 16,
+    "padX": 19,
+    "padY": 0,
+    "objectFit": "contain",
+    "clickInPaddingGap": {
+      "x": 26,
+      "hitWhat": "img",
+      "closed": false
+    },
+    "clickOnImageCenter": {
+      "hitWhat": "img",
+      "closed": false
+    }
+  },
+  "small__stretchClick": {
+    "natural": [
+      480,
+      270
+    ],
+    "box": [
+      1871,
+      1031
+    ],
+    "content": [
+      1833,
+      1031
+    ],
+    "boxEqualsContent": false,
+    "boxLeft": 16,
+    "boxTop": 16,
+    "padX": 19,
+    "padY": 0,
+    "objectFit": "contain",
+    "clickInPaddingGap": {
+      "x": 26,
+      "hitWhat": "img",
+      "closed": true
+    },
+    "clickOnImageCenter": {
+      "hitWhat": "img",
+      "closed": false
+    }
+  },
+  "small__fit48": {
+    "natural": [
+      480,
+      270
+    ],
+    "box": [
+      1719,
+      967
+    ],
+    "content": [
+      1719,
+      967
+    ],
+    "boxEqualsContent": true,
+    "boxLeft": 92,
+    "boxTop": 48,
+    "padX": 0,
+    "padY": 0,
+    "objectFit": "contain",
+    "clickInPaddingGap": "n/a(盒子=图，没有假空白)",
+    "clickOnImageCenter": {
+      "hitWhat": "img",
+      "closed": false
+    }
+  },
+  "big__none": {
+    "natural": [
+      3000,
+      2000
+    ],
+    "box": [
+      1547,
+      1031
+    ],
+    "content": [
+      1547,
+      1031
+    ],
+    "boxEqualsContent": true,
+    "boxLeft": 171,
+    "boxTop": 9,
+    "padX": 0,
+    "padY": 0,
+    "objectFit": "fill",
+    "clickInPaddingGap": "n/a(盒子=图，没有假空白)",
+    "clickOnImageCenter": {
+      "hitWhat": "img",
+      "closed": false
+    }
+  },
+  "big__stretch": {
+    "natural": [
+      3000,
+      2000
+    ],
+    "box": [
+      1871,
+      1031
+    ],
+    "content": [
+      1547,
+      1031
+    ],
+    "boxEqualsContent": false,
+    "boxLeft": 9,
+    "boxTop": 9,
+    "padX": 162,
+    "padY": 0,
+    "objectFit": "contain",
+    "clickInPaddingGap": {
+      "x": 90,
+      "hitWhat": "img",
+      "closed": false
+    },
+    "clickOnImageCenter": {
+      "hitWhat": "img",
+      "closed": false
+    }
+  },
+  "big__stretchClick": {
+    "natural": [
+      3000,
+      2000
+    ],
+    "box": [
+      1871,
+      1031
+    ],
+    "content": [
+      1547,
+      1031
+    ],
+    "boxEqualsContent": false,
+    "boxLeft": 9,
+    "boxTop": 9,
+    "padX": 162,
+    "padY": 0,
+    "objectFit": "contain",
+    "clickInPaddingGap": {
+      "x": 90,
+      "hitWhat": "img",
+      "closed": true
+    },
+    "clickOnImageCenter": {
+      "hitWhat": "img",
+      "closed": false
+    }
+  },
+  "big__fit48": {
+    "natural": [
+      3000,
+      2000
+    ],
+    "box": [
+      1451,
+      967
+    ],
+    "content": [
+      1451,
+      967
+    ],
+    "boxEqualsContent": true,
+    "boxLeft": 219,
+    "boxTop": 41,
+    "padX": 0,
+    "padY": 0,
+    "objectFit": "contain",
+    "clickInPaddingGap": "n/a(盒子=图，没有假空白)",
+    "clickOnImageCenter": {
+      "hitWhat": "img",
+      "closed": false
+    }
+  },
+  "wide__none": {
+    "natural": [
+      2400,
+      400
+    ],
+    "box": [
+      1871,
+      312
+    ],
+    "content": [
+      1871,
+      312
+    ],
+    "boxEqualsContent": true,
+    "boxLeft": 16,
+    "boxTop": 368,
+    "padX": 0,
+    "padY": 0,
+    "objectFit": "fill",
+    "clickInPaddingGap": "n/a(盒子=图，没有假空白)",
+    "clickOnImageCenter": {
+      "hitWhat": "img",
+      "closed": false
+    }
+  },
+  "wide__stretch": {
+    "natural": [
+      2400,
+      400
+    ],
+    "box": [
+      1871,
+      1031
+    ],
+    "content": [
+      1871,
+      312
+    ],
+    "boxEqualsContent": false,
+    "boxLeft": 16,
+    "boxTop": 9,
+    "padX": 0,
+    "padY": 360,
+    "objectFit": "contain",
+    "clickInPaddingGap": "n/a(盒子=图，没有假空白)",
+    "clickOnImageCenter": {
+      "hitWhat": "img",
+      "closed": false
+    }
+  },
+  "wide__stretchClick": {
+    "natural": [
+      2400,
+      400
+    ],
+    "box": [
+      1871,
+      1031
+    ],
+    "content": [
+      1871,
+      312
+    ],
+    "boxEqualsContent": false,
+    "boxLeft": 16,
+    "boxTop": 9,
+    "padX": 0,
+    "padY": 360,
+    "objectFit": "contain",
+    "clickInPaddingGap": "n/a(盒子=图，没有假空白)",
+    "clickOnImageCenter": {
+      "hitWhat": "img",
+      "closed": false
+    }
+  },
+  "wide__fit48": {
+    "natural": [
+      2400,
+      400
+    ],
+    "box": [
+      1807,
+      967
+    ],
+    "content": [
+      1807,
+      301
+    ],
+    "boxEqualsContent": false,
+    "boxLeft": 48,
+    "boxTop": 41,
+    "padX": 0,
+    "padY": 333,
+    "objectFit": "contain",
+    "clickInPaddingGap": "n/a(盒子=图，没有假空白)",
+    "clickOnImageCenter": {
+      "hitWhat": "img",
+      "closed": false
+    }
+  },
+  "tall__stretchClick": {
+    "natural": [
+      600,
+      1800
+    ],
+    "box": [
+      1871,
+      1031
+    ],
+    "content": [
+      344,
+      1031
+    ],
+    "boxEqualsContent": false,
+    "boxLeft": 9,
+    "boxTop": 16,
+    "padX": 764,
+    "padY": 0,
+    "objectFit": "contain",
+    "clickInPaddingGap": {
+      "x": 391,
+      "hitWhat": "img",
+      "closed": true
+    },
+    "clickOnImageCenter": {
+      "hitWhat": "img",
+      "closed": false
+    }
+  }
+}

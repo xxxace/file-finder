@@ -17,4 +17,4 @@ cd "$(dirname "$0")/../../.."
 
 env -u ELECTRON_RUN_AS_NODE ./node_modules/electron/dist/electron.exe docs/probes/preview-fill/run.cjs 2>&1 \
     | grep -v "GPU process\|Dawn\|deprecated\|Security Warning\|font-weight\|Content Security\|renderer process\|For more\|electronjs.org\|once the app\|development build of Vue\|production build" \
-    | tee docs/probes/preview-fill/out.log
+    | tee docs/probes/preview-fill/out.txt
