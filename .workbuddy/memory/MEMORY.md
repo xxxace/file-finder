@@ -20,7 +20,12 @@
 6. **这是「脱敏仓库」**（远端 `github.com/xxxace/file-finder`，`fff69a0` 确立标准）：任何入库文本（源码注释 / `docs/` / `.workbuddy/memory/` / 探针 / 夹具）**不许**出现真实番号、真实演员名、真实作品名、真机目录与文件名、纯数字站点流水号、盘序列号、用户名。
    - 占位风格：番号 → `TST-xxx`（或保留格式族的三段式 `FC2-PPV-1000001`、数字前缀 `200GANA-1001` / `1PONDO-100001`，让解析器示例仍成立）；演员名 → `示例演员A…H`；作品/系列名 → `示例作品标题`；片商 → `示例片商`；路径 → `D:/sample/videos/…`。
    - ⚠️ **写"我脱敏了"的复盘日志时最容易复发** —— 别把原值当例子抄一遍，只写类别与占位风格（2026-09-30 踩过）。
-   - 入库前自检：`git grep -nE '[A-Z]{2,6}[0-9]{0,3}-[0-9]{3,5}'` + 比对 `HEAD` 已有标识集合，**新增的真实标识一律先替换再提交**。
+   - 入库前自检：`git grep -nE '[A-Z]{2,6}[0-9]{0,3}-[0-9]{3,5}'` + 比对 `HEAD` 已有标识集合，**新增的真实标识一律先替换再提交**。完整手法见 skill `.workbuddy/skills/desensitize-audit/`（含"别用通用 hex 当模式"这个坑）。
+   - ⚠️ **已知遗留（2026-09-30 自检发现，未清，等用户决定）**：`HEAD` 里仍有 **12 个文件**含真实标识，且**都不是当轮新增的**（更早的提交就已入库）——
+     最重的是 `docs/PRD-manager-assistant-2026-09-25.md`（7 处）、`docs/CODE-REVIEW.md`（4 处）；
+     另有 `docs/ARCH-PLAN.md`、`.workbuddy/memory/2026-09-2{4,5}.md`、`docs/probes/{scan-rules/run.mjs,scan-rules/fixture.json,scan-real/run.mjs,parse-title/run.mjs}`；
+     以及 3 个源码注释里的"新建文件夹"（`electron/utils/driveIdentity.ts`、`electron/server/assistant/scan.ts`、`src/views/FileFinder/AssistantCoverModal.vue`，属轻量）。
+     **改工作区只能让"以后"干净，历史里的还在** ⇒ 真要清得改写历史 + 强推。**不擅自动别的会话的文档（单一真相源）**。
 
 ## 四、文档索引
 - `docs/PROJECT-MEMO-2026-09-24.md`（特性/缓存/依赖契约/P0-P2/加密备份/n-space 全文）
@@ -66,8 +71,7 @@
 - ⚠️ `route()` 精确匹配 pathname（`server/index.ts:1106`）→ **不支持 `/:id`**，任务 id 走 `?id=`。
 - ⚠️ 隐藏窗会让 `window-all-closed` 永不触发 → `main/index.ts` 加 `win.on('closed', destroyTrackedWindows)`。
 
-## 九、实测铁律
-1. 验证须先放"已知存在 ID"当控制组（验 FC2 用 javdock 1000002/1000003；旧 fc2-check.js 拿 javbus 验 FC2→假阴性差点改错）。
+## 九、实测铁律1. 验证须先放"已知存在 ID"当控制组（验 FC2 用 javdock 1000002/1000003；旧 fc2-check.js 拿 javbus 验 FC2→假阴性差点改错）。
 2. javbus 不收 FC2；预置 5 站仅 javdock 收。onejav 404、jav.wine 挂广告、freejavbt 详情需 `/en/` 前缀。
 3. dryrun 分不清 404 和选择器错 → Phase 3 面板必带 HTTP 状态/页面标题。
 4. unmatched 有 46% 是目录（182 条里 83 条 folder）→ 维持现状，别再提拆桶（用户否决）。
