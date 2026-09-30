@@ -28,7 +28,7 @@
 - 角色产出：`docs/DESIGN-UIUX-2026-09-24.md` · `docs/DESIGN-PM-2026-09-24.md`
 - 管理助手：`docs/PRD-manager-assistant-2026-09-25.md`（权威）+ 同名 `DESIGN-` / `KICKOFF-`
 - 缓存面板：`docs/DESIGN-CACHE-PANEL-2026-09-30.md` · `docs/PLAN-cache-panel-2026-09-30.md` · `docs/cache-panel-mockup-2026-09-30.html`
-- 头部/面包屑：`docs/DESIGN-HEADER-2026-09-30.md`（布局：分区+有界化+折叠+三家官方规范对照）· `docs/DESIGN-NAV-2026-09-30.md`（导航语义：绝对链+返回修条件+跳转可撤销，§12 含四问自查）· `docs/PLAN-nav-header-2026-10-01.md`（**三阶段实施计划**）—— **全部待批准，代码未动**
+- 头部/面包屑：`docs/DESIGN-HEADER-2026-09-30.md` + `docs/DESIGN-NAV-2026-09-30.md`（§12 四问自查）+ `docs/PLAN-nav-header-2026-10-01.md`（三阶段计划 + §十一 实施结果）—— **已落地（4 提交），待真机目视**；探针 `docs/probes/header-width/`（真 Chromium 量头部高度）· `docs/probes/crumbs/`
 - 探针 `docs/probes/`：`scan-real/`（真 scan + 真库只读）· `parse-title/` · `table-scroll/` · `preview-fill/` · `remove-race/` · `cache-panel-*`；skill：`electron-headless-verify` · `real-module-probe` · `ui-render-verify`
 - **没有测试框架**（`package.json` 只有 dev/typecheck/build）⇒ 验证固定三件套：`typecheck` 0 error + `docs/probes/` 只读探针 + 真机目视。**别写 TDD 式假测试**。
 - 探针证据**必须 `.txt`**（`.gitignore` 挡 `*.log`，否则文档引用变死链）。
@@ -41,7 +41,7 @@
 - 视频扩展名单一真相源 `electron/server/videoExt.ts`；改它要同步 `index.vue` 的 `VIDEO_EXT_RE` 并重启 dev
 
 ## 六、待他动作
-重启 dev · 跑 PRD §15/§16 真机自测 · 目视验收离线只读层 · **对 `docs/PLAN-nav-header-2026-10-01.md` §七 的 D1–D4 说一句**（阶段 1 已可开工）· `ffprobe` 超时回收（泄漏实测成立）
+重启 dev · 跑 PRD §15/§16 真机自测 · 目视验收离线只读层 · **真机回归导航**（选根/下钻/返回/刷新/批量扫描 + 缓存跳转→返回，见 `PLAN-nav-header` §十一）· `ffprobe` 超时回收（泄漏实测成立）
 
 ## 七、暂缓
 视觉去重/以图搜图 **砍掉**；盘舰队看板、常驻增量索引 **短期不做**；走「功能完善」路线。
