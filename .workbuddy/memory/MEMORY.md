@@ -28,8 +28,8 @@
 - 角色产出：`docs/DESIGN-UIUX-2026-09-24.md` · `docs/DESIGN-PM-2026-09-24.md`
 - 管理助手：`docs/PRD-manager-assistant-2026-09-25.md`（权威）+ 同名 `DESIGN-` / `KICKOFF-`
 - 缓存面板：`docs/DESIGN-CACHE-PANEL-2026-09-30.md` · `docs/PLAN-cache-panel-2026-09-30.md` · `docs/cache-panel-mockup-2026-09-30.html`
-- 头部/面包屑：`docs/DESIGN-HEADER-2026-09-30.md` + `docs/DESIGN-NAV-2026-09-30.md`（§12 四问自查）+ `docs/PLAN-nav-header-2026-10-01.md`（三阶段计划 + §十一 实施结果）—— **已落地（4 提交），待真机目视**；探针 `docs/probes/header-width/`（真 Chromium 量头部高度）· `docs/probes/crumbs/`
-- 探针 `docs/probes/`：`scan-real/`（真 scan + 真库只读）· `parse-title/` · `table-scroll/` · `preview-fill/` · `remove-race/` · `cache-panel-*`；skill：`electron-headless-verify` · `real-module-probe` · `ui-render-verify`
+- 头部/面包屑：`DESIGN-HEADER-2026-09-30.md`（§18 工具条预算 / 分隔符 / 截图）+ `DESIGN-NAV-2026-09-30.md`（§12 四问自查）+ `PLAN-nav-header-2026-10-01.md`（三阶段 + §十一 实施结果）—— **已落地，待真机目视**；探针 `probes/header-width/`（真 Chromium + 真编译 scoped CSS + **截图**）· `probes/crumbs/`
+- 探针 `docs/probes/`：`scan-real/` `parse-title/` `table-scroll/` `preview-fill/` `remove-race/` `cache-panel-*` `header-width/` `crumbs/`；skill：`electron-headless-verify` · `real-module-probe` · `ui-render-verify`
 - **没有测试框架**（`package.json` 只有 dev/typecheck/build）⇒ 验证固定三件套：`typecheck` 0 error + `docs/probes/` 只读探针 + 真机目视。**别写 TDD 式假测试**。
 - 探针证据**必须 `.txt`**（`.gitignore` 挡 `*.log`，否则文档引用变死链）。
 
@@ -46,8 +46,7 @@
 视觉去重/以图搜图 **砍掉**；盘舰队看板、常驻增量索引 **短期不做**；走「功能完善」路线。
 
 ## 八、管理助手（active，只做 JAV）
-- 隐藏 BrowserWindow 抓取（不引 puppeteer/cheerio）；站点规则=JSON 候选链；默认只写封面文件；接口走 `route()` 加 `/assistant/*`；UI=全屏 `n-modal`（浅色）
-- apply 后**必须 `removeCache` 失效**；目标目录 `tmp→rename` 原子写 + `apply.log` + 回滚
+- 隐藏 BrowserWindow 抓取（不引 puppeteer/cheerio）；站点规则=JSON 候选链；默认只写封面文件；接口走 `route()` 加 `/assistant/*`；UI=全屏 `n-modal`（浅色）。apply 后**必须 `removeCache` 失效**；目标目录 `tmp→rename` 原子写 + `apply.log` + 回滚
 - `cf_clearance` 绑 IP+UA+TLS ⇒ **不能**走 Node `fetch`，全程 Chromium 网络栈
 - `avatar.jpg` / `cover.jpg` 是**保留名，助手永不写**；有它们 UI 自动当目录脸
 - 线索降级链：解析出番号 → 站点抓封面；认不出 → **视频抽帧**；都不行 → 手动 URL。**禁止**对"认不出"自动乱搜（=误配）
@@ -57,14 +56,14 @@
 - 站点：`freejavbt` / `javwine` / `javbus` / `javdock` / `onejav` + `javtext.net`，均无账号
 
 ## 九、实测事实（错了会误导）
-1. 验证**先放"已知存在 ID"当控制组**（验 FC2 曾拿 javbus → 假阴性）。javbus 不收 FC2，5 站仅 javdock 收；onejav 404；jav.wine 挂广告；freejavbt 详情需 `/en/`。
+1. 验证**先放"已知存在 ID"当控制组**（验 FC2 曾拿 javbus → 假阴性）。javbus 不收 FC2，5 站仅 javdock 收；freejavbt 详情需 `/en/`。
 2. unmatched 里 **46% 是目录** ⇒ 维持现状，别再提拆桶（他否决）。
 3. **缓存库**：215 行 = 213 记录 + 2 行 `$$indexCreated`；死行 0；81.7 MB 全是真内容 ⇒ **「压缩库瘦身」是伪需求**。⚠️ 读库**必须跳过 `$$indexCreated`**。
 4. `DriveInfo.label` **从来没被赋值**（`probe()` 写死 `''`）⇒ 已用「离线(序列号后4位)」绕过。
-5. **收敛条目的 size = 该子目录所有文件之和**；**双算 = 0**；内存聚合 0.07 ms ⇒ **面板做聚合是零新增磁盘 I/O**（nedb 全库常驻内存，`getAllData()` 不碰文件）。
+5. **收敛条目的 size = 该子目录所有文件之和**；**双算 = 0**；内存聚合 0.07 ms ⇒ **面板做聚合零新增磁盘 I/O**（nedb 全库常驻内存）。
 6. `parseSize` 曾把 TB 截断（`% 1024`）⇒ 已由 `formatBytes` 取代。
 7. `HistoryTable` 换每页条数**不重置页码** ⇒ 会翻到空白页。
-8. 缓存记录入口原为无文字无 tooltip 的脚印图标；旁边 `n-badge` 是"当前目录条目数"却**像它的角标**（待裁决）。
+8. 缓存记录入口原为无文字无 tooltip 的脚印图标；旁边 `n-badge` 是"当前目录条目数"却**像它的角标**。
 
 ## 十、五条硬约束（他原话，跨会话）
 1. **不加「操作」列** —— 打开固定为**双击**；可发现性不许靠加列解决。
@@ -77,15 +76,8 @@
 1. **DataTable `render()` 生成的节点，`<style scoped>` 匹配不到** ⇒ 用不带 scoped 的 `<style>` + 外层类名前缀。先例 `HistoryTable/index.vue` 末尾。
 2. 并发别用 `if (loading) return` 守卫 ⇒ 用**请求序号** `const my=++seq; if(my!==seq) return;`。
 3. `n-input` **吃掉 composition 事件** ⇒ 外面套一层普通 div 接（会冒泡）。
-4. **表格内部滚动 + 表头吸顶**：① 外层要有**确定高度**（`max-height` 不给高度，子项会撑到 4235px）② 滚动交给 DataTable（加 **`flex-height`**）③ **别**用外层 `overflow:auto` + `thead{sticky}`（实测无效）。⚠️ `n-spin` 的 DOM 是 `.n-spin-container > .n-spin-content > slot`，flex 链**每层**都要 `flex:1 1 auto; min-height:0`。
-5. 弹窗内**只有表格滚**，别在卡片内容上加 `overflow`。
-6. **小窗口下"flex 子项被挤压"是一类病**：症状常表现为"文字竖排成一个字一行 / 元素悬在半空"。
-   （实例：分页器内部 `flex-wrap: nowrap`，被挤压后把「共 N 项」压到内容最小宽 ≈12px。）
-   通用解法：容器给 `flex-wrap: wrap`（装不下就整块换行），要"整块不缩"的一方给 `flex: 0 0 auto`，
-   会被压成竖排的文本再补 `white-space: nowrap`。探针 `docs/probes/narrow-layout/`（扫 680→1100 宽度复算）。
-   ⚠️ 附带的坑：**别把 `scrollWidth > clientWidth` 当"可横向滚动"的判据** ——
-   被父级裁掉的内容 scrollWidth 照样更大，会把"改前"也判成可滚动，证据不能用；
-   正确判据是 computed `overflow-x` ∈ {auto, scroll} **且**内容更宽。
+4. **布局类坑**（表头吸顶 / 弹窗内只有表格滚 / 小窗口下 flex 子项被挤压）**正文搬到 `docs/LAYOUT-GOTCHAS.md`** ——
+   太长，留在这里会把注入上限撑爆。改"容器/滚动/flex"之前先读它。
 
 ## 十二、两条自检问句（血泪换来）
 1. **判据落在"事实"还是"快照"上？** 曾用 `path.startsWith('#')`（地址形态=历史快照）判"能不能打开" ⇒ 盘插回来也**永久打不开**。正解：`/resolveAnchor` 在**动作那一刻**问服务端。
