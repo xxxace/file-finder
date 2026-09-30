@@ -79,6 +79,13 @@
 3. `n-input` **吃掉 composition 事件** ⇒ 外面套一层普通 div 接（会冒泡）。
 4. **表格内部滚动 + 表头吸顶**：① 外层要有**确定高度**（`max-height` 不给高度，子项会撑到 4235px）② 滚动交给 DataTable（加 **`flex-height`**）③ **别**用外层 `overflow:auto` + `thead{sticky}`（实测无效）。⚠️ `n-spin` 的 DOM 是 `.n-spin-container > .n-spin-content > slot`，flex 链**每层**都要 `flex:1 1 auto; min-height:0`。
 5. 弹窗内**只有表格滚**，别在卡片内容上加 `overflow`。
+6. **小窗口下"flex 子项被挤压"是一类病**：症状常表现为"文字竖排成一个字一行 / 元素悬在半空"。
+   （实例：分页器内部 `flex-wrap: nowrap`，被挤压后把「共 N 项」压到内容最小宽 ≈12px。）
+   通用解法：容器给 `flex-wrap: wrap`（装不下就整块换行），要"整块不缩"的一方给 `flex: 0 0 auto`，
+   会被压成竖排的文本再补 `white-space: nowrap`。探针 `docs/probes/narrow-layout/`（扫 680→1100 宽度复算）。
+   ⚠️ 附带的坑：**别把 `scrollWidth > clientWidth` 当"可横向滚动"的判据** ——
+   被父级裁掉的内容 scrollWidth 照样更大，会把"改前"也判成可滚动，证据不能用；
+   正确判据是 computed `overflow-x` ∈ {auto, scroll} **且**内容更宽。
 
 ## 十二、两条自检问句（血泪换来）
 1. **判据落在"事实"还是"快照"上？** 曾用 `path.startsWith('#')`（地址形态=历史快照）判"能不能打开" ⇒ 盘插回来也**永久打不开**。正解：`/resolveAnchor` 在**动作那一刻**问服务端。
