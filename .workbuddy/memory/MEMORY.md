@@ -103,7 +103,7 @@
 1. **naive-ui DataTable 的 `render()` 里生成的节点，`<style scoped>` 匹配不到**：`render` 回调在 **DataTable 自己的渲染上下文**执行，节点拿到的是 DataTable 的 scope id。⇒ 给这些节点写样式要用**不带 scoped 的 `<style>` + 外层类名前缀隔离**（本项目：`.cache-panel .dir-cell { … }`）。先例：`src/components/HistoryTable/index.vue` 末尾的 style 块。
 2. **并发请求别用 `if (loading) return` 守卫**（会丢掉后发的那次，界面停在旧结果）⇒ 用**请求序号**：`const my = ++seq; … if (my !== seq) return;`，让"旧的响应永远覆盖不了新的"成为结构保证。
 3. **`n-input` 吃掉 composition 事件**：naive-ui 在**它自己的 render 里**把 `onCompositionstart/end` 绑到内部 input（`input/src/Input.mjs:928-929`），外面传同名 prop 会被顶掉。而 composition **会冒泡** ⇒ **在外面套一层普通 div 接**。
-4. **要让表格"内部滚动 + 表头吸顶"**（踩过两次，实测在 `docs/probes/table-scroll/out.log`）：
+4. **要让表格"内部滚动 + 表头吸顶"**（踩过两次，实测在 `docs/probes/table-scroll/out.txt`）：
    ① 外层必须有**确定高度** —— `max-height` **只封顶、不给确定高度**，`flex:1 1 auto` 的子项**没有剩余空间可分**，
    表格会按内容长（实测 60 行 = 4235px）压根不受约束；
    ② 滚动交给 DataTable 自己 —— 加 **`flex-height`**，它会把表头渲染成独立的一块

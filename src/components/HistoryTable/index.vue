@@ -179,7 +179,7 @@ import {
 import type { DataTableColumns, DataTableRowKey, DataTableSortState, InputInst } from 'naive-ui'
 import { formatBytes } from '@/utils';
 import type { BrowseHistoryWithPagination, OpenMode } from 'electron/server/nedb';
-import { deletAction, getAction, postAction } from '@/utils/request';
+import { getAction, postAction } from '@/utils/request';
 
 // 统一写 127.0.0.1 而不是 localhost，避免个别机器把 localhost 解析到 ::1（服务端只绑 IPv4）
 const API_BASE = 'http://127.0.0.1:3060';
@@ -687,7 +687,9 @@ const onRemove = async () => {
 
     try {
         const ids = toRaw(checkedRowKeysRef.value)
-        await deletAction(API_BASE + '/removeHistoryBatch?ids=' + ids.join(','))
+        // POST + JSON body（原来是 DELETE + 查询串 —— 拿 DELETE 做"带参数查询"是语义错位）。
+        // 服务端接口和这里同步改了，见 removeHistoryBatch 的注释。
+        await postAction(API_BASE + '/removeHistoryBatch', { ids })
         notify('success', '成功', `删除成功`)
         setTimeout(() => {
             handleCheck([])

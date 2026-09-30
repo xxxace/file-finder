@@ -216,43 +216,22 @@
         .overview b { color: var(--text); font-weight: 600; }
         .overview .sep { color: #d8d8e0; margin: 0 6px; }
 
-        .drive-row {
+        .disk-row {
             display: flex;
-            flex-wrap: wrap;
-            gap: 8px;
+            align-items: center;
+            gap: 10px;
             padding: 0 0 12px;
             border-bottom: 1px solid var(--divider);
         }
 
-        .chip {
-            display: inline-flex;
-            align-items: center;
-            gap: 6px;
-            height: 27px;
-            padding: 0 11px;
-            border: 1px solid var(--divider);
-            border-radius: 14px;
-            font-size: 12.5px;
-            background: var(--bg);
-            color: var(--text);
+        .disk-row .fake-select {
+            border-color: var(--divider);
+            width: 340px;
         }
-
-        .chip.active {
-            border-color: var(--primary);
-            background: #f2fbf6;
-            color: #146139;
-            font-weight: 500;
-        }
-
-        .chip.off { color: var(--text-2); }
 
         .dot { width: 7px; height: 7px; border-radius: 50%; display: inline-block; }
         .dot.on { background: var(--primary); }
         .dot.off { background: #c9c9d1; }
-
-        .chip .n { color: var(--text-2); }
-        .chip.active .n { color: #146139; }
-        .chip .na { color: var(--text-3); font-size: 11.5px; }
 
         .new-table-head,
         .new-table-row {
@@ -514,7 +493,7 @@
                     <div class="search-row">
                         <div class="search-box">
                             <span>🔍</span>
-                            <span>搜索目录名</span>
+                            <span>搜索目录名（也可以直接输盘符）</span>
                         </div>
                         <span class="btn" style="height:32px">↻ 刷新</span>
                     </div>
@@ -532,16 +511,13 @@
                         <span class="btn text">打开存放文件夹</span>
                     </div>
 
-                    <div class="drive-row">
-                        <span class="chip active">全部 <span class="n">213</span></span>
-                        <span class="chip"><i class="dot on"></i>F: <span class="n">106</span></span>
-                        <span class="chip"><i class="dot on"></i>G: <span class="n">14</span></span>
-                        <span class="chip off"><i class="dot off"></i>未命名 · CD72 <span class="n">63</span>
-                            <span class="na">未插入</span></span>
-                        <span class="chip off"><i class="dot off"></i>未命名 · C6EE <span class="n">26</span>
-                            <span class="na">未插入</span></span>
-                        <span class="chip off"><i class="dot off"></i>未命名 · 2E892 <span class="n">4</span>
-                            <span class="na">未插入</span></span>
+                    <div class="disk-row">
+                        <div class="fake-select">
+                            <span>全部盘 · 213 个目录 / 1247 个条目</span>
+                            <span class="caret">▼</span>
+                        </div>
+                        <span class="hint">离线盘在选项里长这样：<b>离线(CD72)</b> · 63 个目录 / 269 个条目
+                            —— 用序列号后 4 位，两块盘都不在时也能分出是哪一块</span>
                     </div>
 
                     <!-- 列表 -->
@@ -614,7 +590,7 @@
                             <span class="pg">2</span>
                             <span class="pg">3</span>
                             <span class="pg">›</span>
-                            <span class="pg">20 / 页</span>
+                            <span class="pg">16 / 页</span>
                         </div>
                     </div>
                 </div>
@@ -670,7 +646,7 @@
                     <li><b>0 显示 <code>—</code>，不显示 0 B。</b>表里那行「示例分类目录」是真事：
                         104 个条目全是子目录、合计 0 字节。写成"104 个条目 / 0 B"会被读成"这 104 个东西没内容"。</li>
                     <li>总览里写「<b>已读到 3.35 TB</b>」—— 措辞是"缓存里记录到的字节之和"，不是"硬盘上有 3.35 TB"。
-                        盘条上不再单独放每块盘的大小（chip 会太长，且行级可排序已经够用）。</li>
+                        每块盘的大小不再单独展示（行级「大小」列可排序，已经够用）。</li>
                 </ol>
                 <h3>这个改法里，会碰到你硬盘的动作清单</h3>
                 <ol>

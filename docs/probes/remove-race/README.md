@@ -14,14 +14,14 @@
 ## 复算
 
 ```bash
-node docs/probes/remove-race/run.mjs     # 结果写进 out.log
+bash docs/probes/remove-race/run.sh     # 结果写进 out.txt
 ```
 
 ⚠️ **这个探针验的是机制，不是真服务端的端到端时序**：
 它把 `queueCacheWrite` 的语义逐字复刻成最小可运行版本，用断言对比"删除进链 / 不进链"两种写法。
 （复刻对照是 superpowers `verify-async-claims` 的手法：对并发/时序下结论前，先把逻辑跑起来。）
 
-## 实测结果（`out.log`）
+## 实测结果（`out.txt`，复算产出）
 
 | 版本 | 删完之后库里还有这条记录 |
 |---|---|

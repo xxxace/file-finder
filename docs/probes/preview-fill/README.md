@@ -11,7 +11,7 @@
 ## 复算
 
 ```bash
-bash docs/probes/preview-fill/run.sh        # 结果同时落到 out.log
+bash docs/probes/preview-fill/run.sh        # 结果同时落到 out.txt
 ```
 
 ## 背景：为什么会冒出"点图外关不掉"这个问题

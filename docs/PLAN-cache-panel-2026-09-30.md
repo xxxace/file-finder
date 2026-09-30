@@ -58,7 +58,7 @@
 用户复验：「其它都没问题，表格的 header 为什么还是会跟着滚动消失在可视区域？」
 
 **我第 1 轮的修法是错的**，而且错在"以为给它一个 overflow 就行"。实测见
-`docs/probes/table-scroll/out.log`（真 Chromium + 真 naive-ui）：
+`docs/probes/table-scroll/out.txt`（真 Chromium + 真 naive-ui）：
 
 | 变体 | 卡片 CSS | 表格实测高 | 滚的是谁 | 滚到底后表头 |
 |---|---|---|---|---|

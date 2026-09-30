@@ -940,14 +940,17 @@ async function getHistory(req: Req, res: http.ServerResponse) {
 }
 
 async function removeHistoryBatch(req: Req, res: http.ServerResponse) {
-    const ids = req.params?.get('ids');
-    if (!ids) {
+    // POST + body（原来是 DELETE + 查询串：拿 DELETE 去"带参数查询"是语义错位，
+    // 而且 ids 一多查询串会越来越长）。查询串里给了也认 —— 老调用方不至于一下子断掉。
+    const raw = (req.body as { ids?: unknown } | undefined)?.ids ?? req.params?.get('ids');
+    const idList = (Array.isArray(raw) ? raw.map(String) : String(raw ?? '').split(','))
+        .map(s => s.trim())
+        .filter(Boolean);
+    if (!idList.length) {
         return sendJson(res, { code: 500, error: '参数 ids 不能为空' });
     }
 
     try {
-        const idList = ids.split(',').filter(Boolean);
-
         // 用户手里拿到的是 `_id`（表格行键），但**删除必须按主键 (serial, relPath, mode) 进各自的串行链**：
         // `_id` 只是"这一份库内部的身份"，不是数据的身份；而链的键就是主键。
         // 所以先只读地查一次元数据，把 _id 翻译成主键。

@@ -14,4 +14,4 @@ cd "$(dirname "$0")/../../.."
 
 env -u ELECTRON_RUN_AS_NODE ./node_modules/electron/dist/electron.exe docs/probes/table-scroll/run.cjs 2>&1 \
     | grep -v "GPU process\|Dawn\|deprecated\|Security Warning\|font-weight\|Content Security\|renderer process\|For more\|electronjs.org\|once the app\|development build\|production build\|unsafe-eval\|Policy set\|This warning" \
-    | tee docs/probes/table-scroll/out.log
+    | tee docs/probes/table-scroll/out.txt

@@ -7,14 +7,14 @@
 ## 复算
 
 ```bash
-bash docs/probes/table-scroll/run.sh     # 结果写进 out.log
+bash docs/probes/table-scroll/run.sh     # 结果写进 out.txt（*.log 被 gitignore 挡掉，所以用 .txt 才进得了仓库）
 ```
 
 用**项目自带 electron**（无头 offscreen）当真实浏览器，页面加载**真 naive-ui UMD 包** +
 真 Vue，渲染同样的卡片 / n-spin / n-data-table 结构，然后量：
 ① 滚的到底是哪个元素；② 滚到底之后表头还在不在表格可视区内。
 
-## 实测结论（`out.log`）
+## 实测结论（`out.txt`，复算产出）
 
 | 变体 | 卡片 CSS | 表格实测高 | 滚的是谁 | 滚到底后表头 |
 |---|---|---|---|---|
