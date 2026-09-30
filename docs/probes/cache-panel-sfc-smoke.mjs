@@ -34,9 +34,12 @@ for (const rel of FILES) {
     const { descriptor, errors } = parse(source, { filename });
     if (errors.length) problems.push(...errors.map(e => `parse: ${e.message}`));
     if (!descriptor.template) problems.push('没有找到 <template>');
-    if (!descriptor.scriptSetup) problems.push('没有找到 <script setup>');
+    // ⚠️ **不能把"没有 `<script setup>`"当成问题**：本项目有合法的 Options API 组件
+    // （`src/components/FolderSelector/index.vue` 就是 `defineComponent` + `<script lang="ts">`），
+    // 探针第一版在这里误报过一次。只有**两者都没有**才算真问题。
+    if (!descriptor.scriptSetup && !descriptor.script) problems.push('既没有 <script setup> 也没有 <script>');
 
-    if (descriptor.scriptSetup) {
+    if (descriptor.scriptSetup || descriptor.script) {
         try {
             compileScript(descriptor, { id });
         } catch (e) {

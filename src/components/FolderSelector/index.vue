@@ -4,9 +4,11 @@
             <n-button v-if="!modelValue" @click="handleClick" size="small">{{ label }}</n-button>
             <!-- 选中的根路径 = 一个**有界**的字符串。
                  层级深不会把它撑长：`foldPath()` 把它压成「首段 + … + 末 2 段」，
-                 与"单个名字过长"是两回事，后者由下面的 max-width + 省略号兜（全名进 title）。
-                 ⚠️ 不用 CSS 的 `direction: rtl` 做反向截断：那会把 `E:/` 里的 `/` 排到错位置。 -->
-            <n-tag v-else class="fs-tag" :title="modelValue">
+                 与"单个名字过长"是两回事，后者由下面的 max-width + 省略号兜。
+                 `title` 里给**完整路径**并说明它的身份 —— 跳转之后这块 chip 可能指向
+                 另一块盘（它只是"起点"，不是"你当前位置"），悬停一句话把它讲清楚，
+                 不额外引一个 tooltip 去和这个 title 抢。 -->
+            <n-tag v-else class="fs-tag" :title="`${modelValue}\n（这是你的起点；点 × 可清除）`">
                 <div class="fs-path">
                     <span class="fs-text">{{ shownPath }}</span>
                     <n-button size="tiny" style="margin-left:6px" @click="onClear">x</n-button>

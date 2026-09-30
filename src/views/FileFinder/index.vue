@@ -1,27 +1,71 @@
 <template>
     <div class="file-finder">
         <div class="header-bar">
-            <!-- 裸 flex 容器，**故意不用 n-space**。
-                 naive-ui 2.45.3 的 Space 会给**每一个**子项写死同一个 key（`key: 1`），
-                 子元素个数一变，Vue 的 keyed diff 就会让两个旧节点认领同一个新槽位：
-                 界面上凭空多出重复节点、按钮点了没反应。这一组的子元素是**会增减**的
-                 （openStack 的 v-for + 「返回」的 v-if），所以必须换掉。
+            <!-- 导航区 = 头部**唯一**的弹性槽位。
+                 继续用**裸 flex**、不用 n-space：naive-ui 2.45.3 的 Space 会给每一个子项
+                 写死同一个 key（`key: 1`），而这一组的子元素个数是**会变**的
+                 （面包屑 v-for + 折叠分支 + 「返回」的条件渲染），一变就会重复 key、错位复用节点。
                  详见 docs/FIX-2026-09-24-nspace-duplicate-keys.md -->
-            <div class="hstack">
-                <FolderSelector ref="folderSelector" v-model="dir" label="请选择文件夹(D)" @change="handleDirChange" />
-                <template v-for="(folder, index) in openStack">
-                    <n-tag v-if="!!folder.name" :key="folder.path" @click="handleJump(folder, index)"
-                        style="cursor:pointer">
-                        <span>{{ folder.name }}</span>
-                        <n-spin v-if="loading" :size="12" style="margin-left: 8px;" />
+            <div class="nav-zone">
+                <FolderSelector ref="folderSelector" v-model="dir" label="请选择文件夹(D)" @change="setRoot" />
+
+                <!-- 面包屑 = 从**盘符 / 离线锚点**到当前的完整链，由 `ancestorsOf(currentPath)` 现算。
+                     为什么不按导航栈渲染：跳转到达的目录**不是"栈顶的子级"**，用栈拼会拼出
+                     一条物理上不存在的路径（`videos › a › y`）——
+                     见 docs/DESIGN-NAV-2026-09-30.md §12.3 的反证推演。
+                     折叠规则：保首段 + `…` + 父 + 当前（Apple HIG 与 Fluent 2 两家官方默认行为）。 -->
+                <template v-if="crumbFold">
+                    <!-- 首段（盘符 / 离线盘）：**不可点**，只作定位。
+                         点它会打开盘根，而盘根通常没被缓存过 ⇒ **会真读一次盘**。
+                         「回根 / 换根」交给左边那个 chip，不在这里新开一条读盘路径。 -->
+                    <n-tag class="crumb crumb-root" :title="crumbFold.head.path">
+                        <span class="crumb-text">{{ crumbFold.head.name }}</span>
+                    </n-tag>
+                    <!-- 被折起来的中间层：**每一层都还能点** —— 折叠只牺牲「常显」，不牺牲任何能力 -->
+                    <n-popover trigger="click" placement="bottom-start">
+                        <template #trigger>
+                            <n-tag class="crumb crumb-more" title="展开被折叠的层级">
+                                <span class="crumb-text">…</span>
+                            </n-tag>
+                        </template>
+                        <div class="hstack">
+                            <n-button v-for="c in crumbFold.hidden" :key="c.path" size="small"
+                                @click="onCrumbClick(c)">
+                                {{ c.name }}
+                            </n-button>
+                        </div>
+                    </n-popover>
+                    <n-tag v-for="(c, i) in crumbFold.tail" :key="c.path" class="crumb"
+                        :class="{ 'crumb-current': i === crumbFold.tail.length - 1 }" :title="c.path"
+                        @click="onCrumbClick(c)">
+                        <span class="crumb-text">{{ c.name }}</span>
+                        <n-spin v-if="loading && i === crumbFold.tail.length - 1" :size="12"
+                            style="margin-left: 8px;" />
                     </n-tag>
                 </template>
-                <n-button v-if="dir" size="small" @click="onBack">返回</n-button>
+                <template v-else>
+                    <n-tag v-for="(c, i) in crumbs" :key="c.path" class="crumb"
+                        :class="{ 'crumb-root': c.kind === 'root', 'crumb-current': i === crumbs.length - 1 }"
+                        :title="c.path" @click="onCrumbClick(c)">
+                        <span class="crumb-text">{{ c.name }}</span>
+                        <n-spin v-if="loading && i === crumbs.length - 1" :size="12" style="margin-left: 8px;" />
+                    </n-tag>
+                </template>
+
+                <!-- 「返回」的出现条件是 **`history.length > 1`：此刻真有上一屏**（事实），
+                     不是 `dir`（"曾经选过根"的快照）—— 后者在「根层」和「跳转后」都会
+                     造成"按钮看得见、点不动"的死交互。 -->
+                <n-tooltip v-if="history.length > 1">
+                    <template #trigger>
+                        <n-button size="small" @click="onBack">返回</n-button>
+                    </template>
+                    返回上一屏（Backspace）
+                </n-tooltip>
             </div>
             <!-- <n-space>
                 <FolderSelector v-model="dirRoot" label="请选择文件夹2(D)" @change="handleDirRootChange" />
             </n-space> -->
-            <div class="toolbar" style="align-self: flex-end">
+            <div class="toolbar">
                 <!-- 工具条 = PC 文件管理器那套：**动作常驻，忙碌时只置灰，绝不消失、绝不换形**。
                      原来扫描中把两个入口"就地换成"进度+取消，于是工具条的子元素个数随
                      `scanning` 变化 —— 叠加 n-space 的重复 key 问题，界面上会多出重复按钮，
@@ -30,7 +74,7 @@
                      两个入口仍然**平铺**，不拿下拉藏（这条特性没动）。
                      顺序上「补全」在前（命中缓存就不碰盘，是默认动作），
                      「重读」在后且带确认（唯一会整片真读一遍的主动作）。 -->
-                <n-button size="small" :disabled="scanning || !openStack.length || readOnlyLevel" @click="startScan(false)">
+                <n-button size="small" :disabled="scanning || !history.length || readOnlyLevel" @click="startScan(false)">
                     补全这一片
                 </n-button>
                 <!-- 只有「重读」带确认：它会忽略缓存、把整片真读一遍，是本组里唯一
@@ -40,7 +84,7 @@
                      确认框自然弹不出来，不需要再给 popconfirm 加一层 v-if。 -->
                 <n-popconfirm positive-text="重读" negative-text="取消" @positive-click="startScan(true)">
                     <template #trigger>
-                        <n-button size="small" :disabled="scanning || !openStack.length || readOnlyLevel">重读这一片</n-button>
+                        <n-button size="small" :disabled="scanning || !history.length || readOnlyLevel">重读这一片</n-button>
                     </template>
                     忽略缓存，把这一片重新读一遍硬盘。确定吗？
                 </n-popconfirm>
@@ -166,7 +210,8 @@
 </template>
 
 <script setup lang="ts">
-import { formatBytes } from '@/utils';
+import { formatBytes, ancestorsOf, foldCrumbList, ANCHOR_PREFIX } from '@/utils';
+import type { PathCrumb } from '@/utils';
 import { apiUrl, getAction, ApiError } from '@/utils/request';
 import folderIcon from '@/assets/fileTypeIcon/folder.png';
 import usePinYin from '@/hooks/usePinYin';
@@ -182,15 +227,29 @@ import type { FileInfo, FileInfoFiles } from '../../../electron/server/index';
 import type { OpenMode } from 'electron/server/nedb';
 
 /**
- * 打开栈里的一层。
+ * 一屏的历史条目。
  *
- * `name` **不是可选的** —— 它就是面包屑上那个标签的文字。原来写成可选，
- * 结果只有"从网格下钻"那条路会传，另外两条入口（选择文件夹、缓存记录）都没传，
- * 而模板里的 `v-if="!!folder.name"` 会把没名字的层级**整个吃掉**：
- * 表现就是"从这两条入口进来没有面包屑"。名字能由 `path` 算出来，所以由
- * `pushLevel()` 统一派生（见那边注释），这里要求必填。
+ * ⚠️ 这三样原来分散在**三个地方**：`openStack` 的元素（`name`/`mode`/`scrollY`）、
+ * `searchStack` 数组（搜索词），以及"两个数组长度必须差 1"这个**没有任何类型约束的隐式不变量**。
+ * 合并成一个对象之后，"索引对齐错"在结构上不可能发生。
+ *
+ * **位置不进这里** —— 面包屑由 `ancestorsOf(currentPath)` 现算（纯函数）。
+ * 这是本轮的核心：位置可推导、历史不可推导，两者共用一个数组时，
+ * 逐层下钻看不出问题，**一旦跳转就必然分叉**（详见 `docs/DESIGN-NAV-2026-09-30.md` §2）。
  */
-export interface IOpenInfo { name: string; path: string; mode: 'folder' | 'cover', scrollY?: number }
+export interface NavEntry {
+    path: string;
+    /**
+     * 三层入口（选根 / 网格下钻 / 缓存跳转）**一律用 `'cover'`**。
+     * 保留这个字段是为了不动 `fetchFolder` 的签名 —— 服务端的 `folder`（无封面收敛）模式
+     * 是真实存在的能力，删它是删能力，不是删死代码。
+     */
+    mode: OpenMode;
+    /** 坐在这一屏时搜索框里的词 —— 返回时恢复（原来的 `searchStack`） */
+    searchText: string;
+    /** 离开这一屏时的滚动位置 —— 返回时恢复（原来是挂在 `openStack` 元素上的可选字段） */
+    scrollY: number;
+}
 
 // 与 electron/server/videoExt.ts 的 VIDEO_EXT 保持一致（渲染层不能 import server，保留正则副本）。
 // 改了 videoExt.ts 这里要同步改。
@@ -325,8 +384,21 @@ const dataSource = ref<FileInfo[]>([]);
  * 改成 computed 之后它没有任何写入口，这类时序 bug 在结构上就不可能存在。
  */
 const fileList = computed(() => filterByName(dataSource.value, searchText.value));
-const searchStack = ref<string[]>([]);
-const openStack = ref<IOpenInfo[]>([]);
+/**
+ * 导航的**唯一状态**：历史（去过哪些屏）。每屏一个对象。
+ * 为什么不留 `name`：面包屑的文字由 `ancestorsOf(currentPath)` 给（见 utils），
+ * 一份数据只留一个来源。
+ */
+const history = ref<NavEntry[]>([]);
+/**
+ * 当前这一屏的路径 —— 「位置」的一切都从它派生。
+ * 因为它就是路径本身，所以**不可能**和界面显示的位置不一致（不存状态 ⇒ 不会不一致）。
+ */
+const currentPath = computed(() => history.value[history.value.length - 1]?.path ?? '');
+/** 面包屑：从起点到当前的完整链。**纯推导** ⇒ 跳转后自动正确，不需要任何同步代码。 */
+const crumbs = computed(() => ancestorsOf(currentPath.value));
+/** 折叠决策（保首尾）。`null` = 全显。规则在 `@/utils` 的 `foldCrumbList` 里，可单独验证。 */
+const crumbFold = computed(() => foldCrumbList(crumbs.value));
 const loading = ref(false);
 /**
  * 上一次取数失败的**分类**。空串 = 没失败。
@@ -363,8 +435,10 @@ const loadFailed = computed(() => failKind.value !== '');
 const emptyTip = computed(() => {
     if (loading.value || loadFailed.value || fileList.value.length) return '';
     if (searchText.value) return '没找到匹配的内容';
-    // 还没选目录，什么都还没开始，这时候提示是噪音
-    if (!dir.value) return '';
+    // "是否已经进入浏览"要用**当下事实**（有没有一屏），不能用 `dir`（那只是"曾经选过根"的快照）。
+    // ⚠️ 这一条是自查 S-1 的回归防护：从缓存跳转**不再写 `dir`**，
+    // 冷启动直接跳进一个空目录时，用 `dir` 判断会让这句话不显示 —— 一片空白、连"空的"都不说。
+    if (!history.value.length) return '';
     return '这个目录是空的';
 });
 
@@ -377,10 +451,10 @@ const emptyTip = computed(() => {
  * 锚点自带这个信息 —— 两边就不会出现"状态说在线、地址却是锚点"这种不一致。
  * 渲染层不解析锚点内容，只认这一个前缀。
  */
-const isReadOnlyPath = (path: string) => path.startsWith('#');
+const isReadOnlyPath = (path: string) => path.startsWith(ANCHOR_PREFIX);
 
 /** 只看栈顶那一层：用户眼下看到的这屏是不是只读的 */
-const readOnlyLevel = computed(() => isReadOnlyPath(openStack.value[openStack.value.length - 1]?.path ?? ''));
+const readOnlyLevel = computed(() => isReadOnlyPath(currentPath.value));
 
 /**
  * 失败横幅的内容。`text` 为空 = 不显示。
@@ -439,8 +513,8 @@ const showHistory = () => {
  * 盘不在（只读层）时 apply 根本写不了，不用刷。
  */
 const refreshAfterApply = () => {
-    const top = openStack.value[openStack.value.length - 1];
-    if (top && !readOnlyLevel.value) fetchFolder(top.path, top.mode);
+    const cur = history.value[history.value.length - 1];
+    if (cur && !readOnlyLevel.value) fetchFolder(cur.path, cur.mode);
 }
 
 const handleOpen = (e: MouseEvent, item: FileInfo) => {
@@ -464,41 +538,57 @@ const handleOpen = (e: MouseEvent, item: FileInfo) => {
     }
 }
 /**
- * 一层的显示名 = 路径的最后一段。
+ * 离开当前屏之前，把"这一屏的样子"记在**它自己**身上（滚动位置 + 搜索词）。
  *
- * 面包屑上的文字本来就能从路径算出来，所以它**不该**是调用方传的可选参数：
- * 三条件入口里有两条件忘了传，而模板 `v-if="!!folder.name"` 一旦拿不到名字就不画那一层 ——
- * 「选择文件夹」和「缓存记录」两条入口的面包屑因此整层消失。
- * 收成这条纯函数之后，"某一层没名字"在结构上不可能出现。
+ * 原来是"滚动位置写进 `openStack` 的元素、搜索词压进另一个平行的 `searchStack`"，
+ * 两处必须同步、长度还得差 1。现在都写在同一个对象上，不可能错位。
  */
-const levelName = (path: string) => {
-    const segs = path.replace(/[/\\]+$/, '').split(/[/\\]/).filter(Boolean);
-    return segs[segs.length - 1] || path;
+const rememberCurrentScreen = () => {
+    const cur = history.value[history.value.length - 1];
+    if (!cur) return;
+    cur.scrollY = imageBox.value?.scrollTop ?? 0;
+    cur.searchText = searchText.value;
 }
 
 /**
- * 往打开栈里压一层。**所有层级都必须从这里过。**
- *
- * 原来建栈有两处：`handleDirChange` 和 `openFolderInCover`，一处传名字一处不传，
- * 于是同一个面包屑在两条入口下长得不一样。收成一个出口之后，
- * 「名字」和「进入这一层时记住滚动位置」这两件事都只写一遍。
- * 这和 `fileList` 从 ref 改 computed 是同一个思路：让不一致在结构上不可能。
+ * 进入某一屏。**所有导航动作都必须从这里过** —— 「记旧屏 → 压新屏 → 取数 → 清搜索词」
+ * 这四件事只写一遍；以后新增入口（前进 / 历史列表 / 多标签）也不会漏掉其中一件。
  */
-const pushLevel = (path: string, mode: OpenMode) => {
-    // 进入新的一层之前，先把当前层的滚动位置记在**当前层**上，供 onBack 恢复
-    if (openStack.value.length) {
-        openStack.value[openStack.value.length - 1].scrollY = imageBox.value?.scrollTop
-    }
-    openStack.value.push({ path, mode, name: levelName(path) });
+const enterScreen = (path: string, mode: OpenMode = 'cover') => {
+    rememberCurrentScreen();
+    history.value.push({ path, mode, searchText: '', scrollY: 0 });
+    // 进新的一屏不带上一屏的搜索词（原有行为，不动）
+    searchText.value = '';
+    fetchFolder(path, mode);
 }
 
+/** 网格双击下钻：进子目录 */
 const openFolderInCover = (path: string) => {
-    pushLevel(path, 'cover');
-    searchStack.value.push(searchText.value);
-    // 进新目录不带上一层的搜索词。这句原来在 fetchFolder 里 —— 取数的函数顺手改了
-    // 别的状态，结果 onRefresh 得自己"先存后还原"来抵消它。现在归导航动作管。
-    searchText.value = '';
-    fetchFolder(path, 'cover');
+    enterScreen(path, 'cover');
+}
+
+/**
+ * 到某个目录去，但**保留历史** —— 所以「返回」能回到刚才那一屏（"跳转"因此是可撤销的动作）。
+ *
+ * 与 `setRoot` 只差一个字：那个是"重新开始"（清空历史），这个是"去别处看看"。
+ * 这两件事原来被混在同一个 `handleDirChange` 里（对任何入参都清栈），
+ * 正是"从缓存跳转后返回体验怪"的根因。
+ */
+const jumpTo = (path: string) => {
+    enterScreen(path, 'cover');
+}
+
+/**
+ * 点面包屑的某一段 = 到那个目录去。
+ *
+ * **压历史，不截断**：位置由路径推导之后，"截断到某个祖先"已经没有对应的东西可截
+ * —— 历史里未必有这一段（可能刚从另一块盘跳过来）。而且压栈才能保证**点完还能返回**。
+ * （现状是 `slice()` 截断：点完就回不到刚才那一层，这是同一个病的第二处症状。）
+ */
+const onCrumbClick = (c: PathCrumb) => {
+    if (c.kind === 'root') return;              // 首段不可点，见模板注释
+    if (c.path === currentPath.value) return;   // 当前段是纯文本，点了也不动
+    jumpTo(c.path);
 }
 
 /**
@@ -537,8 +627,8 @@ const openFile = async (item: FileInfo | string) => {
     if (typeof item === 'string') {
         // popover 里双击的是封面目录下的某个具体文件。
         // 父目录必须取 cover.dir：那个封面是"子目录收敛"出来的，它的真实父目录比
-        // openStack 顶层的 path **深一层**。原来用 openStack 顶层拼，会拼出
-        // `E:/sample/videos/"TST-131"/"xxx.mp4"` 这种不存在的路径（TST-131 是封面图名，不是目录名）。
+        // **当前屏的路径（`currentPath`）深一层**。原来用"栈顶路径"拼，会拼出
+        // `E:/sample/videos/cover/xxx.mp4` 这种不存在的路径（cover 是封面图名，不是目录名）。
         popover.value.visible = false;
         target = `${popover.value.cover?.dir}/${item}`;
     } else {
@@ -698,80 +788,69 @@ const fetchFolder = (path: string, mode: OpenMode, noCache?: boolean) => {
 // }
 
 const onBack = async () => {
-    if (openStack.value.length === 1) return;
-    openStack.value.pop();
-    const to = openStack.value[openStack.value.length - 1];
-    // 恢复这一层的搜索词。fileList 是 computed，词一变列表自己会重新筛 ——
+    if (history.value.length <= 1) return;
+    history.value.pop();
+    const to = history.value[history.value.length - 1];
+    // 恢复这一屏的搜索词。fileList 是 computed，词一变列表自己会重新筛 ——
     // 不需要（也不能）再手动调一次过滤
-    searchText.value = searchStack.value.pop() || '';
+    searchText.value = to.searchText;
     await fetchFolder(to.path, to.mode);
-    // 滚动位置必须等新列表渲染出来再恢复：在旧内容上滚会被 clamp 掉。
-    // 原来这里写死 10ms，是因为缓存命中那条路是同步赋值的；现在没有缓存了，只能等
+    // 滚动位置必须等新列表渲染出来再恢复：在旧内容上滚会被 clamp 掉
     if (to.scrollY) {
         await nextTick();
-        imageBox.value?.scrollTo(0, to.scrollY || 0)
+        imageBox.value?.scrollTo(0, to.scrollY)
     }
 }
 
 const onRefresh = () => {
     // 只读层没有"重读"这回事：它的源就是缓存，盘不在，F5 也读不出新东西。
     // 拦住而不是让服务端静默回一份缓存 —— 静默最坏（用户以为他重读过了）。
-    if (loading.value || !openStack.value.length || readOnlyLevel.value) return;
-    const to = openStack.value[openStack.value.length - 1];
+    if (loading.value || !history.value.length || readOnlyLevel.value) return;
+    const cur = history.value[history.value.length - 1];
     // F5 = 重新扫盘，要带 noCache 让服务端把这条缓存删掉真去读盘，
     // 不然"刷新"只是把同一份缓存又发了一遍。
     // 搜索词不用管：fetchFolder 已经不碰它了
-    fetchFolder(to.path, to.mode, true);
+    fetchFolder(cur.path, cur.mode, true);
 }
 
-const handleDirChange = (value: string) => {
-    // 切换主目录时清空所有栈
+/**
+ * 换根 / 清空根。**这是唯一"重新开始"的入口**，与「跳转」严格分开：
+ * 这里清空历史（你真的换了个地方）；跳转保留历史（你只是去看看，返回随时能回来）。
+ * 这两件事原来混在同一个 `handleDirChange` 里，是"返回体验怪"的根因之一。
+ */
+const setRoot = (value: string) => {
     if (!value) {
-        openStack.value = [];
-        searchStack.value = []
+        dir.value = '';
+        history.value = [];
         // 清掉文件夹选择就该把这个文件夹的内容也清掉，
         // 否则界面上留着上一个目录的东西，而选择框已经空了
         dataSource.value = [];
         searchText.value = '';
-    } else {
-        dir.value = value;
-        openStack.value = [];
-        searchStack.value = [];
-        // 首层也用 cover。cover 模式才会对子目录调 handleCover（收敛成封面条目）；
-        // 原来首层写的是 folder，而 folder 模式**根本不会调用 handleCover** ——
-        // 结果是「封面收敛」只在点进去之后的第二层生效，第一层永远只看到一堆文件夹图标，
-        // 而第二层反而显示封面。同一个规则两层表现不一致，所以首层也统一成 cover。
-        searchText.value = '';
-        pushLevel(value, 'cover');
-        fetchFolder(value, 'cover');
+        return;
     }
-}
-
-const handleJump = (to: IOpenInfo, index: number) => {
-    if (index === openStack.value.length - 1) return;
-    openStack.value = openStack.value.slice(0, index + 1);
-    searchStack.value = searchStack.value.slice(0, index + 1);
-
-    fetchFolder(to.path, to.mode);
-    searchText.value = searchStack.value.pop() || '';
+    dir.value = value;
+    history.value = [];
+    // 首层也用 cover。cover 模式才会对子目录调 handleCover（收敛成封面条目）；
+    // 原来首层写的是 folder，而 folder 模式**根本不会调用 handleCover** ——
+    // 结果是「封面收敛」只在点进去之后的第二层生效，第一层永远只看到一堆文件夹图标，
+    // 而第二层反而显示封面。同一个规则两层表现不一致，所以首层也统一成 cover。
+    enterScreen(value, 'cover');
 }
 
 /**
- * 从缓存记录打开一个目录。
+ * 从缓存记录打开一个目录。**这是一次「跳转」，不是"以它为根"**。
  *
- * **不再按记录的 `mode` 分叉。** `mode` 说的是"这条记录当初是怎么被扫出来的" ——
- * 它是**缓存记录的属性**，不该决定"导航长什么样"。而 `handleDirChange` 本来就已经
- * 把首层统一成 `cover`（见那边的注释），所以这里只看 path 就够。
+ * 原来它走 `handleDirChange(path)`，那一句同时干了三件事，于是三个症状一起出现：
+ *   · `dir.value = path`（把跳转目标当成新根）+ 清空导航栈 ⇒ **面包屑只剩一段，位置感丢失**
+ *   · 「返回」按钮按 `dir` 判断 ⇒ **按钮还在，但点了没反应**（栈里只有一屏）
+ *   · 历史被销毁 ⇒ **回不到刚才那一屏**，只能重开面板再找那一行
+ * ⇒ 现在走 `jumpTo`：**不换根、保留历史**，于是「返回」能撤销这次跳转。
  *
- * 原来 `mode === 'cover'` 那条走的是 `openFolderInCover(path)`，它只往栈里压一层、
- * **不设 `dir`、也不给这层名字**，于是：
- *   · 返回按钮那句 `v-if="dir"` 不成立 → 从缓存记录进来没有「返回」
- *   · 模板里 `v-if="!!folder.name"` 不成立 → 这一层在面包屑上被整个吃掉
- * 表现就是"从缓存记录打开既没有多层级面包屑、也没有返回"。
- * 两条入口现在合成同一条 —— 打开一个目录 = 以它为根开始一次浏览。
+ * `mode` 仍然不看：那是"这条记录当初怎么被扫出来的"（缓存记录的属性），
+ * 不该决定"导航长什么样"。三条入口一律 `'cover'`。
  */
 const openHistory = (path: string) => {
-    handleDirChange(path);
+    jumpTo(path);
 }
 
 /**
@@ -888,7 +967,7 @@ const fetchScanContext = async () => {
  * （实测：`E:/sample/videos/示例演员E` 已缓存，而它自己下面还有 2 个子目录从未被扫过。）
  */
 const startScan = async (rescan: boolean) => {
-    const root = openStack.value[openStack.value.length - 1]?.path;
+    const root = currentPath.value;
     if (!root || scanning.value) return;
 
     scanning.value = true;
@@ -971,8 +1050,8 @@ const startScan = async (rescan: boolean) => {
         // ⚠️ 这里**不带 noCache**：刚写好的新缓存就在库里，再真读一次盘是纯浪费，
         // 而"少碰移动硬盘"是这一整批的硬要求。补全模式下当前层本来就有缓存、不会变，所以不刷。
         if (rescan) {
-            const top = openStack.value[openStack.value.length - 1];
-            if (top) fetchFolder(top.path, top.mode);
+            const cur = history.value[history.value.length - 1];
+            if (cur) fetchFolder(cur.path, cur.mode);
         }
     }
 };
@@ -1035,6 +1114,11 @@ const onKeyup = (e: KeyboardEvent) => {
         onRefresh();
     } else if (e.key.toUpperCase() === 'D') {
         folderSelector.value!.handleClick();
+    } else if (e.key === 'Backspace') {
+        // 与 `S` / `D` / `F5` 同一个单键风格。只在**真有上一屏**时生效（onBack 自己会判），
+        // 且 `target === body` 的守卫已经在最上面 —— 在搜索框里按退格是删字，不是返回。
+        e.preventDefault();
+        onBack();
     }
 };
 
@@ -1062,6 +1146,10 @@ onUnmounted(() => {
 
     .header-bar {
         display: flex;
+        /* ⚠️ 「头部永远只有一行」的第一道保险。
+           不加它，两个子区（导航区 / 动作区）会退化成"谁装不下谁换行"，
+           头部高度就成了**用户数据（路径长度、层级数）的函数**。 */
+        flex-wrap: nowrap;
         padding: 4px;
         margin-bottom: 4px;
         border-radius: 4px;
@@ -1119,14 +1207,95 @@ onUnmounted(() => {
 }
 
 /**
- * 头部右侧那一组：**单行，永不换行**。
+ * 导航区 —— 头部**唯一**的弹性槽位（现在只用在头部；两个 popover 仍用 `.hstack`）。
  *
- * 它和 `.hstack` 只差一个 `flex-wrap` —— 但这一条就是"工具条有几行高"的全部答案。
- * 里面的搜索框是 `width: 100%`（见下面 `.header-bar .n-input` 的注释），
- * 在会换行的容器里它必然独霸一行。`nowrap` 把"工具条永远只有一行"变成结构保证，
- * 以后往这一组里加东西也不会再长高。
+ * `min-width: 0` 是这整套的地基：flex 子项默认 `min-width: auto`（≈ 内容宽），
+ * 不给 0 的话，**哪怕写了 `overflow` 也不会真的收窄**，头部照样被长路径撑开。
+ * `max-width: 50%` 来自 Fluent 2 的宽度预算（面包屑占整体 30–50% 是安全的）：
+ * 它保证动作区**永远拿得到 ≥50%**，超出的部分交给折叠规则消化。
+ *
+ * 实测：`docs/probes/header-width/`（真 Chromium + 真 naive-ui，窗口 640/800/1280/1920 四档）。
+ */
+.nav-zone {
+    flex: 1 1 auto;
+    min-width: 0;
+    max-width: 50%;
+    display: flex;
+    flex-wrap: nowrap;
+    align-items: center;
+    gap: 8px;
+    overflow: hidden;
+
+    /* 面包屑每一段：**单个名字有界**（层级深度问题已由折叠解决，这里只管"一段太长"）。
+       ⚠️ 中文不能用 Fluent 那条「超过 30 字符就截断」——那是**拉丁文**语境的量级：
+       中文一个字约等于拉丁两个字宽，30 个字 ≈ 360px，照抄等于没截断。所以用像素。 */
+    .crumb {
+        /* ⚠️ `0 1 auto`（**可收缩**）而不是 `0 0 auto`：
+           宽度不够时先压历史段，而不是把"当前层"直接挤出屏幕右边缘被裁掉。
+           收缩下界交给 `min-width: 0` + 文本省略号 —— 极窄时显示成「…」，与资源管理器一致。 */
+        flex: 0 1 auto;
+        min-width: 0;
+        max-width: 160px;
+        cursor: pointer;
+
+        /* 文本真的收窄之后 `text-overflow` 才会出现 —— 同理，这一层也要 `min-width: 0` */
+        :deep(.n-tag__content) {
+            min-width: 0;
+            overflow: hidden;
+        }
+
+        .crumb-text {
+            display: block;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+        }
+    }
+
+    /* 层级之间的方向符。
+       ⚠️ 用 CSS 生成，**不插 DOM 子元素** —— 这一组的子元素个数在本项目是敏感量
+       （n-space 重复 key 事故同族）。`position: absolute` 让它落在两个 tag 之间的
+       空隙里，不占 tag 内部空间（tag 自带 `position: relative`）。
+       用 `:not(.crumb-root)` 而不是相邻选择器：不依赖"中间有没有被插入包装元素"。 */
+    .crumb:not(.crumb-root)::before {
+        content: '›';
+        position: absolute;
+        left: -13px;
+        color: #a1a1a1;
+        pointer-events: none;   /* 别挡住上一个 tag / chip 的点击 */
+    }
+
+    /* 当前层**永不被压掉**：它是"我在哪"的唯一答案，比任何历史段都重要 */
+    .crumb-current {
+        flex: 0 0 auto;
+        /* 与网格里条目名的字重一致（`.image-box-item span` 也是 bold）：
+           一眼看出"哪个是我现在在的地方" */
+        font-weight: bold;
+    }
+
+    .crumb-more {
+        flex: 0 0 auto;
+        padding: 0 8px;
+    }
+
+    /* 两种**不可点**的段：首段（盘符 / 离线盘）与当前段。
+       必须与可点的段**视觉可分** —— 现状是"所有 tag 都 cursor:pointer"，
+       于是当前层看着能点、点了没反应（死交互）。 */
+    .crumb-root,
+    .crumb-current {
+        cursor: default;
+    }
+}
+
+/**
+ * 头部右侧那一组：**单行 + 不参与压缩**。
+ *
+ * `flex: 0 0 auto` 是「动作区永远拿得到自己需要的宽度」的保证：
+ * 默认的 `flex-shrink: 1` 会让它在窄窗口里被压到内容宽以下（按钮文字被挤），
+ * 而那正是"换行 / 溢出"的起点。宽度不够时该被裁的是**导航区**（那里有折叠规则兜底）。
  */
 .toolbar {
+    flex: 0 0 auto;
     display: flex;
     flex-wrap: nowrap;
     align-items: center;
