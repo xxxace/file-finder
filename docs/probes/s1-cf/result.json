@@ -1,0 +1,156 @@
+{
+  "verdict": "GO ✅",
+  "best": "javbus",
+  "results": {
+    "javbus": {
+      "label": "javbus",
+      "n": 2,
+      "channelOk": 2,
+      "coverHit": 2,
+      "cfBlocked": 0,
+      "neededManual": 0,
+      "neededCookie": 0,
+      "errors": 0,
+      "coverRate": 100,
+      "details": [
+        {
+          "id": "TST-218",
+          "url": "https://www.javbus.com/TST-218",
+          "status": "封面✓",
+          "cover": "/pics/cover/c6b1_b.jpg"
+        },
+        {
+          "id": "TST-229",
+          "url": "https://www.javbus.com/TST-229",
+          "status": "封面✓",
+          "cover": "/pics/cover/c8s4_b.jpg"
+        }
+      ]
+    },
+    "freejavbt": {
+      "label": "freejavbt",
+      "n": 2,
+      "channelOk": 2,
+      "coverHit": 2,
+      "cfBlocked": 0,
+      "neededManual": 0,
+      "neededCookie": 0,
+      "errors": 0,
+      "coverRate": 100,
+      "details": [
+        {
+          "id": "TST-218",
+          "url": "https://freejavbt.com/TST-218",
+          "status": "封面✓(兜底)",
+          "cover": "https://freejavbt.com/theme/freejavbt/images/theporndude.png"
+        },
+        {
+          "id": "TST-229",
+          "url": "https://freejavbt.com/TST-229",
+          "status": "封面✓(兜底)",
+          "cover": "https://freejavbt.com/theme/freejavbt/images/theporndude.png"
+        }
+      ]
+    },
+    "javwine": {
+      "label": "javwine",
+      "n": 2,
+      "channelOk": 0,
+      "coverHit": 0,
+      "cfBlocked": 0,
+      "neededManual": 0,
+      "neededCookie": 0,
+      "errors": 0,
+      "coverRate": 0,
+      "details": [
+        {
+          "id": "TST-218",
+          "url": "https://javwine.com/TST-218",
+          "status": "失败",
+          "cover": null
+        },
+        {
+          "id": "TST-229",
+          "url": "https://javwine.com/TST-229",
+          "status": "失败",
+          "cover": null
+        }
+      ]
+    },
+    "javdock": {
+      "label": "javdock",
+      "n": 2,
+      "channelOk": 2,
+      "coverHit": 2,
+      "cfBlocked": 1,
+      "neededManual": 1,
+      "neededCookie": 0,
+      "errors": 0,
+      "coverRate": 100,
+      "details": [
+        {
+          "id": "TST-218",
+          "url": "https://javdock.net/TST-218",
+          "status": "封面✓",
+          "cover": "/wp-content/themes/dock/logo.png"
+        },
+        {
+          "id": "TST-229",
+          "url": "https://javdock.net/TST-229",
+          "status": "封面✓",
+          "cover": "/wp-content/themes/dock/logo.png"
+        }
+      ]
+    },
+    "onejav": {
+      "label": "onejav",
+      "n": 2,
+      "channelOk": 0,
+      "coverHit": 0,
+      "cfBlocked": 2,
+      "neededManual": 2,
+      "neededCookie": 0,
+      "errors": 0,
+      "coverRate": 0,
+      "details": [
+        {
+          "id": "TST-218",
+          "url": "https://onejav.com/TST-218",
+          "status": "CF拦",
+          "cover": null
+        },
+        {
+          "id": "TST-229",
+          "url": "https://onejav.com/TST-229",
+          "status": "CF拦",
+          "cover": null
+        }
+      ]
+    },
+    "javtext": {
+      "label": "javtext.net(actress)",
+      "n": 2,
+      "channelOk": 0,
+      "coverHit": 0,
+      "cfBlocked": 0,
+      "neededManual": 0,
+      "neededCookie": 0,
+      "errors": 0,
+      "coverRate": 0,
+      "details": [
+        {
+          "id": "TST-218",
+          "url": "https://javtext.net/?type=actress&q=TST-218",
+          "status": "失败",
+          "cover": null
+        },
+        {
+          "id": "TST-229",
+          "url": "https://javtext.net/?type=actress&q=TST-229",
+          "status": "失败",
+          "cover": null
+        }
+      ]
+    }
+  }
+}

@@ -1,0 +1,208 @@
+<!doctype html>
+<html lang="zh">
+
+<head>
+    <meta charset="utf-8">
+    <title>probe: 预览图撑满视口 + 图外可点关闭</title>
+    <style>
+        html,
+        body {
+            margin: 0;
+            padding: 0;
+            background: #111;
+        }
+
+        /* ⚠️ 这里**不要**禁 transition：
+           量到 0.9 倍（1670×870 = 1855×966 × 0.9）的原因不是"动画没跑完"，
+           而是 Vue <Transition> 的 `enter-from` class **一直没被移除**
+           （窗口不参与合成时 rAF 不推进，Vue 推不动 class 切换），而 enter-from 正是 scale(0.9)。
+           禁掉 transition 只会让 transitionend 更不触发、class 更赖着不走。
+           ——这一条由 run.cjs 的 offscreen: true 解决。 */
+    </style>
+</head>
+
+<body>
+    <div id="app"></div>
+    <script src="../../../node_modules/vue/dist/vue.global.js"></script>
+    <script src="../../../node_modules/naive-ui/dist/index.prod.js"></script>
+    <script>
+        function makeFrame(w, h) {
+            const c = document.createElement('canvas');
+            c.width = w; c.height = h;
+            const g = c.getContext('2d');
+            g.fillStyle = '#26415e'; g.fillRect(0, 0, w, h);
+            g.fillStyle = '#fff'; g.font = `bold ${Math.round(w / 16)}px sans-serif`;
+            g.fillText(`${w} x ${h}`, w / 3, h / 2);
+            return c.toDataURL('image/jpeg', 0.82);
+        }
+
+        const IMAGES = {
+            small: makeFrame(480, 270),   // 视频抽帧（THUMB_WIDTH=480），16:9
+            big: makeFrame(3000, 2000),   // 图片走 /raw 原图那一档，3:2
+            tall: makeFrame(600, 1800),   // 竖图
+            wide: makeFrame(2400, 400)    // 宽银幕，比视口(1.79:1)还宽 —— 暴露 fit 的失效点
+        };
+
+        const { createApp, h } = window.Vue;
+        const NImage = window.naive.NImage;
+        let app = null;
+
+        // ⚠️ 下面两个函数与 src/views/FileFinder/index.vue 里那份**逐字一致**，改的话两边一起改
+        function isPointInsideImage(img, x, y) {
+            const r = img.getBoundingClientRect();
+            const ar = img.naturalWidth / img.naturalHeight;
+            if (!ar || !r.width || !r.height) return true;
+            let quarter = false;
+            try {
+                const m = new DOMMatrixReadOnly(getComputedStyle(img).transform);
+                const deg = Math.round(Math.atan2(m.b, m.a) * 180 / Math.PI);
+                quarter = Math.abs(deg) % 180 === 90;
+            } catch { /* transform: none → 没旋转 */ }
+            const boxW = quarter ? r.height : r.width;
+            const boxH = quarter ? r.width : r.height;
+            const boxAr = boxW / boxH;
+            const cw = boxAr > ar ? boxH * ar : boxW;
+            const ch = boxAr > ar ? boxH : boxW / ar;
+            const halfW = (quarter ? ch : cw) / 2;
+            const halfH = (quarter ? cw : ch) / 2;
+            return Math.abs(x - (r.left + r.width / 2)) <= halfW
+                && Math.abs(y - (r.top + r.height / 2)) <= halfH;
+        }
+
+        function closeIfOutsideImage(e) {
+            const img = e.currentTarget;
+            if (!isPointInsideImage(img, e.clientX, e.clientY)) {
+                const overlay = document.querySelector('.n-image-preview-overlay');
+                if (overlay) overlay.click();
+            }
+        }
+
+        const STRETCH = { width: '100%', height: '100%', objectFit: 'contain' };
+
+        /**
+         * 候选：
+         *   none         = naive-ui 原生，图按自然尺寸显示
+         *   stretch      = 上一版：元素盒铺满视口 → 图外被 img 吃掉，点空白关不掉（本轮要修的）
+         *   stretchClick = 本版：stretch + 点"图内容之外"就关闭（带 A/B 对照组的意义所在）
+         *   fit48        = 另一条路：盒子贴合图 + 边距 96px（图只剩约九成，且宽银幕失效）
+         */
+        const MODES = {
+            none: null,
+            stretch: { style: STRETCH },
+            stretchClick: { style: STRETCH, onClick: closeIfOutsideImage },
+            fit48: {
+                style: {
+                    width: 'auto', height: '100%', objectFit: 'contain',
+                    maxWidth: 'calc(100vw - 96px)', maxHeight: 'calc(100vh - 96px)'
+                }
+            }
+        };
+
+        function mount(props, src) {
+            if (app) { app.unmount(); app = null; }
+            document.getElementById('app').innerHTML = '';
+            app = createApp({
+                render() {
+                    const p = { src, previewSrc: src };
+                    if (props) p.previewedImgProps = props;
+                    return h(NImage, p);
+                }
+            });
+            app.mount('#app');
+        }
+
+        const wait = ms => new Promise(r => setTimeout(r, ms));
+
+        function openPreview() {
+            const thumb = document.querySelector('.n-image img');
+            if (!thumb) return false;
+            thumb.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+            return true;
+        }
+
+        function describe(el) {
+            if (!el) return 'null';
+            const cn = typeof el.className === 'string' ? el.className : '';
+            if (cn.includes('n-image-preview-overlay')) return 'overlay';
+            if (cn.includes('n-image-preview')) return 'img';
+            return cn.split(' ')[0] || el.tagName;
+        }
+
+        function readPreview() {
+            const img = document.querySelector('.n-image-preview');
+            if (!img) return { error: '预览没打开' };
+            const r = img.getBoundingClientRect();
+            const cs = getComputedStyle(img);
+            const ar = img.naturalWidth / img.naturalHeight;
+            const boxAr = r.width / r.height;
+            const content = boxAr > ar ? [r.height * ar, r.height] : [r.width, r.width / ar];
+            return {
+                natural: [img.naturalWidth, img.naturalHeight],
+                box: [Math.round(r.width), Math.round(r.height)],
+                content: [Math.round(content[0]), Math.round(content[1])],
+                boxEqualsContent: Math.abs(r.width - content[0]) < 1.5 && Math.abs(r.height - content[1]) < 1.5,
+                boxLeft: Math.round(r.left),
+                boxTop: Math.round(r.top),
+                // 元素盒比图内容宽出来的那半条（= 会被 img 吃掉的那条"假空白"）
+                padX: Math.round((r.width - content[0]) / 2),
+                padY: Math.round((r.height - content[1]) / 2),
+                objectFit: cs.objectFit
+            };
+        }
+
+        /** 在 (x,y) 点一下，看预览是否真的关掉了 */
+        async function clickAndCheck(x, y) {
+            const el = document.elementFromPoint(x, y);
+            const hitWhat = describe(el);
+            if (!el) return { hitWhat, closed: null };
+            el.dispatchEvent(new MouseEvent('click', { bubbles: true, clientX: x, clientY: y }));
+            await wait(500);
+            const img = document.querySelector('.n-image-preview');
+            const closed = !img || getComputedStyle(img).display === 'none';
+            return { hitWhat, closed };
+        }
+
+        window.__probe = async function () {
+            const out = { viewport: [innerWidth, innerHeight] };
+            const midX = Math.round(innerWidth / 2);
+            const midY = Math.round(innerHeight / 2);
+
+            const once = async (mode, imgKey) => {
+                mount(MODES[mode], IMAGES[imgKey]);
+                await wait(600);
+                openPreview();
+                await wait(400);
+                const d = readPreview();
+                if (d.error) { out[`${imgKey}__${mode}`] = d; return; }
+
+                // 点 1：元素盒内、图内容外的"假空白"（padX > 12 才有意义）
+                if (d.padX > 12) {
+                    const x = Math.round(d.boxLeft + d.padX / 2);
+                    d.clickInPaddingGap = { x, ...(await clickAndCheck(x, midY)) };
+                    // 上面这一下可能把预览关掉了，重开再测下一点
+                    mount(MODES[mode], IMAGES[imgKey]);
+                    await wait(600);
+                    openPreview();
+                    await wait(400);
+                } else {
+                    d.clickInPaddingGap = 'n/a(盒子=图，没有假空白)';
+                }
+
+                // 点 2：图内容正中 —— 任何方案都**不该**被关闭
+                d.clickOnImageCenter = await clickAndCheck(midX, midY);
+
+                out[`${imgKey}__${mode}`] = d;
+            };
+
+            for (const imgKey of ['small', 'big', 'wide']) {
+                for (const mode of ['none', 'stretch', 'stretchClick', 'fit48']) {
+                    await once(mode, imgKey);
+                }
+            }
+            await once('stretchClick', 'tall');
+            return out;
+        };
+    </script>
+</body>
+
+</html>

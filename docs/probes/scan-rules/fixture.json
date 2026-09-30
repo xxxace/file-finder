@@ -1,0 +1,59 @@
+{
+  "metas": [
+    { "serial": "SERIAL01", "relPath": "film", "mode": "cover", "count": 10 },
+    { "serial": "SERIAL01", "relPath": "film/SSIS-001", "mode": "cover", "count": 1 },
+    { "serial": "SERIAL01", "relPath": "film/TST-088", "mode": "cover", "count": 2 },
+    { "serial": "SERIAL01", "relPath": "film/合集", "mode": "cover", "count": 2 },
+    { "serial": "SERIAL01", "relPath": "other", "mode": "cover", "count": 1 },
+    { "serial": "SERIAL02", "relPath": "film", "mode": "cover", "count": 1 }
+  ],
+  "docs": {
+    "SERIAL01|film": {
+      "serial": "SERIAL01", "relPath": "film", "mode": "cover", "v": 2, "count": 10, "create_at": "",
+      "data": [
+        { "dir": "film", "name": "TST-218", "isDirectory": false, "ext": "mp4", "type": "video", "size": 100 },
+        { "dir": "film", "name": "MIAA-111", "isDirectory": false, "ext": "jpg", "type": "image", "size": 10 },
+        { "dir": "film", "name": "SSIS-001", "isDirectory": true, "ext": "", "type": "folder", "size": 1 },
+        { "dir": "film", "name": "新建文件夹", "isDirectory": true, "ext": "", "type": "folder", "size": 1 },
+        { "dir": "film", "name": "合集", "isDirectory": true, "ext": "", "type": "folder", "size": 1 },
+        { "dir": "film", "name": "ABP-123", "isDirectory": true, "ext": "", "type": "folder", "size": 1 },
+        { "dir": "film", "name": "TST-088", "isDirectory": true, "ext": "", "type": "folder", "size": 1 },
+        { "dir": "film", "name": "SSNI-777", "isDirectory": false, "ext": "mp4", "type": "video", "size": 100 },
+        { "dir": "film", "name": "SSNI-777", "isDirectory": false, "ext": "jpg", "type": "image", "size": 10 },
+        { "dir": "film", "name": "HAS-FACE", "isDirectory": true, "ext": "", "type": "folder", "size": 1, "avatar": "k1" }
+      ]
+    },
+    "SERIAL01|film/TST-088": {
+      "serial": "SERIAL01", "relPath": "film/TST-088", "mode": "cover", "v": 2, "count": 2, "create_at": "",
+      "data": [
+        { "dir": "film/TST-088", "name": "TST-088A_FHD", "isDirectory": false, "ext": "mp4", "type": "video", "size": 100 },
+        { "dir": "film/TST-088", "name": "TST-088B_FHD", "isDirectory": false, "ext": "mp4", "type": "video", "size": 100 }
+      ]
+    },
+    "SERIAL01|film/SSIS-001": {
+      "serial": "SERIAL01", "relPath": "film/SSIS-001", "mode": "cover", "v": 2, "count": 1, "create_at": "",
+      "data": [
+        { "dir": "film/SSIS-001", "name": "SSIS-001", "isDirectory": false, "ext": "mp4", "type": "video", "size": 100 }
+      ]
+    },
+    "SERIAL01|film/合集": {
+      "serial": "SERIAL01", "relPath": "film/合集", "mode": "cover", "v": 2, "count": 2, "create_at": "",
+      "data": [
+        { "dir": "film/合集", "name": "AAA-001", "isDirectory": true, "ext": "", "type": "folder", "size": 1 },
+        { "dir": "film/合集", "name": "BBB-002", "isDirectory": true, "ext": "", "type": "folder", "size": 1 }
+      ]
+    },
+    "SERIAL01|other": {
+      "serial": "SERIAL01", "relPath": "other", "mode": "cover", "v": 2, "count": 1, "create_at": "",
+      "data": [
+        { "dir": "other", "name": "ZZZ-001", "isDirectory": false, "ext": "mp4", "type": "video", "size": 1 }
+      ]
+    },
+    "SERIAL02|film": {
+      "serial": "SERIAL02", "relPath": "film", "mode": "cover", "v": 2, "count": 1, "create_at": "",
+      "data": [
+        { "dir": "film", "name": "YYY-001", "isDirectory": false, "ext": "mp4", "type": "video", "size": 1 }
+      ]
+    }
+  }
+}

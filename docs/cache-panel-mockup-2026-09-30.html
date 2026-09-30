@@ -1,0 +1,708 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+
+<head>
+    <meta charset="UTF-8">
+    <title>缓存记录面板 · 改造前后对照</title>
+    <style>
+        :root {
+            --primary: #18a058;
+            --primary-hover: #36ad6a;
+            --text: #333639;
+            --text-2: #666;
+            --text-3: #999;
+            --border: #efeff5;
+            --divider: #e6e6ee;
+            --bg: #fff;
+            --bg-soft: #fafafc;
+            --hover: #f5f7fa;
+            --error: #d03050;
+            --warning: #f0a020;
+            --info: #2080f0;
+            --radius: 3px;
+        }
+
+        * { box-sizing: border-box; }
+
+        body {
+            margin: 0;
+            padding: 32px 24px 64px;
+            background: #eef0f4;
+            color: var(--text);
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "Microsoft YaHei", "PingFang SC", sans-serif;
+            font-size: 14px;
+            line-height: 1.6;
+        }
+
+        .page { max-width: 1120px; margin: 0 auto; }
+
+        h1 { font-size: 20px; margin: 0 0 6px; font-weight: 600; }
+        .sub { color: var(--text-2); font-size: 13px; margin: 0 0 26px; }
+        .sub b { color: var(--text); }
+
+        .section { margin-bottom: 34px; }
+
+        .section-head {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            margin-bottom: 12px;
+        }
+
+        .section-head h2 { font-size: 15px; margin: 0; font-weight: 600; }
+
+        .tag-was, .tag-now {
+            font-size: 11px;
+            padding: 1px 8px;
+            border-radius: 10px;
+            font-weight: 500;
+        }
+
+        .tag-was { background: #f3d5d9; color: #8c2438; }
+        .tag-now { background: #cfeadd; color: #146139; }
+
+        .btn {
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            height: 28px;
+            padding: 0 12px;
+            border: 1px solid var(--border);
+            border-radius: var(--radius);
+            background: var(--bg);
+            color: var(--text);
+            font-size: 13px;
+            font-family: inherit;
+            white-space: nowrap;
+            cursor: default;
+        }
+
+        .btn.small { height: 25px; padding: 0 9px; font-size: 12px; }
+        .btn.text { border: none; background: transparent; color: var(--info); padding: 0 4px; }
+        .btn.error { border-color: #d03050; color: var(--error); }
+        .btn.ghost { border: none; background: transparent; color: var(--info); }
+        .btn.disabled { color: #c2c2c2; border-color: var(--border); }
+
+        /* ---------- 面板外壳 ---------- */
+        .panel {
+            background: var(--bg);
+            border-radius: 6px;
+            box-shadow: 0 6px 26px rgba(0, 0, 0, .1);
+            overflow: hidden;
+        }
+
+        .panel-head {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            padding: 14px 20px 10px;
+            font-size: 17px;
+            font-weight: 600;
+        }
+
+        .close-x { color: var(--text-3); font-size: 17px; line-height: 1; }
+
+        .panel-body { padding: 0 20px; }
+        .panel-foot { border-top: 1px solid var(--divider); padding: 10px 20px; }
+
+        /* ---------- 改造前 ---------- */
+        .old-head-row {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            padding-bottom: 12px;
+        }
+
+        .fake-select {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            height: 28px;
+            width: 320px;
+            padding: 0 10px;
+            border: 1px solid var(--primary);
+            border-radius: var(--radius);
+            background: var(--bg);
+            font-size: 13px;
+            color: var(--text);
+        }
+
+        .fake-select .caret { color: var(--text-3); font-size: 10px; }
+
+        .fake-input {
+            display: flex;
+            align-items: center;
+            height: 28px;
+            width: 170px;
+            padding: 0 10px;
+            border: 1px solid var(--border);
+            border-radius: var(--radius);
+            color: #c2c2c2;
+            font-size: 13px;
+        }
+
+        .old-toolbar {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            padding-bottom: 12px;
+            border-bottom: 1px solid var(--divider);
+        }
+
+        .old-table-head,
+        .old-table-row {
+            display: grid;
+            grid-template-columns: 40px 1fr 80px 170px;
+            align-items: center;
+            height: 38px;
+            font-size: 13px;
+        }
+
+        .old-table-head {
+            border-bottom: 1px solid var(--divider);
+            color: var(--text-2);
+            font-weight: 600;
+        }
+
+        .old-table-head .c, .old-table-row .c { justify-self: center; }
+
+        .old-path { display: flex; align-items: center; gap: 6px; min-width: 0; }
+        .old-path .letter {
+            background: #d9f0e4; color: #146139;
+            font-size: 11px; padding: 1px 6px; border-radius: 3px;
+        }
+        .old-path .letter.off { background: #f0f0f4; color: #8a8a96; }
+        .old-path .p { color: var(--info); }
+        .old-path .ro { color: var(--text-3); font-size: 12px; }
+
+        .checkbox {
+            width: 15px; height: 15px;
+            border: 1px solid #c9c9d1;
+            border-radius: 2px;
+            display: inline-block;
+        }
+
+        /* ---------- 改造后 ---------- */
+        .search-row {
+            display: flex;
+            gap: 10px;
+            padding-bottom: 12px;
+        }
+
+        .search-box {
+            flex: 1;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            height: 32px;
+            padding: 0 11px;
+            border: 1px solid var(--border);
+            border-radius: var(--radius);
+            color: #c2c2c2;
+            font-size: 13px;
+            background: var(--bg);
+        }
+
+        .overview {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 12px;
+            padding: 0 0 12px;
+            font-size: 12.5px;
+            color: var(--text-2);
+        }
+
+        .overview b { color: var(--text); font-weight: 600; }
+        .overview .sep { color: #d8d8e0; margin: 0 6px; }
+
+        .drive-row {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 8px;
+            padding: 0 0 12px;
+            border-bottom: 1px solid var(--divider);
+        }
+
+        .chip {
+            display: inline-flex;
+            align-items: center;
+            gap: 6px;
+            height: 27px;
+            padding: 0 11px;
+            border: 1px solid var(--divider);
+            border-radius: 14px;
+            font-size: 12.5px;
+            background: var(--bg);
+            color: var(--text);
+        }
+
+        .chip.active {
+            border-color: var(--primary);
+            background: #f2fbf6;
+            color: #146139;
+            font-weight: 500;
+        }
+
+        .chip.off { color: var(--text-2); }
+
+        .dot { width: 7px; height: 7px; border-radius: 50%; display: inline-block; }
+        .dot.on { background: var(--primary); }
+        .dot.off { background: #c9c9d1; }
+
+        .chip .n { color: var(--text-2); }
+        .chip.active .n { color: #146139; }
+        .chip .na { color: var(--text-3); font-size: 11.5px; }
+
+        .new-table-head,
+        .new-table-row {
+            display: grid;
+            grid-template-columns: 40px 100px 1fr 68px 96px 120px;
+            align-items: center;
+            height: 39px;
+            font-size: 13px;
+        }
+
+        .new-table-head {
+            border-bottom: 1px solid var(--divider);
+            color: var(--text-2);
+            font-weight: 600;
+            position: sticky;
+            top: 0;
+            background: var(--bg);
+        }
+
+        .new-table-row:hover { background: var(--hover); }
+        .new-table-head .c, .new-table-row .c { justify-self: center; }
+        .new-table-head .r, .new-table-row .r { justify-self: end; }
+
+        .new-table-row .dir { display: flex; align-items: center; gap: 8px; min-width: 0; }
+        .new-table-row .dir .name {
+            overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+            color: var(--text);
+        }
+        .new-table-row .dir .ro {
+            flex: none;
+            font-size: 11px; color: #8a8a96;
+            background: #f0f0f4;
+            padding: 1px 6px; border-radius: 3px;
+        }
+
+        .disk-cell { display: flex; align-items: center; gap: 6px; color: var(--text-2); }
+        .disk-cell .l {
+            font-family: ui-monospace, Consolas, monospace;
+            font-size: 12px;
+        }
+
+        .num { font-variant-numeric: tabular-nums; color: var(--text-2); }
+        .sz { font-variant-numeric: tabular-nums; color: var(--text); font-weight: 500; }
+        .sz.na { color: #c2c2c2; font-weight: 400; }
+        .time { font-variant-numeric: tabular-nums; color: var(--text-2); font-size: 12.5px; }
+
+        .new-table-row .name { cursor: pointer; }
+        .dbltip {
+            opacity: 0;
+            margin-left: 8px;
+            font-size: 11.5px;
+            color: var(--text-3);
+            white-space: nowrap;
+        }
+        .new-table-row:hover .dbltip { opacity: 1; }
+
+        .foot-row {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 12px;
+        }
+
+        .selbar { display: flex; align-items: center; gap: 8px; font-size: 12.5px; color: var(--text-2); }
+        .selbar .muted { color: var(--text-3); }
+
+        .pager { display: flex; align-items: center; gap: 6px; font-size: 12.5px; color: var(--text-2); }
+        .pager .pg {
+            min-width: 26px; height: 26px; padding: 0 6px;
+            display: inline-flex; align-items: center; justify-content: center;
+            border: 1px solid var(--divider); border-radius: var(--radius);
+            background: var(--bg);
+        }
+        .pager .pg.active { border-color: var(--primary); color: var(--primary); font-weight: 600; }
+
+        .collapse-bar {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            padding: 11px 20px;
+            border-top: 1px solid var(--divider);
+            background: var(--bg-soft);
+            font-size: 13px;
+            color: var(--text-2);
+        }
+
+        .collapse-bar .tri { color: var(--text-3); font-size: 10px; }
+
+        /* 展开后的折叠内容（示意） */
+        .expanded {
+            border: 1px dashed #d8d8e2;
+            border-radius: 6px;
+            padding: 14px 16px;
+            background: var(--bg);
+            max-width: 620px;
+        }
+
+        .expanded .line {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            flex-wrap: wrap;
+            margin-bottom: 10px;
+        }
+        .expanded .line:last-child { margin-bottom: 0; }
+
+        .hint { font-size: 12px; color: var(--text-3); }
+        .hint.warn { color: #a06a00; }
+
+        /* 编号标注 */
+        .mk {
+            display: inline-flex; align-items: center; justify-content: center;
+            width: 17px; height: 17px; border-radius: 50%;
+            background: var(--info); color: #fff;
+            font-size: 11px; font-weight: 700;
+            margin-left: 6px; flex: none;
+            font-family: ui-monospace, Consolas, monospace;
+        }
+
+        .legend {
+            margin-top: 14px;
+            background: #fff;
+            border-radius: 6px;
+            padding: 14px 18px;
+            box-shadow: 0 2px 10px rgba(0, 0, 0, .06);
+        }
+        .legend h3 { font-size: 13px; margin: 0 0 8px; }
+        .legend ol { margin: 0; padding-left: 20px; font-size: 12.5px; color: var(--text-2); }
+        .legend li { margin-bottom: 4px; }
+        .legend li b { color: var(--text); }
+
+        .note { font-size: 12px; color: var(--text-3); margin-top: 10px; }
+    </style>
+</head>
+
+<body>
+    <div class="page">
+        <h1>「缓存记录」面板 · 改造前后对照</h1>
+        <p class="sub">
+            实测基线：<b>5 块盘 · 213 个目录 · 1247 个条目 · 库 81.7 MB · 最近扫描 09-27 22:32</b>
+        </p>
+
+        <!-- ============ 改造前 ============ -->
+        <div class="section">
+            <div class="section-head">
+                <h2>改造前</h2>
+                <span class="tag-was">现在</span>
+                <span class="hint">日常的「进目录」只能靠猜双击；一年用两次的迁移动作占满工具条</span>
+            </div>
+
+            <div class="panel" style="max-width:900px">
+                <div class="panel-head">
+                    <span>缓存记录</span>
+                    <span class="close-x">—</span>
+                </div>
+                <div class="panel-body">
+                    <div class="old-head-row">
+                        <div class="fake-select">
+                            <span>全部盘 · 213 个目录</span>
+                            <span class="caret">▼</span>
+                        </div>
+                        <div class="fake-input">路径关键词过滤</div>
+                        <span class="btn small">查询</span>
+                        <span class="btn small">刷新</span>
+                    </div>
+
+                    <div class="old-toolbar">
+                        <span class="btn small">备份</span>
+                        <span class="btn small">备份到文件…</span>
+                        <span class="btn small">从文件还原…</span>
+                        <span class="btn small">合并缓存…</span>
+                        <span class="btn small ghost">打开存放文件夹</span>
+                    </div>
+
+                    <div class="old-table-head">
+                        <span class="c"><i class="checkbox"></i></span>
+                        <span>盘 / 路径</span>
+                        <span class="c">封面</span>
+                        <span class="c">日期</span>
+                    </div>
+
+                    <div class="old-table-row">
+                        <span class="c"><i class="checkbox"></i></span>
+                        <span class="old-path">
+                            <span class="letter">F:</span>
+                            <span class="p">示例作品目录 A</span>
+                        </span>
+                        <span class="c">12</span>
+                        <span class="c">2026-09-24 14:32:15</span>
+                    </div>
+                    <div class="old-table-row">
+                        <span class="c"><i class="checkbox"></i></span>
+                        <span class="old-path">
+                            <span class="letter off">??</span>
+                            <span class="p">示例作品目录 B</span>
+                            <span class="ro">（盘未插入 · 只读）</span>
+                        </span>
+                        <span class="c">5</span>
+                        <span class="c">2026-09-20 10:11:08</span>
+                    </div>
+                    <div class="old-table-row">
+                        <span class="c"><i class="checkbox"></i></span>
+                        <span class="old-path">
+                            <span class="letter off">??</span>
+                            <span class="p">示例作品目录 C</span>
+                            <span class="ro">（盘未插入 · 只读）</span>
+                        </span>
+                        <span class="c">8</span>
+                        <span class="c">2026-09-20 10:09:41</span>
+                    </div>
+                </div>
+                <div class="panel-foot">
+                    <div style="display:flex;justify-content:flex-end">
+                        <div class="pager">
+                            <span>共 213 项</span>
+                            <span class="pg">‹</span>
+                            <span class="pg active">1</span>
+                            <span class="pg">2</span>
+                            <span class="pg">›</span>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <div class="legend">
+                <h3>问题</h3>
+                <ol>
+                    <li><b>主次颠倒</b> —— 面板真正要做的是「找到目录 → 进去」，而它只有路径文字的<b>双击</b>，
+                        还被渲染成看着像单击的链接色；反而低频的迁移动作（备份 / 还原 / 合并）占了整条工具条。</li>
+                    <li><b>两个「备份」</b> —— 「备份」把库默默写在你看不见的地方、<b>同一天同名覆盖</b>（第二次盖掉第一次）；
+                        真正能兜底的是「备份到文件…」。</li>
+                    <li><b>危险不分级</b> —— 「从文件还原…」（整库替换、不可逆）和「合并缓存…」（只增不删）
+                        长得完全一样，唯一着色的是「删除」。</li>
+                    <li><b>离线盘认不出来</b> —— 盘名从来没被填过，离线时只剩一个 <code>??</code> 和「未插入」。
+                        两块盘都不在，就是两行一模一样的「未插入」。"有哪些"答不出来。</li>
+                    <li><b>看不到总量</b> —— 开口只有一个「213 个目录」；条目数 1247、库 81.7 MB、最近扫描时间全都看不到。</li>
+                    <li><b>搜索要点了才算</b> —— 主界面是输入即过滤 + 拼音 + 空态提示，这里三样都没有。</li>
+                    <li><b>没有关闭按钮</b> —— 只能点遮罩或按 Esc。</li>
+                    <li><b>入口本身就没法发现</b> —— 打开它的是工具条上一个<b>只有脚印图标、没有文字也没有悬停提示</b>的按钮。
+                        面板做得再好，找不到入口等于零。</li>
+                    <li><b>「改每页条数」会翻到空白页</b> —— 停在第 10 页时把每页改成 100，请求第 10 页 × 100 条 = 第 901~1000 条，
+                        而一共只有 213 条 → 表格空了，分页器还写着"共 213 项"。</li>
+                    <li><b>删了可能又回来</b> —— 删除走的是"直接删"，没有和后台批量扫描共用同一条写入链；
+                        扫描正在跑时删掉的那条会被重新插回来。</li>
+                    <li><b>库里 2 条「0 个条目」的记录无处处理</b> —— 它们可能是历史缺陷留下的（也可能是真空目录，数据分不出来）。
+                        面板上看得到，但没有任何动作能修它。</li>
+                </ol>
+            </div>
+        </div>
+
+        <!-- ============ 改造后 ============ -->
+        <div class="section">
+            <div class="section-head">
+                <h2>改造后</h2>
+                <span class="tag-now">建议</span>
+                <span class="hint">查 → 逛 → 去 是三段主路径；管理动作收进底部与折叠区</span>
+            </div>
+
+            <div class="panel" style="max-width:1040px">
+                <div class="panel-head">
+                    <span>缓存记录</span>
+                    <span class="close-x">✕</span>
+                </div>
+                <div class="panel-body">
+                    <!-- G1 找 -->
+                    <div class="search-row">
+                        <div class="search-box">
+                            <span>🔍</span>
+                            <span>搜索目录名</span>
+                        </div>
+                        <span class="btn" style="height:32px">↻ 刷新</span>
+                    </div>
+
+                    <!-- G2 逛 -->
+                    <div class="overview">
+                        <span>
+                            <b>5</b> 块盘<span class="sep">·</span>
+                            <b>213</b> 个目录<span class="sep">·</span>
+                            <b>1247</b> 个条目<span class="sep">·</span>
+                            已读到 <b>3.35 TB</b><span class="sep">·</span>
+                            库 <b>81.7 MB</b><span class="sep">·</span>
+                            最近扫描 <b>09-27 22:32</b>
+                        </span>
+                        <span class="btn text">打开存放文件夹</span>
+                    </div>
+
+                    <div class="drive-row">
+                        <span class="chip active">全部 <span class="n">213</span></span>
+                        <span class="chip"><i class="dot on"></i>F: <span class="n">106</span></span>
+                        <span class="chip"><i class="dot on"></i>G: <span class="n">14</span></span>
+                        <span class="chip off"><i class="dot off"></i>未命名 · CD72 <span class="n">63</span>
+                            <span class="na">未插入</span></span>
+                        <span class="chip off"><i class="dot off"></i>未命名 · C6EE <span class="n">26</span>
+                            <span class="na">未插入</span></span>
+                        <span class="chip off"><i class="dot off"></i>未命名 · 2E892 <span class="n">4</span>
+                            <span class="na">未插入</span></span>
+                    </div>
+
+                    <!-- 列表 -->
+                    <div class="new-table-head">
+                        <span class="c"><i class="checkbox"></i></span>
+                        <span>盘</span>
+                        <span>目录</span>
+                        <span class="r">条目</span>
+                        <span class="r">大小</span>
+                        <span class="r">上次扫描</span>
+                    </div>
+
+                    <div class="new-table-row">
+                        <span class="c"><i class="checkbox"></i></span>
+                        <span class="disk-cell"><i class="dot on"></i><span class="l">F:</span></span>
+                        <span class="dir"><span class="name">示例作品目录 A</span><span class="dbltip">双击打开</span></span>
+                        <span class="r num">12</span>
+                        <span class="r sz">492.55 GB</span>
+                        <span class="r time">09-24 14:32</span>
+                    </div>
+                    <div class="new-table-row">
+                        <span class="c"><i class="checkbox"></i></span>
+                        <span class="disk-cell"><i class="dot on"></i><span class="l">F:</span></span>
+                        <span class="dir"><span class="name">示例演员目录 B</span><span class="dbltip">双击打开</span></span>
+                        <span class="r num">8</span>
+                        <span class="r sz">176.81 GB</span>
+                        <span class="r time">09-24 14:31</span>
+                    </div>
+                    <div class="new-table-row">
+                        <span class="c"><i class="checkbox"></i></span>
+                        <span class="disk-cell"><i class="dot on"></i><span class="l">G:</span></span>
+                        <span class="dir"><span class="name">示例作品目录 C</span><span class="dbltip">双击打开</span></span>
+                        <span class="r num">21</span>
+                        <span class="r sz">32.72 GB</span>
+                        <span class="r time">09-27 22:32</span>
+                    </div>
+                    <div class="new-table-row">
+                        <span class="c"><i class="checkbox"></i></span>
+                        <span class="disk-cell"><i class="dot off"></i><span class="l">CD72</span></span>
+                        <span class="dir">
+                            <span class="name">示例作品目录 D</span>
+                            <span class="ro">离线 · 只读</span>
+                            <span class="dbltip">双击打开</span>
+                        </span>
+                        <span class="r num">5</span>
+                        <span class="r sz">1.21 GB</span>
+                        <span class="r time">09-20 10:11</span>
+                    </div>
+                    <div class="new-table-row">
+                        <span class="c"><i class="checkbox"></i></span>
+                        <span class="disk-cell"><i class="dot on"></i><span class="l">F:</span></span>
+                        <span class="dir">
+                            <span class="name">新建文件夹</span>
+                            <span class="ro">只有子目录</span>
+                            <span class="dbltip">双击打开</span>
+                        </span>
+                        <span class="r num">104</span>
+                        <span class="r sz na">—</span>
+                        <span class="r time">09-24 19:19</span>
+                    </div>
+                </div>
+
+                <div class="panel-foot">
+                    <div class="foot-row">
+                        <div class="selbar">
+                            <span class="btn small disabled">删除记录</span>
+                            <span class="muted">未选中任何记录</span>
+                        </div>
+                        <div class="pager">
+                            <span>共 213 项</span>
+                            <span class="pg">‹</span>
+                            <span class="pg active">1</span>
+                            <span class="pg">2</span>
+                            <span class="pg">3</span>
+                            <span class="pg">›</span>
+                            <span class="pg">20 / 页</span>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="collapse-bar">
+                    <span class="tri">▶</span>
+                    <span>备份与迁移</span>
+                    <span class="hint">（低频操作，默认收起；两个「备份」已合并成一个）</span>
+                </div>
+            </div>
+
+            <div class="legend">
+                <h3>「备份与迁移」点开之后</h3>
+                <div class="expanded" style="margin-bottom:10px">
+                    <div class="line">
+                        <span class="btn small">备份到文件…</span>
+                        <span class="hint">默认文件名带你今天的日期，位置自己挑 —— 不会被任何东西覆盖</span>
+                    </div>
+                    <div class="line">
+                        <span class="btn small error">从文件还原…</span>
+                        <span class="hint warn">确认框会报出当前库有多大（81.7 MB），并说明这是"整份替换、本机独有记录会消失"</span>
+                    </div>
+                    <div class="line">
+                        <span class="btn small">合并缓存…</span>
+                        <span class="hint">只增不删 → 不弹确认，直接给结果（新增 27 / 覆盖 3 / 跳过 9）</span>
+                    </div>
+                </div>
+
+                <h3>这一版改了什么</h3>
+                <ol>
+                    <li><b>仍然是双击打开，不加「操作」列</b>：和主界面一致（主界面也是双击格子才打开）。
+                        但把"看着像单击链接"的按钮样式去掉，改成<b>真文本 + 手型指针 + 悬停出现「双击打开」</b>——
+                        既不加一列，也不用让用户去猜。</li>
+                    <li><b>离线是一等公民</b>：盘条里离线盘有自己的位置，显示可辨认的 <code>未命名 · CD72</code>，
+                        行内标「离线 · 只读」。<b>盘可以就地改名</b>（默认名字是序列号后 4 位，不再有 <code>??</code>）。</li>
+                    <li><b>一眼看清现状</b>：5 块盘 / 213 个目录 / <b>1247 个条目</b> / 库 81.7 MB / 最近扫描 —— 只读，不碰移动硬盘。</li>
+                    <li><b>搜索即时化</b>：输入即过滤，去掉「查询」；没结果和"一条都没有"分别给提示。</li>
+                    <li><b>危险分级</b>：整库替换着红 + 报出影响量；合并只增不删就不弹窗（门槛 ∝ 不可逆 × 波及面）。</li>
+                    <li><b>入口收敛</b>：低频迁移收进「备份与迁移」折叠区；两个「备份」合并成一个。</li>
+                    <li><b>底部恒定高度</b>：没选中时按钮置灰而不是消失 —— 不再把工具栏整体推来推去。</li>
+                    <li><b>列名说实话</b>：「封面」→「条目」（它本来就是这一层的条目数，实测 213 个目录 / 1247 个条目）；
+                        「日期」→「上次扫描」。</li>
+                    <li><b>多一列「大小」</b>：直接用库里已经存着的文件大小算出来（收敛的片子条目 = 该目录所有文件之和），
+                        还能点表头按大小排 —— 一眼看出哪个目录最大。实测能算出量的 210/213 条，
+                        单层最大 <b>492.55 GB</b>。</li>
+                </ol>
+
+                <h3>「大小」这列的几条规矩（都是实测逼出来的）</h3>
+                <ol>
+                    <li><b>只汇总缓存里已经存着的文件大小 —— 一个字节都不去读硬盘。</b>
+                        库里每条记录本来就存着每个条目的 size（收敛的片子条目 = 该目录所有文件之和），
+                        所以这是<b>纯内存相加</b>，实测一次 0.07 ms，零新增读盘。</li>
+                    <li>它是<b>扫描那一刻</b>的快照（之后删/移文件不会更新）→ 所以叫「上次读到时的大小」，
+                        不叫"当前大小"。</li>
+                    <li><b>0 显示 <code>—</code>，不显示 0 B。</b>表里那行「新建文件夹」是真事：
+                        104 个条目全是子目录、合计 0 字节。写成"104 个条目 / 0 B"会被读成"这 104 个东西没内容"。</li>
+                    <li>总览里写「<b>已读到 3.35 TB</b>」—— 措辞是"缓存里记录到的字节之和"，不是"硬盘上有 3.35 TB"。
+                        盘条上不再单独放每块盘的大小（chip 会太长，且行级可排序已经够用）。</li>
+                </ol>
+                <h3>这个改法里，会碰到你硬盘的动作清单</h3>
+                <ol>
+                    <li><b>新增的读盘动作：0 个。</b>（原方案里的「重读这一条」已砍掉 —— 那是新开一个读盘入口。）</li>
+                    <li><b>沿用已有的</b>：双击打开在线目录（本来就是这么工作的）；
+                        主界面的「补全这一片 / 重读这一片」不在这里，面板里不放。</li>
+                    <li><b>一条既有的、需要你知道的行为</b>：这个面板<b>每次打开</b>都会探测一遍 C–Z 每个盘符
+                        （<code>getDrives(true)</code>），并写一次 <code>disks.json</code>。
+                        它不是新增的，但既然每次打开都做 → 建议改成<b>只在点「刷新」时才探测</b>。</li>
+                </ol>
+
+                <p class="note">
+                    ⚠️ 示意说明：盘名、在线/离线状态、目录名为示例（真实目录名不外露）；
+                    <b>目录数 213、条目数 1247、库 81.7 MB、各行的大小、以及"新建文件夹 = 104 个条目全子目录"</b>
+                    全部取自真实库的只读探测（<code>docs/probes/cache-panel-stats.mjs</code> ·
+                    <code>cache-panel-size3.mjs</code>）。表里 492.55 GB 那行就是实测的最大单层。
+                </p>
+            </div>
+        </div>
+    </div>
+</body>
+
+</html>
