@@ -54,6 +54,10 @@ app.whenReady().then(async () => {
     console.log(`\nnew 变体头部高（各宽度）：${news.map(r => r.窗口宽 + '→' + r.头部高 + 'px').join('  ')}`);
     console.log(`old 变体头部高（各宽度）：${out.filter(r => r.变体 === 'old').map(r => r.窗口宽 + '→' + r.头部高 + 'px').join('  ')}`);
     console.log(`new 头部截断段数：${news.map(r => r.有截断的段数).join('/')}`);
+    // 这一行是"真实 scoped CSS 生效"的硬证据：`::before` 的 content 只有在那条
+    // scoped 规则命中时才不会是 none
+    console.log(`new 分隔符 ::before content：${JSON.stringify(news.map(r => r['::before内容']))}`);
+    console.log(`new 导航区宽（各宽度）：${news.map(r => r.窗口宽 + '→' + r.导航区宽 + 'px').join('  ')}`);
     console.log(ok
         ? '\n✅ new：头部高在四档宽度下**完全一致**（常量），当前段可见、工具条不溢出'
         : `\n❌ new：头部高各档=${heights.join(',')}（要求完全一致）；另有 ${bad.length} 条不满足`);

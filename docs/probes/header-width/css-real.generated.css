@@ -1,0 +1,320 @@
+/* ⚠️ 本文件是 **生成产物**，别手改 —— 由 docs/probes/header-width/build-css.mjs
+   从两个 SFC 的 <style scoped> 真实编译而来（less 预处理 + scoped 转换）。
+   改了组件样式就重跑：node docs/probes/header-width/build-css.mjs */
+
+/* ── src/views/FileFinder/index.vue  style[0] ── */
+.file-finder[data-v-probe] {
+  display: flex;
+  flex-flow: column;
+  padding: 10px 10px 0 10px;
+  height: 100vh;
+  box-sizing: border-box;
+}
+.file-finder .header-bar[data-v-probe] {
+  display: flex;
+  /* ⚠️ 「头部永远只有一行」的第一道保险。
+           不加它，两个子区（导航区 / 动作区）会退化成"谁装不下谁换行"，
+           头部高度就成了**用户数据（路径长度、层级数）的函数**。 */
+  flex-wrap: nowrap;
+  padding: 4px;
+  margin-bottom: 4px;
+  border-radius: 4px;
+  box-shadow: 1px 0 6px rgba(113, 147, 192, 0.25);
+  justify-content: space-between;
+  /* 批量扫描的进度文字。颜色沿用搜索框后缀图标那个灰 */
+}
+.file-finder .header-bar .n-input[data-v-probe] {
+  /* ⚠️ 这一行不能删。n-input 天生 `width: 100%`（为表单布局设计的），
+               而这里是 flex 行 —— 100% 会把它撑成整行宽、独霸一行，把「刷新」
+               挤到下一行，工具条从一行涨到三行（实测 1805px 窗口下头部高 ~150px）。
+               原来 n-space 会给每个子项包一层 div，恰好把这个 100% 关在盒子里；
+               换成裸容器之后就露出来了（见 docs/FIX-2026-09-24-nspace-duplicate-keys.md）。
+               搜索框本来就该是固定宽度 —— 资源管理器里它也是固定的一小段。 */
+  width: 200px;
+}
+.file-finder .header-bar .n-input[data-v-probe] .n-input-wrapper {
+  padding-top: 1px;
+  padding-right: 6px;
+}
+.file-finder .header-bar .n-input[data-v-probe] .n-input-wrapper .n-input__suffix .suffix-icon {
+  display: inline-block;
+  box-sizing: border-box;
+  padding: 7px;
+  height: 22px;
+  line-height: 8px;
+  border: 1px solid #dbdbdb;
+  border-radius: 4px;
+  color: #a1a1a1;
+}
+/**
+ * 横向单行容器 —— 顶替 naive-ui 的 `n-space`。
+ *
+ * 不是审美选择，是**避开一个真 bug**：naive-ui 2.45.3 的 Space 给每个子项硬编码
+ * 同一个 key（`key: 1`），子元素个数变化时 Vue 的 keyed diff 会让两个旧节点认领
+ * 同一个新槽位，界面上就多出重复节点。用裸 flex + `gap` 之后子元素按位置 patch，
+ * 根本没有 key 可比 —— 这类错位在结构上不可能发生。
+ *
+ * 12px 就是 n-space 默认 size（medium）的间距，所以观感与原来一致。
+ * 见 docs/FIX-2026-09-24-nspace-duplicate-keys.md
+ */
+.hstack[data-v-probe] {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 12px;
+}
+/**
+ * 导航区 —— 头部**唯一**的弹性槽位（现在只用在头部；两个 popover 仍用 `.hstack`）。
+ *
+ * `min-width: 0` 是这整套的地基：flex 子项默认 `min-width: auto`（≈ 内容宽），
+ * 不给 0 的话，**哪怕写了 `overflow` 也不会真的收窄**，头部照样被长路径撑开。
+ * `max-width: 50%` 来自 Fluent 2 的宽度预算（面包屑占整体 30–50% 是安全的）：
+ * 它保证动作区**永远拿得到 ≥50%**，超出的部分交给折叠规则消化。
+ *
+ * 实测：`docs/probes/header-width/`（真 Chromium + 真 naive-ui，窗口 640/800/1280/1920 四档）。
+ */
+.nav-zone[data-v-probe] {
+  flex: 1 1 auto;
+  min-width: 0;
+  max-width: 50%;
+  display: flex;
+  flex-wrap: nowrap;
+  align-items: center;
+  gap: 8px;
+  overflow: hidden;
+  /* 面包屑每一段：**单个名字有界**（层级深度问题已由折叠解决，这里只管"一段太长"）。
+       ⚠️ 中文不能用 Fluent 那条「超过 30 字符就截断」——那是**拉丁文**语境的量级：
+       中文一个字约等于拉丁两个字宽，30 个字 ≈ 360px，照抄等于没截断。所以用像素。 */
+  /* 层级之间的方向符。
+       ⚠️ 用 CSS 生成，**不插 DOM 子元素** —— 这一组的子元素个数在本项目是敏感量
+       （n-space 重复 key 事故同族）。`position: absolute` 让它落在两个 tag 之间的
+       空隙里，不占 tag 内部空间（tag 自带 `position: relative`）。
+       用 `:not(.crumb-root)` 而不是相邻选择器：不依赖"中间有没有被插入包装元素"。 */
+  /* 当前层**永不被压掉**：它是"我在哪"的唯一答案，比任何历史段都重要 */
+  /* 两种**不可点**的段：首段（盘符 / 离线盘）与当前段。
+       必须与可点的段**视觉可分** —— 现状是"所有 tag 都 cursor:pointer"，
+       于是当前层看着能点、点了没反应（死交互）。 */
+}
+.nav-zone .crumb[data-v-probe] {
+  /* ⚠️ `0 1 auto`（**可收缩**）而不是 `0 0 auto`：
+           宽度不够时先压历史段，而不是把"当前层"直接挤出屏幕右边缘被裁掉。
+           收缩下界交给 `min-width: 0` + 文本省略号 —— 极窄时显示成「…」，与资源管理器一致。 */
+  flex: 0 1 auto;
+  min-width: 0;
+  max-width: 160px;
+  cursor: pointer;
+  /* 文本真的收窄之后 `text-overflow` 才会出现 —— 同理，这一层也要 `min-width: 0` */
+}
+.nav-zone .crumb[data-v-probe] .n-tag__content {
+  min-width: 0;
+  overflow: hidden;
+}
+.nav-zone .crumb .crumb-text[data-v-probe] {
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.nav-zone .crumb[data-v-probe]:not(.crumb-root)::before {
+  content: '›';
+  position: absolute;
+  left: -13px;
+  color: #a1a1a1;
+  pointer-events: none;
+  /* 别挡住上一个 tag / chip 的点击 */
+}
+.nav-zone .crumb-current[data-v-probe] {
+  flex: 0 0 auto;
+  /* 与网格里条目名的字重一致（`.image-box-item span` 也是 bold）：
+           一眼看出"哪个是我现在在的地方" */
+  font-weight: bold;
+}
+.nav-zone .crumb-more[data-v-probe] {
+  flex: 0 0 auto;
+  padding: 0 8px;
+}
+.nav-zone .crumb-root[data-v-probe],
+.nav-zone .crumb-current[data-v-probe] {
+  cursor: default;
+}
+/**
+ * 头部右侧那一组：**单行 + 不参与压缩**。
+ *
+ * `flex: 0 0 auto` 是「动作区永远拿得到自己需要的宽度」的保证：
+ * 默认的 `flex-shrink: 1` 会让它在窄窗口里被压到内容宽以下（按钮文字被挤），
+ * 而那正是"换行 / 溢出"的起点。宽度不够时该被裁的是**导航区**（那里有折叠规则兜底）。
+ */
+.toolbar[data-v-probe] {
+  flex: 0 0 auto;
+  display: flex;
+  flex-wrap: nowrap;
+  align-items: center;
+  gap: 12px;
+}
+/* 扫描状态条：贴着网格下方一条，整条随 scanning 出现/消失 */
+.scan-bar[data-v-probe] {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 4px 4px 8px;
+}
+.scan-bar .scan-progress[data-v-probe] {
+  font-size: 12px;
+  color: #a1a1a1;
+}
+.scan-bar .scan-hint[data-v-probe] {
+  font-size: 12px;
+  color: #a1a1a1;
+}
+.image-box[data-v-probe] {
+  flex: 1;
+  display: flex;
+  flex-flow: row wrap;
+  overflow: hidden auto;
+  justify-content: flex-start;
+  align-content: flex-start;
+}
+/* 空状态：占满一整行、居中一行小字。颜色沿用搜索框后缀图标那个灰 */
+.empty-tip[data-v-probe] {
+  width: 100%;
+  padding-top: 48px;
+  text-align: center;
+  font-size: 14px;
+  color: #a1a1a1;
+}
+.image-box-item[data-v-probe],
+.file-item[data-v-probe] {
+  --item-gap: 10px;
+  --item-width: calc(100% / 6);
+  --item-height: 1.5rem;
+  display: flex;
+  flex-direction: column;
+  flex-grow: 0;
+  flex-shrink: 0;
+  width: calc(var(--item-width) - var(--item-gap));
+  min-height: 80px !important;
+  height: var(--item-height) !important;
+  max-height: var(--item-height) !important;
+  padding: 0 2px 10px;
+  margin: 10px 5px 0px;
+  border: 1px solid transparent;
+  justify-content: flex-end;
+  align-items: center;
+  box-sizing: border-box;
+  transition: all 0.1s ease-in-out;
+  user-select: none;
+  font-size: 16px;
+}
+.image-box-item .n-image[data-v-probe],
+.file-item .n-image[data-v-probe] {
+  height: calc(100% - 16px - 20px);
+  margin: 10px 0;
+}
+.image-box-item .n-image[data-v-probe] img,
+.file-item .n-image[data-v-probe] img {
+  width: 100%;
+}
+.image-box-item img[data-v-probe],
+.file-item img[data-v-probe] {
+  display: block;
+  margin: 10px 0;
+  object-fit: contain;
+  overflow: hidden;
+}
+.image-box-item span[data-v-probe],
+.file-item span[data-v-probe] {
+  display: inline-block;
+  width: 100%;
+  height: 38px !important;
+  line-height: 1em;
+  font-size: 1em;
+  color: #000;
+  font-weight: bold;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  text-align: center;
+}
+.image-box-item[data-v-probe]:hover,
+.file-item[data-v-probe]:hover {
+  border-color: #7a8da9;
+  background-color: rgba(110, 123, 173, 0.16);
+  box-shadow: 1px 0 10px rgba(122, 141, 169, 0.15);
+}
+.image-box-item[data-v-probe]:active,
+.file-item[data-v-probe]:active {
+  border-color: #525e72;
+  background-color: rgba(75, 83, 116, 0.16);
+}
+@media screen and (max-width: 1100px) {
+.image-box-item[data-v-probe],
+  .file-item[data-v-probe] {
+    font-size: 12px;
+}
+}
+@media screen and (max-width: 600px) {
+.image-box-item[data-v-probe],
+  .file-item[data-v-probe] {
+    --item-width: 20%;
+}
+}
+@media screen and (max-width: 400px) {
+.image-box-item[data-v-probe],
+  .file-item[data-v-probe] {
+    --item-width: 33.33%;
+}
+}
+@media screen and (max-width: 300px) {
+.image-box-item[data-v-probe],
+  .file-item[data-v-probe] {
+    --item-width: 50%;
+}
+}
+@media screen and (max-width: 200px) {
+.image-box-item[data-v-probe],
+  .file-item[data-v-probe] {
+    --item-width: 100%;
+}
+}
+.file-item[data-v-probe] {
+  width: 84px !important;
+  height: 84px !important;
+  max-height: 84px !important;
+}
+.file-item span[data-v-probe] {
+  display: inline-block;
+  max-height: 48px;
+  line-height: 16px;
+  font-size: 14px;
+  word-break: break-all;
+  text-overflow: ellipsis;
+  overflow: hidden;
+}
+.file-cover[data-v-probe] {
+  display: block;
+  margin: 10px 0;
+  object-fit: contain;
+  overflow: hidden;
+  background-image: url(@/assets/fileTypeIcon/blank.svg);
+}
+
+
+/* ── src/components/FolderSelector/index.vue  style[0] ── */
+
+/* 单个名字过长时截断（深度问题已由 foldPath 从字符串层面解决，这里只管"一段太长"）。
+   `min-width: 0` 是必需的：flex 子项默认 `min-width: auto`，不给 0 的话
+   内层文本不会收窄，省略号也就不会出现。 */
+.fs-tag[data-v-probe] {
+    max-width: 220px;
+}
+.fs-path[data-v-probe] {
+    display: flex;
+    align-items: center;
+    min-width: 0;
+}
+.fs-text[data-v-probe] {
+    display: inline-block;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}

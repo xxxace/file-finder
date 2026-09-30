@@ -9,8 +9,12 @@
 # 不删掉的话 electron 会退化成纯 Node、根本不跑窗口。
 set -u
 cd "$(dirname "$0")/../../.." || exit 1
+
+# 先重建"真实 scoped CSS"——探针的 new 变体用的是它，不是手抄的等效样式
+node docs/probes/header-width/build-css.mjs >/dev/null || exit 1
+
 env -u ELECTRON_RUN_AS_NODE ./node_modules/electron/dist/electron.exe \
     docs/probes/header-width/run.cjs > docs/probes/header-width/out.txt 2>&1
 code=$?
-tail -8 docs/probes/header-width/out.txt
+tail -12 docs/probes/header-width/out.txt
 exit $code

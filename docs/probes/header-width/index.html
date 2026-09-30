@@ -3,7 +3,14 @@
 
 <head>
     <meta charset="utf-8">
-    <title>头部行数 / 折叠 / 截断 —— 真布局测量</title>
+    <title>头部行数 / 折叠 / 截断 —— 真布局 + 真 scoped CSS</title>
+
+    <!-- ⚠️ 这份是**真实编译产物**（两个 SFC 的 <style scoped>，less + scoped 转换），
+         由 build-css.mjs 生成、run.sh 会先重建。
+         `new` 变体**只**用它，不再手抄 —— 手抄只能证明"这套写法在普通 CSS 下成立"，
+         证明不了":deep() / :not()::before 在 scoped 转换之后还成立"。 -->
+    <link rel="stylesheet" href="css-real.generated.css">
+
     <style>
         html,
         body {
@@ -17,99 +24,11 @@
             box-sizing: border-box;
         }
 
-        .width-tag {
-            font-size: 12px;
-            color: #666;
-            padding: 2px 4px 6px;
-        }
-
-        /* 与 src/views/FileFinder/index.vue 的 .file-finder 一致 */
-        .file-finder {
-            display: flex;
-            flex-flow: column;
-            box-sizing: border-box;
-        }
-
-        /* ===================== 变体 new（候选实现） ===================== */
-        .v-new .header-bar {
-            display: flex;
-            /* 「头部永远只有一行」的第一道保险 */
-            flex-wrap: nowrap;
-            padding: 4px;
-            margin-bottom: 4px;
-            border-radius: 4px;
-            box-shadow: 1px 0 6px rgba(113, 147, 192, 0.25);
-            justify-content: space-between;
-        }
-
-        .v-new .header-bar .n-input {
-            width: 200px;
-        }
-
-        /* 导航区：头部唯一的弹性槽位。min-width:0 是地基（默认 auto ≈ 内容宽 ⇒ 不会收窄） */
-        .v-new .nav-zone {
-            flex: 1 1 auto;
-            min-width: 0;
-            max-width: 50%;
-            display: flex;
-            flex-wrap: nowrap;
-            align-items: center;
-            gap: 8px;
-            overflow: hidden;
-        }
-
-        .v-new .crumb {
-            /* ⚠️ `0 1 auto`（**可收缩**）而不是 `0 0 auto`：
-               宽度不够时先压历史段，而不是把"当前层"直接挤出屏幕右边缘被裁掉。
-               收缩下界交给 `min-width: 0` + 文本省略号 —— 极窄时显示成「…」，与资源管理器一致。 */
-            flex: 0 1 auto;
-            min-width: 0;
-            max-width: 160px;
-            cursor: pointer;
-        }
-
-        /* 当前层**永不被压掉**：它是"我在哪"的唯一答案，比任何历史段都重要 */
-        .v-new .crumb-current {
-            flex: 0 0 auto;
-        }
-
-        .v-new .fs-tag {
-            max-width: 220px;
-        }
-
-        .v-new .crumb .n-tag__content {
-            min-width: 0;
-            overflow: hidden;
-        }
-
-        .v-new .crumb .crumb-text {
-            display: block;
-            overflow: hidden;
-            text-overflow: ellipsis;
-            white-space: nowrap;
-        }
-
-        .v-new .crumb-more {
-            padding: 0 8px;
-        }
-
-        .v-new .crumb-root,
-        .v-new .crumb-current {
-            cursor: default;
-        }
-
-        .v-new .toolbar {
-            flex: 0 0 auto;
-            display: flex;
-            flex-wrap: nowrap;
-            align-items: center;
-            gap: 12px;
-        }
-
-        /* ===================== 变体 old（改造前的写法，作对照） =====================
-           与改造前的 index.vue 一致：左区 `.hstack` 是 flex-wrap:wrap，
-           面包屑无 max-width、无折叠、无省略；工具条 align-self:flex-end。 */
-        .v-old .header-bar {
+        /* ===================== 变体 old 的复刻样式 =====================
+           ⚠️ 这一段是**手写的"改造前"样式复刻**（不是从 git 里抽出来的），
+           只用来做对照：证明"旧写法下头部高度确实随窗口变化"。
+           它**不带** data-v-probe，所以真实 scoped CSS 对 old 变体完全不参与。 */
+        .old-header {
             display: flex;
             padding: 4px;
             margin-bottom: 4px;
@@ -118,18 +37,18 @@
             justify-content: space-between;
         }
 
-        .v-old .header-bar .n-input {
+        .old-header .n-input {
             width: 200px;
         }
 
-        .v-old .hstack {
+        .old-header .hstack {
             display: flex;
             flex-wrap: wrap;
             align-items: center;
             gap: 12px;
         }
 
-        .v-old .toolbar {
+        .old-header .toolbar {
             display: flex;
             flex-wrap: nowrap;
             align-items: center;
@@ -148,9 +67,12 @@
         const { createApp, h, ref } = Vue;
         const N = naive;
 
+        /** 真实 scoped CSS 要求的选择器属性（与 build-css.mjs 的 SCOPE_ID 一致） */
+        const SCOPE_ATTR = 'data-v-probe';
+
         /**
-         * 故意造一条"层级多 + 名字长"的链：
-         * 首段 = 盘符（不可点），后面 7 层，其中两层的名字很长（测单条截断）。
+         * 故意造一条"层级多 + 名字长"的链：首段 = 盘符（不可点），后 7 层，
+         * 其中最后两层名字很长（折叠后它们一定会被渲染，才测得到"单条截断"）。
          * 全部是**假数据**，不碰任何盘。
          */
         const SEGS = [
@@ -160,14 +82,11 @@
             { name: '示例作品标题B也很难短下来', kind: 'dir' },
             { name: '子目录C', kind: 'dir' },
             { name: '第四层目录', kind: 'dir' },
-            // ⚠️ 最后两段（折叠后它们就是"父 + 当前"，**一定会被渲染**）故意起长名字：
-            // 只有这样才测得到"单条截断"。上一版把长名字放在会被折掉的中间层，
-            // 结果截断数恒为 0 —— 探针测了个寂寞。
             { name: '第五层是一个特别长的目录名字', kind: 'dir' },
             { name: '当前层也是一个特别长的目录名字', kind: 'dir' },
         ];
 
-        /** 折叠：保首段 + `…` + 末 2 段（与 src/utils 的 foldCrumbList 同规则：`…` 至少代表 2 段） */
+        /** 折叠：保首段 + `…` + 末 2 段（与 src/utils 的 foldCrumbList 同规则） */
         const fold = (segs) => {
             if (segs.length <= 4) return null;
             const head = segs[0];
@@ -178,37 +97,48 @@
 
         const variant = ref('new');
         window.__setVariant = (v) => { variant.value = v; };
-        window.__segCount = SEGS.length;
+        window.__scopeAttr = SCOPE_ATTR;
+
+        /**
+         * 只有 `new` 变体打 scoped 标记 ⇒ 真实 scoped CSS 只对它生效。
+         * old 变体全靠上面那段手写复刻，两种样式不会互相污染。
+         */
+        const sv = () => (variant.value === 'new' ? { [SCOPE_ATTR]: '' } : {});
 
         const crumbTag = (seg, cls, spin) => h(N.NTag, {
             class: ['crumb', cls].filter(Boolean).join(' '),
             title: seg.name,
-            style: 'cursor:pointer',
+            ...sv(),
         }, {
             default: () => [
-                h('span', { class: 'crumb-text' }, seg.name),
+                h('span', { class: 'crumb-text', ...sv() }, seg.name),
                 spin ? h(N.NSpin, { size: 12, style: 'margin-left:8px' }) : null,
             ],
         });
 
+        /** 与 FolderSelector 的模板结构一致：n-tag > div.fs-path > span.fs-text + tiny button */
         const chip = (bounded) => h(N.NTag, {
-            class: bounded ? 'fs-tag' : '',
-            title: 'E:/videos/示例演员A的名字真的很长很长/示例作品标题B也很难短下来',
+            class: 'fs-tag',
+            title: 'E:/videos/…（这是你的起点；点 × 可清除）',
+            ...sv(),
         }, {
-            avatar: () => h(N.NAvatar, { color: 'transparent' }, { default: () => '📁' }),
-            // 有界版走的是 foldPath 的结果（首段 + … + 末2）；无界版就是原样的整条路径
-            default: () => bounded
-                ? 'E:/…/示例作品标题B也很难短下来'
-                : 'E:/videos/示例演员A的名字真的很长很长/示例作品标题B也很难短下来',
+            avatar: () => h(N.NAvatar, { color: 'transparent' }, { default: () => '·' }),
+            // 有界版给的是 foldPath 的结果（首段 + … + 末2）；无界版是原样的整条路径
+            default: () => h('div', { class: 'fs-path', ...sv() }, [
+                h('span', { class: 'fs-text', ...sv() }, bounded
+                    ? 'E:/…/示例作品标题B也很难短下来'
+                    : 'E:/videos/示例演员A的名字真的很长很长/示例作品标题B也很难短下来'),
+                h(N.NButton, { size: 'tiny', style: 'margin-left:6px' }, { default: () => 'x' }),
+            ]),
         });
 
-        const toolbar = () => h('div', { class: 'toolbar' }, [
+        const toolbar = (isNew) => h('div', { class: 'toolbar', ...sv() }, [
             h(N.NButton, { size: 'small' }, { default: () => '补全这一片' }),
             h(N.NButton, { size: 'small' }, { default: () => '重读这一片' }),
             h(N.NButton, { size: 'small' }, { default: () => '补封面' }),
             h(N.NButton, { size: 'small' }, { default: () => '◉' }),
             h(N.NBadge, { value: 35 }),
-            h(N.NInput, { size: 'small', placeholder: '搜索', style: 'width:200px' }),
+            h(N.NInput, { size: 'small', placeholder: '搜索', ...(isNew ? {} : { style: 'width:200px' }) }),
             h(N.NButton, { size: 'small' }, { default: () => '↻' }),
         ]);
 
@@ -219,21 +149,17 @@
                     const f = isNew ? fold(SEGS) : null;
 
                     const nav = isNew
-                        ? h('div', { class: 'nav-zone' }, [
+                        ? h('div', { class: 'nav-zone', ...sv() }, [
                             chip(true),
                             f
                                 ? [
                                     crumbTag(f.head, 'crumb-root', false),
                                     crumbTag({ name: '…' }, 'crumb-more', false),
                                     ...f.tail.map((s, i) =>
-                                        crumbTag(s, 'crumb' + (i === f.tail.length - 1 ? ' crumb-current' : ''),
+                                        crumbTag(s, i === f.tail.length - 1 ? 'crumb-current' : '',
                                             i === f.tail.length - 1)),
                                 ]
-                                : SEGS.map((s, i) =>
-                                    crumbTag(s,
-                                        (s.kind === 'root' ? 'crumb-root ' : '') +
-                                        (i === SEGS.length - 1 ? 'crumb-current' : ''),
-                                        false)),
+                                : SEGS.map((s) => crumbTag(s, s.kind === 'root' ? 'crumb-root' : '', false)),
                             h(N.NButton, { size: 'small' }, { default: () => '返回' }),
                         ])
                         : h('div', { class: 'hstack' }, [
@@ -242,11 +168,12 @@
                             h(N.NButton, { size: 'small' }, { default: () => '返回' }),
                         ]);
 
-                    return h('div', {
-                        class: 'file-finder header-bar ' + (isNew ? 'v-new' : 'v-old'),
-                        // 上面把 header-bar 直接挂在 file-finder 上：探针只测这一条，
-                        // 不用复刻整个页面骨架
-                    }, [nav, toolbar()]);
+                    return h('div', { class: 'file-finder', ...sv() }, [
+                        h('div', { class: 'header-bar' + (isNew ? '' : ' old-header'), ...sv() }, [
+                            nav,
+                            toolbar(isNew),
+                        ]),
+                    ]);
                 };
             },
         };
@@ -254,10 +181,9 @@
         createApp(App).mount('#stage');
 
         /**
-         * 视觉行数 = 把所有子孙元素的"顶边"按**容差 10px** 聚类后的簇数。
-         *
-         * ⚠️ 不能用"直接子元素的顶边去重"：`align-items: center` 下同一行里
-         * 高度不同的元素顶边本来就不同（chip 比按钮高），那种量法恒为 2 行 —— 上一版就是错的。
+         * 顶边簇数（**仅参考，不是"行数"**）：把所有子孙元素的顶边按 10px 容差聚类。
+         * `align-items: center` 下同一行里高度不同的元素顶边本来就不同，
+         * 所以绝对值偏大，只能看**变化趋势**。判断几行请用 `头部高`。
          */
         const rowsOf = (el) => {
             const tops = [...el.querySelectorAll('*')]
@@ -273,19 +199,23 @@
         };
 
         window.__measure = function (v, width) {
-            const header = document.querySelector('.file-finder.header-bar');
+            const header = document.querySelector('.header-bar');
+            const navEl = header.querySelector('.nav-zone') || header.querySelector('.hstack');
             const box = header.getBoundingClientRect();
             const crumbs = [...header.querySelectorAll('.crumb')];
             const cur = header.querySelector('.crumb-current');
             const curBox = cur ? cur.getBoundingClientRect() : null;
-            const toolbar = header.querySelector('.toolbar');
-            const tbBox = toolbar.getBoundingClientRect();
+            const tbBox = header.querySelector('.toolbar').getBoundingClientRect();
 
             // 单条截断是否真的发生：文本层 scrollWidth > clientWidth
             const ellipsised = crumbs
                 .map(c => c.querySelector('.crumb-text'))
                 .filter(Boolean)
                 .filter(t => t.scrollWidth > t.clientWidth + 1).length;
+
+            // 「分隔符真的生成了吗」——直接问计算样式要 ::before 的 content
+            const sep = document.querySelector('.nav-zone .crumb:not(.crumb-root)');
+            const sepContent = sep ? getComputedStyle(sep, '::before').content : '(no nav-zone)';
 
             return {
                 变体: v,
@@ -295,19 +225,18 @@
                 渲染出的段数: crumbs.length,
                 有截断的段数: ellipsised,
                 当前段可见: curBox ? (curBox.width > 0 && Math.round(curBox.right) <= Math.round(box.right) + 1) : null,
-                当前段右边距: curBox ? Math.round(box.right - curBox.right) : null,
                 工具条未溢出: Math.round(tbBox.right) <= Math.round(box.right) + 1,
-                导航区宽: Math.round((header.querySelector('.nav-zone') || header.querySelector('.hstack')).getBoundingClientRect().width),
+                导航区宽: Math.round(navEl.getBoundingClientRect().width),
                 头部宽: Math.round(box.width),
+                '::before内容': sepContent,
             };
         };
 
         window.__probeAll = async function () {
             const out = [];
             const stage = document.getElementById('stage');
-            const widths = [640, 800, 1280, 1920];
             for (const v of ['old', 'new']) {
-                for (const w of widths) {
+                for (const w of [640, 800, 1280, 1920]) {
                     window.__setVariant(v);
                     await new Promise(r => requestAnimationFrame(() => requestAnimationFrame(r)));
                     stage.style.width = w + 'px';
