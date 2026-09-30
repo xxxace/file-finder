@@ -65,10 +65,13 @@ export interface BrowseHistory {
     /**
      * `path` 是**打开这一行用的地址**，两种形态：
      * 盘在线 → 完整路径（`H:/x`）；盘不在 → 只读锚点（`#序列号/x`，读缓存、不碰盘）。
-     * 以前盘不在时这里是 `null`（前端据此置灰），现在两种盘都有地址 —— `online`
-     * 仍然说明"盘在不在"（面板上显示「盘未插入」），但**不再决定能不能点**。
+     * 两种盘都有地址 —— `online` 仍然说明"盘在不在"，但**不再决定能不能点**
+     * （只读层里双击资源也能打开：见 `server/index.ts` 的 `/resolveAnchor`）。
+     *
+     * `bytes` = 这一层的字节总量（见 `loadMeta` 的 `withBytes`；纯内存算出来，零读盘）。
+     * 面板拿它显示「大小」列，并可点表头按它排序。
      */
-    records: (CacheMeta & { path: string; online: boolean })[];
+    records: (CacheMeta & { bytes?: number; path: string; online: boolean })[];
 }
 
 export type BrowseHistoryWithPagination = Pagination & BrowseHistory;
@@ -357,24 +360,71 @@ export function removeByIds(ids: string[]): Promise<number> {
     });
 }
 
+export interface MetaQuery {
+    /**
+     * 顺带算出这条记录的**字节总量**（= `data[].size` 求和，纯内存）。
+     *
+     * 为什么在这里算而不是让调用方去读 `data`：这是**唯一聚合点**。
+     * 真库里每条记录的 `data` 装着该层所有条目（含缩略图 base64），
+     * 让外面各自去遍历，迟早出现两份口径（"这一层多大"必须只有一个算法）。
+     *
+     * 代价（实测）：真库整库本来就在内存里
+     * （`node_modules/@seald-io/nedb/lib/datastore.js:416` `getAllData()` 返回内存索引），
+     * 213 条遍历求和 **0.07 ms**，**零新增磁盘 I/O** —— 不碰移动硬盘。
+     */
+    withBytes?: boolean;
+    /**
+     * 排序键。
+     *   'path'      = (serial, relPath)：黄页默认 —— 同盘相邻，老盘的记录不会被时间冲到底
+     *   'create_at' = 老行为（最近扫描在前）
+     */
+    sortBy?: 'path' | 'count' | 'bytes' | 'create_at';
+    /** 1 = 升序，-1 = 降序。缺省按 sortBy 给合理默认（path 升序，其余降序） */
+    dir?: 1 | -1;
+}
+
+/** 排序是纯内存操作 —— 213 条，零成本；而且 'path' 这种多字段排序 nedb 的 sort 也表达不了 */
+function sortMeta<T extends CacheMeta & { bytes?: number }>(rows: T[], q: MetaQuery): T[] {
+    const key = q.sortBy ?? 'create_at';
+    const dir = q.dir ?? (key === 'path' ? 1 : -1);
+    const cmp = (a: T, b: T) => {
+        if (key === 'path') {
+            return a.serial === b.serial
+                ? a.relPath.localeCompare(b.relPath, 'zh')
+                : a.serial.localeCompare(b.serial);
+        }
+        if (key === 'count') return (a.count || 0) - (b.count || 0);
+        if (key === 'bytes') return (a.bytes || 0) - (b.bytes || 0);
+        return (a.create_at || '').localeCompare(b.create_at || '');
+    };
+    return rows.sort((a, b) => cmp(a, b) * dir);
+}
+
 /**
- * 只取元数据，跳过 data 里那坨 base64。
- * 列表和按盘统计全用它 —— 不带上缩略图，102 条记录也就几十 KB。
+ * 只取元数据，跳过下发 `data` 里那坨 base64（`withBytes` 时在内存里算一次求和）。
+ * 列表和按盘统计全用它。
+ *
+ * ⚠️ **默认参数必须与老行为逐字一致**（`sortBy='create_at'`, `dir=-1`）——
+ * 这样 `listDisksController` 那种"只是遍历统计、顺序无所谓"的调用方**一行都不用改**。
  */
-export function loadMeta(): Promise<CacheMeta[]> {
+export function loadMeta(q: MetaQuery = {}): Promise<(CacheMeta & { bytes?: number })[]> {
     assertUsable();
     return new Promise((resolve, reject) => {
-        // 投影走 Cursor 而不是 find(query, projection)：
-        // @seald-io/nedb 的 index.d.ts 里 find 的第一个重载是 `(query, projection, callback?) => void`，
-        // 两个参数的形式会被它吃掉，于是 `.sort()` 在类型上不存在（运行时没问题，只是类型报错）。
-        // `find({})` 只有一个参数 → 命中返回 Cursor 的重载，projection/sort/exec 都带类型。
-        // 行为不变：实测 22 条文档无一带 data，整个列表 3213 B。
-        nedb.find({}).projection({ data: 0 }).sort({ create_at: -1 }).exec((err, docs) => {
+        // 用 Cursor 形式（理由见原注释：find(query, cb) 那个重载把回调标成 any）。
+        // 这里**不加 projection** —— 要算 bytes 就必须拿到 data；
+        // 整库本来就在内存里，多走一趟是纯内存遍历，不构成读盘。
+        nedb.find({}).exec((err, docs) => {
             if (err) {
                 reject(err);
-            } else {
-                resolve(docs as unknown as CacheMeta[]);
+                return;
             }
+            const rows = (docs as SearchCache[]).map(({ data, ...m }) => ({
+                ...m,
+                ...(q.withBytes
+                    ? { bytes: Array.isArray(data) ? data.reduce((n, it) => n + (it.size || 0), 0) : 0 }
+                    : {}),
+            })) as (CacheMeta & { bytes?: number })[];
+            resolve(sortMeta(rows, q));
         });
     });
 }

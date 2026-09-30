@@ -166,7 +166,7 @@
 </template>
 
 <script setup lang="ts">
-import { parseSize } from '@/utils';
+import { formatBytes } from '@/utils';
 import { apiUrl, getAction, ApiError } from '@/utils/request';
 import folderIcon from '@/assets/fileTypeIcon/folder.png';
 import usePinYin from '@/hooks/usePinYin';
@@ -417,16 +417,16 @@ const banner = computed(() => {
 const loadingBar = useLoadingBar();
 const notify = useNotify();
 
-const getSize = (size: number | undefined) => {
-    if (size) {
-        const s = parseSize(size);
-        if (s.gb) return `${s.gb.toFixed(2)}GB`;
-        if (s.mb) return `${s.mb.toFixed(2)}MB`;
-        if (s.kb) return `${s.kb.toFixed(2)}KB`;
-    } else {
-        return size
-    }
-}
+/**
+ * 文件大小 → 人类可读。
+ *
+ * 改成调用 `@/utils` 的 `formatBytes`（**一处实现**）：原来的实现只到 GB，
+ * 而上限是它自己算出来的 `bytes / 1G % 1024` —— **取模**，1.83 TB 会显示成 `850.xxGB`、
+ * 2 TB 直接变 `0.00GB`（静默说错数字）。`formatBytes` 支持到 PB，并且 0 显示 `—` 而不是 `0`。
+ * 函数名保留不变（不改调用点）。
+ */
+const getSize = (size: number | undefined) => formatBytes(size);
+
 
 const showHistory = () => {
     historyTable.value!.setShowModal(true);

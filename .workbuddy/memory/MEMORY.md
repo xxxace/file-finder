@@ -24,7 +24,7 @@
    - ⚠️ **已知遗留（2026-09-30 自检发现，未清，等用户决定）**：`HEAD` 里仍有 **12 个文件**含真实标识，且**都不是当轮新增的**（更早的提交就已入库）——
      最重的是 `docs/PRD-manager-assistant-2026-09-25.md`（7 处）、`docs/CODE-REVIEW.md`（4 处）；
      另有 `docs/ARCH-PLAN.md`、`.workbuddy/memory/2026-09-2{4,5}.md`、`docs/probes/{scan-rules/run.mjs,scan-rules/fixture.json,scan-real/run.mjs,parse-title/run.mjs}`；
-     以及 3 个源码注释里的"新建文件夹"（`electron/utils/driveIdentity.ts`、`electron/server/assistant/scan.ts`、`src/views/FileFinder/AssistantCoverModal.vue`，属轻量）。
+     以及 3 个源码注释里的 Windows 默认目录名（`electron/utils/driveIdentity.ts`、`electron/server/assistant/scan.ts`、`src/views/FileFinder/AssistantCoverModal.vue`，属轻量）。
      **改工作区只能让"以后"干净，历史里的还在** ⇒ 真要清得改写历史 + 强推。**不擅自动别的会话的文档（单一真相源）**。
 
 ## 四、文档索引
@@ -36,12 +36,13 @@
 - 「缓存记录」面板方案（2026-09-30，**待批准、代码未动**）：`docs/DESIGN-CACHE-PANEL-2026-09-30.md`（v3 方案，含用户四条硬约束 + 读盘清单 + 自洽性审查）、`docs/PLAN-cache-panel-2026-09-30.md`（实施计划 A/B/C 三阶段）、`docs/cache-panel-mockup-2026-09-30.html`（mockup）；探针 `docs/probes/cache-panel-{stats,ghost,size,size2,size3,agg-cost}.mjs`（只读解密真库，可复算）
 - **本项目没有测试框架**：`package.json` 只有 `dev` / `typecheck` / `build`。⇒ 验证手段固定为「`npm run typecheck` 0 error」+「`docs/probes/` 只读探针」+「真机目视」；**不要写 TDD 式的假测试步骤**。
 
-## 五、当前状态（2026-09-30 晚，HEAD=`17bc2bb`）
-- **「缓存记录」面板阶段 A 已落地（未提交）**：`src/components/HistoryTable/index.vue` + `src/views/FileFinder/index.vue`
-  （G1/G2/G3/G4 布局、closable、列改造、搜索即时化+输入法守卫、空态、批量区、折叠迁移区、文案重写、表格内滚动 + 表头吸顶）。
-  验证：`npm run typecheck` 0 error + `node docs/probes/cache-panel-sfc-smoke.mjs` 0 问题（冒烟只证编译，渲染仍需目视）。
-  用户已真机试过一轮并给 7 条反馈，**7 条已全处理**（含新增 `/resolveAnchor`）。
-  阶段 B（只读聚合：总览 stats + 行级大小 + 排序）**未开始**。
+## 五、当前状态（2026-09-30 晚，HEAD=`70c8a88`）
+- **「缓存记录」面板阶段 A 已提交**（`6189a17`），阶段 B **代码已落地、未提交**（改 5 个文件 + 1 个探针）：
+  `src/utils/index.ts`（新增 `formatBytes`，支持 TB）、`electron/server/nedb.ts`（`loadMeta` 加 `withBytes`+排序，**默认参数与老行为一致**）、
+  `electron/server/index.ts`（`/getHistory` 返回 `bytes`+`sort`/`dir`；`/getDisks` 加 `stats`）、
+  `src/components/HistoryTable/index.vue`（总览句 + 「大小」列 + 服务端排序）、`src/views/FileFinder/index.vue`（`getSize` 改薄封装）。
+  **阶段 B 改了主进程 ⇒ 必须重启 dev**；期望值：`5 块盘 · 213 个目录 · 1247 个条目 · 已读到 3.35 TB · 库 81.7 MB · 最近扫描 2026-09-27 22:32`。
+  阶段 C（chips 盘条 / 盘改名 / 删除竞态 / 键盘）**未开始**。
 - P0+P1+P2 / 加密备份还原合并 已落地实测；离线盘只读浏览已落地（界面待目视）
 - n-space 重复 key 修复 + 连带布局回归已修（`.toolbar{flex-wrap:nowrap}` + `.header-bar .n-input{width:200px}` 两条**不许删**）
 - 管理助手：Phase 1 + 2A + 5 代码全落地；真机自测部分通过（scan 命中 23/25=92%）；**真机未全验**

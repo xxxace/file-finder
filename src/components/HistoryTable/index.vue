@@ -64,7 +64,11 @@
                      所以它**不进**下面的折叠区 —— 折叠区收的是会动数据的动作。
                      理由见 docs/DESIGN-CONVERGED-2026-09-24.md §三。 -->
                 <div class="g2-row">
-                    <span class="overview"></span>
+                    <!-- 总览句：盘数 / 目录数 / 条目数 / 已读到多少 / 库大小 / 最近扫描。
+                         全部来自 /getDisks 的 stats —— **服务端在内存里汇总**，一次盘都不读。
+                         「已读到」这个措辞是刻意的：它是缓存里记录到的字节之和（扫描快照），
+                         不是"硬盘上有多少"。 -->
+                    <span class="overview">{{ overview }}</span>
                     <n-button text size="small" @click="openDataDir">打开存放文件夹</n-button>
                 </div>
 
@@ -85,6 +89,7 @@
                          外面那层 div 就成了"整张表"的滚动容器 —— 表头必然跟着滚。
                          前提是外层有**确定高度**（见卡片上的 `height: 86vh` 与 style 块里的注释）。 -->
                     <n-data-table :columns="columns" :data="tableData" :row-key="rowKey" flex-height
+                        :sorter="tableSorter" @update:sorter="handleSorterChange"
                         @update:checked-row-keys="handleCheck">
                         <!-- 空态渲染在**表格自己的空槽**里（naive-ui 的 #empty 会替换它内置的"暂无数据"），
                              而不是另起一个 div 挂在表格下面 —— 挂下面会同时出现两句"没数据"，
@@ -171,7 +176,8 @@ import {
     NInput, NButton, NCard, NModal, NPagination, NDataTable, NSpin, NSelect, NAlert, NTag, NIcon,
     NCollapse, NCollapseItem, useDialog,
 } from 'naive-ui'
-import type { DataTableColumns, DataTableRowKey } from 'naive-ui'
+import type { DataTableColumns, DataTableRowKey, DataTableSortState } from 'naive-ui'
+import { formatBytes } from '@/utils';
 import type { BrowseHistoryWithPagination, OpenMode } from 'electron/server/nedb';
 import { deletAction, getAction, postAction } from '@/utils/request';
 
@@ -184,6 +190,10 @@ type HistoryQuery = {
     pageNo: number;
     pageSize: number;
     total: number;
+    /** 排序键，与 /getHistory 的 sort 参数同名：'path' | 'count' | 'bytes' | 'create_at' */
+    sort: string;
+    /** 'asc' | 'desc' */
+    dir: string;
 }
 
 /** /getDisks 回来的一行 */
@@ -194,6 +204,21 @@ type DiskRow = {
     online: boolean;
     folders: number;
     covers: number;
+    lastScanAt: string;
+};
+
+/**
+ * `/getDisks` 的只读汇总（面板顶部「总览」用）。
+ * **全是服务端在内存里算出来的** + 一次本地库文件的 `stat` —— 没有任何一项碰移动硬盘。
+ */
+type DiskStats = {
+    disks: number;
+    folders: number;
+    entries: number;
+    /** 「缓存里记录到的字节之和」——是**扫描快照**，不是硬盘上的实时占用（措辞必须这么写） */
+    bytes: number;
+    /** 库文件大小（本地文件）。拿不到就是 undefined，那种情况不显示这一项 */
+    dbBytes?: number;
     lastScanAt: string;
 };
 
@@ -243,7 +268,7 @@ const columns = ref<DataTableColumns<RowData>>([{
      *
      * 离线**照旧可进**：服务端给的是只读锚点，读缓存、不碰盘（见 openDir 注释）。
      */
-    title: '目录', key: 'path', minWidth: 240,
+    title: '目录', key: 'path', minWidth: 240, sorter: true,
     render(row) {
         return h('div', { class: 'dir-cell' }, [
             h('span', { class: 'dir-name', ondblclick: () => openDir(row) }, row.relPath || '/'),
@@ -261,11 +286,87 @@ const columns = ref<DataTableColumns<RowData>>([{
 }, {
     // 「封面」→「条目」：它本来就是这一层的**条目数**（scanAndCache 写的是 `count: data.length`，
     // 即收敛之后的卡片数），不是"封面图有多少张"。实测 AAAA1111 = 106 个目录 / 644 个条目。
-    title: '条目', key: 'count', width: 68, align: 'right',
+    title: '条目', key: 'count', width: 68, align: 'right', sorter: true,
 }, {
-    title: '上次扫描', key: 'create_at', width: 150, align: 'right',
+    /**
+     * 大小 = 这一层的内容字节总量。
+     *
+     * ⚠️ 语义要说准（列头 tooltip 也这么写）：它是"**上次扫到的那一刻**，这一层里所有文件加起来多大"，
+     * 不是"硬盘上此刻有多少"——之后删/移文件不会更新它，缓存本来就是一快照。
+     * 数值来自服务端 `loadMeta({ withBytes: true })` 的**纯内存求和**（实测 0.07 ms），**不读盘**。
+     * 0 / 算不出时 `formatBytes` 给 `—`（反例：有一层 104 个条目全是子目录，合计 0 字节 ——
+     * 写 "0 B" 会被读成"这 104 个东西没内容"）。
+     */
+    title: '大小', key: 'bytes', width: 96, align: 'right', sorter: true,
+    render: row => formatBytes(row.bytes),
+}, {
+    title: '上次扫描', key: 'create_at', width: 150, align: 'right', sorter: true,
     render: row => fmtScanTime(row.create_at),
 }])
+
+/**
+ * 表头箭头**受控** —— 让界面如实反映"现在按什么排的"（默认按盘→路径）。
+ * naive-ui 的 order 取值是 'ascend' / 'descend'；`sorter` 给一个**恒等比较器**：
+ * 排序是服务端做的（只有它知道全量），这里若给真正的比较函数，
+ * naive-ui 会在**当前页**再排一次 —— 那会和服务端给的顺序打架
+ * （最典型的是 'path'：服务端按 (盘, 路径) 排，前端只会按路径排 → 同页里盘会被打散）。
+ */
+const tableSorter = computed<DataTableSortState[]>(() => [
+    {
+        columnKey: model.value.sort,
+        order: model.value.dir === 'asc' ? 'ascend' : 'descend',
+        sorter: () => 0,
+    },
+]);
+
+/**
+ * 表头排序 → **重新向服务端要数据**。
+ *
+ * 为什么必须服务端排：只有服务端知道全量（213 条）。前端排只能排**当前这一页** ——
+ * 那是**假排序**：看着"第 1 页最大的在最上面"，翻到第 2 页又是另一批，用户会以为数据错了。
+ *
+ * 列 key 与 `/getHistory` 的 `sort` 参数**同名**（path / count / bytes / create_at），
+ * 所以这里直接把 columnKey 当排序键 —— 不维护映射表，就少一处会漂移的对应关系。
+ */
+const handleSorterChange = (sorter: DataTableSortState | DataTableSortState[] | null) => {
+    const s = Array.isArray(sorter) ? sorter[0] : sorter;
+    let nextSort = 'path';
+    let nextDir = 'asc';
+    if (s && s.order) {
+        nextSort = String(s.columnKey);
+        nextDir = s.order === 'ascend' ? 'asc' : 'desc';
+    }
+
+    // **幂等守卫**：目标排序和当前一模一样就直接返回。
+    // 两个作用：① 受控 `:sorter` 万一因为 prop 同步再回调一次，这里直接吞掉 ——
+    // 死循环在结构上不可能发生（不是赌它不回调）；② 顺带省掉一次无意义的请求。
+    if (nextSort === model.value.sort && nextDir === model.value.dir) return;
+
+    model.value.sort = nextSort;
+    model.value.dir = nextDir;
+    model.value.pageNo = 1;
+    getHistrotyList();
+};
+
+/**
+ * 顶部「总览」那一句。数据来自 `/getDisks` 的 `stats`（服务端内存汇总，零读盘）。
+ * 拿不到 stats 时返回空串（不显示）—— 首次加载前那一下不该闪出一个半截句子。
+ */
+const overview = computed(() => {
+    const s = stats.value;
+    if (!s) return '';
+    const parts = [
+        `${s.disks} 块盘`,
+        `${s.folders} 个目录`,
+        `${s.entries} 个条目`,
+        // ⚠️「已读到」这三个字不能省、也不能改成"当前"或"硬盘上"：
+        // 它是"缓存里记录到的字节之和"，是**扫描快照**，不是硬盘上的实时占用。
+        `已读到 ${formatBytes(s.bytes)}`,
+    ];
+    if (typeof s.dbBytes === 'number') parts.push(`库 ${formatBytes(s.dbBytes)}`);
+    if (s.lastScanAt) parts.push(`最近扫描 ${fmtScanTime(s.lastScanAt)}`);
+    return parts.join(' · ');
+});
 
 const tableData = ref<RowData[]>([])
 const emits = defineEmits<{
@@ -278,13 +379,21 @@ const model = ref<HistoryQuery>({
     path: '',
     pageNo: 1,
     pageSize: 10,
-    total: 0
+    total: 0,
+    // 默认排序 = **盘 → 路径**（服务端按 (serial, relPath) 排）。
+    // 为什么不是"最近扫描在前"：这个面板被当成黄页/导航用，同盘相邻才好找；
+    // 而按时间倒序会把**扫得早那块盘的记录永远冲到底部** —— 直接伤"盘不在也能看有哪些"。
+    // 想按时间看：点「上次扫描」表头即可（一次点击，能力没丢）。
+    sort: 'path',
+    dir: 'asc'
 })
 const showModal = ref(false);
 const loading = ref(false);
 const diskLoading = ref(false);
 const diskOptions = ref<{ label: string; value: string }[]>([{ label: '全部盘', value: '' }]);
 const duplicated = ref<string[]>([]);
+/** 顶部「总览」的数据源（/getDisks 的 stats）。没拿到前不显示那一行 */
+const stats = ref<DiskStats | null>(null);
 
 const setShowModal = function (val: boolean) {
     showModal.value = val;
@@ -338,6 +447,7 @@ const loadDisks = async () => {
             ...disks.map(d => ({ label: diskLabel(d), value: d.serial })),
         ];
         duplicated.value = data.duplicated || [];
+        stats.value = data.stats || null;
     } catch (err) {
         notify('error', '错误', `获取磁盘列表失败！${err}`)
     } finally {

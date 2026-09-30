@@ -13,8 +13,31 @@
 | 阶段 | 状态 | 证据 |
 |---|---|---|
 | **A 纯渲染层**（7 任务） | ✅ **已落地；已完成 1 轮真机反馈修正（7 条）** | `npm run typecheck` 0 error · `node docs/probes/cache-panel-sfc-smoke.mjs` 两个文件均 0 问题 |
-| B 只读聚合（4 任务） | ⬜ 未开始 | 等 A 复验通过 |
+| B 只读聚合（4 任务） | ✅ **代码已完成，待重启 dev 复验** | `npm run typecheck` 0 error · SFC 冒烟 0 问题 · 期望数值由只读探针给出（见下） |
 | C 结构与交互（4 任务） | ⬜ 未开始（本轮不做） | — |
+
+### 阶段 B 落地（只读聚合，**零新增读盘**）
+
+**加了什么**
+- `src/utils/index.ts`：新增 `formatBytes()`（KB/MB/GB/**TB**，0 → `—`）；主界面 `getSize` 改成它的薄封装
+  —— 顺带修掉老的 `parseSize` 把 TB **取模截断**的静默错数字（1.83 TB 会显示成 `850.xxGB`）。
+- `electron/server/nedb.ts`：`loadMeta(q)` 扩展为可选算 `bytes`（= `data[].size` 内存求和）+ 可选排序。
+  **默认参数与老行为逐字一致**（`create_at` 倒序）⇒ `listDisksController` 一行都不用改。
+- `electron/server/index.ts`：`/getHistory` 返回 `bytes` 并支持 `sort`/`dir`；`/getDisks` 返回体加 `stats`。
+- `src/components/HistoryTable/index.vue`：顶部**总览句**、「**大小**」列、表头**服务端排序**（受控 + 幂等守卫）。
+
+**期望数值**（只读探针 `docs/probes/cache-panel-stats.mjs` 给的对照值，重启 dev 后逐项核对）
+`5 块盘 · 213 个目录 · 1247 个条目 · 已读到 3.35 TB · 库 81.7 MB · 最近扫描 2026-09-27 22:32`
+
+**⚠️ 顺手修掉探针自己的一个 bug（正是备忘里警告过的那个）**
+`cache-panel-stats.mjs` 原来**没跳过 nedb 的 `$$indexCreated` 索引行**，于是目录数报 **214**、盘数报 **6**
+（真实是 213 / 5），死行报 2（真实 0）。已修：跳过索引元数据行，并把死行算式也减掉它。
+**如果不修，我给你的对照数字就是错的** —— 服务端的 `loadMeta()` 走 `find()`，返回的是真文档，没有那一行。
+
+**排序为什么在服务端**：只有服务端知道全量（213 条）。前端排只能排当前页 = **假排序**
+（"第 1 页最大的在最上面"，翻页又是另一批）。列 key 与 `/getHistory` 的 `sort` 参数同名，
+不维护映射表。受控 `:sorter` 配一个**幂等守卫**：目标排序与当前相同就直接 return ⇒
+万一 prop 同步再回调一次也不会变成死循环（结构上不可能，不是赌它不回调）。
 
 ### 第 1 轮真机反馈（7 条，已全部处理）
 

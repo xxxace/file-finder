@@ -782,7 +782,8 @@ async function listDisksController(_req: Req, res: http.ServerResponse) {
     const drives = await getDrives(true);
     const now = dayjs().format('YYYY-MM-DD HH:mm:ss');
     const registry = await syncRegistry(drives, now);
-    const metas = await loadMeta();
+    // withBytes：顺带算出全库字节合计。纯内存求和（实测 0.07 ms），**不读盘**。
+    const metas = await loadMeta({ withBytes: true });
 
     const stats = new Map<string, { folders: number; covers: number; lastScanAt: string }>();
     for (const m of metas) {
@@ -795,10 +796,21 @@ async function listDisksController(_req: Req, res: http.ServerResponse) {
 
     const empty = { folders: 0, covers: 0, lastScanAt: '' };
 
+    const offline = offlineSerials(registry, drives);
+
+    // 库文件大小：读的是**本地数据文件**的 metadata（`~/.file-finder/searchCache.db`），
+    // **不碰任何移动硬盘**。拿不到就不显示（前端按 undefined 处理），不因此报错。
+    let dbBytes: number | undefined;
+    try {
+        dbBytes = (await fsasync.stat(CACHE_DB_PATH)).size;
+    } catch {
+        dbBytes = undefined;
+    }
+
     sendJson(res, {
         disks: [
             ...drives.map(d => ({ ...d, online: true, ...(stats.get(d.serial) || empty) })),
-            ...offlineSerials(registry, drives).map(serial => ({
+            ...offline.map(serial => ({
                 serial,
                 drive: '',
                 root: '',
@@ -810,10 +822,37 @@ async function listDisksController(_req: Req, res: http.ServerResponse) {
         // 卷序列号是格式化时写进卷里的，用 Ghost 之类整盘克隆会把两块盘做成同一个身份。
         // 这时盘符是唯一能区分它们的东西，必须提示用户 —— 否则两块盘的缓存会互相串
         duplicated: findDuplicatedSerials(drives),
+        /**
+         * 面板顶部的「总览」用的只读汇总。
+         *
+         * 全是**内存里算出来的**（`loadMeta` 已经在内存）+ 一次本地文件的 `stat`，
+         * 没有一项会去碰移动硬盘 —— 这是用户定的硬约束（只汇总已有缓存，不读盘）。
+         *
+         * `bytes` 的语义要写准：它是"**缓存里记录到的字节之和**"，
+         * 不是"硬盘上有多少"。措辞在界面上写成「已读到 X」，不能写"当前"/"硬盘上"。
+         * 实测当前真库：5 块盘 / 213 个目录 / 1247 个条目 / 3.35 TB / 库 81.7 MB。
+         */
+        stats: {
+            disks: drives.length + offline.length,
+            folders: metas.length,
+            entries: metas.reduce((n, m) => n + (m.count || 0), 0),
+            bytes: metas.reduce((n, m) => n + (m.bytes || 0), 0),
+            dbBytes,
+            lastScanAt: metas.reduce((a, m) => (m.create_at > a ? m.create_at : a), ''),
+        },
     });
 }
 
 interface HistoryRow extends CacheMeta {
+    /**
+     * 这条记录**这一层的内容字节总量**（= `data[].size` 求和）。
+     *
+     * 语义要说准（面板上也要这么写）：它是"**上次扫到的那一刻**，这一层里所有文件加起来多大"，
+     * 不是"硬盘上此刻有多少"。之后删/移文件不会更新它 —— 缓存本来就是一快照。
+     * 实测（真库）：213 条里 210 条 > 0；单层最大 492.55 GB；全库合计 3.35 TB。
+     * 算法在 nedb 的 `loadMeta({ withBytes: true })` 里，**唯一聚合点**，纯内存、零读盘。
+     */
+    bytes?: number;
     /**
      * 打开这一行用的地址。
      *
@@ -821,7 +860,7 @@ interface HistoryRow extends CacheMeta {
      * 以前这里盘不在时给 `null`，前端据此置灰（"不给一个点不开的路径"）——
      * 现在锚点是点得开的（读缓存、不碰盘），所以两种盘都有地址，前端不再需要按
      * `online` 决定能不能点。**注意它已经不等于"磁盘上的路径"了**，
-     * 展示上别拿它当盘符用（面板里那枚盘符标签用的是 `online ? path.slice(0,2) : '??'`）。
+     * 展示上别拿它当盘符用（面板里那枚盘符标签用的是 `online ? path.slice(0,2) : '离线'`）。
      */
     path: string;
     online: boolean;
@@ -832,12 +871,18 @@ async function getHistory(req: Req, res: http.ServerResponse) {
     const keyword = (req.params?.get('path') || '').trim().toLowerCase();
     const pageNo = Number(req.params?.get('pageNo')) || 1;
     const pageSize = Number(req.params?.get('pageSize')) || 10;
+    // 排序。不传 = 老行为（create_at 倒序），这样老调用方语义不变。
+    // 面板默认传 sort=path：那是"黄页"该有的顺序 —— 同盘相邻，
+    // 而且老盘的记录**不会因为扫得早就被时间冲到底部**（那会直接伤"盘不在也能看有哪些"）。
+    const sortBy = (req.params?.get('sort') || 'create_at') as 'path' | 'count' | 'bytes' | 'create_at';
+    const dir: 1 | -1 = req.params?.get('dir') === 'asc' ? 1 : -1;
 
     try {
         const drives = await getDrives();
         const letterOf = new Map<string, string>(drives.map(d => [d.serial, d.drive]));
 
-        let metas = await loadMeta();
+        // withBytes：每行多一个 bytes（这一层的字节和）。纯内存，**不读盘**。
+        let metas = await loadMeta({ withBytes: true, sortBy, dir });
         if (serial) metas = metas.filter(m => m.serial === serial);
         if (keyword) metas = metas.filter(m => m.relPath.toLowerCase().includes(keyword));
 
