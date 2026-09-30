@@ -76,7 +76,20 @@ export default defineComponent({
         const shownPath = computed(() => foldPath(props.modelValue || ''));
 
         ipcRenderer.on('directory-changed', function (e, value) {
-            if (isFocus.value) setValue(value ? value[0] : '');
+            if (!isFocus.value) return;
+
+            // ⚠️ 取消 = **一个都没选** ⇒ 那是「算了，不改」，**不是「清空」**。
+            // 原来这里写的是 `setValue(value ? value[0] : '')` —— 把"取消"当成了"清空"，
+            // 一路传到主界面的 `setRoot('')` ⇒ 清掉当前视图 + **整个导航历史** + 搜索词。
+            // 代价大、**不可逆**（要回去得重新选根、重新逐层下钻），而且没有确认、没有撤销 ——
+            // 正好撞上项目自己的原则「门槛 ∝ 不可逆 × 波及面」：一个"取消"造成最大范围的
+            // 不可逆后果，是这个原则是反的。
+            // 「清空」只归 chip 上那个 × —— 用户**主动点它**才是清空。
+            if (!value || !value.length) {
+                isFocus.value = false;   // 对话框已经关了，别让后面的事件误命中
+                return;
+            }
+            setValue(value[0]);
         });
 
         return {
