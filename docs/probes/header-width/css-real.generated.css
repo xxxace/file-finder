@@ -74,22 +74,28 @@
  * 实测：`docs/probes/header-width/`（真 Chromium + 真 naive-ui，窗口 640/800/1280/1920 四档）。
  */
 .nav-zone[data-v-probe] {
+  /* ⚠️ 分隔符的定位依赖"两个 tag 之间的空隙有多宽"，所以空隙宽度**只能有一个来源**：
+       这个变量。gap 与 ::before 的 left/width 共用它，改一处就够。
+       原实现写的是 `left: -13px`（魔数），而 gap 是 8px ⇒ 它往左多插了 5px，
+       压在**前一个标签的右边框**上（用户 2026-10-01 截图报的就是这个）。 */
+  --crumb-gap: 12px;
   flex: 1 1 auto;
   min-width: 0;
   max-width: 50%;
   display: flex;
   flex-wrap: nowrap;
   align-items: center;
-  gap: 8px;
+  gap: var(--crumb-gap);
   overflow: hidden;
   /* 面包屑每一段：**单个名字有界**（层级深度问题已由折叠解决，这里只管"一段太长"）。
        ⚠️ 中文不能用 Fluent 那条「超过 30 字符就截断」——那是**拉丁文**语境的量级：
        中文一个字约等于拉丁两个字宽，30 个字 ≈ 360px，照抄等于没截断。所以用像素。 */
   /* 层级之间的方向符。
        ⚠️ 用 CSS 生成，**不插 DOM 子元素** —— 这一组的子元素个数在本项目是敏感量
-       （n-space 重复 key 事故同族）。`position: absolute` 让它落在两个 tag 之间的
-       空隙里，不占 tag 内部空间（tag 自带 `position: relative`）。
-       用 `:not(.crumb-root)` 而不是相邻选择器：不依赖"中间有没有被插入包装元素"。 */
+       （n-space 重复 key 事故同族）。
+       `position: absolute` 让它不占 tag 内部空间（tag 自带 `position: relative`）；
+       **盒子正好等于那个空隙、再在盒子里居中** —— 这样就不依赖"猜一个负偏移量"，
+       换字体、换字号都不会再压到边框上。 */
   /* 当前层**永不被压掉**：它是"我在哪"的唯一答案，比任何历史段都重要 */
   /* 两种**不可点**的段：首段（盘符 / 离线盘）与当前段。
        必须与可点的段**视觉可分** —— 现状是"所有 tag 都 cursor:pointer"，
@@ -118,7 +124,12 @@
 .nav-zone .crumb[data-v-probe]:not(.crumb-root)::before {
   content: '›';
   position: absolute;
-  left: -13px;
+  left: calc(-1 * var(--crumb-gap));
+  width: var(--crumb-gap);
+  text-align: center;
+  top: 50%;
+  transform: translateY(-50%);
+  line-height: 1;
   color: #a1a1a1;
   pointer-events: none;
   /* 别挡住上一个 tag / chip 的点击 */
@@ -305,7 +316,25 @@
    `min-width: 0` 是必需的：flex 子项默认 `min-width: auto`，不给 0 的话
    内层文本不会收窄，省略号也就不会出现。 */
 .fs-tag[data-v-probe] {
-    max-width: 220px;
+    /* 初值 220px 在 820px 窗口下实测把导航区吃掉了 61%（220/362），面包屑被压成 14px 碎片；
+       降到 150px。全路径永远在 `title` 里，折叠后的形状（首段 + … + 末段）也还在 ——
+       它只是"起点书签"，不需要在窄窗口里霸占大半条导航区。真机可再调。 */
+    max-width: 150px;
+}
+
+/* ⚠️ 这一条是收缩链的**最外一环**，漏了它整条链就断在这儿：
+   `.n-tag__content` 是 n-tag 内部的 flex 子项，默认 `min-width: auto`（≈ 内容宽）
+   ⇒ 它不收窄，下面 `.fs-path` / `.fs-text` 再怎么设 `min-width: 0` 都没用。
+   症状：路径文本**画到盒子外面**、盖在后面几个面包屑标签上（整条头部上肉眼看不出来，
+   是探针的局部放大截图抓到的；实测 文本宽 211px vs 外框 150px）。
+
+   ⚠️ **必须写成"扁平"规则，不能把它嵌套进 `.fs-tag { ... }` 里**：
+   本 style 块是**纯 CSS**（没有 `lang="less"`），嵌套的 `:deep()` 会被 CSS Nesting 搅坏 ——
+   实测编译产物变成 `[data-v-x] .n-tag__content`（**`.fs-tag` 前缀整个丢了**）外加一个游离的 `}`。
+   探针里"打印编译后选择器"这一步就是为了抓这种东西。 */
+.fs-tag[data-v-probe] .n-tag__content {
+    min-width: 0;
+    overflow: hidden;
 }
 .fs-path[data-v-probe] {
     display: flex;
@@ -314,6 +343,11 @@
 }
 .fs-text[data-v-probe] {
     display: inline-block;
+    /* ⚠️ 这一行不能少：它是 flex 子项，而 flex 子项默认 `min-width: auto`（≈ 内容宽）
+       ⇒ 少了它，长路径**收缩不了**、`text-overflow` 永远不触发，
+       文字会**溢出盒子盖到后面几个面包屑标签上**。
+       （2026-10-01 由探针的局部放大截图抓到：溢出的字画在邻居身上，肉眼在整条头部上看不出来。） */
+    min-width: 0;
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;

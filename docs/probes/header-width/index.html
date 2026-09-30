@@ -70,12 +70,8 @@
         /** 真实 scoped CSS 要求的选择器属性（与 build-css.mjs 的 SCOPE_ID 一致） */
         const SCOPE_ATTR = 'data-v-probe';
 
-        /**
-         * 故意造一条"层级多 + 名字长"的链：首段 = 盘符（不可点），后 7 层，
-         * 其中最后两层名字很长（折叠后它们一定会被渲染，才测得到"单条截断"）。
-         * 全部是**假数据**，不碰任何盘。
-         */
-        const SEGS = [
+        /** 长链（测折叠与截断） */
+        const SEG_LONG = [
             { name: 'E:', kind: 'root' },
             { name: 'videos', kind: 'dir' },
             { name: '示例演员A的名字真的很长很长', kind: 'dir' },
@@ -86,12 +82,22 @@
             { name: '当前层也是一个特别长的目录名字', kind: 'dir' },
         ];
 
-        /** 折叠：保首段 + `…` + 末 2 段（与 src/utils 的 foldCrumbList 同规则） */
-        const fold = (segs) => {
-            if (segs.length <= 4) return null;
-            const head = segs[0];
-            const tail = segs.slice(-2);
-            const hidden = segs.slice(1, segs.length - 2);
+        /** 短链 —— **复刻用户截图**（`H: › 新建文件夹`，两段、不触发折叠）。
+            只测长链会漏掉"两个标签之间那个分隔符"的观感问题。 */
+        const SEG_SHORT = [
+            { name: 'H:', kind: 'root' },
+            { name: '新建文件夹', kind: 'dir' },
+        ];
+
+        const segs = ref(SEG_LONG);
+        window.__setSegs = (which) => { segs.value = which === 'short' ? SEG_SHORT : SEG_LONG; };
+
+        /** 折叠：保首段 + `…` + 当前段（与 src/utils 的 foldCrumbList 同规则） */
+        const fold = (list) => {
+            if (list.length <= 4) return null;
+            const head = list[0];
+            const tail = list.slice(-1);
+            const hidden = list.slice(1, list.length - 1);
             return hidden.length < 2 ? null : { head, hidden, tail };
         };
 
@@ -201,7 +207,8 @@
             setup() {
                 return () => {
                     const isNew = variant.value === 'new';
-                    const f = isNew ? fold(SEGS) : null;
+                    const list = segs.value;
+                    const f = isNew ? fold(list) : null;
 
                     const nav = isNew
                         ? h('div', { class: 'nav-zone', ...sv() }, [
@@ -214,12 +221,12 @@
                                         crumbTag(s, i === f.tail.length - 1 ? 'crumb-current' : '',
                                             i === f.tail.length - 1)),
                                 ]
-                                : SEGS.map((s) => crumbTag(s, s.kind === 'root' ? 'crumb-root' : '', false)),
+                                : list.map((s) => crumbTag(s, s.kind === 'root' ? 'crumb-root' : '', false)),
                             h(N.NButton, { size: 'small' }, { default: () => '返回' }),
                         ])
                         : h('div', { class: 'hstack' }, [
                             chip(false),
-                            ...SEGS.map((s) => crumbTag(s, '', false)),
+                            ...list.map((s) => crumbTag(s, '', false)),
                             h(N.NButton, { size: 'small' }, { default: () => '返回' }),
                         ]);
 
@@ -374,6 +381,44 @@
             window.__setChipForm('path');
             window.__setToolbar('now');
             return out;
+        };
+
+        /**
+         * 逐个量导航区子元素的**实际渲染宽度**与**计算后的 flex 值**。
+         * 用途：截图里"标签塌成小碎片"时，判断到底是"谁没收缩"还是"谁收缩过头"——
+         * 光看图只能猜，而 `flex` 的计算值会直接告诉你哪条规则赢了。
+         */
+        window.__measureCrumbs = async function (w) {
+            window.__setVariant('new');
+            window.__setToolbar('more');
+            window.__setSegs('long');
+            window.__setChipForm('path');
+            const stage = document.getElementById('stage');
+            stage.style.width = w + 'px';
+            await new Promise(r => requestAnimationFrame(() => requestAnimationFrame(r)));
+            await new Promise(r => setTimeout(r, 120));
+            const nav = document.querySelector('.nav-zone');
+            const tag = nav.querySelector('.fs-tag');
+            const txt = nav.querySelector('.fs-text');
+            return {
+                窗口宽: w,
+                导航区宽: Math.round(nav.getBoundingClientRect().width),
+                芯片文本: txt ? {
+                    已应用: getComputedStyle(txt).minWidth,
+                    文本宽: txt.scrollWidth,
+                    盒子宽: txt.clientWidth,
+                    溢出中: txt.scrollWidth > txt.clientWidth + 1,
+                } : '（没找到 .fs-text）',
+                芯片外框宽: tag ? Math.round(tag.getBoundingClientRect().width) : null,
+                芯片外框溢出: tag ? tag.scrollWidth > tag.clientWidth + 1 : null,
+                子元素: [...nav.children].map(el => ({
+                    文本: (el.textContent || '').trim().slice(0, 8),
+                    类: (el.className || '').toString().split(/\s+/)
+                        .filter(c => c.startsWith('crumb') || c.startsWith('fs')).join('.'),
+                    宽: Math.round(el.getBoundingClientRect().width),
+                    flex: getComputedStyle(el).flex,
+                })),
+            };
         };
 
         window.__probeAll = async function () {

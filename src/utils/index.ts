@@ -170,19 +170,26 @@ export interface CrumbFold { head: PathCrumb; hidden: PathCrumb[]; tail: PathCru
 /**
  * 面包屑的折叠决策。返回 `null` = 全显。
  *
- * 规则：超过 `max` 段就折中间，**保首段 + `…` + 末 2 段（父 + 当前）**。
- * 依据：Apple HIG 的路径控件原文 "If the list is too long to fit within the control,
- * it hides names between the first and last items"；Fluent 2 的默认行为是"只显第一项和最后一项"。
- * 两家独立收敛到同一条规则。
+ * 规则：超过 `max` 段就折中间，**保首段 + `…` + 当前段**。
  *
- * ⚠️ **`…` 至少代表 2 段才折** —— 否则 5 段路径会渲染成 `E: › … › 父 › 当前`，
- * 白白多一次点击（那一段本来可以直接显示）。
+ * 依据（两家官方规范说的都是"首 + 末"，**没有"父"这一格**）：
+ * - Apple HIG：*"If the list is too long to fit within the control, it hides names
+ *   between the first and last items."*
+ * - Fluent 2：*"The first and last item (i.e current page) are shown by default."*
+ *
+ * ⚠️ 2026-10-01 实测修正：原实现是"首 + `…` + **父 + 当前**"（末 2 段）。
+ * 真机截图显示，长中文名（`示例作品标题B也很难短下来`）下即使 **1280px** 窗口，
+ * 4 格也正好把导航区吃到 100% ⇒ 末段被压到 22px（**连自己的 padding 都被裁掉，看起来像坏了**）。
+ * 去掉「父」这一格后，1280px 下留出 ~160px 余量，每格都不再被挤压；
+ * 被折掉的层级仍可通过 `…` 点开（能力不减）。
  */
 export function foldCrumbList(crumbs: PathCrumb[], max = 4): CrumbFold | null {
     if (crumbs.length <= max) return null;
     const head = crumbs[0];
-    const tail = crumbs.slice(-2);
-    const hidden = crumbs.slice(1, crumbs.length - 2);
+    const tail = crumbs.slice(-1);
+    const hidden = crumbs.slice(1, crumbs.length - 1);
+    // 防御性不变量：`…` 只代表 1 段就干脆别折（把它直接显示出来更划算）。
+    // ⚠️ 在默认 `max = 4` 下 `hidden` 恒 ≥ 3，所以这条**不可达**，别把它当成"修了一个活缺陷"。
     if (hidden.length < 2) return null;
     return { head, hidden, tail };
 }

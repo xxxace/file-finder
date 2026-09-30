@@ -1253,13 +1253,18 @@ onUnmounted(() => {
  * 实测：`docs/probes/header-width/`（真 Chromium + 真 naive-ui，窗口 640/800/1280/1920 四档）。
  */
 .nav-zone {
+    /* ⚠️ 分隔符的定位依赖"两个 tag 之间的空隙有多宽"，所以空隙宽度**只能有一个来源**：
+       这个变量。gap 与 ::before 的 left/width 共用它，改一处就够。
+       原实现写的是 `left: -13px`（魔数），而 gap 是 8px ⇒ 它往左多插了 5px，
+       压在**前一个标签的右边框**上（用户 2026-10-01 截图报的就是这个）。 */
+    --crumb-gap: 12px;
     flex: 1 1 auto;
     min-width: 0;
     max-width: 50%;
     display: flex;
     flex-wrap: nowrap;
     align-items: center;
-    gap: 8px;
+    gap: var(--crumb-gap);
     overflow: hidden;
 
     /* 面包屑每一段：**单个名字有界**（层级深度问题已由折叠解决，这里只管"一段太长"）。
@@ -1290,13 +1295,19 @@ onUnmounted(() => {
 
     /* 层级之间的方向符。
        ⚠️ 用 CSS 生成，**不插 DOM 子元素** —— 这一组的子元素个数在本项目是敏感量
-       （n-space 重复 key 事故同族）。`position: absolute` 让它落在两个 tag 之间的
-       空隙里，不占 tag 内部空间（tag 自带 `position: relative`）。
-       用 `:not(.crumb-root)` 而不是相邻选择器：不依赖"中间有没有被插入包装元素"。 */
+       （n-space 重复 key 事故同族）。
+       `position: absolute` 让它不占 tag 内部空间（tag 自带 `position: relative`）；
+       **盒子正好等于那个空隙、再在盒子里居中** —— 这样就不依赖"猜一个负偏移量"，
+       换字体、换字号都不会再压到边框上。 */
     .crumb:not(.crumb-root)::before {
         content: '›';
         position: absolute;
-        left: -13px;
+        left: calc(-1 * var(--crumb-gap));
+        width: var(--crumb-gap);
+        text-align: center;
+        top: 50%;
+        transform: translateY(-50%);
+        line-height: 1;
         color: #a1a1a1;
         pointer-events: none;   /* 别挡住上一个 tag / chip 的点击 */
     }

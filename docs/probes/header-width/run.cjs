@@ -16,6 +16,7 @@
 const { app, BrowserWindow } = require('electron');
 const path = require('node:path');
 const os = require('node:os');
+const fs = require('node:fs');
 
 app.setPath('userData', path.join(os.tmpdir(), 'probe-header-width'));
 app.commandLine.appendSwitch('disable-gpu');
@@ -64,6 +65,59 @@ app.whenReady().then(async () => {
             .map(r => `${r.chip形态}→芯片${r.芯片宽}/导航区${r.导航区宽}`).join('  ');
         console.log(`窗口 ${w}px：${row}`);
     }
+
+    // ── 视觉证据：截图 ────────────────────────────────────────────────────
+    // 观感本来"只能目视"—— 那就把眼睛接进来：把头部区域截成 PNG，人可以（AI 也可以）
+    // 直接看渲染结果。纯几何数字看不出的东西（分隔符压到边框、字重不合适）只有这一步能抓。
+    // ── 逐个量导航区子元素（判断"塌成碎片"时谁的责任）────────────────────
+    console.log('\n── 导航区子元素实际宽度 / 计算出的 flex ──');
+    for (const w of [820, 1280]) {
+        const m = await win.webContents.executeJavaScript(`__measureCrumbs(${w})`);
+        console.log(`窗口 ${m.窗口宽}px · 导航区 ${m.导航区宽}px`);
+        // 根 chip 的文本有没有溢出自己的盒子（溢出就会画到邻居身上，整条头部上看不出来）
+        console.log(`  芯片文本 min-width=${m.芯片文本.已应用} · 文本宽 ${m.芯片文本.文本宽} / 盒子宽 ${m.芯片文本.盒子宽} · 溢出中=${m.芯片文本.溢出中}`);
+        console.log(`  芯片外框宽 ${m.芯片外框宽} · 外框溢出=${m.芯片外框溢出}`);
+        console.table(m.子元素);
+    }
+
+    for (const [name, which, chipForm, winW] of [
+        ['shot-header.png', 'long', 'path', 1280],   // 长链 + 路径 chip：看折叠 / 截断 / 分隔符
+        ['shot-crumbs.png', 'short', 'icon', 820],   // **复刻用户截图**：窄窗 + H: › 新建文件夹 + 图标 chip
+    ]) {
+        const rect = await win.webContents.executeJavaScript(`(async () => {
+            window.__setVariant('new');
+            window.__setToolbar('more');
+            window.__setSegs('${which}');
+            window.__setChipForm('${chipForm}');
+            document.getElementById('stage').style.width = '${winW}px';
+            await new Promise(r => requestAnimationFrame(() => requestAnimationFrame(r)));
+            await new Promise(r => setTimeout(r, 150));
+            const b = document.querySelector('.header-bar').getBoundingClientRect();
+            return { x: Math.max(0, Math.floor(b.left) - 8), y: Math.max(0, Math.floor(b.top) - 8),
+                     width: Math.ceil(b.width) + 16, height: Math.ceil(b.height) + 16 };
+        })()`);
+        const png = await win.webContents.capturePage(rect);
+        fs.writeFileSync(path.join(__dirname, name), png.toPNG());
+        console.log(`── 截图：${name}（窗口 ${winW}px · ${rect.width}×${rect.height}）`);
+    }
+    await win.webContents.executeJavaScript(`window.__setSegs('long'); window.__setChipForm('path');`);
+
+    // 只截左边"chip + 面包屑"那一块：整条头部缩到 1256px 宽时，5px 级的间距差别看不出来，
+    // 而"分隔符离边框多远"恰恰是 5px 级的问题。
+    await win.webContents.executeJavaScript(`(async () => {
+        window.__setVariant('new'); window.__setToolbar('more');
+        window.__setSegs('long'); window.__setChipForm('path');
+        document.getElementById('stage').style.width = '1280px';
+        await new Promise(r => requestAnimationFrame(() => requestAnimationFrame(r)));
+        await new Promise(r => setTimeout(r, 150));
+    })()`);
+    const zoomRect = await win.webContents.executeJavaScript(`(() => {
+        const nav = document.querySelector('.nav-zone').getBoundingClientRect();
+        return { x: Math.floor(nav.left), y: Math.floor(nav.top) - 6, width: Math.min(470, Math.ceil(nav.width)), height: Math.ceil(nav.height) + 12 };
+    })()`);
+    fs.writeFileSync(path.join(__dirname, 'shot-left.png'),
+        (await win.webContents.capturePage(zoomRect)).toPNG());
+    console.log(`── 截图：shot-left.png（左区局部 ${zoomRect.width}×${zoomRect.height}）`);
 
     /**
      * 判据只有三条，全部对应"头部高度取决于内容"这个原始问题：
