@@ -155,7 +155,7 @@
                     </div>
                     <n-pagination size="small" :page="model.pageNo" :page-size="model.pageSize"
                         :disabled="loading" :item-count="model.total" show-size-picker show-quick-jumper :page-slot="7"
-                        :page-sizes="[10, 20, 40, 60, 80, 100]" :on-update:page="handlePageChange"
+                        :page-sizes="[10, 16, 20, 40, 60, 80, 100]" :on-update:page="handlePageChange"
                         :on-update:page-size="handlePageSizeChange">
                         <template #prefix="{ itemCount }">
                             共 {{ itemCount }} 项
@@ -286,7 +286,7 @@ const columns = ref<DataTableColumns<RowData>>([{
 }, {
     // 「封面」→「条目」：它本来就是这一层的**条目数**（scanAndCache 写的是 `count: data.length`，
     // 即收敛之后的卡片数），不是"封面图有多少张"。实测 AAAA1111 = 106 个目录 / 644 个条目。
-    title: '条目', key: 'count', width: 68, align: 'right', sorter: true,
+    title: '条目', key: 'count', width: 88, align: 'right', sorter: true,
 }, {
     /**
      * 大小 = 这一层的内容字节总量。
@@ -378,7 +378,9 @@ const model = ref<HistoryQuery>({
     serial: '',
     path: '',
     pageNo: 1,
-    pageSize: 10,
+    // 每页 16 条（用户定的）。注意 `page-sizes` 里也要有 16，
+    // 否则分页器的"每页条数"下拉表示不出当前这个值。
+    pageSize: 16,
     total: 0,
     // 默认排序 = **盘 → 路径**（服务端按 (serial, relPath) 排）。
     // 为什么不是"最近扫描在前"：这个面板被当成黄页/导航用，同盘相邻才好找；
