@@ -183,7 +183,7 @@ import {
     NCollapse, NCollapseItem, useDialog,
 } from 'naive-ui'
 import type { DataTableColumns, DataTableRowKey, DataTableSortState, InputInst } from 'naive-ui'
-import { formatBytes } from '@/utils';
+import { formatBytes, offlineLabel } from '@/utils';
 import type { BrowseHistoryWithPagination, OpenMode } from 'electron/server/nedb';
 import { getAction, postAction } from '@/utils/request';
 
@@ -427,9 +427,10 @@ function toQueryStr(val: Record<string, any>) {
 }
 
 function diskLabel(d: DiskRow) {
-    // 离线盘**必须能区分是哪一块**：卷标从来没被赋值（见下面注释），所以拿序列号后 4 位当标识。
-    // 不这么做的话，两块盘都不在时下拉里会出现两行只差数字的「未插入」，只能靠目录数猜。
-    const where = d.online ? `${d.drive}:` : `离线(${d.serial.slice(-4)})`;
+    // 「离线(后4位)」现在是 `@/utils` 的**共享**实现 —— 面包屑首段也要用同一个格式，
+    // 各写一份的话以后改文案要改两处（本文件原来就有一份本地的）。
+    // 为什么靠后 4 位区分：卷标从来没被赋值，两块盘都不在时下拉里会出现两行只差数字的「未插入」。
+    const where = d.online ? `${d.drive}:` : offlineLabel(d.serial);
     // `label` 目前**永远是空串** —— 服务端 driveIdentity.ts 的 probe() 把它写死成 `''`
     // （注释却写着"用户起的名字"，从来没实现过）。实测 disks.json 里 6 块盘全空，
     // 所以这个分支恒不命中；留着是为了以后补上"给盘起名"时显示层不用再改。
