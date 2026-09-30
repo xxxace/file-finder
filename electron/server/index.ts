@@ -8,13 +8,13 @@ import { imageThumb, videoThumb } from '../utils/thumbnail';
 import { newThumbKey, putThumb, getThumb } from '../utils/thumbStore';
 import {
     findDriveByLetter, findDuplicatedSerials, getDrives, offlineSerials,
-    splitPath, syncRegistry, toFullPath,
+    readRegistry, splitPath, syncRegistry, toFullPath,
 } from '../utils/driveIdentity';
 import type { DriveInfo } from '../utils/driveIdentity';
 import {
     BEFORE_RESTORE_PATH, CACHE_DB_PATH, CACHE_VERSION, beginRestore, cacheBackup, endRestore,
     findCache, insertCache, loadMeta, readExternalCache, reloadFromDisk,
-    removeByIds, removeCache,
+    removeCache,
 } from './nedb';
 import type { CacheMeta, OpenMode, SearchCache } from './nedb';
 import { LOCAL_TOKEN } from './token';
@@ -777,11 +777,29 @@ async function rawController(req: Req, res: http.ServerResponse) {
  * 列出所有盘 + 各自的缓存概况。
  * 缓存界面的第一屏就是它：先选盘，再看那块盘缓存过哪些目录。
  */
-async function listDisksController(_req: Req, res: http.ServerResponse) {
-    // 用户点这个就是想看"现在插着什么"，强制重扫一次
-    const drives = await getDrives(true);
-    const now = dayjs().format('YYYY-MM-DD HH:mm:ss');
-    const registry = await syncRegistry(drives, now);
+async function listDisksController(req: Req, res: http.ServerResponse) {
+    /**
+     * ⚠️ **默认不再强制重扫盘符**（`?refresh=true` 才扫）。
+     *
+     * 原来这里写死 `getDrives(true)`，而它挂在**每次打开面板**这条高频路径上：
+     * `scanDrives()` 会对 C–Z 每一个盘符做一次 `stat('X:/')`，并顺带无条件写一次 `disks.json`。
+     * 用户的第一优先级是"减少对移动硬盘的读写"，而每次都去 stat 一遍盘根，
+     * **会不会唤醒一块插着但已休眠的移动硬盘，我没有实测过** —— 不确定的事就不该每天做几十遍。
+     *
+     * 现在：打开面板走 `getDrives()`（**进程内缓存，一次盘都不扫**）；
+     * 只有用户点「刷新」（前端传 `?refresh=true`）才真正重探一次。
+     * 代价说清楚：**启动之后新插的盘不会自动出现在列表里**，要按一下「刷新」——
+     * 这个取舍用户已经接受（他原话："插上盘不能更新就算了"）。
+     */
+    const refresh = req.params?.get('refresh') === 'true';
+    const drives = await getDrives(refresh);
+    // 只有**真探测过**才登记。用缓存列表重复登记，只是把同一份数据再写一遍 `disks.json`
+    // —— 那是本地小文件、不是"读盘"问题，但**没有新信息的写就不该做**。
+    // 顺带一个语义更正：拿陈旧列表 sync 会把 lastSeenAt 刷成"刚刚见过"，
+    // 而那块盘可能早就拔了（这个字段目前只写不读，但错的数据不该主动制造）。
+    const registry = refresh
+        ? await syncRegistry(drives, dayjs().format('YYYY-MM-DD HH:mm:ss'))
+        : await readRegistry();
     // withBytes：顺带算出全库字节合计。纯内存求和（实测 0.07 ms），**不读盘**。
     const metas = await loadMeta({ withBytes: true });
 
@@ -884,7 +902,21 @@ async function getHistory(req: Req, res: http.ServerResponse) {
         // withBytes：每行多一个 bytes（这一层的字节和）。纯内存，**不读盘**。
         let metas = await loadMeta({ withBytes: true, sortBy, dir });
         if (serial) metas = metas.filter(m => m.serial === serial);
-        if (keyword) metas = metas.filter(m => m.relPath.toLowerCase().includes(keyword));
+        // 关键词过滤。除了路径，**也允许直接按盘符搜**：`f` / `f:` = "那块盘上的全部记录"。
+        // 但要求**整词相等**、不做子串匹配 —— 否则搜一个含字母的词会把某块盘的记录整片捞进来，
+        // 用户看到一堆"路径里明明没有那个字母"的行，只会以为程序坏了。
+        // （只认盘符不认卷标：卷标至今全空，见 driveIdentity.ts 的 probe()。）
+        if (keyword) {
+            const diskHit = new Set(
+                [...letterOf.entries()]
+                    .filter(([, letter]) => {
+                        const l = letter.toLowerCase();
+                        return l === keyword || `${l}:` === keyword;
+                    })
+                    .map(([s]) => s),
+            );
+            metas = metas.filter(m => m.relPath.toLowerCase().includes(keyword) || diskHit.has(m.serial));
+        }
 
         const records: HistoryRow[] = metas
             .slice((pageNo - 1) * pageSize, pageNo * pageSize)
@@ -914,7 +946,23 @@ async function removeHistoryBatch(req: Req, res: http.ServerResponse) {
     }
 
     try {
-        const numRemoved = await removeByIds(ids.split(','));
+        const idList = ids.split(',').filter(Boolean);
+
+        // 用户手里拿到的是 `_id`（表格行键），但**删除必须按主键 (serial, relPath, mode) 进各自的串行链**：
+        // `_id` 只是"这一份库内部的身份"，不是数据的身份；而链的键就是主键。
+        // 所以先只读地查一次元数据，把 _id 翻译成主键。
+        const metas = await loadMeta();
+        const byId = new Map(metas.map(m => [m._id ?? '', m]));
+
+        let numRemoved = 0;
+        for (const id of idList) {
+            const m = byId.get(id);
+            if (!m) continue;   // 已经被别处删掉了（比如上一次删除、或还原/合并）—— 跳过，不算失败
+            await queueCacheWrite(m.serial, m.relPath, m.mode, async () => {
+                numRemoved += await removeCache(m.serial, m.relPath, m.mode);
+            });
+        }
+
         sendJson(res, { code: 200, message: `${numRemoved} 条数据已删除` });
     } catch (e) {
         sendJson(res, { code: 500, error: String(e) });

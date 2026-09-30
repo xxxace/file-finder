@@ -353,12 +353,18 @@ export function removeCache(serial: string, relPath: string, mode: OpenMode): Pr
     });
 }
 
-export function removeByIds(ids: string[]): Promise<number> {
-    assertUsable();
-    return new Promise((resolve, reject) => {
-        nedb.remove({ _id: { $in: ids } }, { multi: true }, (err, n) => (err ? reject(err) : resolve(n)));
-    });
-}
+// ⚠️ 这里原来有一个 `removeByIds(ids)`（`nedb.remove({ _id: { $in: ids } }, { multi: true })`），
+// 给面板的「删除记录」用。**已删除**，因为它是一个**绕过唯一写入链的口**：
+//
+// 扫描写缓存走的是 `server/index.ts` 的 `queueCacheWrite`（同一主键上串行「先删后插」），
+// 而按 `_id` 直接 remove 完全不进那条链 —— 于是"用户删掉的记录"和"正在跑的那次扫描"
+// 可以交错：扫描在删之后把同一条记录又插回来，用户看到的是**删了又回来**。
+//
+// 为什么是"删掉这个函数"而不是"给调用方加一道守卫"：守卫的责任在调用方，
+// 将来再有人要批量删，顺手拿到这个 API 就又开了一个口；
+// 而库里没有"按 _id 批量删"这个能力之后，**任何删除都只能走 `removeCache`（按主键）**，
+// 而按主键的删除在服务端只有一处会去调它 —— 那一处已经收进链里了。
+// 判据：以后同类场景还会不会复发 —— 会，只要这个口还在。
 
 export interface MetaQuery {
     /**

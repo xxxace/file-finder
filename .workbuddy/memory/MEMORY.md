@@ -42,7 +42,11 @@
   `electron/server/index.ts`（`/getHistory` 返回 `bytes`+`sort`/`dir`；`/getDisks` 加 `stats`）、
   `src/components/HistoryTable/index.vue`（总览句 + 「大小」列 + 服务端排序）、`src/views/FileFinder/index.vue`（`getSize` 改薄封装）。
   **阶段 B 改了主进程 ⇒ 必须重启 dev**；期望值：`5 块盘 · 213 个目录 · 1247 个条目 · 已读到 3.35 TB · 库 81.7 MB · 最近扫描 2026-09-27 22:32`。
-  阶段 C（chips 盘条 / 盘改名 / 删除竞态 / 键盘）**未开始**。
+  阶段 C **代码已落地、未提交**：① 删除进唯一写入链（**`nedb.ts` 已删掉 `removeByIds`** —— 那是绕开链的口，
+  证据 `docs/probes/remove-race/`）② `/getDisks` 默认不重探盘符（`?refresh=true` 才探）③ 离线盘显示 `离线(序列号后4位)`
+  ④ 搜索认盘符（整词相等）+ 打开聚焦搜索框。
+  **故意不做**：chips 换下拉 / 盘可改名 / 上下键选行 —— 理由见 `docs/PLAN-cache-panel-2026-09-30.md` §4。
+  改了主进程 ⇒ 阶段 B 起**必须重启 dev**。
 - P0+P1+P2 / 加密备份还原合并 已落地实测；离线盘只读浏览已落地（界面待目视）
 - n-space 重复 key 修复 + 连带布局回归已修（`.toolbar{flex-wrap:nowrap}` + `.header-bar .n-input{width:200px}` 两条**不许删**）
 - 管理助手：Phase 1 + 2A + 5 代码全落地；真机自测部分通过（scan 命中 23/25=92%）；**真机未全验**

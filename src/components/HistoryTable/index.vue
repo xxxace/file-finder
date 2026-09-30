@@ -26,8 +26,8 @@
                          而 composition 事件**会冒泡**，所以在外面套一层接就行了。 -->
                     <div class="g1-search" @compositionstart="onCompositionStart"
                         @compositionend="onCompositionEnd">
-                        <n-input v-model:value="model.path" placeholder="搜索目录名" clearable size="small"
-                            @keyup.enter="onSearch">
+                        <n-input ref="searchRef" v-model:value="model.path" placeholder="搜索目录名（也可以直接输盘符）"
+                            clearable size="small" @keyup.enter="onSearch">
                             <template #prefix>
                                 <n-icon :component="Search" />
                             </template>
@@ -168,7 +168,7 @@
 </template>
 
 <script lang="ts" setup>
-import { computed, h, ref, toRaw, watch } from 'vue';
+import { computed, h, nextTick, ref, toRaw, watch } from 'vue';
 import { ipcRenderer } from 'electron';
 import useNotify from '@/hooks/useNotify';
 import { Search } from '@vicons/ionicons5';
@@ -176,7 +176,7 @@ import {
     NInput, NButton, NCard, NModal, NPagination, NDataTable, NSpin, NSelect, NAlert, NTag, NIcon,
     NCollapse, NCollapseItem, useDialog,
 } from 'naive-ui'
-import type { DataTableColumns, DataTableRowKey, DataTableSortState } from 'naive-ui'
+import type { DataTableColumns, DataTableRowKey, DataTableSortState, InputInst } from 'naive-ui'
 import { formatBytes } from '@/utils';
 import type { BrowseHistoryWithPagination, OpenMode } from 'electron/server/nedb';
 import { deletAction, getAction, postAction } from '@/utils/request';
@@ -394,6 +394,9 @@ const loading = ref(false);
 const diskLoading = ref(false);
 const diskOptions = ref<{ label: string; value: string }[]>([{ label: '全部盘', value: '' }]);
 const duplicated = ref<string[]>([]);
+/** 搜索框 ref —— 打开面板时把焦点放进去（键盘路径的第一个落点） */
+const searchRef = ref<InputInst | null>(null);
+
 /** 顶部「总览」的数据源（/getDisks 的 stats）。没拿到前不显示那一行 */
 const stats = ref<DiskStats | null>(null);
 
@@ -418,12 +421,12 @@ function toQueryStr(val: Record<string, any>) {
 }
 
 function diskLabel(d: DiskRow) {
-    const where = d.online ? `${d.drive}:` : '未插入';
+    // 离线盘**必须能区分是哪一块**：卷标从来没被赋值（见下面注释），所以拿序列号后 4 位当标识。
+    // 不这么做的话，两块盘都不在时下拉里会出现两行只差数字的「未插入」，只能靠目录数猜。
+    const where = d.online ? `${d.drive}:` : `离线(${d.serial.slice(-4)})`;
     // `label` 目前**永远是空串** —— 服务端 driveIdentity.ts 的 probe() 把它写死成 `''`
     // （注释却写着"用户起的名字"，从来没实现过）。实测 disks.json 里 6 块盘全空，
     // 所以这个分支恒不命中；留着是为了以后补上"给盘起名"时显示层不用再改。
-    // 也正因为它是空的：**盘不在的时候，下拉里每块盘只能靠盘符认，而离线盘连盘符都没有** ——
-    // 两块盘都不在就是两行一模一样的「未插入」。见 docs/DESIGN-CACHE-PANEL-2026-09-30.md P0-6。
     const name = d.label ? ` ${d.label}` : '';
     // `covers` 是 /getDisks 里把每条记录的 `count` 累加出来的数 —— 它是**条目数**，
     // 不是"封面图有多少张"（原来这里写"张封面"，和数据的含义对不上）。
@@ -435,14 +438,18 @@ function diskLabel(d: DiskRow) {
  *
  * 这是这套缓存的分组维度：先说清楚"这些缓存属于哪块盘"，再去列那块盘缓存过哪些目录。
  * 盘符只是当前挂载点，所以列表里显示的是盘符和卷标，真正的身份是序列号。
+ *
+ * `refresh = true` 才让服务端真去重探一遍盘符（26 次 `stat`）。
+ * 打开面板时**不探** —— 那会让"每次打开"都碰一遍所有盘根，
+ * 而"插上盘列表不自动更新"这个代价用户已经接受（按一下「刷新」就好）。
  */
-const loadDisks = async () => {
+const loadDisks = async (refresh = false) => {
     diskLoading.value = true;
     try {
         // 走 getAction 而不是裸 fetch：响应检查只在 request.ts 里做一次就够了。
         // 原来这里是 `fetch(...).then(res => res.json())`，不判 res.ok 也不判 body 里的 code，
         // 于是 `{code:500}` 会被当成正常数据一路用下去。
-        const data = await getAction(`${API_BASE}/getDisks`);
+        const data = await getAction(`${API_BASE}/getDisks${refresh ? '?refresh=true' : ''}`);
         const disks: DiskRow[] = data.disks || [];
         diskOptions.value = [
             { label: `全部盘 · ${disks.reduce((n, d) => n + d.folders, 0)} 个目录`, value: '' },
@@ -548,11 +555,11 @@ watch(() => model.value.path, () => {
 });
 
 /**
- * 刷新 = 重新探测插着哪些盘 + 重取列表。
+ * 刷新 = 重新探测插着哪些盘（**这里是唯一真去探盘符的地方**）+ 重取列表。
  * 同样去掉重入守卫（序号法已保证并发安全），守卫只会表现成"点了没反应"。
  */
 const onRefresh = () => {
-    loadDisks();
+    loadDisks(true);
     getHistrotyList();
 }
 
@@ -827,11 +834,17 @@ const handleMergeCache = async () => {
 // 每次打开都刷新。原来是"只在第一次打开时查一次"（isFirstRender 守卫），
 // 结果第二次打开看到的是上一次的旧列表。
 // 顺带把 watch 从 onMounted 里挪出来 —— 写在 onMounted 内部注册的 watcher，
-// 组件卸载时不会被回收
+// 组件卸载时不会被回收。
+//
+// ⚠️ 这里故意**不重探盘符**（`loadDisks()` 不带 refresh）：那会让"每次打开"都 stat 一遍 C–Z。
+// 想看"现在插着什么"就点「刷新」。
 watch(showModal, (val) => {
     if (val) {
         loadDisks();
         getHistrotyList();
+        // 键盘路径的第一落点：打开就把光标放进搜索框，直接打字就能筛。
+        // 放在 nextTick 之后 —— n-modal 的内容是这一轮才挂上去的，早于它拿不到实例。
+        nextTick(() => searchRef.value?.focus());
     }
 });
 
