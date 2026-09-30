@@ -132,15 +132,44 @@
             ]),
         });
 
-        const toolbar = (isNew) => h('div', { class: 'toolbar', ...sv() }, [
-            h(N.NButton, { size: 'small' }, { default: () => '补全这一片' }),
-            h(N.NButton, { size: 'small' }, { default: () => '重读这一片' }),
-            h(N.NButton, { size: 'small' }, { default: () => '补封面' }),
-            h(N.NButton, { size: 'small' }, { default: () => '◉' }),
-            h(N.NBadge, { value: 35 }),
-            h(N.NInput, { size: 'small', placeholder: '搜索', ...(isNew ? {} : { style: 'width:200px' }) }),
-            h(N.NButton, { size: 'small' }, { default: () => '↻' }),
-        ]);
+        /**
+         * 工具条的候选形态。用来量「缩文案 / 收下拉 / 挪 badge」各自能还给导航区多少 px ——
+         * 这种事**不能估**：字宽取决于字体与 padding，猜出来的数字会误导决策。
+         */
+        const TB_MODES = ['now', 'short', 'short2', 'more'];
+        const tbMode = ref('now');
+        window.__setToolbar = (v) => { tbMode.value = v; };
+
+        const toolbar = (isNew) => {
+            const m = tbMode.value;
+            const kids = [];
+
+            if (m === 'more') {
+                // 三个不常用的动作收进一个下拉（下拉内容不在这一行里）
+                kids.push(h(N.NButton, { size: 'small' }, { default: () => '更多' }));
+            } else {
+                const short = m !== 'now';
+                kids.push(h(N.NButton, { size: 'small' }, { default: () => (short ? '补全' : '补全这一片') }));
+                kids.push(h(N.NButton, { size: 'small' }, { default: () => (short ? '重读' : '重读这一片') }));
+                kids.push(h(N.NButton, { size: 'small' }, { default: () => (short ? '封面' : '补封面') }));
+            }
+
+            kids.push(h(N.NButton, { size: 'small' }, { default: () => '◉' }));
+
+            // short2 = 把角标挪出工具条（它是"内容统计"，本来就不该住在动作区）
+            if (m !== 'short2') kids.push(h(N.NBadge, { value: 35 }));
+
+            kids.push(h(N.NInput, {
+                size: 'small', placeholder: '搜索',
+                // ⚠️ 必须带 scoped 属性，否则真实 CSS 里的 `width: 200px` 不生效 ——
+                // 探针第一版就漏了它，把输入框量成 175px（少 25px），整张预算表都偏小。
+                ...sv(),
+                ...(m === 'short2' ? { style: 'width:150px' } : {}),
+            }));
+            kids.push(h(N.NButton, { size: 'small' }, { default: () => '↻' }));
+
+            return h('div', { class: 'toolbar', ...sv() }, kids);
+        };
 
         const App = {
             setup() {
@@ -230,6 +259,62 @@
                 头部宽: Math.round(box.width),
                 '::before内容': sepContent,
             };
+        };
+
+        /**
+         * 工具条预算明细：每个子元素真实占多宽 + gap 合计。
+         * 用途：把"工具条是导航区不够的元凶"从判断变成数字，并算出
+         * "缩某几个字的文案" / "把某几个动作收进下拉" 各自能还给导航区多少 px。
+         */
+        window.__measureToolbar = function () {
+            const tb = document.querySelector('.toolbar');
+            const box = tb.getBoundingClientRect();
+            const kids = [...tb.children].map(el => ({
+                类型: (el.className || '').toString().split(/\s+/)
+                    .filter(c => c.startsWith('n-')).slice(0, 2).join('.') || el.tagName.toLowerCase(),
+                文字: (el.textContent || '').trim().slice(0, 10),
+                宽: Math.round(el.getBoundingClientRect().width),
+            }));
+            const cs = getComputedStyle(tb);
+            const gap = Math.round(parseFloat(cs.columnGap || cs.gap) || 0);
+            return {
+                工具条总宽: Math.round(box.width),
+                子元素数: tb.children.length,
+                gap单值: gap,
+                gap合计: gap * (tb.children.length - 1),
+                子元素合计: kids.reduce((s, k) => s + k.宽, 0),
+                明细: kids,
+            };
+        };
+
+        /**
+         * 四种工具条形态 × 两档"需要它让路"的窗口宽度。
+         * 输出里直接给「导航区还剩多宽」—— 那就是"面包屑还有没有地方"的答案。
+         */
+        window.__measureToolbarPlans = async function () {
+            const stage = document.getElementById('stage');
+            window.__setVariant('new');
+            const out = [];
+            for (const m of TB_MODES) {
+                window.__setToolbar(m);
+                await new Promise(r => requestAnimationFrame(() => requestAnimationFrame(r)));
+                for (const w of [640, 800, 1280]) {
+                    stage.style.width = w + 'px';
+                    await new Promise(r => setTimeout(r, 80));
+                    const header = document.querySelector('.header-bar');
+                    const box = header.getBoundingClientRect();
+                    out.push({
+                        方案: m,
+                        窗口宽: w,
+                        工具条宽: Math.round(header.querySelector('.toolbar').getBoundingClientRect().width),
+                        导航区宽: Math.round(header.querySelector('.nav-zone').getBoundingClientRect().width),
+                        头部高: Math.round(box.height),
+                        工具条未溢出: Math.round(header.querySelector('.toolbar').getBoundingClientRect().right) <= Math.round(box.right) + 1,
+                    });
+                }
+            }
+            window.__setToolbar('now');
+            return out;
         };
 
         window.__probeAll = async function () {

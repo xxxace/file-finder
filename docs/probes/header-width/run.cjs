@@ -39,6 +39,22 @@ app.whenReady().then(async () => {
     const out = await win.webContents.executeJavaScript('__probeAll()');
     console.table(out);
 
+    // ── 工具条预算明细（把"元凶"变成数字）────────────────────────────────
+    const budget = await win.webContents.executeJavaScript('__measureToolbar()');
+    console.log('\n── 工具条预算（复刻件上量的，组件与 props 与真实模板一致）──');
+    console.log(`总宽 ${budget.工具条总宽}px = 子元素合计 ${budget.子元素合计} + gap ${budget.gap合计}（${budget.gap单值}px × ${budget.子元素数 - 1}）`);
+    console.table(budget.明细);
+
+    // ── 四种工具条形态的对比：缩文案 / 挪角标 / 收下拉，各能还给导航区多少 ──
+    const plans = await win.webContents.executeJavaScript('__measureToolbarPlans()');
+    console.log('\n── 工具条形态对比（同为 new 变体，只换工具条内容）──');
+    console.table(plans);
+    for (const w of [640, 800, 1280]) {
+        const row = plans.filter(p => p.窗口宽 === w)
+            .map(p => `${p.方案}→${p.工具条宽}/${p.导航区宽}`).join('  ');
+        console.log(`窗口 ${w}px（工具条宽/导航区宽）：${row}`);
+    }
+
     /**
      * 判据只有三条，全部对应"头部高度取决于内容"这个原始问题：
      *   ① **头部高是常量** —— 它在四档窗口宽度下必须完全一致（这一条是核心）
