@@ -313,3 +313,10 @@ function transcodeImage(filepath: string, out: string): Promise<boolean> {
     cmd.run();
     return runFfmpeg(cmd, '图片转码', filepath);
 }
+
+/**
+ * 供「补封面」的写盘层复用（`apply.ts`）：nativeImage 解不开的封面图（多为
+ * 改了后缀的 WebP）从这条链路转出 PNG 再走 JPEG 编码。只放行这一条复用出口，
+ * 转码参数（`-frames:v 1`、`min(960,iw)`）仍然只有这一处定义。
+ */
+export { transcodeImage };

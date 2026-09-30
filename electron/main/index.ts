@@ -1,9 +1,10 @@
-import { app, BrowserWindow, shell, ipcMain, dialog } from 'electron'
+import { app, BrowserWindow, shell, ipcMain, dialog, clipboard } from 'electron'
 import { release } from 'os'
 import { join, win32 } from 'path'
 import '../server';
 import '../utils/ffmpeg';
 import { LOCAL_TOKEN } from '../server/token';
+import { destroyTrackedWindows } from '../server/assistant/queue';
 import config from '../config';
 
 // Disable GPU Acceleration for Windows 7
@@ -64,6 +65,11 @@ async function createWindow() {
     if (url.startsWith('https:')) shell.openExternal(url)
     return { action: 'deny' }
   })
+
+  // 管理助手的抓取窗（隐藏窗 / 人工过验证的可见窗）必须跟着主窗一起销毁。
+  // 否则只要还开着一个隐藏窗，`window-all-closed` 就**永远不触发** ——
+  // 用户关掉主界面，应用却还在后台赖着不走（D12 的窗口生命周期冲突）。
+  win.on('closed', destroyTrackedWindows)
 }
 
 app.whenReady().then(createWindow)
@@ -140,6 +146,19 @@ ipcMain.handle('openFile', async function (_e, target: string) {
   if (!target) return '';
   // 渲染层拼路径用的是 `/`，这里归一化成 Windows 形式再交给 ShellExecute
   return shell.openPath(win32.normalize(target));
+});
+
+/**
+ * 把一段文本写进系统剪贴板（右键菜单「复制文件名」用）。
+ *
+ * 沿用 openFile 的同一条路：`clipboard` 是**系统能力**，按本仓约定交主进程做，
+ * 渲染层只负责把"要复制什么"通过 IPC 传过来 —— 不新增机制，也不在渲染层直接碰剪贴板 API。
+ * 失败返回错误描述（成功是空串），和 openFile 的契约一致。
+ */
+ipcMain.handle('copyText', async function (_e, text: string) {
+  if (!text) return '';
+  clipboard.writeText(text);
+  return '';
 });
 
 /**

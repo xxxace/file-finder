@@ -44,6 +44,12 @@
                     </template>
                     忽略缓存，把这一片重新读一遍硬盘。确定吗？
                 </n-popconfirm>
+                <!-- 管理助手「补封面」：常驻按钮，子元素个数恒定（工具条铁律）。
+                     它从缓存找缺封面（零读盘）、抓站点的封面写进盘，与上面的
+                     「补全/重读」是两件事 —— 那两个扫的是"目录结构缓存"，这个补的是"封面图"。 -->
+                <n-button size="small" :disabled="scanning" @click="assistantModal?.setShowModal(true)">
+                    补封面
+                </n-button>
                 <n-button size="small" @click="showHistory">
                     <template #icon>
                         <FootstepsOutline />
@@ -90,10 +96,12 @@
                  同一层的两个文件夹若都叫 cover.jpg，就会生成两个 key="cover"。
                  Vue 遇到重复 key 会复用错的组件实例，封面会串到别的格子里。
                  加上 dir 就唯一了（folder 模式下 dir 是父目录，同样唯一）。 -->
-            <div v-for="(item) in fileList" :key="item.dir + '/' + item.name" class="image-box-item" @dblclick="handleOpen($event, item)"
+            <div v-for="(item) in fileList" :key="item.dir + '/' + item.name" class="image-box-item"
+                @dblclick="handleOpen($event, item)" @contextmenu.prevent="onContextMenu($event, item)"
                 :title="item.name + ' ' + getSize(item.size)">
                 <n-image v-if="item.type === 'image' || item.type === 'video'" :src="thumbUrl(item.thumb)"
-                    :preview-src="previewUrl(item)" :alt="item.dir" :lazy="true" objectFit="contain" />
+                    :preview-src="previewUrl(item)" :previewed-img-props="previewedImgProps" :alt="item.dir"
+                    :lazy="true" objectFit="contain" />
                 <n-image v-else-if="!!item.avatar" :src="thumbUrl(item.avatar)" :alt="item.dir || ''" :lazy="true"
                     objectFit="contain" :style="`width:70%;height:70%`" preview-disabled />
                 <img v-else-if="item.type === 'folder'" :src="folderIcon" :alt="item.dir || ''" :style="`width:70%`">
@@ -132,7 +140,19 @@
                 </div>
             </div>
         </n-popover>
+        <!-- 右键上下文菜单：极简一条，定位手法和上面的 files popover 完全一致
+             （n-popover 手动定位 + clickoutside 关闭），独立状态不串台。 -->
+        <n-popover :show="ctxMenu.visible" :x="ctxMenu.x" :y="ctxMenu.y" trigger="manual" placement="bottom-start"
+            @clickoutside="ctxMenu.visible = false">
+            <div class="hstack">
+                <n-button size="small" @click="copyName">复制文件名</n-button>
+            </div>
+        </n-popover>
         <HistoryTable ref="historyTable" @openDir="openHistory" />
+        <!-- 管理助手 · 补封面（全屏面板：选盘 → 扫描 → 抓取 → 写盘）。
+             写盘完成后它会失效对应目录的缓存并发 refresh —— 这里刷新当前这层，
+             让新封面立刻出现在网格里（不需要重启、也不需要重新选盘）。 -->
+        <AssistantCoverModal ref="assistantModal" @refresh="refreshAfterApply" />
     </div>
 </template>
 
@@ -146,6 +166,7 @@ import { Search, Refresh, FootstepsOutline } from '@vicons/ionicons5';
 import { NButton, NBadge, NInput, NIcon, NImage, NTag, NPopover, NSpin, NAlert, NPopconfirm, NTooltip, useLoadingBar } from 'naive-ui';
 import FolderSelector from '@/components/FolderSelector/index.vue';
 import HistoryTable from '@/components/HistoryTable/index.vue';
+import AssistantCoverModal from './AssistantCoverModal.vue';
 import { ipcRenderer } from 'electron';
 import { computed, nextTick, onMounted, onUnmounted, ref } from 'vue';
 import type { FileInfo, FileInfoFiles } from '../../../electron/server/index';
@@ -162,9 +183,9 @@ import type { OpenMode } from 'electron/server/nedb';
  */
 export interface IOpenInfo { name: string; path: string; mode: 'folder' | 'cover', scrollY?: number }
 
-// 与 electron/server/index.ts 的 VIDEO_EXT 保持一致。
-// 这里不能从 server 导入值：server 会带进 node:fs / http / nedb，渲染层会被整包拖进来
-const VIDEO_EXT_RE = /\.(mp4|mkv|avi|wmv|flv|mpeg)$/i;
+// 与 electron/server/videoExt.ts 的 VIDEO_EXT 保持一致（渲染层不能 import server，保留正则副本）。
+// 改了 videoExt.ts 这里要同步改。
+const VIDEO_EXT_RE = /\.(mp4|mkv|avi|wmv|flv|mpeg|m4v|mov|mpg|ts|m2ts|mts|webm|ogv|3gp)$/i;
 
 // 统一写 127.0.0.1 而不是 localhost：个别机器会把 localhost 解析到 ::1，
 // 而服务端只绑了 IPv4，那样每个请求都要先失败一次再回落
@@ -214,8 +235,41 @@ const previewUrl = (item: FileInfo) => {
     return rawUrl(item);
 };
 
+/**
+ * 预览面板里的图按比例**填满视口** —— 打开就是大的，不用再去点工具栏的放大。
+ *
+ * 为什么需要它：预览那张 img 的脚手架样式只有
+ * `max-width: calc(100vw - 32px)` / `max-height: calc(100vh - 32px)`，**没有 width/height**
+ * （naive-ui `es/image/src/styles/index.cssr.mjs` 的 `.n-image-preview`），
+ * 所以它是按**自然尺寸**显示的 —— 图片走 /raw 原图，本来就比视口大，看不出问题；
+ * 但视频的预览图是 480px 宽的抽帧，在 1920 的窗口里就只有一个小方块。
+ * 而偏偏那个放大按钮对 480px 的图是**死的**：`zoomIn()` 要过 `scale < maxScale`，
+ * 而 `maxScale = max(1, naturalWidth / (innerWidth - 40))` 恒为 1（`ImagePreview.mjs`）。
+ *
+ * 这里用 naive-ui 给预览图留的正规入口 `previewed-img-props` 补上 100% × 100% + contain：
+ * contain 保证不变形；脚手架自带的 max-* 会把二者钳到 (100vw-32) × (100vh-32)，
+ * 所以那圈边距和底部工具条的位置**原样保留**（不是我们另设的魔法数字）。
+ *
+ * 实测（`docs/probes/preview-fill/`，真 Electron offscreen 跑真实 Chromium 布局，视口 1903×1063）：
+ *   480×270 抽帧（视频） → 显示 **480×270 → 1833×1031**（撑满，≈3.8 倍插值 —— 收益全在这一档）
+ *   3000×2000 原图（图片） → 显示 **1546.5×1031 → 1546.5×1031**（**视觉零变化**）
+ * 也就是说：图片走 /raw 原图那一档本来就已被 max-* 钳到贴边，**这个改动只对"比视口小的图"起作用**。
+ *
+ * 代价（知情选择，同一次实测）：
+ * - 480px 的抽帧填满视口 ≈ 3.8 倍插值，会糊 —— 要真清晰得让抽帧存更大的图，
+ *   那要重算缓存、重读一遍移动硬盘，**不做**（第一目标是少碰盘）。
+ * - 预览图的**元素盒**从"贴合图"变成"铺满 (100vw-32) × (100vh-32)"，
+ *   于是"点图外空白关闭预览"的可点区缩小：抽帧那种只剩最外圈 16px
+ *   （实测命中点：x=8 命中 overlay、x=40 命中 img），大图左右两侧的 contain 留白也归了 img。
+ *   关闭照旧有三条路：工具条的 ✕（常显）、最外圈空白、Esc（`ImagePreview.mjs:97`）。
+ */
+const previewedImgProps = {
+    style: { width: '100%', height: '100%', objectFit: 'contain' as const }
+};
+
 const dir = ref('');
 const historyTable = ref<typeof HistoryTable | null>(null)
+const assistantModal = ref<typeof AssistantCoverModal | null>(null)
 // const dirRoot = ref('');
 const popover = ref<{
     visible: boolean;
@@ -229,6 +283,24 @@ const popover = ref<{
     y: 0,
     files: [],
     cover: undefined
+});
+
+/**
+ * 右键上下文菜单的状态。**独立一份**，不和上面那个 `popover`（多文件封面弹层）混用 ——
+ * 两者触发方式、内容、定位都不同，共用一个 ref 会在"先右击再双击"这类操作里串台。
+ * 复用 n-popover 的手动定位手法（`:x/:y/:show` + `trigger="manual"`），
+ * 和 `popover` 是同一套渲染结构，不新增机制。
+ */
+const ctxMenu = ref<{
+    visible: boolean;
+    x: number;
+    y: number;
+    name: string;
+}>({
+    visible: false,
+    x: 0,
+    y: 0,
+    name: ''
 });
 const searchText = ref('');
 const imageBox = ref<HTMLDivElement | null>(null)
@@ -348,6 +420,17 @@ const showHistory = () => {
     historyTable.value!.setShowModal(true);
 }
 
+/**
+ * 「补封面」写盘完成后的刷新。与 onRefresh 的区别：**不带 noCache** ——
+ * apply 已经把写过的目录缓存删掉了，正常取数会真读一次盘、把新封面收进来再建缓存；
+ * 再带 noCache 等于把刚建的缓存又删一遍重读，纯浪费。
+ * 盘不在（只读层）时 apply 根本写不了，不用刷。
+ */
+const refreshAfterApply = () => {
+    const top = openStack.value[openStack.value.length - 1];
+    if (top && !readOnlyLevel.value) fetchFolder(top.path, top.mode);
+}
+
 const handleOpen = (e: MouseEvent, item: FileInfo) => {
     if (loading.value) return;
     if (item.type === 'folder') {
@@ -457,6 +540,35 @@ const openFile = async (item: FileInfo | string) => {
     // openPath 成功返回空串，失败返回错误描述。失败必须说出来
     if (err) notify('error', '打开失败', err);
 }
+
+/**
+ * 右键卡片 → 在光标处弹极简菜单。
+ *
+ * `.prevent` 必须带上：Electron 默认右键会冒出原生菜单（开发期还带「重新加载 /
+ * 检查元素」），不拦掉就和我们自己的菜单叠在一起。
+ * 复制的是**磁盘文件名**（含扩展名，见 `fileNameOf`）—— 那是用户看到的那个名字，
+ * 也是资源管理器里真能搜到的名字；封面条目还原成封面图文件名，目录还原成目录名。
+ */
+const onContextMenu = (e: MouseEvent, item: FileInfo) => {
+    ctxMenu.value.visible = true;
+    ctxMenu.value.x = e.clientX;
+    ctxMenu.value.y = e.clientY;
+    ctxMenu.value.name = fileNameOf(item);
+};
+
+/**
+ * 菜单项「复制文件名」：把文件名交给主进程的 `copyText`（沿用 openFile 那条 IPC 通道）。
+ * 先关菜单再复制：菜单是手动定位的浮层，留着会挡着后面的操作；
+ * 并且复制是用户手势内发的，关掉它不影响 clipboard 写入。
+ */
+const copyName = async () => {
+    const name = ctxMenu.value.name;
+    ctxMenu.value.visible = false;
+    if (!name) return;
+    const err = await ipcRenderer.invoke('copyText', name);
+    if (err) notify('error', '复制失败', String(err));
+    else notify('success', '已复制文件名', name);
+};
 
 /**
  * 只做一件事：把服务端给的完整列表取回来放进 dataSource。

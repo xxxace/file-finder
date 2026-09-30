@@ -18,8 +18,10 @@ import {
 } from './nedb';
 import type { CacheMeta, OpenMode, SearchCache } from './nedb';
 import { LOCAL_TOKEN } from './token';
+import config from '../config';
+import { createAssistantRoutes } from './assistant';
+import { isVideo, VIDEO_MIME } from './videoExt';
 
-const VIDEO_EXT = ['mp4', 'mkv', 'avi', 'wmv', 'flv', 'mpeg'];
 const IMAGE_EXT = ['jpg', 'jpeg', 'png', 'bmp', 'gif', 'svg', 'psd', 'webp'];
 const excludedFiles = ['System Volume Information', '$RECYCLE.BIN', 'Config.Msi', 'found.000', 'found.001'];
 
@@ -41,8 +43,7 @@ const event = new events.EventEmitter();
 const MIME: Record<string, string> = {
     jpg: 'image/jpeg', jpeg: 'image/jpeg', png: 'image/png', bmp: 'image/bmp',
     gif: 'image/gif', webp: 'image/webp', svg: 'image/svg+xml',
-    mp4: 'video/mp4', mkv: 'video/x-matroska', avi: 'video/x-msvideo',
-    wmv: 'video/x-ms-wmv', flv: 'video/x-flv', mpeg: 'video/mpeg',
+    ...VIDEO_MIME,
 };
 
 /**
@@ -101,9 +102,6 @@ type Req<T = any> = http.IncomingMessage & { params?: URLSearchParams; body?: T 
 
 function isImage(ext: string) {
     return ext ? IMAGE_EXT.includes(ext.toLowerCase()) : false;
-}
-function isVideo(ext: string) {
-    return ext ? VIDEO_EXT.includes(ext.toLowerCase()) : false;
 }
 
 /** 这个文件名是不是"目录封面"。大小写不敏感 —— NTFS 本来就不区分大小写 */
@@ -1066,6 +1064,15 @@ route('/backup', backup);
 route('/backupToFile', backupToFile);
 route('/restoreFromFile', restoreFromFile);
 route('/mergeCache', mergeCache);
+
+// 管理助手（Phase 1：规则 CRUD + 单站试跑，暂无写盘）。经同一 route() 咽喉点注册，
+// 自动受 token 校验与统一错误兜底；sendJson/dataDir 以依赖注入传入，避免循环引用。
+// 深度重扫走 assistant 自己的实时清单（纯 readdir+stat，零抽帧、不写缓存），
+// 不需要从这儿注入 scanAndCache —— 缓存的写入入口保持唯一。
+for (const [assistantPath, assistantHandler] of createAssistantRoutes({ sendJson, dataDir: config.userBasePath })) {
+    route(assistantPath, assistantHandler);
+}
+
 route('/', function (_req, res) {
     res.end('hi! i`m ace.');
 });
