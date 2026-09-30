@@ -920,15 +920,29 @@ defineExpose({
 
 .cache-panel .g2-row {
     display: flex;
-    align-items: center;
+    /* `baseline` 而不是 `center`：总览换行成两行时，按钮要和**第一行文本的基线**对齐，
+       而不是和"两行文本的中间"对齐（后者会让按钮悬在半空）。 */
+    align-items: baseline;
     justify-content: space-between;
-    gap: 12px;
+    /* ⚠️ 小窗口下总览那句一定会换行。不给 wrap 的话，右边的「打开存放文件夹」
+       会被挤到第二行的最右边、悬在句子下面 —— 看起来就是"排版错乱"。
+       给了 wrap + 文本 flex-basis，装不下时按钮**整块换到下一行行首**，是可预期的形态。 */
+    flex-wrap: wrap;
+    gap: 4px 12px;
     padding-bottom: 8px;
 }
 
 .cache-panel .overview {
+    /* 文本可伸缩、可换行（它是句子，换行是正常的）；按钮反过来：不许被压缩、不许折行 */
+    flex: 1 1 320px;
+    min-width: 0;
     font-size: 12.5px;
     color: #666;
+}
+
+.cache-panel .g2-row .n-button {
+    flex: 0 0 auto;
+    white-space: nowrap;
 }
 
 .cache-panel .g2-disk {
@@ -1039,17 +1053,38 @@ defineExpose({
     display: flex;
     align-items: center;
     justify-content: space-between;
-    gap: 12px;
+    /* 小窗口下"批量区 + 分页器"一行装不下 —— 允许整块换行，
+       而不是让两边互相挤压（挤的后果就是分页器把「共 106 项」压成一列竖排的字）。 */
+    flex-wrap: wrap;
+    gap: 8px 12px;
 }
 
 .cache-panel .foot-left {
     display: flex;
     align-items: center;
+    flex-wrap: wrap;
     gap: 8px;
+    min-width: 0;
 }
 
 .cache-panel .sel-hint {
     font-size: 12.5px;
     color: #999;
+}
+
+/* 分页器**不许被压缩**：它内部是 `flex-wrap: nowrap`，一被压就把页码和"共 N 项"叠在一起。
+   两招一起上：① 容器 `flex: 0 0 auto` —— 装不下时**整块换行**，而不是缩小；
+   ② 自身改成 `flex-wrap: wrap` —— 极窄时页码换行，而不是溢出被卡片裁掉（卡片内容是 overflow:hidden）。 */
+.cache-panel .foot-row .n-pagination {
+    flex: 0 0 auto;
+    flex-wrap: wrap;
+    row-gap: 4px;
+}
+
+/* 「共 N 项」被压成竖排（一个字一行）的根因就是它是 flex 子项、默认允许收缩到内容宽 ——
+   必须是整块不折。 */
+.cache-panel .foot-row .n-pagination-prefix {
+    flex: 0 0 auto;
+    white-space: nowrap;
 }
 </style>

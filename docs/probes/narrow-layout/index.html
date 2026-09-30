@@ -1,0 +1,305 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+
+<head>
+    <meta charset="utf-8">
+    <title>小窗口布局 —— 真 Chromium 测量（改前 / 改后）</title>
+    <style>
+        html,
+        body {
+            margin: 0;
+            height: 100%;
+            background: #eef0f4;
+            font-family: system-ui, "Microsoft YaHei", sans-serif;
+        }
+
+        #stage {
+            height: 100%;
+            padding: 8px;
+            box-sizing: border-box;
+        }
+
+        /* ===== 两个变体共用的骨架（与 HistoryTable 的实际结构一致） ===== */
+        .cache-panel .n-card__content {
+            display: flex;
+            flex-direction: column;
+            overflow: hidden;
+            flex: 1 1 auto;
+            min-height: 0;
+        }
+
+        .cache-panel .n-spin-container {
+            flex: 1 1 auto;
+            min-height: 0;
+            display: flex;
+            flex-direction: column;
+        }
+
+        .cache-panel .table-wrap {
+            flex: 1 1 auto;
+            min-height: 0;
+            display: flex;
+        }
+
+        .cache-panel .table-wrap>.n-data-table {
+            flex: 1 1 auto;
+            min-height: 0;
+        }
+
+        .cache-panel .overview {
+            font-size: 12.5px;
+            color: #666;
+        }
+
+        .cache-panel .foot-left {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+
+        .cache-panel .sel-hint {
+            font-size: 12.5px;
+            color: #999;
+        }
+
+        /* ===== 变体 old：当前线上的写法（小窗口下会坏） ===== */
+        .variant-old .g2-row {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 12px;
+            padding-bottom: 8px;
+        }
+
+        .variant-old .foot-row {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 12px;
+        }
+
+        /* ===== 变体 new：这次要验的修法 ===== */
+        .variant-new .g2-row {
+            display: flex;
+            align-items: baseline;
+            justify-content: space-between;
+            flex-wrap: wrap;
+            gap: 4px 12px;
+            padding-bottom: 8px;
+        }
+
+        .variant-new .overview {
+            flex: 1 1 320px;
+            min-width: 0;
+        }
+
+        .variant-new .g2-row .n-button {
+            flex: 0 0 auto;
+            white-space: nowrap;
+        }
+
+        .variant-new .foot-row {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            flex-wrap: wrap;
+            gap: 8px 12px;
+        }
+
+        .variant-new .foot-left {
+            flex-wrap: wrap;
+            min-width: 0;
+        }
+
+        .variant-new .foot-row .n-pagination {
+            flex: 0 0 auto;
+            flex-wrap: wrap;
+            row-gap: 4px;
+        }
+
+        .variant-new .foot-row .n-pagination-prefix {
+            flex: 0 0 auto;
+            white-space: nowrap;
+        }
+    </style>
+</head>
+
+<body>
+    <div id="stage">
+        <div id="app"></div>
+    </div>
+
+    <script src="../../../node_modules/vue/dist/vue.global.prod.js"></script>
+    <script src="../../../node_modules/naive-ui/dist/index.js"></script>
+    <script>
+        const { createApp, h, ref } = Vue;
+        const N = naive;
+
+        // 用截图里的真实数字，长度也接近（总览是一句长文本，正是它导致换行）
+        const OVERVIEW = '6 块盘 · 213 个目录 · 1239 个条目 · 已读到 3.33 TB · 库 81.17 MB · 最近扫描 2026-10-01 00:42';
+
+        const rows = Array.from({ length: 20 }, (_, i) => ({
+            _id: 'r' + i,
+            disk: 'H:',
+            relPath: '新建文件夹/示例条目 ' + (i + 1),
+            count: i + 1,
+            bytes: (i + 1) * 1073741824,
+            create_at: '2026-09-24 14:32',
+        }));
+
+        const columns = [
+            { type: 'selection' },
+            { title: '盘', key: 'disk', width: 88 },
+            { title: '目录', key: 'relPath', minWidth: 240, sorter: true },
+            { title: '条目', key: 'count', width: 88, align: 'right', sorter: true },
+            {
+                title: '大小', key: 'bytes', width: 96, align: 'right', sorter: true,
+                render: r => (r.bytes / 1073741824).toFixed(2) + ' GB',
+            },
+            { title: '上次扫描', key: 'create_at', width: 150, align: 'right', sorter: true },
+        ];
+
+        const variant = ref('old');
+        window.__setVariant = v => { variant.value = v; };
+
+        const App = {
+            setup() {
+                return () => h('div', { class: 'cache-panel variant-' + variant.value }, [
+                    h(N.NConfigProvider, null, {
+                        default: () => h(N.NCard, {
+                            title: '缓存记录', closable: true, bordered: false, size: 'huge',
+                            style: 'width:100%; height:86vh; display:flex; flex-direction:column',
+                            contentStyle: { display: 'flex', flexDirection: 'column', overflow: 'hidden', flex: '1 1 auto', minHeight: '0' },
+                        }, {
+                            default: () => h(N.NSpin, {
+                                show: false,
+                                contentStyle: { display: 'flex', flexDirection: 'column', flex: '1 1 auto', minHeight: '0' },
+                            }, {
+                                default: () => [
+                                    // G2 总览行（长文本 + 右侧按钮）
+                                    h('div', { class: 'g2-row' }, [
+                                        h('span', { class: 'overview' }, OVERVIEW),
+                                        h(N.NButton, { text: true, size: 'small' }, { default: () => '打开存放文件夹' }),
+                                    ]),
+                                    h('div', { style: 'padding-bottom:10px' }, [
+                                        h(N.NSelect, {
+                                            size: 'small', style: 'width:320px',
+                                            options: [{ label: 'H: · 106 个目录 / 636 个条目', value: 'H' }],
+                                            value: 'H',
+                                        }),
+                                    ]),
+                                    h('div', { class: 'table-wrap' }, [
+                                        h(N.NDataTable, {
+                                            columns, data: rows, rowKey: r => r._id,
+                                            flexHeight: true,
+                                            // 两边都不给 scroll-x：曾经试加过，量出来列宽只差 18px、
+                                            // 而横向滚动容器改前改后都是 2 个 ⇒ 收益不成立，已从组件里撤回。
+                                            // 探针要和**最终发布的配置**一致，否则量的是别的东西。
+                                            sorter: [{ columnKey: 'create_at', order: 'descend', sorter: () => 0 }],
+                                        }),
+                                    ]),
+                                ],
+                            }),
+                            footer: () => h('div', { class: 'foot-row' }, [
+                                h('div', { class: 'foot-left' }, [
+                                    h(N.NButton, { size: 'small', type: 'error', disabled: true }, { default: () => '删除记录' }),
+                                    h('span', { class: 'sel-hint' }, '未选中任何记录'),
+                                ]),
+                                h(N.NPagination, {
+                                    size: 'small', page: 1, pageSize: 16, itemCount: 106,
+                                    showSizePicker: true, showQuickJumper: true, pageSlot: 7,
+                                    pageSizes: [10, 16, 20, 40, 60, 80, 100],
+                                }, { prefix: ({ itemCount }) => '共 ' + itemCount + ' 项' }),
+                            ]),
+                        }),
+                    }),
+                ]);
+            },
+        };
+
+        createApp(App).mount('#app');
+
+        /**
+         * 量一个变体。判据直接对应截图里那三处"错乱"：
+         *   ① 表格：最后一列有没有被裁（超出表格右边缘）？有没有横向滚动？
+         *   ② 总览行：按钮和文本是不是挤在一行、还是被挤成悬空？
+         *   ③ 底部：「共 N 项」是不是被压成竖排（高度变大、宽度变小）？分页器有没有被压窄？
+         */
+        window.__measure = function (v) {
+            const root = document.querySelector('.cache-panel');
+            const card = root.querySelector('.n-card');
+            const table = root.querySelector('.n-data-table');
+
+            // ① 表格横向。
+            // ⚠️ 判据必须是"**真的有横向滚动容器**"（computed overflow-x ∈ auto/scroll 且内容更宽），
+            // 而不是"某个元素 scrollWidth > clientWidth" —— 后者对被裁掉的内容同样成立：
+            // 没有滚动能力时，超出部分只是被父级裁掉，scrollWidth 照样大于 clientWidth。
+            // 我第一版就是这么写的，结果"改前"也被判成"有横向滚动"，证据没法用。
+            const scrollers = [...root.querySelectorAll('.n-data-table *')]
+                .filter(el => {
+                    const ox = getComputedStyle(el).overflowX;
+                    return (ox === 'auto' || ox === 'scroll') && el.scrollWidth > el.clientWidth + 2;
+                });
+            const ths = [...root.querySelectorAll('th')];
+            const lastTh = ths[ths.length - 1];
+            const tableRect = table.getBoundingClientRect();
+
+            // ② 总览行
+            const ov = root.querySelector('.g2-row .overview');
+            const ovBtn = root.querySelector('.g2-row .n-button');
+            const ovRect = ov.getBoundingClientRect();
+            const btnRect = ovBtn.getBoundingClientRect();
+
+            // ③ 底部
+            const footLeft = root.querySelector('.foot-left');
+            const pg = root.querySelector('.n-pagination');
+            const prefix = root.querySelector('.n-pagination-prefix');
+            const flRect = footLeft.getBoundingClientRect();
+            const pgRect = pg.getBoundingClientRect();
+            const pxRect = prefix.getBoundingClientRect();
+
+            return {
+                变体: v,
+                视口: window.innerWidth + '×' + window.innerHeight,
+                卡片宽: Math.round(card.getBoundingClientRect().width),
+                表格: {
+                    可横向滚动的容器数: scrollers.length,
+                    最后一列可达: scrollers.length > 0,
+                    横向滚动范围: scrollers.length ? `${scrollers[0].clientWidth}/${scrollers[0].scrollWidth}` : '—',
+                    最后一列右缘超出表格: Math.round(lastTh.getBoundingClientRect().right - tableRect.right),
+                    // 每一列**实际渲染出来的宽度** —— 这才是决定"scroll-x 到底有没有用"的指标：
+                    // 不给 scroll-x 时 naive-ui 会把列**压缩**到容器里（宽度对不上声明值），
+                    // 给了之后列保持声明宽度、横向滚动。
+                    各列实际宽: ths.map(th => Math.round(th.getBoundingClientRect().width)),
+                    表格内容宽: Math.round(tableRect.width),
+                },
+                总览行: {
+                    按钮与文本同行: (btnRect.bottom > ovRect.top && btnRect.top < ovRect.top + 24),
+                    按钮顶部相对文本顶部: Math.round(btnRect.top - ovRect.top),
+                    文本高: Math.round(ovRect.height),
+                    按钮高: Math.round(btnRect.height),
+                },
+                底部: {
+                    批量区与分页器同行: Math.abs(flRect.top - pgRect.top) < 8,
+                    分页器宽: Math.round(pgRect.width),
+                    分页器超出卡片: Math.round(pgRect.right - card.getBoundingClientRect().right),
+                    '共N项_宽': Math.round(pxRect.width),
+                    '共N项_高': Math.round(pxRect.height),
+                },
+            };
+        };
+
+        window.__probeAll = async function () {
+            const out = [];
+            for (const v of ['old', 'new']) {
+                window.__setVariant(v);
+                await new Promise(r => requestAnimationFrame(() => requestAnimationFrame(r)));
+                await new Promise(r => setTimeout(r, 150));
+                out.push(window.__measure(v));
+            }
+            return out;
+        };
+    </script>
+</body>
+
+</html>
