@@ -116,21 +116,44 @@
             ],
         });
 
+        /**
+         * 根 chip 的三种形态。
+         * ⚠️ 关键场景：**冷启动 → 从「缓存记录」跳进来**（那时 `dir` 还是空的）
+         * ⇒ 根 chip 是"还没选根"那个按钮，而面包屑**同时存在** ⇒ 两者真的抢地方。
+         * 这个场景下"按钮 vs 图标"的差别才是实打实的（在"已选根"的场景里没有按钮，差别为 0）。
+         */
+        const chipForm = ref('path');
+        window.__setChipForm = (v) => { chipForm.value = v; };
+
         /** 与 FolderSelector 的模板结构一致：n-tag > div.fs-path > span.fs-text + tiny button */
-        const chip = (bounded) => h(N.NTag, {
-            class: 'fs-tag',
-            title: 'E:/videos/…（这是你的起点；点 × 可清除）',
-            ...sv(),
-        }, {
-            avatar: () => h(N.NAvatar, { color: 'transparent' }, { default: () => '·' }),
-            // 有界版给的是 foldPath 的结果（首段 + … + 末2）；无界版是原样的整条路径
-            default: () => h('div', { class: 'fs-path', ...sv() }, [
-                h('span', { class: 'fs-text', ...sv() }, bounded
-                    ? 'E:/…/示例作品标题B也很难短下来'
-                    : 'E:/videos/示例演员A的名字真的很长很长/示例作品标题B也很难短下来'),
-                h(N.NButton, { size: 'tiny', style: 'margin-left:6px' }, { default: () => 'x' }),
-            ]),
-        });
+        const chip = (bounded) => {
+            const form = chipForm.value;
+            if (form === 'label') {
+                return h(N.NButton, { size: 'small', ...sv() }, { default: () => '请选择文件夹(D)' });
+            }
+            if (form === 'icon') {
+                return h(N.NButton, { size: 'small', ...sv() }, {
+                    // 真实实现是一个 14×14 的 <img>；这里用同尺寸的块替身（量盒子，不量图）
+                    icon: () => h('span', {
+                        style: 'display:block;width:14px;height:14px;background:#888;border-radius:2px',
+                    }),
+                });
+            }
+            return h(N.NTag, {
+                class: 'fs-tag',
+                title: 'E:/videos/…（这是你的起点；点 × 可清除）',
+                ...sv(),
+            }, {
+                avatar: () => h(N.NAvatar, { color: 'transparent' }, { default: () => '·' }),
+                // 有界版给的是 foldPath 的结果（首段 + … + 末2）；无界版是原样的整条路径
+                default: () => h('div', { class: 'fs-path', ...sv() }, [
+                    h('span', { class: 'fs-text', ...sv() }, bounded
+                        ? 'E:/…/示例作品标题B也很难短下来'
+                        : 'E:/videos/示例演员A的名字真的很长很长/示例作品标题B也很难短下来'),
+                    h(N.NButton, { size: 'tiny', style: 'margin-left:6px' }, { default: () => 'x' }),
+                ]),
+            });
+        };
 
         /**
          * 工具条的候选形态。用来量「缩文案 / 收下拉 / 挪 badge」各自能还给导航区多少 px ——
@@ -145,8 +168,11 @@
             const kids = [];
 
             if (m === 'more') {
-                // 三个不常用的动作收进一个下拉（下拉内容不在这一行里）
-                kids.push(h(N.NButton, { size: 'small' }, { default: () => '更多' }));
+                // 与真实实现一致：**图标 + 文字**（只算文字会低估 ~16px）
+                kids.push(h(N.NButton, { size: 'small' }, {
+                    icon: () => h(N.NIcon, null, { default: () => '⌄' }),
+                    default: () => '更多',
+                }));
             } else {
                 const short = m !== 'now';
                 kids.push(h(N.NButton, { size: 'small' }, { default: () => (short ? '补全' : '补全这一片') }));
@@ -317,10 +343,49 @@
             return out;
         };
 
+        /**
+         * 根 chip 三形态 × 三档宽度，**在"已批准"的工具条形态下**（更多收纳）测。
+         * 输出里看两件事：`导航区宽`（面包屑有多少地方）与 `当前段可见`。
+         */
+        window.__measureChipForms = async function () {
+            const stage = document.getElementById('stage');
+            window.__setVariant('new');
+            window.__setToolbar('more');
+            const out = [];
+            for (const f of ['path', 'label', 'icon']) {
+                window.__setChipForm(f);
+                await new Promise(r => requestAnimationFrame(() => requestAnimationFrame(r)));
+                for (const w of [640, 800, 1280]) {
+                    stage.style.width = w + 'px';
+                    await new Promise(r => setTimeout(r, 80));
+                    const header = document.querySelector('.header-bar');
+                    const box = header.getBoundingClientRect();
+                    const cur = header.querySelector('.crumb-current');
+                    out.push({
+                        chip形态: f,
+                        窗口宽: w,
+                        芯片宽: Math.round(header.querySelector('.nav-zone > *').getBoundingClientRect().width),
+                        导航区宽: Math.round(header.querySelector('.nav-zone').getBoundingClientRect().width),
+                        头部高: Math.round(box.height),
+                        当前段可见: cur ? Math.round(cur.getBoundingClientRect().right) <= Math.round(box.right) + 1 : null,
+                    });
+                }
+            }
+            window.__setChipForm('path');
+            window.__setToolbar('now');
+            return out;
+        };
+
         window.__probeAll = async function () {
             const out = [];
             const stage = document.getElementById('stage');
             for (const v of ['old', 'new']) {
+                // ⚠️ 口径要对齐"改造前 vs 已落地"：
+                //   old = 改造前的完整形态（flex-wrap 换行 + 三个平铺按钮）
+                //   new = 已批准并落地的形态（nowrap 分区 + 三个动作收进「更多」）
+                // 第一版两边都用 'now' 工具条 ⇒ 对照表里 new 也带着"溢出"那个旧毛病，
+                // 判据把它报成 ❌ —— 那是口径错，不是实现错。
+                window.__setToolbar(v === 'old' ? 'now' : 'more');
                 for (const w of [640, 800, 1280, 1920]) {
                     window.__setVariant(v);
                     await new Promise(r => requestAnimationFrame(() => requestAnimationFrame(r)));
@@ -329,6 +394,7 @@
                     out.push(window.__measure(v, w));
                 }
             }
+            window.__setToolbar('now');
             return out;
         };
     </script>

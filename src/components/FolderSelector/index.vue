@@ -1,7 +1,22 @@
 <template>
     <div class="fs-root">
         <n-space>
-            <n-button v-if="!modelValue" @click="handleClick" size="small">{{ label }}</n-button>
+            <!-- 还没选根时：**只放一个文件夹图标**，不占一行字。
+                 （不是表单，那句「请选择文件夹(D)」白占了 ~160px —— 而它在
+                 "冷启动→从缓存记录跳进来"这条路上会和面包屑**同时出现**，真的抢地方。）
+                 ⚠️ 图标按钮**必须**带 tooltip：本项目在「缓存记录」那个脚印图标上吃过亏 ——
+                 只有图标、没有文字也没有 tooltip ⇒ 功能做得再好也找不到入口。
+                 提示文案就是原来那个 `label`（`请选择文件夹(D)`）⇒ 快捷键提示也没丢。 -->
+            <n-tooltip v-if="!modelValue">
+                <template #trigger>
+                    <n-button class="fs-pick" size="small" @click="handleClick">
+                        <template #icon>
+                            <img class="fs-pick-icon" :src="folderPng" alt="" />
+                        </template>
+                    </n-button>
+                </template>
+                {{ label }}
+            </n-tooltip>
             <!-- 选中的根路径 = 一个**有界**的字符串。
                  层级深不会把它撑长：`foldPath()` 把它压成「首段 + … + 末 2 段」，
                  与"单个名字过长"是两回事，后者由下面的 max-width + 省略号兜。
@@ -25,11 +40,11 @@
 import FolderPng from '@/assets/folder.png';
 import { foldPath } from '@/utils';
 import { computed, defineComponent, ref } from 'vue';
-import { NButton, NTag, NAvatar, NSpace } from 'naive-ui';
+import { NButton, NTag, NAvatar, NSpace, NTooltip } from 'naive-ui';
 import { ipcRenderer } from 'electron';
 
 export default defineComponent({
-    components: { NButton, NTag, NAvatar, NSpace },
+    components: { NButton, NTag, NAvatar, NSpace, NTooltip },
     emits: ['change', 'update:modelValue'],
     props: {
         modelValue: String,
@@ -93,5 +108,13 @@ export default defineComponent({
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
+}
+
+/* 图标本身就是文件夹图（用户认的就是它），不要再套一层图标容器给它留白 */
+.fs-pick-icon {
+    display: block;
+    width: 14px;
+    height: 14px;
+    object-fit: contain;
 }
 </style>

@@ -55,6 +55,16 @@ app.whenReady().then(async () => {
         console.log(`窗口 ${w}px（工具条宽/导航区宽）：${row}`);
     }
 
+    // ── 根 chip 三形态（在"已批准"的工具条形态下）────────────────────────
+    const chipForms = await win.webContents.executeJavaScript('__measureChipForms()');
+    console.log('\n── 根 chip 三形态（工具条＝更多收纳后）──');
+    console.table(chipForms);
+    for (const w of [640, 800, 1280]) {
+        const row = chipForms.filter(r => r.窗口宽 === w)
+            .map(r => `${r.chip形态}→芯片${r.芯片宽}/导航区${r.导航区宽}`).join('  ');
+        console.log(`窗口 ${w}px：${row}`);
+    }
+
     /**
      * 判据只有三条，全部对应"头部高度取决于内容"这个原始问题：
      *   ① **头部高是常量** —— 它在四档窗口宽度下必须完全一致（这一条是核心）

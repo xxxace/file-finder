@@ -318,3 +318,11 @@
     text-overflow: ellipsis;
     white-space: nowrap;
 }
+
+/* 图标本身就是文件夹图（用户认的就是它），不要再套一层图标容器给它留白 */
+.fs-pick-icon[data-v-probe] {
+    display: block;
+    width: 14px;
+    height: 14px;
+    object-fit: contain;
+}

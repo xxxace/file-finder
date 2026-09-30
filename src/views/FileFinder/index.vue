@@ -67,33 +67,31 @@
             </n-space> -->
             <div class="toolbar">
                 <!-- 工具条 = PC 文件管理器那套：**动作常驻，忙碌时只置灰，绝不消失、绝不换形**。
-                     原来扫描中把两个入口"就地换成"进度+取消，于是工具条的子元素个数随
-                     `scanning` 变化 —— 叠加 n-space 的重复 key 问题，界面上会多出重复按钮，
-                     点着还没反应。现在进度和取消都搬到网格下方的状态条（见 .scan-bar），
-                     工具条这一组**一个字都不随状态变**（子元素个数恒定）。
-                     两个入口仍然**平铺**，不拿下拉藏（这条特性没动）。
-                     顺序上「补全」在前（命中缓存就不碰盘，是默认动作），
-                     「重读」在后且带确认（唯一会整片真读一遍的主动作）。 -->
-                <n-button size="small" :disabled="scanning || !history.length || readOnlyLevel" @click="startScan(false)">
-                    补全这一片
-                </n-button>
-                <!-- 只有「重读」带确认：它会忽略缓存、把整片真读一遍，是本组里唯一
-                     大面积碰盘的主动作。而「补全」命中缓存就不碰盘，「刷新」只影响一层 ——
-                     门槛 ∝ 不可逆 × 范围，那两个再弹窗只会烦人（对高频操作尤甚）。
-                     扫描中靠**按钮自身 disabled** 挡住：disabled 的 <button> 不派发 click，
-                     确认框自然弹不出来，不需要再给 popconfirm 加一层 v-if。 -->
-                <n-popconfirm positive-text="重读" negative-text="取消" @positive-click="startScan(true)">
-                    <template #trigger>
-                        <n-button size="small" :disabled="scanning || !history.length || readOnlyLevel">重读这一片</n-button>
-                    </template>
-                    忽略缓存，把这一片重新读一遍硬盘。确定吗？
-                </n-popconfirm>
-                <!-- 管理助手「补封面」：常驻按钮，子元素个数恒定（工具条铁律）。
-                     它从缓存找缺封面（零读盘）、抓站点的封面写进盘，与上面的
-                     「补全/重读」是两件事 —— 那两个扫的是"目录结构缓存"，这个补的是"封面图"。 -->
-                <n-button size="small" :disabled="scanning" @click="assistantModal?.setShowModal(true)">
-                    补封面
-                </n-button>
+                     进度和取消在网格下方的状态条（见 .scan-bar），工具条这一组**一个字都不随状态变**。
+                     ⚠️ 2026-10-01 变更：三个维护动作**收进「更多」**（用户批准）。原来它们是三个平铺的
+                     文字按钮，实测共占 242px —— 工具条 605px 里的 40%，而它们是低频动作。
+                     三条必须同时守住：
+                     ① **子元素个数仍然恒定**（5 个：更多 / 缓存记录 / 角标 / 搜索 / 刷新），
+                        忙碌时只置灰、不消失、不换形（原来那条铁律没变）。
+                     ② **文案一个字都不缩**：下拉里有地方，「这一片」表达的是"递归整片"，
+                        正是它与「刷新＝只重新读当前这一层」的区分点。收进下拉把
+                        "要不要缩短文案"这个取舍**直接消掉了**。
+                     ③ 「重读」的确认从 `n-popconfirm` 改成 `n-dialog` —— 这是**有意偏离**
+                        `docs/DESIGN-UIUX-2026-09-24.md` §4.1 的"不用 modal"。那条原则的理由是
+                        "高频动作弹窗会造成警报疲劳（F5 一天按几十次）"，而重读是**低频**动作
+                        （用户原话"并不常用"）；且从下拉里触发的动作再挂一个受控 popconfirm
+                        在下拉按钮上，反而更绕。低频 ⇒ 模态的打断成本可以忽略。
+                     门槛本身没降：它仍然是唯一带确认的动作（不可逆 × 波及面最大）。 -->
+                <n-dropdown trigger="click" :options="moreOptions" :disabled="scanning" @select="onMoreSelect">
+                    <n-button size="small" :disabled="scanning">
+                        <template #icon>
+                            <n-icon>
+                                <ChevronDownOutline />
+                            </n-icon>
+                        </template>
+                        更多
+                    </n-button>
+                </n-dropdown>
                 <!-- 缓存记录入口。⚠️ 原来它是一个**只有脚印图标、没有文字、也没有 tooltip** 的按钮 ——
                      面板做得再好，找不到入口等于零。这里补一句说明（一行成本）。
                      紧跟着的那个 n-badge 是**当前目录的条目数**，不是这个按钮的角标；
@@ -216,8 +214,8 @@ import { apiUrl, getAction, ApiError } from '@/utils/request';
 import folderIcon from '@/assets/fileTypeIcon/folder.png';
 import usePinYin from '@/hooks/usePinYin';
 import useNotify from '@/hooks/useNotify';
-import { Search, Refresh, FootstepsOutline } from '@vicons/ionicons5';
-import { NButton, NBadge, NInput, NIcon, NImage, NTag, NPopover, NSpin, NAlert, NPopconfirm, NTooltip, useLoadingBar } from 'naive-ui';
+import { Search, Refresh, FootstepsOutline, ChevronDownOutline } from '@vicons/ionicons5';
+import { NButton, NBadge, NInput, NIcon, NImage, NTag, NPopover, NSpin, NAlert, NTooltip, NDropdown, useLoadingBar, useDialog } from 'naive-ui';
 import FolderSelector from '@/components/FolderSelector/index.vue';
 import HistoryTable from '@/components/HistoryTable/index.vue';
 import AssistantCoverModal from './AssistantCoverModal.vue';
@@ -490,6 +488,7 @@ const banner = computed(() => {
 
 const loadingBar = useLoadingBar();
 const notify = useNotify();
+const dialog = useDialog();
 
 /**
  * 文件大小 → 人类可读。
@@ -1066,6 +1065,43 @@ const startScan = async (rescan: boolean) => {
 const onScanCancel = () => {
     cancelling.value = true;
     scanCancelled = true;
+}
+
+/**
+ * 「更多」下拉的项。
+ *
+ * ⚠️ `disabled` 的条件与改造前那三个平铺按钮**逐条一致**，一条都没有放宽 ——
+ * 搬家不该顺手改门槛。扫描中整组不可用，由触发按钮自己的 `:disabled="scanning"` 挡住
+ * （下拉不弹出来 = 三项都点不到），与"忙碌时只置灰、不消失"是同一条铁律。
+ */
+const moreOptions = computed(() => [
+    { label: '补全这一片', key: 'fill', disabled: scanning.value || !history.value.length || readOnlyLevel.value },
+    { label: '重读这一片', key: 'rescan', disabled: scanning.value || !history.value.length || readOnlyLevel.value },
+    { label: '补封面', key: 'cover', disabled: scanning.value },
+]);
+
+/**
+ * 下拉选中。**「重读」的确认放在这里**（唯一不可逆 × 波及面最大的动作）。
+ *
+ * 为什么是 `dialog` 而不是原来的 `n-popconfirm`：换成下拉之后，popconfirm 只能挂在
+ * 「更多」按钮上（受控 show），于是"点了菜单项、确认框却出现在别处"—— 那个形态比 modal 更绕。
+ * 而 `DESIGN-UIUX` §4.1 之所以选 popconfirm，理由是"高频动作弹窗会警报疲劳"，
+ * 重读恰恰是低频动作 ⇒ 那条理由在这里不成立。门槛本身一点没降。
+ */
+const onMoreSelect = (key: string) => {
+    if (key === 'fill') {
+        startScan(false);
+    } else if (key === 'rescan') {
+        dialog.warning({
+            title: '重读这一片？',
+            content: '忽略缓存，把这一片重新读一遍硬盘。',
+            positiveText: '重读',
+            negativeText: '取消',
+            onPositiveClick: () => { startScan(true); },
+        });
+    } else if (key === 'cover') {
+        assistantModal.value?.setShowModal(true);
+    }
 };
 
 /**
