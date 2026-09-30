@@ -21,7 +21,7 @@
 5. 缓存层**永不自动删**；`wire()` 唯一出口；`CACHE_VERSION=2` 非必要不升；`CACHE_KEY`/`CACHE_IV` **永不可改**。
 6. **脱敏仓库**（`github.com/xxxace/file-finder`，`fff69a0` 立标准）：入库文本**不许**出现真实番号/演员名/作品名/真机目录文件名/站点流水号/盘序列号/用户名。占位：`TST-xxx`、`示例演员A…H`、`示例作品标题`、`D:/sample/videos/…`（番号保留格式族，让解析示例仍成立）。
    ⚠️ **写"我脱敏了"的复盘时最易复发**——只写类别与占位风格，**别抄原值**。手法见 skill `desensitize-audit`。
-   ⚠️ **遗留未清（等他定）**：`HEAD` 里 12 个文件含真实标识、**都不是当轮新增**（最重 `docs/PRD-manager-assistant-2026-09-25.md`、`docs/CODE-REVIEW.md`）。改工作区只能让"以后"干净，真要清得改历史+强推；**不擅动别的会话的文档**。
+   ⚠️ **遗留未清（等他定）**：`HEAD` 里 12 个文件含真实标识、**都不是当轮新增**（最重 `PRD-manager-assistant-2026-09-25.md`、`CODE-REVIEW.md`）。改工作区只让"以后"干净；真要清得改历史+强推。**不擅动别的会话的文档。**
 
 ## 四、文档索引
 - 开工先读：`docs/PROJECT-MEMO-2026-09-24.md`（契约/特性/缓存全文）· `docs/DESIGN-CONVERGED-2026-09-24.md` §六 · `docs/UX-DESIGN-INPUT-2026-09-24.md`（**§二事实不许推翻 / §四神圣清单 / 硬要求**）
@@ -33,11 +33,10 @@
 - **没有测试框架**（`package.json` 只有 dev/typecheck/build）⇒ 验证固定三件套：`typecheck` 0 error + `docs/probes/` 只读探针 + 真机目视。**别写 TDD 式假测试**。
 - 探针证据**必须 `.txt`**（`.gitignore` 挡 `*.log`，否则文档引用变死链）。
 
-## 五、当前状态（2026-09-30 晚）
-- 缓存面板 A/B/C **全部落地并提交**：`formatBytes`（支持 TB）；`loadMeta` 加 `withBytes`+排序；`/getHistory` 回 `bytes`+`sort`/`dir`；`/getDisks` 加 `stats` 且**默认不重探盘符**；删除进唯一写入链（**`removeByIds` 已删**）；离线盘显 `离线(序列号后4位)`；搜索认盘符；开面板聚焦搜索框。**故意不做**：chips 换下拉 / 盘改名 / 上下键选行。基线 `5 盘 · 213 目录 · 1247 条目 · 3.35 TB · 库 81.7 MB`
-- P0+P1+P2、加密备份还原合并、离线只读浏览 **已落地**（界面待目视）
+## 五、当前状态（2026-10-01）
+- **已落地并提交**：缓存面板 A/B/C（详情见 `DESIGN-CACHE-PANEL` / `PLAN-cache-panel`，**故意不做**：chips 换下拉 / 盘改名 / 上下键选行）· P0+P1+P2 · 加密备份还原合并 · 离线只读浏览（界面待目视）· **头部+导航改造**（§四索引，待真机目视）· 管理助手 Phase 1+2A+5（真机部分通过 scan 23/25，**未全验**）
+- 缓存库基线：`5 盘 · 213 目录 · 1247 条目 · 3.35 TB · 库 81.7 MB`
 - n-space 重复 key 已修；`.toolbar{flex-wrap:nowrap}` + `.header-bar .n-input{width:200px}` **两条不许删**
-- 管理助手 Phase 1+2A+5 落地，真机自测部分通过（scan 23/25），**真机未全验**
 - 视频扩展名单一真相源 `electron/server/videoExt.ts`；改它要同步 `index.vue` 的 `VIDEO_EXT_RE` 并重启 dev
 
 ## 六、待他动作
