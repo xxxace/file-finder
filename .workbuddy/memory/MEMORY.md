@@ -31,8 +31,12 @@
 - 「缓存记录」面板方案（2026-09-30，**待批准、代码未动**）：`docs/DESIGN-CACHE-PANEL-2026-09-30.md`（v3 方案，含用户四条硬约束 + 读盘清单 + 自洽性审查）、`docs/PLAN-cache-panel-2026-09-30.md`（实施计划 A/B/C 三阶段）、`docs/cache-panel-mockup-2026-09-30.html`（mockup）；探针 `docs/probes/cache-panel-{stats,ghost,size,size2,size3,agg-cost}.mjs`（只读解密真库，可复算）
 - **本项目没有测试框架**：`package.json` 只有 `dev` / `typecheck` / `build`。⇒ 验证手段固定为「`npm run typecheck` 0 error」+「`docs/probes/` 只读探针」+「真机目视」；**不要写 TDD 式的假测试步骤**。
 
-## 五、当前状态（2026-09-30 晚，**已提交 2 笔，未 push**）
-- 提交：`7bd3645 feat:`（源码：管理助手补封面 / 右键复制文件名 / 预览填满视口 / `videoExt.ts` 单一真相源）+ `ce29aa6 docs:`（`docs/` + 记忆，含脱敏）。工作区已干净。
+## 五、当前状态（2026-09-30 晚，HEAD=`17bc2bb`）
+- **「缓存记录」面板阶段 A 已落地（未提交）**：`src/components/HistoryTable/index.vue` + `src/views/FileFinder/index.vue`
+  （G1/G2/G3/G4 布局、closable、列改造、搜索即时化+输入法守卫、空态、批量区、折叠迁移区、文案重写、表格内滚动 + 表头吸顶）。
+  验证：`npm run typecheck` 0 error + `node docs/probes/cache-panel-sfc-smoke.mjs` 0 问题（冒烟只证编译，渲染仍需目视）。
+  用户已真机试过一轮并给 7 条反馈，**7 条已全处理**（含新增 `/resolveAnchor`）。
+  阶段 B（只读聚合：总览 stats + 行级大小 + 排序）**未开始**。
 - P0+P1+P2 / 加密备份还原合并 已落地实测；离线盘只读浏览已落地（界面待目视）
 - n-space 重复 key 修复 + 连带布局回归已修（`.toolbar{flex-wrap:nowrap}` + `.header-bar .n-input{width:200px}` 两条**不许删**）
 - 管理助手：Phase 1 + 2A + 5 代码全落地；真机自测部分通过（scan 命中 23/25=92%）；**真机未全验**
@@ -85,3 +89,27 @@
 2. **不要读盘，只汇总已有缓存的文件大小** —— 做任何统计都必须是纯内存汇总。
 3. **尽量不加扫盘功能，尽可能利用已有缓存**；若有这类功能**必须主动告诉他**（→ 每轮方案都要附「读盘清单」）。
 4. 交付前必须自查：**是否合理自洽 / 有没有误解 / 有没有把握**（未实测的必须标出来）。
+
+## 十一、已验证的写法（可复用，别重新踩）
+1. **naive-ui DataTable 的 `render()` 里生成的节点，`<style scoped>` 匹配不到**：`render` 回调在 **DataTable 自己的渲染上下文**执行，节点拿到的是 DataTable 的 scope id。⇒ 给这些节点写样式要用**不带 scoped 的 `<style>` + 外层类名前缀隔离**（本项目：`.cache-panel .dir-cell { … }`）。先例：`src/components/HistoryTable/index.vue` 末尾的 style 块。
+2. **并发请求别用 `if (loading) return` 守卫**（会丢掉后发的那次，界面停在旧结果）⇒ 用**请求序号**：`const my = ++seq; … if (my !== seq) return;`，让"旧的响应永远覆盖不了新的"成为结构保证。
+3. **`n-input` 吃掉 composition 事件**：naive-ui 在**它自己的 render 里**把 `onCompositionstart/end` 绑到内部 input（`input/src/Input.mjs:928-929`），外面传同名 prop 会被顶掉。而 composition **会冒泡** ⇒ **在外面套一层普通 div 接**。
+4. **要让表格"内部滚动 + 表头吸顶"**（踩过两次，实测在 `docs/probes/table-scroll/out.log`）：
+   ① 外层必须有**确定高度** —— `max-height` **只封顶、不给确定高度**，`flex:1 1 auto` 的子项**没有剩余空间可分**，
+   表格会按内容长（实测 60 行 = 4235px）压根不受约束；
+   ② 滚动交给 DataTable 自己 —— 加 **`flex-height`**，它会把表头渲染成独立的一块
+   （`.n-data-table-base-table-header`），滚动只发生在 body 里；
+   ③ **别**给外层 div 加 `overflow:auto` + 给 `thead` 加 `position:sticky` —— 实测无效（表头相对表格跑到 −3562px）。
+   模板见 `src/components/HistoryTable/index.vue`；探针 `docs/probes/table-scroll/`（可一键复算）。
+   代价：卡片要给 `height:86vh`（恒定高，不再随内容变矮）。
+   ⚠️ 配套事实：`n-spin` 的 DOM 是 `.n-spin-container > .n-spin-content > slot`（`spin/src/Spin.mjs`），
+   `contentStyle` 落在 `.n-spin-content` 上 —— 这条 flex 链上**每一层都要** `flex:1 1 auto; min-height:0`，
+   少一层（尤其 `.n-spin-container`）高度就传不下去。
+5. **面板内滚动不能靠 `overflow` 加在卡片内容上**（会变成整个弹窗 body 滚）。用户明确要求：**只有表格滚**。
+
+## 十二、判据要落在"事实"上，不能落在"形态/快照"上（2026-09-30 血泪）
+真缺陷：判断"只读层的文件能不能打开"用的是 `path.startsWith('#')` —— **地址长什么样**。
+而地址形态只是"当初扫描那一刻盘在不在"的**历史快照** ⇒ 盘插回来地址不变 ⇒ **永久打不开**。
+**正确的问题永远是"此刻的事实是什么"（盘在不在），并由知道事实的那一方（服务端）当场回答。**
+⇒ 修法：加 `/resolveAnchor`，在**动作发生那一刻**解析，而不是靠一个固化下来的状态标记。
+**自检问句：这个判断依赖的是"现在的事实"还是"过去的快照"？**

@@ -50,11 +50,20 @@
                 <n-button size="small" :disabled="scanning" @click="assistantModal?.setShowModal(true)">
                     补封面
                 </n-button>
-                <n-button size="small" @click="showHistory">
-                    <template #icon>
-                        <FootstepsOutline />
+                <!-- 缓存记录入口。⚠️ 原来它是一个**只有脚印图标、没有文字、也没有 tooltip** 的按钮 ——
+                     面板做得再好，找不到入口等于零。这里补一句说明（一行成本）。
+                     紧跟着的那个 n-badge 是**当前目录的条目数**，不是这个按钮的角标；
+                     它是否让人误读，交给用户裁决（见 docs/DESIGN-CACHE-PANEL-2026-09-30.md 的待确认项），这里不动。 -->
+                <n-tooltip>
+                    <template #trigger>
+                        <n-button size="small" @click="showHistory">
+                            <template #icon>
+                                <FootstepsOutline />
+                            </template>
+                        </n-button>
                     </template>
-                </n-button>
+                    缓存记录（读过的目录）
+                </n-tooltip>
                 <n-badge v-if="fileList.length" :value="fileList.length" />
                 <n-input ref="searchInput" v-model:value="searchText" placeholder="搜索" size="small" clearable>
                     <template #prefix>
@@ -397,7 +406,10 @@ const banner = computed(() => {
         return { type: 'warning' as const, text: '这一层当时没缓存过 —— 只读视图不去读盘。插上盘按 F5 重新扫这一片' };
     }
     if (readOnlyLevel.value) {
-        return { type: 'info' as const, text: '只读视图：这块盘现在不在，显示的是缓存内容（缩略图可用，打不开原文件）。要看实时的，插上盘后从「缓存记录」重新打开' };
+        // ⚠️ 文案跟着 openFile 的修复一起改了：原来写"打不开原文件"，那是**修复前**的行为。
+        // 现在只读层在盘插回来之后**可以直接双击打开原文件**（服务端会当场把锚点解析成实时路径），
+        // 只有"列表变成实时的"才需要从「缓存记录」重开这一行。
+        return { type: 'info' as const, text: '只读视图：这一层显示的是缓存内容（缩略图可用）。插上盘后可以直接双击打开原文件；想让列表也变成实时的，从「缓存记录」重新打开这一行' };
     }
     return { type: 'default' as const, text: '' };
 });
@@ -490,6 +502,26 @@ const openFolderInCover = (path: string) => {
 }
 
 /**
+ * 把「只读锚点」交给服务端换成**此刻**的完整路径。换不到（盘确实不在）返回空串。
+ *
+ * 为什么必须有它：见 openFile 里那段注释 —— 只有"当下问盘在不在"才能修掉
+ * "盘插回来也永远打不开"这个缺陷。判据必须是事实，不能是地址形态。
+ *
+ * 分工照旧，一行都没越界：**懂锚点的只有服务端**（它才有 serial → 盘符 映射，
+ * 渲染层刻意不解析锚点内容）；拿到路径之后"交给系统打开"那一步仍然走主进程（shell.openPath）。
+ */
+const resolveAnchor = async (anchor: string): Promise<string> => {
+    try {
+        const data = await getAction(`${API_BASE}/resolveAnchor?path=${encodeURIComponent(anchor)}`);
+        return data?.path || '';
+    } catch {
+        // 盘不在 / 解析不出来 —— 一律走同一条出口（空串），调用方只判一次，
+        // 不用在每个调用点各区分一遍 kind（那种写法迟早漏一处）。
+        return '';
+    }
+};
+
+/**
  * 打开一个文件，交给系统默认程序。
  *
  * 这里只负责算出**路径**，然后交给主进程的 `shell.openPath` —— 不再自己拼命令行。
@@ -529,11 +561,25 @@ const openFile = async (item: FileInfo | string) => {
 
     if (!target) return;
 
-    // 只读层的地址是锚点（`#序列号/…`）—— 磁盘上不存在这个路径，交给 shell 只会回一句
-    // 看不懂的"找不到文件"。这里直接说清楚，也**不去碰盘**（盘根本不在）。
+    // 只读层的地址是锚点（`#序列号/…`）—— 磁盘上不存在这个路径，不能直接交给 shell
+    // （它只会回一句看不懂的"找不到文件"）。但**也不能因此就判成"打不开"**：
+    // 锚点只说明"当初扫这一层的时候盘不在"，不代表**现在**不在。
+    //
+    // 原来这里是无条件拦掉的（notify 一句"只读视图打不开原文件"），于是盘插回来了也永远打不开 ——
+    // 因为判据用的是**地址形态**（一个历史快照），而不是**盘此刻在不在**（事实）。
+    // 这是设计缺陷，不是配置问题，用户实测反馈的就是它。
+    //
+    // 正确做法：**在这一刻**问服务端"这个锚点对应的盘现在在不在？在就把实时路径给我"。
+    // 解析必须放服务端 —— serial → 盘符 这个映射只有它知道（渲染层刻意不解析锚点内容）。
+    // 拿到实时路径之后，"交给系统打开"那一步仍然走主进程，分工一行都没变。
     if (isReadOnlyPath(target)) {
-        notify('warning', '只读视图', '这块盘现在不在，打不开原文件。插上盘后从「缓存记录」重新打开。');
-        return;
+        const real = await resolveAnchor(target);
+        if (!real) {
+            notify('warning', '这块盘现在不在',
+                '插上盘后重新双击就能打开。列表要变成实时的，从「缓存记录」重新打开这一行。');
+            return;
+        }
+        target = real;
     }
 
     const err = await ipcRenderer.invoke('openFile', target);

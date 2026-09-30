@@ -1014,6 +1014,48 @@ async function mergeCache(req: Req, res: http.ServerResponse) {
 }
 
 /**
+ * 把「只读锚点」解析成**此刻**可用的完整路径。
+ *
+ * 这是对一个设计缺陷的正面修复（不是打补丁）：
+ *
+ * 渲染层原来判"能不能打开原文件"用的是 `target.startsWith('#')` —— 也就是**地址长什么样**。
+ * 而地址形态是"当初扫描那一刻盘在不在"的**历史快照**：盘插回来，地址不会变，
+ * 于是那一层被**永久**判成只读，双击资源永远打不开（用户实测反馈）。
+ *
+ * **正确的问题不是"这个地址是不是锚点"，而是"这块盘此刻在不在"。**
+ * 而 `serial → 盘符` 这个映射只有服务端知道（渲染层刻意不解析锚点内容，
+ * 见 `src/views/FileFinder/index.vue` 的 `isReadOnlyPath`），
+ * 所以解析放在这里 —— 和 `toAnchorPath` / `parseAnchor` 同一个模块：
+ * **锚点的"造"和"解"只有这一处懂**，将来谁要碰锚点都得经过它。
+ *
+ * 关于"少读盘"的代价（用户的第一优先级），如实说明：
+ *   先 `getDrives()` —— 那是**进程内缓存，一次盘都不扫**；
+ *   只有查不到才 `getDrives(true)` 重试一次（26 个盘符各一次 stat，代码注释里量过 ≈2ms）。
+ *   触发点只有"用户主动要打开一个文件、而这块盘当时不在已知列表里"——
+ *   而他要打开的那个文件**马上就要读这块盘**，所以这次探测被后面的动作完全盖住，
+ *   不是净新增的读盘。
+ */
+async function resolveAnchorController(req: Req, res: http.ServerResponse) {
+    const anchor = req.params?.get('path') || '';
+    const parsed = parseAnchor(anchor);
+    if (!parsed) {
+        return sendJson(res, { code: 400, error: '不是一条可解析的只读地址' });
+    }
+
+    // 先查进程内缓存（不扫盘）；查不到再强制扫一次 —— 覆盖"启动之后才把盘插上"这个场景
+    let drive = (await getDrives()).find(d => d.serial === parsed.serial)?.drive;
+    if (!drive) {
+        drive = (await getDrives(true)).find(d => d.serial === parsed.serial)?.drive;
+    }
+    if (!drive) {
+        // 盘确实不在。`kind` 让前端能把它和"这个文件本身有问题"分开（不要靠 match 文案）
+        return sendJson(res, { code: 404, kind: 'offline', error: '这块盘现在不在（没插或还没就绪）' }, 404);
+    }
+
+    sendJson(res, { code: 200, path: toFullPath(drive, parsed.relPath) });
+}
+
+/**
  * 路由注册的**唯一入口** —— 顺带把所有 async handler 的抛错兜住。
  *
  * 为什么必须有它：`event.emit(route, req, res)` 是**同步**调用，而下面这些 handler
@@ -1064,6 +1106,9 @@ route('/backup', backup);
 route('/backupToFile', backupToFile);
 route('/restoreFromFile', restoreFromFile);
 route('/mergeCache', mergeCache);
+// 把只读锚点解析成"此刻"的完整路径 —— 只读层双击打开原文件时走它。
+// 见 resolveAnchorController 的注释：修的是"用地址形态当判据"这个设计缺陷。
+route('/resolveAnchor', resolveAnchorController);
 
 // 管理助手（Phase 1：规则 CRUD + 单站试跑，暂无写盘）。经同一 route() 咽喉点注册，
 // 自动受 token 校验与统一错误兜底；sendJson/dataDir 以依赖注入传入，避免循环引用。

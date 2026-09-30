@@ -299,15 +299,8 @@
         .sz.na { color: #c2c2c2; font-weight: 400; }
         .time { font-variant-numeric: tabular-nums; color: var(--text-2); font-size: 12.5px; }
 
-        .new-table-row .name { cursor: pointer; }
-        .dbltip {
-            opacity: 0;
-            margin-left: 8px;
-            font-size: 11.5px;
-            color: var(--text-3);
-            white-space: nowrap;
-        }
-        .new-table-row:hover .dbltip { opacity: 1; }
+        .new-table-row .name { cursor: pointer; color: #2080f0; }
+        .new-table-row .name:hover { color: #4098fc; }
 
         .foot-row {
             display: flex;
@@ -392,7 +385,7 @@
     <div class="page">
         <h1>「缓存记录」面板 · 改造前后对照</h1>
         <p class="sub">
-            实测基线：<b>5 块盘 · 213 个目录 · 1247 个条目 · 库 81.7 MB · 最近扫描 09-27 22:32</b>
+            实测基线：<b>5 块盘 · 213 个目录 · 1247 个条目 · 库 81.7 MB · 最近扫描 2026-09-27 22:32</b>
         </p>
 
         <!-- ============ 改造前 ============ -->
@@ -534,7 +527,7 @@
                             <b>1247</b> 个条目<span class="sep">·</span>
                             已读到 <b>3.35 TB</b><span class="sep">·</span>
                             库 <b>81.7 MB</b><span class="sep">·</span>
-                            最近扫描 <b>09-27 22:32</b>
+                            最近扫描 <b>2026-09-27 22:32</b>
                         </span>
                         <span class="btn text">打开存放文件夹</span>
                     </div>
@@ -564,50 +557,47 @@
                     <div class="new-table-row">
                         <span class="c"><i class="checkbox"></i></span>
                         <span class="disk-cell"><i class="dot on"></i><span class="l">F:</span></span>
-                        <span class="dir"><span class="name">示例作品目录 A</span><span class="dbltip">双击打开</span></span>
+                        <span class="dir"><span class="name">示例作品目录 A</span></span>
                         <span class="r num">12</span>
                         <span class="r sz">492.55 GB</span>
-                        <span class="r time">09-24 14:32</span>
+                        <span class="r time">2026-09-24 14:32</span>
                     </div>
                     <div class="new-table-row">
                         <span class="c"><i class="checkbox"></i></span>
                         <span class="disk-cell"><i class="dot on"></i><span class="l">F:</span></span>
-                        <span class="dir"><span class="name">示例演员目录 B</span><span class="dbltip">双击打开</span></span>
+                        <span class="dir"><span class="name">示例演员目录 B</span></span>
                         <span class="r num">8</span>
                         <span class="r sz">176.81 GB</span>
-                        <span class="r time">09-24 14:31</span>
+                        <span class="r time">2026-09-24 14:31</span>
                     </div>
                     <div class="new-table-row">
                         <span class="c"><i class="checkbox"></i></span>
                         <span class="disk-cell"><i class="dot on"></i><span class="l">G:</span></span>
-                        <span class="dir"><span class="name">示例作品目录 C</span><span class="dbltip">双击打开</span></span>
+                        <span class="dir"><span class="name">示例作品目录 C</span></span>
                         <span class="r num">21</span>
                         <span class="r sz">32.72 GB</span>
-                        <span class="r time">09-27 22:32</span>
+                        <span class="r time">2026-09-27 22:32</span>
                     </div>
                     <div class="new-table-row">
                         <span class="c"><i class="checkbox"></i></span>
-                        <span class="disk-cell"><i class="dot off"></i><span class="l">CD72</span></span>
+                        <span class="disk-cell"><i class="dot off"></i><span class="l">离线</span></span>
                         <span class="dir">
                             <span class="name">示例作品目录 D</span>
-                            <span class="ro">离线 · 只读</span>
-                            <span class="dbltip">双击打开</span>
                         </span>
                         <span class="r num">5</span>
                         <span class="r sz">1.21 GB</span>
-                        <span class="r time">09-20 10:11</span>
+                        <span class="r time">2026-09-20 10:11</span>
                     </div>
                     <div class="new-table-row">
                         <span class="c"><i class="checkbox"></i></span>
                         <span class="disk-cell"><i class="dot on"></i><span class="l">F:</span></span>
                         <span class="dir">
-                            <span class="name">新建文件夹</span>
+                            <span class="name">示例分类目录</span>
                             <span class="ro">只有子目录</span>
-                            <span class="dbltip">双击打开</span>
                         </span>
                         <span class="r num">104</span>
                         <span class="r sz na">—</span>
-                        <span class="r time">09-24 19:19</span>
+                        <span class="r time">2026-09-24 19:19</span>
                     </div>
                 </div>
 
@@ -656,10 +646,8 @@
                 <h3>这一版改了什么</h3>
                 <ol>
                     <li><b>仍然是双击打开，不加「操作」列</b>：和主界面一致（主界面也是双击格子才打开）。
-                        但把"看着像单击链接"的按钮样式去掉，改成<b>真文本 + 手型指针 + 悬停出现「双击打开」</b>——
-                        既不加一列，也不用让用户去猜。</li>
-                    <li><b>离线是一等公民</b>：盘条里离线盘有自己的位置，显示可辨认的 <code>未命名 · CD72</code>，
-                        行内标「离线 · 只读」。<b>盘可以就地改名</b>（默认名字是序列号后 4 位，不再有 <code>??</code>）。</li>
+                        目录名保持<b>蓝色</b>（链接的外观本身就是可发现性，不需要再挂一句解释）。</li>
+                    <li><b>离线盘的标识只在「盘」列</b>：显示「离线」，不再在目录名后面重复一遍"离线 · 只读"。</li>
                     <li><b>一眼看清现状</b>：5 块盘 / 213 个目录 / <b>1247 个条目</b> / 库 81.7 MB / 最近扫描 —— 只读，不碰移动硬盘。</li>
                     <li><b>搜索即时化</b>：输入即过滤，去掉「查询」；没结果和"一条都没有"分别给提示。</li>
                     <li><b>危险分级</b>：整库替换着红 + 报出影响量；合并只增不删就不弹窗（门槛 ∝ 不可逆 × 波及面）。</li>
@@ -679,7 +667,7 @@
                         所以这是<b>纯内存相加</b>，实测一次 0.07 ms，零新增读盘。</li>
                     <li>它是<b>扫描那一刻</b>的快照（之后删/移文件不会更新）→ 所以叫「上次读到时的大小」，
                         不叫"当前大小"。</li>
-                    <li><b>0 显示 <code>—</code>，不显示 0 B。</b>表里那行「新建文件夹」是真事：
+                    <li><b>0 显示 <code>—</code>，不显示 0 B。</b>表里那行「示例分类目录」是真事：
                         104 个条目全是子目录、合计 0 字节。写成"104 个条目 / 0 B"会被读成"这 104 个东西没内容"。</li>
                     <li>总览里写「<b>已读到 3.35 TB</b>」—— 措辞是"缓存里记录到的字节之和"，不是"硬盘上有 3.35 TB"。
                         盘条上不再单独放每块盘的大小（chip 会太长，且行级可排序已经够用）。</li>
@@ -696,7 +684,7 @@
 
                 <p class="note">
                     ⚠️ 示意说明：盘名、在线/离线状态、目录名为示例（真实目录名不外露）；
-                    <b>目录数 213、条目数 1247、库 81.7 MB、各行的大小、以及"新建文件夹 = 104 个条目全子目录"</b>
+                    <b>目录数 213、条目数 1247、库 81.7 MB、各行的大小、以及"示例分类目录 = 104 个条目全子目录"</b>
                     全部取自真实库的只读探测（<code>docs/probes/cache-panel-stats.mjs</code> ·
                     <code>cache-panel-size3.mjs</code>）。表里 492.55 GB 那行就是实测的最大单层。
                 </p>

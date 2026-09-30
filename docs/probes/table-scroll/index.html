@@ -1,0 +1,214 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+
+<head>
+    <meta charset="utf-8">
+    <title>表格内部滚动 / 表头吸顶 —— 真布局测量</title>
+    <style>
+        html,
+        body {
+            margin: 0;
+            height: 100%;
+            background: #eef0f4;
+            font-family: system-ui, "Microsoft YaHei", sans-serif;
+        }
+
+        #stage {
+            height: 100%;
+            padding: 10px;
+            box-sizing: border-box;
+        }
+
+        .hint {
+            font-size: 12px;
+            color: #666;
+            padding: 2px 4px 8px;
+        }
+
+        /* ===== 两个变体共用的骨架（与 app 里 HistoryTable 的结构一致） ===== */
+        .cache-panel .n-card__content {
+            display: flex;
+            flex-direction: column;
+            overflow: hidden;
+            flex: 1 1 auto;
+            min-height: 0;
+        }
+
+        .cache-panel .n-spin-container {
+            flex: 1 1 auto;
+            min-height: 0;
+            display: flex;
+            flex-direction: column;
+        }
+
+        .cache-panel .g2-row {
+            padding-bottom: 8px;
+            font-size: 12.5px;
+            color: #666;
+        }
+
+        /* ===== 变体 old：现状 —— 包表格的 div 自己滚 + 给 thead 加 sticky ===== */
+        .variant-old .table-wrap {
+            flex: 1 1 auto;
+            min-height: 0;
+            overflow: auto;
+        }
+
+        .variant-old .table-wrap .n-data-table-thead {
+            position: sticky;
+            top: 0;
+            z-index: 2;
+            background: #fff;
+        }
+
+        /* ===== 变体 new：候选 —— 卡片给确定高度，滚动交给 DataTable 自己（flex-height） ===== */
+        .variant-new .table-wrap {
+            flex: 1 1 auto;
+            min-height: 0;
+            display: flex;
+        }
+
+        .variant-new .table-wrap>.n-data-table {
+            flex: 1 1 auto;
+            min-height: 0;
+        }
+    </style>
+</head>
+
+<body>
+    <div id="stage">
+        <div class="hint" id="hint"></div>
+        <div id="app"></div>
+    </div>
+
+    <script src="../../../node_modules/vue/dist/vue.global.prod.js"></script>
+    <script src="../../../node_modules/naive-ui/dist/index.js"></script>
+    <script>
+        const { createApp, h, ref } = Vue;
+        const N = naive;
+
+        // 60 行 —— 足够把表格撑到必须滚动
+        const rows = Array.from({ length: 60 }, (_, i) => ({
+            _id: 'r' + i,
+            serial: 'AAAA1111',
+            relPath: '示例目录 ' + String(i + 1).padStart(3, '0'),
+            count: (i % 13) + 1,
+            create_at: '2026-09-24 14:32',
+        }));
+
+        const columns = [
+            { type: 'selection' },
+            { title: '盘', key: 'serial', width: 88 },
+            { title: '目录', key: 'relPath', minWidth: 240 },
+            { title: '条目', key: 'count', width: 68, align: 'right' },
+            { title: '上次扫描', key: 'create_at', width: 150, align: 'right' },
+        ];
+
+        const variant = ref('old');
+        window.__setVariant = v => { variant.value = v; };
+
+        const App = {
+            setup() {
+                return () => h('div', { class: 'cache-panel variant-' + variant.value }, [
+                    h(N.NConfigProvider, null, {
+                        default: () => h(N.NCard, {
+                            title: '缓存记录',
+                            closable: true,
+                            bordered: false,
+                            size: 'huge',
+                            // 唯一的差别就在这一行：
+                            //   old = max-height（内容撑高，封顶 86vh）
+                            //   new = height（**确定高度**，让下面的 flex:1 有东西可分）
+                            style: variant.value === 'old'
+                                ? 'width:100%; max-height:86vh; display:flex; flex-direction:column'
+                                : 'width:100%; height:86vh; display:flex; flex-direction:column',
+                            contentStyle: { display: 'flex', flexDirection: 'column', overflow: 'hidden', flex: '1 1 auto', minHeight: '0' },
+                        }, {
+                            default: () => h(N.NSpin, {
+                                show: false,
+                                contentStyle: { display: 'flex', flexDirection: 'column', flex: '1 1 auto', minHeight: '0' },
+                            }, {
+                                default: () => [
+                                    h('div', { class: 'g2-row' }, '5 块盘 · 213 个目录 · 1247 个条目 · 库 81.7 MB'),
+                                    h('div', { class: 'table-wrap' }, [
+                                        h(N.NDataTable, {
+                                            columns,
+                                            data: rows,
+                                            rowKey: (r) => r._id,
+                                            // 候选变体才开 flex-height
+                                            flexHeight: variant.value === 'new',
+                                        }),
+                                    ]),
+                                ],
+                            }),
+                            footer: () => h('div', { class: 'foot' }, '底部：分页 / 批量区（应当始终可见）'),
+                        }),
+                    }),
+                ]);
+            },
+        };
+
+        createApp(App).mount('#app');
+
+        /**
+         * 量一个变体。
+         * 判据只有两条，都直接对应用户的原话"表头跟着滚动消失":
+         *   ① 滚的是谁 —— 是包表格的 div / 卡片内容（错），还是 DataTable 自己的 body（对）？
+         *   ② 滚到底之后，表头还在不在表格的可视区里（还在 = 吸顶成立）。
+         */
+        window.__measure = function (v) {
+            const root = document.querySelector('.cache-panel');
+            const card = root.querySelector('.n-card');
+            const table = root.querySelector('.n-data-table');
+            const head = root.querySelector('.n-data-table-base-table-header') || root.querySelector('thead');
+            const foot = root.querySelector('.foot');
+
+            const scrollers = [];
+            root.querySelectorAll('*').forEach(el => {
+                if (el.clientHeight > 0 && el.scrollHeight > el.clientHeight + 2) scrollers.push(el);
+            });
+
+            const nameOf = el => ((el.className || '').toString().split(/\s+/)[0] || el.tagName);
+
+            const tableTop = table.getBoundingClientRect().top;
+            const tableBottom = table.getBoundingClientRect().bottom;
+
+            const steps = scrollers.map(el => {
+                el.scrollTop = el.scrollHeight;      // 滚到底
+                const hr = head ? head.getBoundingClientRect() : null;
+                return {
+                    滚的是: nameOf(el),
+                    滚动范围_可视比总数: el.clientHeight + '/' + el.scrollHeight,
+                    表头仍在表格可视区内: hr ? (hr.top >= tableTop - 1 && hr.bottom <= tableBottom + 1) : null,
+                    表头顶部相对表格: hr ? Math.round(hr.top - tableTop) : null,
+                };
+            });
+            scrollers.forEach(el => { el.scrollTop = 0; });   // 复位，别串到下一个变体
+
+            return {
+                变体: v,
+                视口高: window.innerHeight,
+                卡片高: card ? card.clientHeight : null,
+                卡片底部没超屏: card ? Math.round(card.getBoundingClientRect().bottom) <= window.innerHeight + 1 : null,
+                表格高: table ? table.clientHeight : null,
+                表头元素: head ? nameOf(head) : '(没找到)',
+                底部栏在卡片内: foot && card ? Math.round(foot.getBoundingClientRect().bottom) <= Math.round(card.getBoundingClientRect().bottom) + 1 : null,
+                滚动元素: scrollers.map(el => nameOf(el) + '(' + el.clientHeight + '/' + el.scrollHeight + ')'),
+                表头判定: steps,
+            };
+        };
+
+        window.__probeAll = async function () {
+            const out = [];
+            for (const v of ['old', 'new']) {
+                window.__setVariant(v);
+                await new Promise(r => requestAnimationFrame(() => requestAnimationFrame(r)));
+                await new Promise(r => setTimeout(r, 120));
+                out.push(window.__measure(v));
+            }
+            return out;
+        };
+    </script>
+</body>
+
+</html>
