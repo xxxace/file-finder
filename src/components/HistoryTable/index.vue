@@ -63,13 +63,15 @@
                      （系统文件管理器自带回收站和撤销，比在应用里自建一个没有撤销的版本安全），
                      所以它**不进**下面的折叠区 —— 折叠区收的是会动数据的动作。
                      理由见 docs/DESIGN-CONVERGED-2026-09-24.md §三。 -->
+                <!-- 总览句**独占一行**（用户要求）。
+                     它是面板里最长的一句，和任何东西挤在一行都会被压到换行 —— 小窗口下尤其明显
+                     （实测：和按钮同行时 681px 窗口下文本高 40px = 两行）。给它整行就不会再折。 -->
                 <div class="g2-row">
                     <!-- 总览句：盘数 / 目录数 / 条目数 / 已读到多少 / 库大小 / 最近扫描。
                          全部来自 /getDisks 的 stats —— **服务端在内存里汇总**，一次盘都不读。
                          「已读到」这个措辞是刻意的：它是缓存里记录到的字节之和（扫描快照），
                          不是"硬盘上有多少"。 -->
                     <span class="overview">{{ overview }}</span>
-                    <n-button text size="small" @click="openDataDir">打开存放文件夹</n-button>
                 </div>
 
                 <div class="g2-disk">
@@ -80,6 +82,12 @@
                          详见 docs/FIX-2026-09-24-naive-ui-update-prop.md -->
                     <n-select :value="model.serial" :options="diskOptions" :loading="diskLoading"
                         style="width: 320px" size="small" :on-update:value="handleSerialChange" />
+                    <!-- 「打开存放文件夹」从总览行挪到这里（和下拉同行）——
+                         这样总览那句能独占整行、不再被挤到换行。
+                         它仍然**不进**折叠区：它是唯一一个不碰任何数据的出口
+                         （系统文件管理器自带回收站和撤销），留在外面。
+                         理由见 docs/DESIGN-CONVERGED-2026-09-24.md §三。 -->
+                    <n-button text size="small" @click="openDataDir">打开存放文件夹</n-button>
                 </div>
 
                 <div class="table-wrap">
@@ -918,36 +926,33 @@ defineExpose({
     flex: 1 1 auto;
 }
 
+/* 总览**独占一行**，不和任何东西争宽度 ⇒ 它不会被迫折行。 */
 .cache-panel .g2-row {
-    display: flex;
-    /* `baseline` 而不是 `center`：总览换行成两行时，按钮要和**第一行文本的基线**对齐，
-       而不是和"两行文本的中间"对齐（后者会让按钮悬在半空）。 */
-    align-items: baseline;
-    justify-content: space-between;
-    /* ⚠️ 小窗口下总览那句一定会换行。不给 wrap 的话，右边的「打开存放文件夹」
-       会被挤到第二行的最右边、悬在句子下面 —— 看起来就是"排版错乱"。
-       给了 wrap + 文本 flex-basis，装不下时按钮**整块换到下一行行首**，是可预期的形态。 */
-    flex-wrap: wrap;
-    gap: 4px 12px;
     padding-bottom: 8px;
 }
 
 .cache-panel .overview {
-    /* 文本可伸缩、可换行（它是句子，换行是正常的）；按钮反过来：不许被压缩、不许折行 */
-    flex: 1 1 320px;
-    min-width: 0;
+    display: block;
     font-size: 12.5px;
     color: #666;
 }
 
-.cache-panel .g2-row .n-button {
+/* 盘筛选 + 「打开存放文件夹」同一行：按钮靠右（`margin-left:auto` 在换行时也一样靠右），
+   装不下就整块换行，而不是互相挤压。 */
+.cache-panel .g2-disk {
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 8px 12px;
+    padding-bottom: 10px;
+}
+
+.cache-panel .g2-disk .n-button {
+    margin-left: auto;
     flex: 0 0 auto;
     white-space: nowrap;
 }
 
-.cache-panel .g2-disk {
-    padding-bottom: 10px;
-}
 
 /* ⚠️ 这一条不能省：n-spin 的根是 `.n-spin-container`，它是卡片内容的直接子节点。
    不把它也变成"会长大的纵向 flex"，里面的 `.n-spin-content`（拿到了 contentStyle 的 flex:1）

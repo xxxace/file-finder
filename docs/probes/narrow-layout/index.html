@@ -98,7 +98,21 @@
             white-space: nowrap;
         }
 
-        .variant-new .foot-row {
+        .variant-new .g2-disk {
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 8px 12px;
+    padding-bottom: 10px;
+}
+
+.variant-new .g2-disk .n-button {
+    margin-left: auto;
+    flex: 0 0 auto;
+    white-space: nowrap;
+}
+
+.variant-new .foot-row {
             display: flex;
             align-items: center;
             justify-content: space-between;
@@ -160,6 +174,8 @@
         ];
 
         const variant = ref('old');
+        /** 两个变体共用同一个按钮实例，只是**放在哪一行**不同 —— 这是本次要验的东西 */
+        const openDirBtn = () => h(N.NButton, { text: true, size: 'small' }, { default: () => '打开存放文件夹' });
         window.__setVariant = v => { variant.value = v; };
 
         const App = {
@@ -179,14 +195,16 @@
                                     // G2 总览行（长文本 + 右侧按钮）
                                     h('div', { class: 'g2-row' }, [
                                         h('span', { class: 'overview' }, OVERVIEW),
-                                        h(N.NButton, { text: true, size: 'small' }, { default: () => '打开存放文件夹' }),
+                                        variant.value === 'old' ? openDirBtn : null,
                                     ]),
-                                    h('div', { style: 'padding-bottom:10px' }, [
+                                    h('div', { class: 'g2-disk' }, [
                                         h(N.NSelect, {
                                             size: 'small', style: 'width:320px',
                                             options: [{ label: 'H: · 106 个目录 / 636 个条目', value: 'H' }],
                                             value: 'H',
                                         }),
+                                        // old：按钮在总览行；new：按钮挪到这一行（和下拉同行）
+                                        variant.value === 'old' ? null : openDirBtn,
                                     ]),
                                     h('div', { class: 'table-wrap' }, [
                                         h(N.NDataTable, {
@@ -246,7 +264,7 @@
 
             // ② 总览行
             const ov = root.querySelector('.g2-row .overview');
-            const ovBtn = root.querySelector('.g2-row .n-button');
+            const ovBtn = root.querySelector('.cache-panel .n-button');
             const ovRect = ov.getBoundingClientRect();
             const btnRect = ovBtn.getBoundingClientRect();
 
@@ -274,7 +292,7 @@
                     表格内容宽: Math.round(tableRect.width),
                 },
                 总览行: {
-                    按钮与文本同行: (btnRect.bottom > ovRect.top && btnRect.top < ovRect.top + 24),
+                    按钮与总览同行: (btnRect.bottom > ovRect.top && btnRect.top < ovRect.top + 24),
                     按钮顶部相对文本顶部: Math.round(btnRect.top - ovRect.top),
                     文本高: Math.round(ovRect.height),
                     按钮高: Math.round(btnRect.height),

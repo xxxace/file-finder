@@ -229,6 +229,9 @@
             width: 340px;
         }
 
+        /* 「打开存放文件夹」在盘筛选这一行靠右 */
+        .disk-row .btn.text { margin-left: auto; white-space: nowrap; }
+
         .dot { width: 7px; height: 7px; border-radius: 50%; display: inline-block; }
         .dot.on { background: var(--primary); }
         .dot.off { background: #c9c9d1; }
@@ -498,7 +501,8 @@
                         <span class="btn" style="height:32px">↻ 刷新</span>
                     </div>
 
-                    <!-- G2 逛 -->
+                    <!-- G2 逛：总览**独占一行**（和任何东西挤一行都会被压到折行 ——
+                         实测 901px 的宽窗口下它也在折成两行） -->
                     <div class="overview">
                         <span>
                             <b>5</b> 块盘<span class="sep">·</span>
@@ -508,14 +512,15 @@
                             库 <b>81.7 MB</b><span class="sep">·</span>
                             最近扫描 <b>2026-09-27 22:32</b>
                         </span>
-                        <span class="btn text">打开存放文件夹</span>
                     </div>
 
+                    <!-- 盘筛选 + 「打开存放文件夹」同一行（用户要求） -->
                     <div class="disk-row">
                         <div class="fake-select">
                             <span>全部盘 · 213 个目录 / 1247 个条目</span>
                             <span class="caret">▼</span>
                         </div>
+                        <span class="btn text">打开存放文件夹</span>
                         <span class="hint">离线盘在选项里长这样：<b>离线(CD72)</b> · 63 个目录 / 269 个条目
                             —— 用序列号后 4 位，两块盘都不在时也能分出是哪一块</span>
                     </div>
