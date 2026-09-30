@@ -88,8 +88,14 @@
                          不给它的话，表格高度由内容决定（实测 60 行 = 4235px），
                          外面那层 div 就成了"整张表"的滚动容器 —— 表头必然跟着滚。
                          前提是外层有**确定高度**（见卡片上的 `height: 86vh` 与 style 块里的注释）。 -->
+                    <!-- ⚠️ `:checked-row-keys` **必须给**（受控）。naive-ui 的 DataTableInst 里
+                        没有 clearCheckedRowKeys 这类 API，勾选是表格**内部态** ——
+                         不给受控 prop 的话，外面的 `checkedRowKeysRef = []` 只是改了我自己的变量，
+                         表格上的勾**原封不动**："清空选择"、关闭面板、删除后复位全都不生效，
+                         界面会出现"提示说未选中、勾还打着"（自己 review 时抓到的）。 -->
                     <n-data-table :columns="columns" :data="tableData" :row-key="rowKey" flex-height
-                        :sorter="tableSorter" @update:sorter="handleSorterChange"
+                        :sorter="tableSorter" :checked-row-keys="checkedRowKeysRef"
+                        @update:sorter="handleSorterChange"
                         @update:checked-row-keys="handleCheck">
                         <!-- 空态渲染在**表格自己的空槽**里（naive-ui 的 #empty 会替换它内置的"暂无数据"），
                              而不是另起一个 div 挂在表格下面 —— 挂下面会同时出现两句"没数据"，
@@ -137,10 +143,10 @@
             <template #footer>
                 <!-- 批量区固定在底部、**高度恒定**：没选中时按钮置灰而不是消失 ——
                      用 v-if 的话它一出现就把整行推走（原来正是这样）。
-                     选择状态是表格**内部态**（只监听 @update:checked-row-keys、没传受控 prop），
-                     所以跨页勾选后"要删哪些"对用户是黑箱 —— 这里把话说白：几项不在本页 + 给个清空选择。
-                     **不改成受控**：受控得自己管清理时机，而"跨页多选"在这个规模本身就是陷阱；
-                     先让状态透明，不剥夺能力。 -->
+                     勾选是**受控**的（`:checked-row-keys`）—— 这既让"清空选择"和关闭面板复位真的生效，
+                     也让跨页勾选后"要删哪些"不再是黑箱：几项不在本页直接写在提示里。
+                     （原先我担心"受控要自己管清理时机"就没做受控，结果"清空选择"点了没反应 ——
+                     见表格上那条注释。） -->
                 <div class="foot-row">
                     <div class="foot-left">
                         <n-button size="small" type="error" :disabled="!checkedRowKeysRef.length"
@@ -555,11 +561,29 @@ watch(() => model.value.path, () => {
 });
 
 /**
- * 刷新 = 重新探测插着哪些盘（**这里是唯一真去探盘符的地方**）+ 重取列表。
- * 同样去掉重入守卫（序号法已保证并发安全），守卫只会表现成"点了没反应"。
+ * 「刷新」= **真的重探一遍盘符** + 重取列表。这是面板里唯一会碰盘根探测的入口。
+ *
+ * ⚠️ **必须串行**：`/getDisks?refresh=true` 才会让服务端重探，而 `/getHistory` 用的是
+ * **进程内缓存的盘列表**（阶段 C 起不再每次重探）。两个并发发出去的话，
+ * 列表请求很可能在重探完成**之前**读到旧列表 —— 表现就是"下拉里盘已经在线了，表格里还是离线/只读"。
+ * 所以：先等盘列表回来，再取列表。
+ *
+ * 也不再需要重入守卫：请求序号已经保证并发安全，守卫只会表现成"点了没反应"。
  */
-const onRefresh = () => {
-    loadDisks(true);
+const onRefresh = async () => {
+    await loadDisks(true);
+    getHistrotyList();
+}
+
+/**
+ * 「列表数据变了但盘没变」时用的刷新 —— 删除 / 还原 / 合并之后走它。
+ *
+ * 和 `onRefresh` 的区别只有一点：**不重探盘符**。那三个动作都不会改变"插着哪些盘"，
+ * 让它们顺带做 26 次 `stat` 纯属浪费（用户的第一优先级就是少碰盘）。
+ * 但仍要重取盘列表 —— 每条记录的目录数/条目数变了，下拉里的统计得跟上。
+ */
+const reloadAfterDataChange = () => {
+    loadDisks();
     getHistrotyList();
 }
 
@@ -635,7 +659,7 @@ const checkedRowKeysRef = ref<DataTableRowKey[]>([])
 /**
  * 选中的行里有多少**不在当前这一页**。
  *
- * 为什么需要：表格的选择状态是**内部态**（只监听 `@update:checked-row-keys`、没传受控 prop），
+ * 为什么需要：跨页勾选时，表格**受控**的 checked-row-keys 会保留不在本页的键，
  * naive-ui 会让跨页选中的行保持选中 → 底部那行"删除记录"实际会删掉**当前页看不见的记录**，
  * 而用户无从知道。这里不剥夺"跨页多选"的能力，只把状态说明白。
  */
@@ -644,9 +668,13 @@ const checkedOnOtherPages = computed(() => {
     return checkedRowKeysRef.value.filter(k => !onPage.has(k as string)).length;
 });
 
+/**
+ * 勾选变化的唯一入口。表格是**受控**的（`:checked-row-keys="checkedRowKeysRef"`），
+ * 所以这里写进去的值就是表格显示的值 —— 清空、复位都靠它，不需要（也没有）
+ * 什么"清空表格勾选"的实例 API（`DataTableInst` 里确实没有，查过）。
+ */
 const handleCheck = (rowKeys: DataTableRowKey[]) => {
     checkedRowKeysRef.value = rowKeys
-
 }
 
 /**
@@ -664,14 +692,23 @@ const handleCheck = (rowKeys: DataTableRowKey[]) => {
  */
 const handleRemove = async () => {
     const n = checkedRowKeysRef.value.length;
-    const off = checkedOnOtherPages.value;
-    const offlineCount = tableData.value.filter(r => !r.online).length;
+    const off = checkedOnOtherPages.value;                     // 有几条选中不在本页
+    const selected = new Set(checkedRowKeysRef.value.map(String));
+    const offlineOnPage = tableData.value.filter(r => selected.has(rowKey(r)) && !r.online).length;
+
+    // ⚠️ 这里以前写的是 `tableData.filter(r => !r.online).length` —— **那是"本页有多少离线行"，
+    // 不是"选中的里面有多少条离线"**，跨页选中时会报一个和删除范围无关的数字（自己 review 时抓到的）。
+    // 选中的记录如果不在本页，它此刻在不在线**这里查不到** ⇒ 那种情况就不报数字，只把风险说清楚，
+    // 而不是给一个看起来精确、其实错的数。
+    const offlineClause = off === 0
+        ? (offlineOnPage ? `其中 ${offlineOnPage} 条在没插的盘上 —— 删了就看不到了，除非把盘插回来重扫。` : '')
+        : `如果有记录属于没插的那块盘，删了就看不到了，除非把盘插回来重扫。`;
 
     dialog.warning({
         title: `删除 ${n} 条记录？`,
         content: `只删掉这 ${n} 条**记录**，硬盘上的文件一个都不动。`
             + `删掉后，下次打开这些目录会重新读一遍硬盘（要碰移动硬盘）。`
-            + (offlineCount ? `其中 ${offlineCount} 条在没插的盘上 —— 删了就看不到了，除非把盘插回来重扫。` : '')
+            + offlineClause
             + (off ? `（另有 ${off} 条选中的记录不在当前页。）` : ''),
         positiveText: '删除记录',
         negativeText: '取消',
@@ -693,7 +730,8 @@ const onRemove = async () => {
         notify('success', '成功', `删除成功`)
         setTimeout(() => {
             handleCheck([])
-            onRefresh()
+            // 删除只改了数据、没改"插着哪些盘" ⇒ 走 reloadAfterDataChange（不重探盘符）
+            reloadAfterDataChange()
         }, 500)
     } catch (err) {
         notify('error', '错误', `删除失败:${err}`)
@@ -804,9 +842,9 @@ const onRestoreFromFile = async () => {
 
     if (!ok) return;
     notify('success', '成功', '已还原')
-    // 必须放在 loading 复位之后：onRefresh 里有 `if (loading.value) return` 的守卫，
-    // 提前调用会被它自己挡掉，界面看起来就是"还原了但列表没变"
-    onRefresh();
+    // 放在 loading 复位之后：取数里有 `loading` 相关的时序，提前调用界面会像"还原了但列表没变"。
+    // 还原换的是库内容，没换"插着哪些盘" ⇒ 不重探盘符。
+    reloadAfterDataChange();
 }
 
 /**
@@ -830,7 +868,7 @@ const handleMergeCache = async () => {
     if (!result) return;
     notify('success', '合并完成',
         `新增 ${result.added} 条、覆盖 ${result.replaced} 条、跳过 ${result.skipped} 条`)
-    onRefresh();
+    reloadAfterDataChange();
 }
 
 // 每次打开都刷新。原来是"只在第一次打开时查一次"（isFirstRender 守卫），
