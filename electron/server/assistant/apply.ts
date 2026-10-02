@@ -8,9 +8,16 @@
  * 行为定义（2026-09-25 用户明确，**取代**早期"只写封面、不搬动"的决策）：
  *
  *   - **文件形态**（裸视频散在某一层）：以番号建一个**同名文件夹**，把这一部的**全部分卷**
- *     rename 进去，封面写成 `<番号>/cover.jpg`。上一层从此看到的是一张带脸的文件夹卡。
+ *     rename 进去，封面写成 `<番号>/<番号>.jpg`（与文件夹同名 —— 用户 2026-09-25 拍板）。
+ *     上一层从此看到的是一张带脸的文件夹卡。
  *   - **目录形态**（一部片已经在一个文件夹里，如 `TST-088/`）：什么都不搬，
- *     只补 `cover.jpg` 给文件夹长脸。
+ *     只补 `<目录名>.jpg` 给这个目录长脸。
+ *   - **换封面形态**（`kind:'cover'`，2026-10-02 新增）：目标是**用户已有的那个封面文件**，
+ *     直接**覆盖**它（文件名不变）—— 破坏性，所以**写入前必须先备份**（见 `backupCover`）。
+ *
+ * ⚠️ `cover.jpg` / `avatar.jpg` 是"目录头像"保留名，助手在**新建**时永不写这两个名字
+ *（它们由 `makeDirCover` 探、由 `handleCover` 摘）。`cover` 形态例外：它写的是
+ * 用户**已经在用的**那个文件 —— 那不是"抢名字"，是"替换既有数据"，且必须留备份。
  *
  * 硬约束：
  *
@@ -35,6 +42,7 @@
 import * as fsasync from 'node:fs/promises';
 import path from 'node:path';
 import os from 'node:os';
+import crypto from 'node:crypto';
 import { net, nativeImage, session } from 'electron';
 import { getDrives } from '../../utils/driveIdentity';
 import { removeCache } from '../nedb';
@@ -55,7 +63,7 @@ export interface ApplyRow {
 
 /** 一部片的写盘动作。文件形态带 srcRels（要搬的分卷），目录形态为空 */
 interface ApplyGroup {
-    /** 分组键：`file|层目录|番号` 或 `dir|影片目录` */
+    /** 分组键：`file|层目录|番号` / `dir|写入路径` / `cover|写入路径` */
     key: string;
     kind: 'file' | 'dir';
     /** 番号（墓碑缓存要用） */
@@ -69,6 +77,11 @@ interface ApplyGroup {
     /** 要搬进番号文件夹的源视频（盘内相对路径，含扩展名） */
     srcRels: string[];
     coverUrl: string;
+    /**
+     * `true` = 目标是**用户已有的那个封面文件**（`kind:'cover'`）⇒ 写入前必须先备份。
+     * `false` = 写的是**新文件** `<目录名>.jpg`（`kind:'dir'`）⇒ 无破坏、不备份。
+     */
+    overwrite: boolean;
 }
 
 /** 盘内相对路径拼接 */
@@ -93,22 +106,33 @@ function dirOf(rel: string): string {
  * 进同一个文件夹、共用一张封面 —— 用户 2026-09-25 的要求。
  *
  * 封面命名（用户拍板）：与文件夹**同名**（`AAA-123/AAA-123.jpg`）。
- * `cover.jpg`/`avatar.jpg` 是"目录头像"保留名，助手永不写。
+ * `cover.jpg`/`avatar.jpg` 是"目录头像"保留名，助手**新建时**永不写。
  * 形态判定用 GrabRow.kind（scan 透传），**不靠 writeRel 的文件名猜**。
+ *
+ * `export` 仅为探针可测（`docs/probes/faces/verify.mjs`）—— 纯函数、只依赖入参，
+ * 测试它不需要碰盘也不需要 electron。
  */
-function buildGroups(rows: GrabRow[]): ApplyGroup[] {
+export function buildGroups(rows: GrabRow[]): ApplyGroup[] {
     const groups = new Map<string, ApplyGroup>();
     for (const r of rows) {
         if (r.status !== 'ok' || !r.coverUrl) continue;
 
-        if (r.kind === 'dir') {
-            // 目录形态：影片目录已存在（scan 对目录形态只写 `<目录名>.jpg` 一个文件）
-            const layerDir = dirOf(r.writeRel);
-            const key = `dir|${layerDir}`;
+        if (r.kind === 'dir' || r.kind === 'cover') {
+            // 两者都是「**只写封面、不搬任何东西**」，区别只在写哪、有没有破坏：
+            //   · dir   → 写**新文件** `<目录名>.jpg`；`handleCover` 会摘掉旧的
+            //             `avatar.jpg`/`cover.jpg`，新图自动成为脸 —— **旧文件一个不动**。
+            //   · cover → **覆盖**用户已有的那个封面文件（换封面）⇒ 破坏性，写入前必须先备份。
+            //
+            // ⚠️ 分组键必须带 `writeRel`，**不能只用 layerDir**：同一层可能有多个待写目标
+            //（`演员A/` 下同时有 `TST-001/`、`TST-002/`…）。原版用 `dir|layerDir` 作键，
+            // 后面同层的会被 `groups.has()` 吞掉、**静默丢失**。这里一并修掉。
+            const overwrite = r.kind === 'cover';
+            const key = `${overwrite ? 'cover' : 'dir'}|${r.writeRel}`;
             if (!groups.has(key)) {
                 groups.set(key, {
                     key, kind: 'dir', query: r.query, coverWriteRel: r.writeRel,
-                    layerDir, folderRel: '', srcRels: [], coverUrl: r.coverUrl,
+                    layerDir: dirOf(r.writeRel), folderRel: '', srcRels: [],
+                    coverUrl: r.coverUrl, overwrite,
                 });
             }
             continue;
@@ -126,6 +150,7 @@ function buildGroups(rows: GrabRow[]): ApplyGroup[] {
                 folderRel: joinRel(layerDir, r.query),
                 srcRels: [],
                 coverUrl: r.coverUrl,
+                overwrite: false,
             };
             groups.set(key, g);
         }
@@ -171,6 +196,31 @@ export async function runApply(
             bumpProgress(job, { current: g.folderRel || g.layerDir });
             const notes: string[] = [];
 
+            // ── ⓪ 覆盖前备份（只 `cover` 形态 = 换封面）────────────────────────
+            // PRD D7 明文「覆盖前先备份」。备份落**系统盘**的数据目录 ——
+            // 刻意**不在移动硬盘上留 `.bak`**（多一个文件、脏，而写盘本身就在碰盘）。
+            //
+            // ⚠️ 备份失败 ⇒ **放弃覆盖**。宁可这一条记失败，也绝不在"没有退路"的情况下
+            // 覆盖用户自己的文件。源文件不存在（缓存过期 / 已被手动删）**不算失败** ——
+            // 本来就没有东西可毁，让流程照常走。
+            if (g.overwrite) {
+                const b = await backupCover(root, g.coverWriteRel, dataDir, serial);
+                if (!b.ok) {
+                    appendLog(dataDir, `${new Date().toISOString()}\t${serial}\t${g.coverWriteRel}\tfail\t原图备份失败，已跳过（没有覆盖）`);
+                    pushRow(job, {
+                        writeRel: g.coverWriteRel,
+                        ok: false,
+                        message: '原图备份失败，这条没写（你的文件没被动过）',
+                    });
+                    bumpProgress(job, { processed: job.progress.processed + 1, current: '' });
+                    continue;
+                }
+                // ⚠️ 备份路径必须**留下痕迹**：PRD D7 说的"覆盖前先备份"只有配上"备份在哪"
+                // 才真的可还原。只记数据目录内的**相对路径** —— 绝对路径又长又带用户名，
+                // 日志里没必要（数据目录本身就是固定的）。
+                if (b.file) notes.push(`原图已备份：${b.file}`);
+            }
+
             // ── ① 建番号文件夹 + 搬分卷（只文件形态；同卷 rename，瞬时、不复制数据） ──
             if (g.kind === 'file') {
                 const absFolder = `${root}${g.folderRel}`;
@@ -200,7 +250,7 @@ export async function runApply(
                 }
                 notes.unshift(`搬入 ${moved}/${g.srcRels.length} 个分卷`);
             } else {
-                notes.push('已有文件夹，只补封面');
+                notes.push(g.overwrite ? '覆盖原封面（已备份到数据目录）' : '已有文件夹，只补封面');
             }
 
             // ── ② 下载封面（Chromium 网络栈 + 抓取用的同一个 session） ──
@@ -372,6 +422,47 @@ export function download(
         req.on('error', (e: Error) => done(() => reject(e)));
         req.end();
     });
+}
+
+/**
+ * 覆盖前把原图备份到**系统盘**的数据目录（`~/.file-finder/assistant/cover-backup/<serial>/`）。
+ *
+ * 返回（调用方据此决定要不要继续）：
+ *   - `{ ok: true }`  —— 已备份好；**或**源文件本来就不存在（没有可毁的东西）⇒ 可以继续写
+ *   - `{ ok: true, file }` —— 已备份，`file` 是**数据目录内的相对路径**（写进 `apply.log`，
+ *                             这样"备份在哪"是可追溯的 —— D7 的"可还原"义务靠这一条兑现）
+ *   - `{ ok: false }` —— 读取/写备份失败 ⇒ 调用方**必须放弃覆盖**
+ *
+ * 文件名 = `<时间戳>__<路径哈希>__<原文件名尾巴>`，**一层平铺**、不重建目录树：
+ * 盘内相对路径可能很长（`演员名/番号/子目录/…`），Windows 有 260 字符的路径上限，
+ * 直接照搬会写失败。哈希保唯一，尾巴保人还能看出是哪张。
+ */
+async function backupCover(
+    root: string, rel: string, dataDir: string, serial: string,
+): Promise<{ ok: boolean; file?: string }> {
+    const abs = `${root}${rel}`;
+    let buf: Buffer;
+    try {
+        buf = await fsasync.readFile(abs);
+    } catch (e) {
+        // ENOENT：这张脸已经不在盘上了（缓存过期 / 用户手动删过）。
+        // 没有可备份的东西 = 没有可毁的东西 ⇒ 放行，让后面的写入照常走。
+        return { ok: (e as NodeJS.ErrnoException)?.code === 'ENOENT' };
+    }
+
+    try {
+        const dir = path.join(dataDir, 'assistant', 'cover-backup', serial);
+        await fsasync.mkdir(dir, { recursive: true });
+        const stamp = new Date().toISOString().replace(/[:.]/g, '-');
+        const hash = crypto.createHash('sha1').update(rel).digest('hex').slice(0, 10);
+        const tail = baseOf(rel).replace(/[\\/]/g, '_').slice(-48);
+        const name = `${stamp}__${hash}__${tail}`;
+        await fsasync.writeFile(path.join(dir, name), buf);
+        return { ok: true, file: `assistant/cover-backup/${serial}/${name}` };
+    } catch (e) {
+        console.error('[assistant/apply] 备份原封面失败:', rel, e);
+        return { ok: false };
+    }
 }
 
 /** 追加 apply.log（数据目录里，不碰移动硬盘）。写日志失败只打控制台 —— 不能让它连累写盘结果 */

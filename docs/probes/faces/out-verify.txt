@@ -1,0 +1,59 @@
+── ② buildGroups：分组与形态 ──
+  ✅ 同层两个 dir 目标 → **2 组**（分组键必须带 writeRel，不能只按层）
+  ✅   两组的写入路径各不相同
+  ✅   dir 形态 `overwrite:false`（写的是新文件，不需要备份）
+  ✅   dir 形态不搬任何东西（srcRels 空、folderRel 空）
+  ✅ cover 形态 → `overwrite:true`（apply 会先备份原图）
+  ✅ cover 形态写入路径 = 目标自己（原文件被覆盖，名字不变）
+  ✅ cover 形态不搬任何东西
+  ✅ 同一路径的 cover 与 dir 是两个不同的组（不会互吞）
+  ✅ 未命中的行不参与分组
+  ✅ 回归·file 形态：同层同番号的分卷收拢成 1 组、2 个源文件
+  ✅ 回归·file 形态：封面 = `<层>/<番号>/<番号>.jpg`、会搬（folderRel 非空）
+  ✅ 回归·file 形态 `overwrite:false`
+
+── ① collectFaces：从缓存展开（真库，只输出数字/布尔）──
+  ✅ 空 picks → 空目标（不发无谓的缓存查询）
+  ✅ 不存在的盘 → 空目标
+[nedb] serial 索引创建失败: Error: EBUSY: resource busy or locked, open 'C:\Users\73116\AppData\Local\Temp\ff-probe-faces-442nHs\.file-finder\searchCache.db'
+    at async open (node:internal/fs/promises:639:25)
+    at async writeFile (node:internal/fs/promises:1219:14)
+    at async Object.wrappedPromisesAppendFile [as appendFileAsync] (C:\Users\73116\AppData\Local\Programs\WorkBuddy\resources\app.asar.unpacked\cli\vendor\shim\node-brokered-fs-shim.cjs:748:20)
+    at async Persistence.persistNewStateAsync (D:\code\file-finder\node_modules\@seald-io\nedb\lib\persistence.js:163:5)
+    at async Datastore.ensureIndexAsync (D:\code\file-finder\node_modules\@seald-io\nedb\lib\datastore.js:493:5) {
+  errno: -4082,
+  code: 'EBUSY',
+  syscall: 'open',
+  path: 'C:\\Users\\73116\\AppData\\Local\\Temp\\ff-probe-faces-442nHs\\.file-finder\\searchCache.db'
+}
+  ✅ 选中一个具体条目 → 恰好展开出 1 条目标
+  ✅   目标形态与来源一致（image → cover / folder+avatar → dir）：cover
+  ✅   cover 的写入路径 = 那一层 + 封面文件名（覆盖原文件）
+  ✅   dir 的写入路径 = 目录 + `<目录名>.jpg`（新建，与补封面同规则）
+  ✅ 条目名能解析出番号时，query 必须与它一致
+  ℹ️ 带 query 的目标：1 / 1
+  ✅ 至少有一条目标带得上可搜的查询词（否则点了等于没点）
+  ✅ 同一位置重复选中 → 只有 1 条（去重生效）
+  ✅ 完整路径 `Z:/…` 与盘内相对路径得到**同一条**目标
+  ✅ 只读锚点 `#<serial>/…` 也能匹配
+  ✅ 反斜杠完整路径 `Z:\…` 也能匹配（分隔符归一）
+  ✅ 盘根形态 `Z:`（无斜杠）→ 空且不抛
+  ✅ 空 dir → 空且不抛
+  ✅ 选父目录 → 展开成 1 条（≥1），且**包含**刚才那条
+  ✅   展开结果里没有重复的写入路径
+
+── ③ 全库穷举：每一条"有脸"条目都按前端形态喂一遍 ──
+  ✅ 全库 6 块盘 / 1039 条"有脸"条目，**全部**按前端形态命中（实得 1039）
+
+── ④ 全库穷举（`kind:'dir'`，选目录格子）──
+  ✅ 全库 4 块盘 / 114 个"有脸目录"（kind:'dir'）展开出 663 条目标（≥ 114）
+
+── ⑤ 分类目录闸门 ──
+  ℹ️ 检查了 113 个 dir 形态目标
+  ✅ 目标清单里**不含任何分类目录**（泄漏 0 个）
+
+── ⑥ 查询词兜底分支 ──
+  ℹ️ 真库里没有"名字认不出、目录名能认出"的封面卡 ⇒ **这条分支未被真实数据覆盖**
+     （判据本身已按 `atDir` 实现，但没有真实样本能证明它）
+
+✅ 通过 31 / 失败 0

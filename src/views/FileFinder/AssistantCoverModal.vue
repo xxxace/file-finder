@@ -1,6 +1,6 @@
 <template>
     <n-modal :show="visible" preset="card" title="补封面" style="width: 100vw; height: 100vh"
-        content-style="display:flex; flex-direction:column; overflow:hidden" @update:show="setShowModal">
+        content-style="display:flex; flex-direction:column; overflow:hidden" @update:show="onModalShowChange">
         <!-- 全屏面板：选盘 → 扫描（零读盘）→ 勾选 → 抓取 → 写入。
              布局全用裸 flex 容器（.ffassist-*），**不用 n-space** ——
              naive-ui 2.45.3 的 Space 给每个子项硬编码同一个 key，子元素个数一变就重复节点
@@ -9,26 +9,34 @@
             <!-- 选盘行 -->
             <div class="ffassist-row">
                 <span class="ffassist-label">盘：</span>
+                <!-- ⚠️ 「换封面」时禁用：盘由服务端从你挑的那些位置**反推**出来
+                     （挑的是哪块盘的东西就查哪块盘），用户改选没有意义，
+                     而且改完会被下一次展开"弹回去"，看着像坏掉了 -->
                 <n-select v-if="diskOptions.length" v-model:value="selectedSerial" :options="diskOptions"
-                    size="small" style="width: 380px" :disabled="busy" @update:value="runScan" />
+                    size="small" style="width: 380px" :disabled="busy || faceMode" @update:value="runScan" />
                 <n-spin v-if="disksLoading" :size="16" />
                 <n-button size="small" :disabled="busy || !selectedSerial" @click="runScan">
                     重新扫描
                 </n-button>
                 <!-- 深度重扫：扫描是零读盘、只认缓存的。用户在盘上手动删过图/动过文件后，
                      缓存不知道 —— 这个按钮把"写入过"的目录用实时清单（纯 readdir+stat，
-                     不抽帧不写缓存）复核一遍再出清单。 -->
+                     不抽帧不写缓存）复核一遍再出清单。
+                     ⚠️ 它出的是「缺封面」那一套（走 /assistant/rebuild），所以**换封面模式下
+                     必须禁用** —— 否则一点就把用户刚挑的那批清单整个顶掉。 -->
                 <n-popconfirm positive-text="深度重扫" negative-text="取消" @positive-click="deepRescan">
                     <template #trigger>
-                        <n-button size="small" :disabled="busy || !selectedSerial" :loading="deepLoading">
+                        <n-button size="small" :disabled="busy || !selectedSerial || faceMode" :loading="deepLoading">
                             深度重扫
                         </n-button>
                     </template>
                     把这块盘上写入过的目录用实时清单复核一遍（只读文件名，不抽帧，很快）。确定吗？
                 </n-popconfirm>
                 <span v-if="scan" class="ffassist-hint">
-                    待补 {{ scan.targets.length }} · 认不出番号 {{ scan.unmatched.length }} ·
-                    分类目录跳过 {{ scan.skippedCategory }}
+                    <template v-if="faceMode">待换 {{ scan.targets.length }}</template>
+                    <template v-else>
+                        待补 {{ scan.targets.length }} · 认不出番号 {{ scan.unmatched.length }} ·
+                        分类目录跳过 {{ scan.skippedCategory }}
+                    </template>
                 </span>
             </div>
 
@@ -37,8 +45,18 @@
                 <n-spin v-if="scanLoading" style="margin-top: 48px" />
                 <template v-if="scan">
                     <div v-if="!scan.targets.length" class="ffassist-hint" style="padding-top: 48px; text-align: center">
-                        这块盘的缓存里没有发现缺封面的视频<br>
-                        <span style="font-size: 12px">刚在盘上手动删过图 / 动过文件的话，点上面的「深度重扫」用实时清单复核</span>
+                        <template v-if="faceMode">
+                            缓存里**找不到你刚在主界面选的那些位置**<br>
+                            <span style="font-size: 12px">
+                                这一批的情况：收到 {{ scan.received ?? 0 }} 个选中位置 ·
+                                查了 {{ scan.probed ?? 1 }} 块盘的缓存<br>
+                                把这些数字告诉助手就能定位（收到 0 个 = 选择没传过来；收到 N 个 = 位置没匹配上）
+                            </span>
+                        </template>
+                        <template v-else>
+                            这块盘的缓存里没有发现缺封面的视频<br>
+                            <span style="font-size: 12px">刚在盘上手动删过图 / 动过文件的话，点上面的「深度重扫」用实时清单复核</span>
+                        </template>
                     </div>
                     <div v-for="t in scan.targets" :key="t.writeRel" class="ffassist-item">
                         <n-checkbox size="small" :checked="checked.has(t.writeRel)" :disabled="busy"
@@ -47,7 +65,11 @@
                             <div class="ffassist-item-name">{{ t.name }}</div>
                             <div class="ffassist-item-path">{{ t.writeRel }}</div>
                         </div>
-                        <n-tag size="small" :bordered="false">{{ t.kind === 'dir' ? '影片目录' : '单独文件' }}</n-tag>
+                        <n-tag size="small" :bordered="false">{{
+                            t.kind === 'cover' ? '已有封面 · 覆盖'
+                                : t.kind === 'dir' ? '目录封面 · 新建'
+                                    : '单独文件 · 新建'
+                        }}</n-tag>
                     </div>
 
                     <!-- 认不出番号：只报个数 + 可折叠明细，不做逐条操作（已锁决策） -->
@@ -97,9 +119,11 @@
 
                 <!-- 待抓取 -->
                 <template v-else>
-                    <span class="ffassist-hint">勾选要补封面的片子，抓到后还需要点「写入」才会进盘</span>
+                    <span class="ffassist-hint">{{ faceMode
+                        ? '这些是你刚在主界面挑的；抓到后还要点「写入」才会真的换掉。翻新封面会**先备份原图**'
+                        : '勾选要补封面的片子，抓到后还需要点「写入」才会进盘' }}</span>
                     <n-button size="small" type="primary" :disabled="!checkedCount || scanLoading" @click="startGrab()">
-                        开始抓取（{{ checkedCount }} 条）
+                        {{ faceMode ? `开始抓取新封面（${checkedCount} 条）` : `开始抓取（${checkedCount} 条）` }}
                     </n-button>
                 </template>
             </div>
@@ -124,8 +148,17 @@
     <n-modal :show="showConfirm" preset="card" title="确认写入" style="width: 82vw"
         content-style="display:flex; flex-direction:column; gap:8px" @update:show="v => showConfirm = v">
         <div class="ffassist-hint">
-            勾选的会**新建番号文件夹**、把这一部的全部分卷搬进去、封面写进文件夹里；
-            不勾的完全不碰。搬动只用改名（同盘瞬时，不复制数据），同名冲突会跳过并说明。
+            <!-- 两种模式的后果完全不同，文案必须分开写（旧版只有一套"搬分卷"的说法，
+                 套到「换封面」上会告诉用户一件根本不会发生的事） -->
+            <template v-if="faceMode">
+                勾选的会**换掉它现在那张封面**：有封面文件的**覆盖**它（文件名不变，
+                **原图会先备份到数据目录**）；只有头像的目录则写一张新封面上去，旧头像自动让位。
+                不勾的完全不碰，也**不会搬动任何视频**。
+            </template>
+            <template v-else>
+                勾选的会**新建番号文件夹**、把这一部的全部分卷搬进去、封面写进文件夹里；
+                不勾的完全不碰。搬动只用改名（同盘瞬时，不复制数据），同名冲突会跳过并说明。
+            </template>
         </div>
         <div class="pick-grid">
             <div v-for="c in pickCards" :key="c.key" class="pick-card" :class="{ off: !pickChecked.has(c.key) }"
@@ -134,8 +167,9 @@
                     @update:checked="v => togglePick(c.key, v)" />
                 <img :src="previewSrc(c.coverUrl)" loading="lazy" referrerpolicy="no-referrer" alt="">
                 <div class="pick-name">{{ c.title }}</div>
-                <div class="pick-tag">{{ c.kind === 'dir' ? '已有文件夹 · 只补封面'
-                    : (c.volumes > 1 ? `${c.volumes} 个分卷搬入` : '单文件搬入') }}</div>
+                <div class="pick-tag">{{ c.kind === 'cover' ? '覆盖原封面 · 先备份'
+                    : c.kind === 'dir' ? '写新封面 · 旧头像自动让位'
+                        : (c.volumes > 1 ? `${c.volumes} 个分卷搬入` : '单文件搬入') }}</div>
             </div>
         </div>
         <div class="ffassist-row">
@@ -172,7 +206,8 @@ interface DiskRow {
     folders: number; covers: number;
 }
 interface ScanTarget {
-    kind: 'file' | 'dir';
+    /** `dir` = 写新封面到影片目录；`cover` = 覆盖它自己那张现有封面；`file` = 裸视频（建文件夹并搬） */
+    kind: 'file' | 'dir' | 'cover';
     dir: string; name: string; writeRel: string; hasVideo?: boolean;
 }
 interface ScanUnmatched { dir: string; name: string; }
@@ -180,11 +215,17 @@ interface ScanResult {
     serial: string; scope: string;
     targets: ScanTarget[]; unmatched: ScanUnmatched[];
     skippedCategory: number; scannedDocs: number;
+    /** 只对「换封面」有意义：服务端一共查了几块盘的缓存（空态里要如实说"找过了"） */
+    probed?: number;
+    /** 只对「换封面」有意义：服务端**实际收到**几个选中位置（0 = 前端根本没传过去） */
+    received?: number;
 }
 interface GrabRow {
     writeRel: string; query: string; hitSite: string | null; coverUrl: string | null;
     title: string | null; status: 'ok' | 'no-id' | 'no-match' | 'blocked' | 'error';
-    message: string; blockedSite?: string; srcRel?: string; kind?: 'file' | 'dir';
+    message: string; blockedSite?: string; srcRel?: string; kind?: 'file' | 'dir' | 'cover';
+    /** 目标显示名（后端透传）—— 确认弹窗拿它当卡片标题 */
+    name?: string;
 }
 interface ApplyRow { writeRel: string; ok: boolean; message: string; }
 /**
@@ -193,7 +234,7 @@ interface ApplyRow { writeRel: string; ok: boolean; message: string; }
  * 勾/不勾的是整部，写入时它们一起进同一个番号文件夹。
  */
 interface PickCard {
-    key: string; kind: 'file' | 'dir';
+    key: string; kind: 'file' | 'dir' | 'cover';
     /** 卡片标题：文件形态 = `番号/`（将新建的文件夹）；目录形态 = `已有文件夹名/` */
     title: string;
     /** 这部片所在的层（盘内相对路径） */
@@ -212,11 +253,24 @@ interface JobSnapshot {
     rows: (GrabRow | ApplyRow)[];
     message: string;
 }
+/**
+ * 主界面「换封面」传进来的一个选中位置（与后端 `FacePick` 同形）。
+ * `kind:'dir'` = 展开这个目录（含子树）下所有有封面的；`kind:'item'` = 只换这一个。
+ */
+interface FacePick { dir: string; name: string; ext?: string; kind: 'dir' | 'item'; }
 
 const emit = defineEmits<{ refresh: [] }>();
 const notify = useNotify();
 
 const visible = ref(false);
+
+/**
+ * 「换封面」入口带来的选中位置。
+ * **为空 = 走原来的「补封面」流程**（扫描找"没有封面的"）；非空 = 只处理这些（"有但要换的"）。
+ * 关闭面板时清空 —— 否则下次从「补封面」进来会莫名其妙地沿用上一次的挑选。
+ */
+const facePicks = ref<FacePick[]>([]);
+const faceMode = computed(() => facePicks.value.length > 0);
 const disksLoading = ref(false);
 const scanLoading = ref(false);
 const disks = ref<DiskRow[]>([]);
@@ -271,14 +325,18 @@ const pickCards = computed<PickCard[]>(() => {
     for (const r of rows) {
         const i = r.writeRel.lastIndexOf('/');
         const layerDir = i === -1 ? '' : r.writeRel.slice(0, i);
-        if (r.kind === 'dir') {
-            // 目录形态：影片文件夹已存在，封面 = `<文件夹名>.jpg`（与文件夹同名）
-            const key = `dir|${layerDir}`;
+        if (r.kind === 'dir' || r.kind === 'cover') {
+            // 「只写封面、不搬动」的两类：dir = 写新封面到影片目录；cover = 覆盖它自己那张。
+            // ⚠️ 分组键必须与后端 `buildGroups` **同一口径**（`kind|writeRel`）：
+            // 原来这里和后端都用 `layerDir` 作键，同一层的第二个目标会被吞掉、静默丢失。
+            const key = `${r.kind}|${r.writeRel}`;
             if (!map.has(key)) {
                 map.set(key, {
-                    key, kind: 'dir',
-                    title: `${layerDir.split('/').pop()}/`,
-                    path: layerDir.split('/').slice(0, -1).join('/'),
+                    key, kind: r.kind,
+                    // 卡片标题：`cover` 形态优先用**番号**（`query`）—— 它的 `name` 是
+                    // 封面图文件名（可能是 `cover`/`1` 这种），拿去当标题没有信息量
+                    title: r.kind === 'cover' ? (r.query || r.name || layerDir.split('/').pop() || '') : `${layerDir.split('/').pop()}/`,
+                    path: r.kind === 'cover' ? layerDir : layerDir.split('/').slice(0, -1).join('/'),
                     coverUrl: r.coverUrl!,
                     coverWriteRel: r.writeRel,
                     writeRels: [r.writeRel], volumes: 0,
@@ -355,23 +413,66 @@ const poll = (id: string, onJob: (job: JobSnapshot) => boolean | void) => {
 };
 onUnmounted(stopPoll);
 
-const setShowModal = async (v: boolean) => {
+/**
+ * ⚠️ `n-modal` 的 `@update:show` 回声 —— **只处理关闭**。
+ *
+ * 为什么不能像原来那样直接接 `setShowModal`：打开时 modal 会把 `visible = true`
+ * 这个变化**回声**出来（`update:show(true)`），而事件只带一个 boolean ——
+ * `setShowModal(true)` 的第二个参数 `picks` **变成了 undefined**，
+ * 于是刚设好的「换封面」选择被 `facePicks.value = picks ?? []` **当场清空**，
+ * 后端收到的 picks 是空数组 ⇒ 弹窗里一条都没有（用户真机实测的原话：
+ * "出现弹窗，但是什么都没得操作"）。
+ *
+ * 打开永远是**程序主动调的**（带 picks），所以这里只管关闭。
+ */
+const onModalShowChange = (v: boolean) => {
+    if (!v) setShowModal(false);
+};
+
+/**
+ * 打开 / 关闭面板。
+ *
+ * ⚠️ 第二个参数是「换封面」的入口：**主界面里选中的位置**（见 `FacePick`）。
+ * 不传 = 原来的「补封面」（扫描找"没有封面的"）；传了 = 只处理这批"有封面但要换的"。
+ *
+ * 两者共用**这一个面板、这一条链路**（抓取 → 预览确认 → 写入），只是"清单从哪来"不同 ——
+ * 这是刻意的：用户 2026-10-02 明确「不要搞出太多的界面和入口，尽可能保持统一」。
+ */
+const setShowModal = async (v: boolean, picks?: FacePick[]) => {
     visible.value = v;
-    if (!v) { stopPoll(); return; }
+    if (!v) {
+        stopPoll();
+        // 关面板就清掉挑选 —— 否则下次从「补封面」进来会沿用上一次的挑选
+        facePicks.value = [];
+        return;
+    }
+    // ⚠️ **只有显式传了才覆盖**：不传时保留已有的（防"回声调用"把选择清掉，
+    // 与上面的 `onModalShowChange` 是双保险）
+    if (picks) facePicks.value = picks;
     await loadDisks();
     // 面板关了任务还在跑（job 活在主进程内存里）。重开时挂回正在跑的那个，
     // 不然用户以为取消/关闭就等于任务没了
+    let attached = false;
     try {
         const res = await getAction(`${API_BASE}/assistant/jobs`);
         const running = (res.jobs as JobSnapshot[]).find(j => j.status === 'running');
         if (running?.kind === 'grab') {
             grabJob.value = running;
             poll(running.id, job => { grabJob.value = job; return job.status !== 'running'; });
+            attached = true;
         } else if (running?.kind === 'apply') {
             applyJob.value = running;
             poll(running.id, job => { applyJob.value = job; return job.status !== 'running'; });
+            attached = true;
         }
     } catch { /* 没有任务/服务没起来都无所谓，走正常流程 */ }
+
+    // ⚠️ 没有在跑的任务时**必须重算清单**。
+    // 原来只在"从没选过盘"时才自动扫（那段逻辑在 `loadDisks` 里），于是
+    // **第二次打开面板永远显示上一次的清单** —— 从「补封面」切到「换封面」时，
+    // 用户看到的还是"缺封面的"那一批，自然会以为"换封面不过是弹出补封面界面"
+    // （用户真机实测）。跨模式、换盘重开，都必须重新算。
+    if (!attached) await runScan();
 };
 
 const loadDisks = async () => {
@@ -379,10 +480,11 @@ const loadDisks = async () => {
     try {
         const res = await getAction(`${API_BASE}/getDisks`);
         disks.value = (res.disks ?? []).filter((d: DiskRow) => d.serial);
-        // 只有一块盘就自动选上直接扫；多盘必须用户自己选（不替他做主）
+        // 只有一块盘就自动选上（多盘必须用户自己选，不替他做主）。
+        // ⚠️ **不在这里顺手扫描** —— 扫码的时机由 `setShowModal` 统一管
+        //（否则会和它重复扫一次，而且"第二次打开不重算"那个坑就是这段引起的）。
         if (!selectedSerial.value && disks.value.length === 1) {
             selectedSerial.value = disks.value[0].serial;
-            await runScan();
         }
     } catch (e) {
         notify('error', '取盘列表失败', String(e));
@@ -392,18 +494,39 @@ const loadDisks = async () => {
 };
 
 const runScan = async () => {
-    if (!selectedSerial.value || runningJob.value) return;
+    if (runningJob.value) return;
+    // ⚠️ 「换封面」**不需要先选盘**：picks 里带的是完整路径（或只读锚点），
+    // 服务端据此反推这块盘的序列号，再把结果回来告诉你（多盘机器上这一步关键 ——
+    // 你挑的是哪块盘的东西，就该查哪块盘的缓存）。
+    if (!faceMode.value && !selectedSerial.value) return;
     scanLoading.value = true;
     try {
-        const res = await postAction(`${API_BASE}/assistant/scan`, { serial: selectedSerial.value, relPath: '' });
-        scan.value = res as ScanResult;
+        if (faceMode.value) {
+            // 把主界面选中的**位置**展开成目标清单（零读盘，只读缓存）。
+            // ⚠️ 返回的 `targets` 与「补封面」的**同形** ⇒ 下游（勾选/抓取/确认/写入）零改动。
+            const res = await postAction(`${API_BASE}/assistant/faces`, { picks: facePicks.value });
+            if (res.serial) selectedSerial.value = res.serial as string;
+            scan.value = {
+                serial: (res.serial ?? '') as string,
+                scope: '',
+                targets: (res.targets ?? []) as ScanTarget[],
+                unmatched: [],
+                skippedCategory: 0,
+                scannedDocs: 0,
+                probed: (res.probed as number | undefined) ?? 1,
+                received: (res.received as number | undefined) ?? facePicks.value.length,
+            };
+        } else {
+            const res = await postAction(`${API_BASE}/assistant/scan`, { serial: selectedSerial.value, relPath: '' });
+            scan.value = res as ScanResult;
+        }
         // 默认全选（已锁决策）；重新扫描也重置勾选
         checked.value = new Set(scan.value.targets.map(t => t.writeRel));
         grabJob.value = null;
         applyJob.value = null;
         stopPoll();
     } catch (e) {
-        notify('error', '扫描失败', String(e));
+        notify('error', faceMode.value ? '展开选中项失败' : '扫描失败', String(e));
     } finally {
         scanLoading.value = false;
     }
@@ -451,6 +574,9 @@ const startGrab = async (targets?: ScanTarget[]) => {
     try {
         const res = await postAction(`${API_BASE}/assistant/jobs`, {
             kind: 'grab', serial: selectedSerial.value, targets: list,
+            // 「换封面」必须**绕开命中缓存**：否则助手以前抓到过的番号会秒回同一张 URL
+            // ⇒ 下载到逐字节相同的图，"已替换"就成了假话（详见 grab.ts 的 runGrab 注释）。
+            ...(faceMode.value ? { force: true } : {}),
         });
         if (!res.jobId) {
             notify('info', '没有可抓的目标', res.message || '');

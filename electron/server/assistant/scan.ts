@@ -64,7 +64,20 @@ import { parseTitle } from './match';
 /** 一次扫描最多看多少条缓存文档 —— 防止在盘根触发时把主进程按住 */
 const MAX_DOCS = 3_000;
 
-export type TargetKind = 'file' | 'dir';
+/**
+ * 目标的写入形态。三者对应三种**互不相同的写盘动作**（见 apply.ts 的 buildGroups）：
+ *
+ *   - `file`  —— 裸视频：建番号文件夹、把分卷 rename 进去、封面写进文件夹（**会搬文件**）
+ *   - `dir`   —— 没脸的影片目录：只写 `<目录>/<目录名>.jpg`（**只新增，不搬**）
+ *   - `cover` —— **已经有脸**、但用户要换掉它：覆盖那张脸自己（`dir/<封面图名>.<ext>`），
+ *                并**先备份原图**（**只覆盖一个文件，不搬、不建目录**）
+ *
+ * ⚠️ `cover` 是 2026-10-02「换封面」新增的。它与 `dir` 的关键区别是：
+ * `dir` 写的是**新文件**（`<目录名>.jpg`，`handleCover` 会把旧的 `avatar.jpg`/`cover.jpg`
+ * 摘掉，所以旧文件根本不用动 —— 零破坏）；而 `cover` 写的是**用户已有的那个文件**，
+ * 是破坏性覆盖，因此必须备份。
+ */
+export type TargetKind = 'file' | 'dir' | 'cover';
 
 export interface ScanTarget {
     kind: TargetKind;
@@ -85,6 +98,18 @@ export interface ScanTarget {
      * `undefined` = 这个子目录从没被扫过，我们只能靠目录名判断（界面上应提示"较不确定"）。
      */
     hasVideo?: boolean;
+    /**
+     * 该拿哪个词去站点搜。
+     *
+     * ⚠️ **目前只有 `collectFaces`（换封面）会设它**，理由见那里的 `queryOf()`：
+     * 封面卡条目的 `name` 是**封面图文件名**（可能是 `cover` / `1` 这种），
+     * 拿它解析番号必然失败 ⇒ 那批目标会在抓取端被静默跳过。
+     * 扫描阶段就知道"该搜什么"，比让抓取端瞎猜靠谱。
+     *
+     * `scanMissingCovers`（补封面）**不设它** ⇒ `grab` 回落到 `parseTitle(name)`，
+     * 那条既有路径的行为**一个字没变**。
+     */
+    query?: string;
 }
 
 export interface ScanResult {
@@ -459,4 +484,171 @@ export async function deepScanMissingCovers(
     }
 
     return { serial, scope, refreshed, ...evaluateDocs(scope, docs) };
+}
+
+// ---------------------------------------------------------------------------
+// 「换封面」：收集**已经有脸**的条目（零读盘）
+// ---------------------------------------------------------------------------
+
+/**
+ * 主界面传过来的一个"选中位置"，与 `FileFinder` 网格的条目一一对应：
+ *
+ *   - `kind:'dir'`  —— 选中的是**目录格子** ⇒ 展开它（含子树）下面**所有**有脸条目。
+ *                      这就是"按演员 / 按文件夹"批量：目录名通常就是演员名。
+ *   - `kind:'item'` —— 选中的是**某一个格子** ⇒ 只处理这一个。
+ *
+ * `name` 是**去扩展名**的显示名（与 `FileInfo.name` 同口径），所以带点的目录名
+ * 要用 `ext` 拼回真名 —— 与 `server/index.ts` 的 `diskNameOf` 同一条规则。
+ */
+export interface FacePick {
+    dir: string;
+    name: string;
+    ext?: string;
+    kind: 'dir' | 'item';
+}
+
+/** 拼出条目在盘上的真名（`name` 去过扩展名，目录名带点时靠 ext 拼回） */
+function diskNameOf(name: string, ext?: string): string {
+    return ext ? `${name}.${ext}` : name;
+}
+
+/**
+ * 决定"该拿什么词去站点搜"。
+ *
+ * ⚠️ **为什么必须有它**（用户真机实测：点了「换封面…」，弹窗里什么都没发生）：
+ * 封面卡条目的 `name` 来自 `handleCover` 的 `info.name = getFilename(file)` ——
+ * 是**封面图文件名**，可能是 `cover` / `1` / `poster` 这类；拿它去 `parseTitle`
+ * 必然认不出番号，于是抓取端一律记成 `no-id` 静默跳过。
+ *
+ * 兜底顺序（都失败就返回 undefined，让抓取端照旧报 `no-id`）：
+ *   ① 条目名自己 —— 有脸的目录名通常就是番号
+ *   ② 它**所在层**的名字 —— 影片目录里的条目常常"层名才是番号"
+ */
+function queryOf(name: string, dir: string): string | undefined {
+    const bySelf = parseTitle(name).id;
+    if (bySelf) return bySelf;
+    const base = baseName(dir);
+    if (base) {
+        const byDir = parseTitle(base).id;
+        if (byDir) return byDir;
+    }
+    return undefined;
+}
+
+/**
+ * 把主界面发来的 `dir` 归一成缓存里的**盘内相对路径**。
+ *
+ * ⚠️ **必须有这一步**：主界面下发的 `item.dir` 是**完整路径** ——
+ * `server/index.ts` 的 `toWire()` 最后一句就是 `dir: toFullPath(drive, item.dir)`
+ * （存储态才是相对路径）。直接拿它去和缓存里的 `relPath` 比，一条都匹配不上。
+ *
+ * 三种形态都要认：
+ *   · 在线：`H:/影片/演员A`            → `影片/演员A`
+ *   · 离线（只读锚点）：`#<serial>/影片/演员A` → `影片/演员A`
+ *   · **已经是相对路径**（探针 / 内部调用）→ 原样返回（这个函数是幂等的）
+ *
+ * 分隔符统一成 `/` —— 存储态的 `relPath` 实测就是 `/`（见 `ANALYSIS-folder-size` §九）。
+ */
+function relOfPath(dir: string): string {
+    let s = dir;
+    if (s.startsWith('#')) {
+        // 只读锚点 `#<serial>/<relPath>`：`#` 在 Windows 路径里永远不合法，撞不上真路径
+        const rest = s.slice(1);
+        const cut = rest.indexOf('/');
+        s = cut === -1 ? '' : rest.slice(cut + 1);
+    } else {
+        s = s.replace(/^[A-Za-z]:[\\/]?/, '');   // 盘符（`H:` / `H:\` / `H:/`）
+    }
+    return s.replace(/\\/g, '/').replace(/^\/+/, '').replace(/\/+$/, '');
+}
+
+/**
+ * 从缓存收集"换封面"的目标（**零读盘**，与找缺封面同一姿态）。
+ *
+ * 只收两类**已经有脸**的条目：
+ *   ① `type:'image'`         → `kind:'cover'`：覆盖 `dir/<封面图名>.<ext>`
+ *   ② `type:'folder'`+avatar → `kind:'dir'`  ：**新建** `<目录名>/<目录名>.jpg`
+ *      （`handleCover` 会摘掉旧的 `avatar.jpg`/`cover.jpg`，新图自动成为脸，旧文件一个不动）
+ *
+ * ⚠️ **裸视频（`type:'video'`）不收** —— 它没有"当前这张脸"可换，归「补封面」管。
+ * 两者互补、不重叠：`scanMissingCovers` 找"没有的"，这里找"有但不想要的"。
+ */
+export async function collectFaces(serial: string, picks: FacePick[]): Promise<ScanTarget[]> {
+    if (!picks.length) return [];
+
+    const docs = await gatherCacheDocs(serial, '');
+
+    /** 要整体展开的目录（盘内相对路径；`relOfPath` 负责把主界面的完整路径归一） */
+    const scopes = picks
+        .filter(p => p.kind === 'dir')
+        .map(p => joinRel(relOfPath(p.dir), diskNameOf(p.name, p.ext)));
+    /** 只要这一个（盘内相对路径 = 该条目代表的位置） */
+    const singles = new Set(
+        picks.filter(p => p.kind === 'item').map(p => joinRel(relOfPath(p.dir), diskNameOf(p.name, p.ext))),
+    );
+
+    const out: ScanTarget[] = [];
+    const seen = new Set<string>();
+
+    for (const [docDir, entries] of docs) {
+        for (const e of entries) {
+            // ⚠️⚠️ 基准必须是**条目自己的 `dir`**，不是文档的 key（`docDir`）——
+            // 这两者在"收敛出来的封面卡"上**不是一回事**：
+            //
+            //   `server/index.ts:251` 调 `handleCover(filepath, serial, joinRel(storeDir, file))`，
+            //   也就是卡片拿到的是**它代表的那个子目录**（`…/演员名/番号`）；
+            //   而它落库时挂在**父层文档**（`…/演员名`）的 `data` 里。
+            //
+            // 用 `docDir` 拼就会**永远差一层** ⇒ 一条都匹配不上。真机实测就是这个：
+            // 选了 5 个位置、6 块盘的缓存都查了，全部落空、界面显示"找不到"。
+            const atDir = e.dir || docDir;
+            const selfRel = joinRel(atDir, diskNameOf(e.name, e.ext));
+
+            // 命中：① 明确点选的这一个 ② 落在被选中的目录（含子树）里
+            // ⚠️ 最后那条 `atDir === s` 不能少，而且理由和 `atDir` 一样：
+            // 收敛卡片声明的 `dir` **就是它代表的那个子目录**，所以"选中那个目录格子"
+            // 时，卡片自己是"属于这个目录"的 —— 靠这条才对得上。
+            // （`docDir === s` 那条覆盖不了它：有脸目录没有自己的文档。）
+            const hit = singles.has(selfRel)
+                || scopes.some(s => docDir === s || docDir.startsWith(`${s}/`) || selfRel === s || atDir === s);
+            if (!hit) continue;
+
+            if (e.type === 'image') {
+                // 封面卡：脸 = 它自己那个图片文件 → 覆盖它（apply 会先备份）
+                if (seen.has(selfRel)) continue;
+                seen.add(selfRel);
+                out.push({
+                    kind: 'cover', dir: atDir, name: e.name, writeRel: selfRel,
+                    // ⚠️ 兜底用 **`atDir`**（卡片代表的那个影片目录），不是 `docDir`（父层）：
+                    // 封面图文件名认不出番号时，能救场的是"影片目录名"，而父层通常是**演员名**。
+                    // 这一处是"层错位"那个 bug 的同型残留 —— 当时 `selfRel`/`dir` 都换成 `atDir` 了，
+                    // 偏偏 `query` 漏了；而探针恰好在真库挑到一条"名字本身就是番号"的卡片，
+                    // 兜底分支从来没被执行过 ⇒ 测不出来。
+                    query: queryOf(e.name, atDir),
+                });
+                continue;
+            }
+
+            if (e.type === 'folder' && e.avatar) {
+                // ⚠️ **分类目录**（里面还有子目录，典型就是"演员名目录"）不处理：
+                // 给它写 `<目录名>.jpg` **永远不会生效** —— `handleCover` 第一关
+                // "有子目录 → return null" 就挡住了（`server/index.ts:341`），
+                // 结果只多一个垃圾文件、界面还报"写入成功"。与 `evaluateDocs` 的
+                // `skippedCategory` 是**同一道闸**，两边的判据必须一致。
+                const child = docs.get(selfRel);
+                if (child && child.some(c => c.type === 'folder')) continue;
+
+                // 有脸目录（单片）：新建 <目录>/<目录名>.jpg（与找缺封面**同一规则**，零破坏）
+                const writeRel = joinRel(selfRel, `${e.name}.jpg`);
+                if (seen.has(writeRel)) continue;
+                seen.add(writeRel);
+                out.push({
+                    kind: 'dir', dir: atDir, name: e.name, writeRel,
+                    query: queryOf(e.name, atDir),
+                });
+            }
+        }
+    }
+
+    return out;
 }

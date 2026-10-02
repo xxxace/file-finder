@@ -62,6 +62,12 @@ export interface GrabRow {
      * 封面改成与文件夹同名后，writeRel 的 basename 不再能区分两种形态。
      */
     kind?: TargetKind;
+    /**
+     * 目标的显示名（透传自 ScanTarget.name）。确认弹窗要拿它当卡片标题 ——
+     * `writeRel` 的最后一段对 `kind:'cover'` 是**文件名**（如 `TST-xxx.jpg`），
+     * 而这里是**去扩展名的显示名**，正是界面该显示的东西。
+     */
+    name?: string;
 }
 
 /** 命中结果（与具体写入位置无关，因此可以在同名影片间复用） */
@@ -93,6 +99,18 @@ export async function runGrab(
     rules: SiteRule[],
     job: Job<GrabRow>,
     dataDir: string,
+    /**
+     * `force: true` = **绕开落盘命中缓存，真打站点**。
+     *
+     * 为什么必须有它（2026-10-02「换封面」）：下面 `outcomeOf` 的第一级就是查
+     * `hits.jsonl`，凡助手**以前抓到过**的番号会秒回旧 URL ⇒ 下载到**逐字节相同**的图。
+     * 对"补封面"这是优点（省请求）；但对"换封面"就是**空转** —— 用户明确表示这张不好、
+     * 要换一张，结果拿回同一张，"已替换"就成了假话。
+     *
+     * ⚠️ 刻意**不写墓碑**（`appendTombstone`）来实现：墓碑的语义是"这个 URL 永久坏了"，
+     * 而"我想换一张"跟 URL 好坏无关 —— 不该污染那张表。
+     */
+    force = false,
 ): Promise<void> {
     const active = rules.filter(r => r.enabled);
     bumpProgress(job, { total: targets.length });
@@ -181,7 +199,9 @@ export async function runGrab(
      *   ③ 真打站点。
      */
     function outcomeOf(id: string): Promise<MatchOutcome> {
-        const hit = hits.get(id);
+        // `force` 时跳过命中缓存（理由见 `runGrab` 的形参注释）；`force` 下抓到的**新 URL
+        // 仍然照常 `appendHit`**（在 `fetchOnce` 里），所以缓存不会因此失效。
+        const hit = force ? undefined : hits.get(id);
         if (hit) {
             return Promise.resolve({
                 match: {
@@ -208,8 +228,14 @@ export async function runGrab(
 
     /** 处理一个目标：解析番号 → 取结果 → 记一行。单条失败记成一行，不炸整批 */
     async function grabOne(t: ScanTarget): Promise<void> {
-        const p = parseTitle(t.name);
-        if (!p.id) {
+        // ⚠️ 优先用目标自带的查询词。封面卡条目的 `name` 是**封面图文件名**
+        // （`handleCover` 里 `info.name = getFilename(file)`，可能是 `cover`/`1` 这类），
+        // 拿它解析番号必然失败 ⇒ 那批目标会被静默记成 `no-id` 跳过
+        // （用户真机实测："点了换封面，弹窗里什么都没发生"）。
+        // `scanMissingCovers`（补封面）的目标**没有** `query` 字段，所以回落到原来的
+        // `parseTitle(t.name)` —— 那条既有路径的行为一个字都没变。
+        const id = t.query || parseTitle(t.name).id;
+        if (!id) {
             pushRow(job, {
                 writeRel: t.writeRel,
                 query: '',
@@ -226,11 +252,11 @@ export async function runGrab(
 
         let outcome: MatchOutcome;
         try {
-            outcome = await outcomeOf(p.id);
+            outcome = await outcomeOf(id);
         } catch (e) {
             if (e instanceof CancelledError) throw e;
             pushRow(job, {
-                writeRel: t.writeRel, query: p.id, hitSite: null, coverUrl: null, title: null,
+                writeRel: t.writeRel, query: id, hitSite: null, coverUrl: null, title: null,
                 actresses: [], status: 'error',
                 message: e instanceof Error ? e.message : String(e),
             });
@@ -244,7 +270,7 @@ export async function runGrab(
         if (outcome.match) {
             pushRow(job, {
                 writeRel: t.writeRel,
-                query: p.id,
+                query: id,
                 hitSite: outcome.match.hitSite,
                 coverUrl: outcome.match.coverUrl,
                 title: outcome.match.title,
@@ -253,12 +279,13 @@ export async function runGrab(
                 message: '',
                 srcRel: t.srcRel,
                 kind: t.kind,
+                name: t.name,
             });
             step(job, 'hit');
         } else {
             pushRow(job, {
                 writeRel: t.writeRel,
-                query: p.id,
+                query: id,
                 hitSite: null,
                 coverUrl: null,
                 title: null,

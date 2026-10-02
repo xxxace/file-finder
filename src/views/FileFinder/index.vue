@@ -150,17 +150,30 @@
                  Vue 遇到重复 key 会复用错的组件实例，封面会串到别的格子里。
                  加上 dir 就唯一了（folder 模式下 dir 是父目录，同样唯一）。 -->
             <div v-for="(item) in fileList" :key="item.dir + '/' + item.name" class="image-box-item"
-                @dblclick="handleOpen($event, item)" @contextmenu.prevent="onContextMenu($event, item)"
+                :class="{ pickable: picking && isPickable(item), picked: isPicked(item) }"
+                @click="onItemClick(item)" @dblclick="handleOpen($event, item)"
+                @contextmenu.prevent="onContextMenu($event, item)"
                 :title="item.name + ' ' + getSize(item.size)">
+                <!-- 「换封面」模式下单击格子 = 选中/取消（见 onItemClick）。
+                     同时**关掉图片预览** —— 否则一下点下去既弹放大图、又切换选中，两个动作打架。
+                     判断"这张糊不糊"靠格子里的图本身（6 列下也有 200~320px），不靠点开大图。 -->
                 <n-image v-if="item.type === 'image' || item.type === 'video'" :src="thumbUrl(item.thumb)"
                     :preview-src="previewUrl(item)" :previewed-img-props="previewedImgProps" :alt="item.dir"
-                    :lazy="true" objectFit="contain" />
+                    :lazy="true" objectFit="contain" :preview-disabled="picking" />
+                <!-- 目录的脸：只在 70% 显示、且本来就不给点开。挑封面时要看得清，所以模式下放到 100% -->
                 <n-image v-else-if="!!item.avatar" :src="thumbUrl(item.avatar)" :alt="item.dir || ''" :lazy="true"
-                    objectFit="contain" :style="`width:70%;height:70%`" preview-disabled />
+                    objectFit="contain" :style="picking ? 'width:100%;height:100%' : 'width:70%;height:70%'"
+                    preview-disabled />
                 <img v-else-if="item.type === 'folder'" :src="folderIcon" :alt="item.dir || ''" :style="`width:70%`">
                 <div v-else :title="item.dir" :class="`file-cover fiv-cla fiv-icon-${item.ext}`"
                     :style="`width:70%;font-size: .6rem`"></div>
                 <span>{{ item.name }}</span>
+                <!-- 选中角标。⚠️ 用 `<i>` 而**不是** `<span>` —— `.image-box-item span` 那条
+                     （1681 行）里有 `width:100%` + `height:38px !important`，会把角标拉成长条、
+                     圆直接变形。换个元素最省事，也不用跟 `!important` 打架。
+                     ⚠️ 绝对定位、**不参与布局** —— 网格 6 列的宽度是"margin 撑间距 +
+                     `width:100%/6−10px` 补偿"算出来的，任何参与布局的新元素都会带偏它 -->
+                <i v-if="isPicked(item)" class="pick-badge" aria-hidden="true"></i>
             </div>
             <!-- 空状态：只有一行浅灰小字。不加边框、不加图标、不加按钮 —— 保持极简观感 -->
             <div v-if="emptyTip" class="empty-tip">{{ emptyTip }}</div>
@@ -175,12 +188,26 @@
              ⚠️ 取消只在**目录边界**生效（当前这个目录会扫完）—— 那是刻意的：
              半途中断会留下写了一半的缓存。所以文案要说"当前这个扫完就停"，
              不能让用户以为点了就应该立刻停。 -->
-        <div v-if="scanning" class="scan-bar">
-            <span class="scan-progress">已扫 {{ scanDone }} / 待扫 {{ scanPending }}</span>
-            <n-button size="small" :disabled="cancelling" @click="onScanCancel">
-                {{ cancelling ? '正在取消…' : '取消' }}
-            </n-button>
-            <span v-if="cancelling" class="scan-hint">当前这个目录扫完就停</span>
+        <div v-if="scanning || picking" class="scan-bar">
+            <!-- 「换封面」的挑选中。复用这一条而不动工具条 —— 工具条那条铁律是
+                 "绝不消失、绝不换形、一个字都不随状态变"，所以模式态的信号只能住在这里。
+                 两者不会同时出现（进模式前会等扫描结束）。 -->
+            <template v-if="!scanning">
+                <span class="scan-progress">换封面：点有封面的格子选中 · 已选 {{ pickedCount }} 处</span>
+                <n-button size="small" :disabled="!pickedCount" @click="clearPicked">清空</n-button>
+                <n-button size="small" @click="exitPick">退出</n-button>
+                <n-button size="small" type="primary" :disabled="!pickedCount" @click="openFaces">
+                    换封面…
+                </n-button>
+                <span class="scan-hint">没有封面的格子选不了 —— 那是「补封面」管的事</span>
+            </template>
+            <template v-else>
+                <span class="scan-progress">已扫 {{ scanDone }} / 待扫 {{ scanPending }}</span>
+                <n-button size="small" :disabled="cancelling" @click="onScanCancel">
+                    {{ cancelling ? '正在取消…' : '取消' }}
+                </n-button>
+                <span v-if="cancelling" class="scan-hint">当前这个目录扫完就停</span>
+            </template>
         </div>
         <n-popover :show="popover.visible" :x="popover.x" :y="popover.y" trigger="manual" placement="bottom"
             @clickoutside="popover.visible = false">
@@ -1112,9 +1139,15 @@ const onScanCancel = () => {
  * （下拉不弹出来 = 三项都点不到），与"忙碌时只置灰、不消失"是同一条铁律。
  */
 const moreOptions = computed(() => [
-    { label: '补全这一片', key: 'fill', disabled: scanning.value || !history.value.length || readOnlyLevel.value },
-    { label: '重读这一片', key: 'rescan', disabled: scanning.value || !history.value.length || readOnlyLevel.value },
+    // ⚠️ 扫描类动作在「挑封面」模式下**也禁用**：它们会把网格重扫一遍，
+    // 而状态条那边是 `v-if="scanning || picking"` 且扫描优先 —— 扫描条会把挑选 UI
+    // 顶掉（选中的东西还在、但你看不见那个计数和处理按钮了）。
+    { label: '补全这一片', key: 'fill', disabled: scanning.value || picking.value || !history.value.length || readOnlyLevel.value },
+    { label: '重读这一片', key: 'rescan', disabled: scanning.value || picking.value || !history.value.length || readOnlyLevel.value },
     { label: '补封面', key: 'cover', disabled: scanning.value },
+    // 「换封面」= 补封面的**反面**：补封面是让程序找出"没有封面的"，
+    // 换封面是让用户自己挑"有封面但要换的"。两者最终复用同一个弹窗、同一条抓取写入链路。
+    { label: picking.value ? '退出换封面' : '换封面', key: 'faces', disabled: scanning.value || readOnlyLevel.value },
 ]);
 
 /**
@@ -1138,7 +1171,89 @@ const onMoreSelect = (key: string) => {
         });
     } else if (key === 'cover') {
         assistantModal.value?.setShowModal(true);
+    } else if (key === 'faces') {
+        // 再点一次 = 退出（下拉项的文案会跟着变成「退出换封面」）
+        if (picking.value) exitPick();
+        else enterPick();
     }
+};
+
+// ─────────────────────────────────────────────────────────────────────────
+// 「换封面」：在**主界面网格**上叠加一层"可点选"，挑出要换的封面。
+//
+// 立场（2026-10-02，用户原话「我不要搞出太多的界面和入口，尽可能保持统一」）：
+//   · **不新增任何界面** —— 挑就用主界面自己的网格 / 目录树 / 搜索 / 面包屑；
+//   · **不动工具条**（铁律：绝不换形、子元素个数恒定）⇒ 入口进「更多」下拉、状态进状态条；
+//   · **不改双击**（打开照旧）⇒ 单击只在模式态里变成"选中"；
+//   · 模式是**叠加**的：退出即完全恢复，普通浏览体验一个字都不变。
+// 选中的"位置"交给既有的补封面弹窗（`AssistantCoverModal.setShowModal(true, picks)`），
+// 展开 → 抓取 → 预览 → 写入 整条链路零改动。
+// ─────────────────────────────────────────────────────────────────────────
+
+/** 是否处于"挑封面"模式 */
+const picking = ref(false);
+
+/**
+ * 已选的位置。key 与网格的 `:key` 同口径（`dir + '/' + name`）。
+ *
+ * ⚠️ 存的是**位置**（dir/name/ext/kind），不是条目对象 —— 刷新一次、换个目录，
+ * `fileList` 里的对象就换了新的，但位置没变，所以选择能活下来（切目录、按 ↻ 都不会丢）。
+ */
+const picked = ref(new Map<string, { dir: string; name: string; ext?: string; kind: 'dir' | 'item' }>());
+const pickedCount = computed(() => picked.value.size);
+
+/**
+ * 这个格子能不能被选。
+ *
+ * 只有**已经有脸**的才算：「封面卡」（`type:'image'`）或「有脸的目录」（folder 且带 avatar）。
+ * 裸视频、没脸的目录都**不属于**换封面的范围 —— 它们归「补封面」管。
+ * 两边互补、不重叠，所以这里不让它们被误选。
+ */
+const isPickable = (item: any) =>
+    item.type === 'image' || (item.type === 'folder' && !!item.avatar);
+
+const isPicked = (item: any) => picked.value.has(`${item.dir}/${item.name}`);
+
+/**
+ * 模式态下的单击 = 选中 / 取消。**非模式态直接返回**，所以"单击不打开"这条既有习惯没变
+ * （双击才打开，那一条一个字没改）。
+ */
+const onItemClick = (item: any) => {
+    if (!picking.value) return;
+    if (!isPickable(item)) return;
+
+    const key = `${item.dir}/${item.name}`;
+    const next = new Map(picked.value);
+    if (next.has(key)) next.delete(key);
+    else next.set(key, {
+        dir: item.dir,
+        name: item.name,
+        ext: item.ext,
+        // `kind:'dir'` = 展开它下面所有有封面的（"按演员 / 按文件夹"批量）；
+        // `kind:'item'` = 只换这一个
+        kind: item.type === 'folder' ? 'dir' : 'item',
+    });
+    picked.value = next;
+};
+
+const clearPicked = () => { picked.value = new Map(); };
+
+const enterPick = () => {
+    picked.value = new Map();
+    picking.value = true;
+};
+
+/** 退出即**清空选择** —— 留着的话，下次进来会看到一堆"不知道什么时候选的"东西 */
+const exitPick = () => {
+    picking.value = false;
+    picked.value = new Map();
+};
+
+/** 把选中的位置交给既有的补封面弹窗（它去展开成目标、抓取、确认、写入） */
+const openFaces = () => {
+    const picks = [...picked.value.values()];
+    if (!picks.length) return;
+    assistantModal.value?.setShowModal(true, picks);
 };
 
 /**
@@ -1181,6 +1296,19 @@ function filterByName(list: FileInfo[], value: string) {
 
 const onKeyup = (e: KeyboardEvent) => {
     if (e.target !== document.body) return;
+
+    // 「换封面」模式态：Esc 退出，并**短路那几个会跑到别处去的单键**。
+    // 理由：模式态下用户手一直放在键盘上（点格子挑），误触 S / D / Backspace
+    // 会当场跳到搜索框、文件夹选择器、上一屏 —— 而屏幕上看不出是"跑偏了"。
+    // ⚠️ F5 刷新**不短路**：它是"我挑完想看看盘上现在什么样"，模式态里照样有用。
+    if (picking.value) {
+        if (e.key === 'Escape') {
+            exitPick();
+            return;
+        }
+        if (e.key.toUpperCase() === 'S' || e.key.toUpperCase() === 'D' || e.key === 'Backspace') return;
+    }
+
     if (e.key.toUpperCase() === 'S') {
         searchInput.value!.focus();
     } else if (e.key === 'F5') {
@@ -1430,6 +1558,55 @@ onUnmounted(() => {
     .scan-hint {
         font-size: 12px;
         color: #a1a1a1;
+    }
+}
+
+/*
+ * 「换封面」模式：可选 / 已选 / 角标。
+ *
+ * ⚠️ 三条硬约束：
+ *   ① 选中态**复用已有的 `border`**（那条 `1px solid transparent` 本来就在）只改颜色 ——
+ *      绝不能新增参与布局的属性。网格 6 列的宽度是"margin 撑间距 + `width:100%/6−10px`
+ *      补偿回来"算出来的（见 `.image-box-item` 的注释），任何新增的盒模型属性都会带偏它。
+ *   ② 角标**绝对定位**（配 `position: relative`，它不脱流、不影响几何）。
+ *   ③ 颜色取 naive-ui 默认主色 —— 本项目没有自定义主题（`App.vue` 无 `themeOverrides`）。
+ */
+.image-box-item {
+    position: relative;
+
+    &.pickable {
+        cursor: pointer;
+    }
+
+    &.picked {
+        border-color: #18a058;
+    }
+
+    .pick-badge {
+        position: absolute;
+        top: 2px;
+        right: 2px;
+        display: block;
+        width: 16px;
+        height: 16px;
+        flex-shrink: 0;
+        box-sizing: border-box;
+        font-style: normal;
+        border-radius: 50%;
+        background-color: #18a058;
+        box-shadow: 0 0 0 1px #fff;
+
+        &::after {
+            content: '';
+            position: absolute;
+            left: 4px;
+            top: 3px;
+            width: 7px;
+            height: 4px;
+            border-left: 2px solid #fff;
+            border-bottom: 2px solid #fff;
+            transform: rotate(-45deg);
+        }
     }
 }
 
