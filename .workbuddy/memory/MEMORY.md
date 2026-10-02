@@ -29,18 +29,25 @@
 - 管理助手：`docs/PRD-manager-assistant-2026-09-25.md`（权威）+ 同名 `DESIGN-` / `KICKOFF-`
 - 缓存面板：`docs/DESIGN-CACHE-PANEL-2026-09-30.md` · `docs/PLAN-cache-panel-2026-09-30.md` · `docs/cache-panel-mockup-2026-09-30.html`
 - 头部/面包屑：`DESIGN-HEADER-2026-09-30.md`（§18 工具条预算 / 分隔符 / 截图）+ `DESIGN-NAV-2026-09-30.md`（§12 四问自查）+ `PLAN-nav-header-2026-10-01.md`（三阶段 + §十一 实施结果）—— **已落地，待真机目视**；探针 `probes/header-width/`（真 Chromium + 真编译 scoped CSS + **截图**）· `probes/crumbs/`
-- 探针 `docs/probes/`：`scan-real/` `parse-title/` `table-scroll/` `preview-fill/` `remove-race/` `cache-panel-*` `header-width/` `crumbs/`；skill：`electron-headless-verify` · `real-module-probe` · `ui-render-verify`
+- **2026-10-02 四条小改动**：`docs/CHANGES-2026-10-02.md`（窗口 1280×860 + min 1024×640 / 右键加「去后缀」/ 角标挪面包屑当前段 / 标题 File Finder）＋ §五（网格左右贴边＝`.image-box` 负 margin）＋ §六（**文件夹 size 用缓存聚合，零读盘**）；新增探针 `probes/win-size/` `probes/grid-6col/` `probes/folder-size/`
+- **文件夹 size 分析原文（已落地）**：`docs/ANALYSIS-folder-size-2026-10-02.md`
+- **应用图标（2026-10-02 续）**：`docs/CHANGES-2026-10-02.md` §七 → 源 `build/icon.svg`，产出 `build/icon.ico`(七档)+`build/icon.png`+`public/favicon.ico`；生成脚本/证据/目视页 `docs/probes/icon-render/`
+- 探针 `docs/probes/`：`scan-real/` `parse-title/` `table-scroll/` `preview-fill/` `remove-race/` `cache-panel-*` `header-width/` `crumbs/` `win-size/` `grid-6col/` `icon-render/`；skill：`electron-headless-verify` · `real-module-probe` · `ui-render-verify` · `headless-rasterize`
+  ⚠️ **探针的媒体查询盲区**：`@media (max-width)` 看的是 **viewport** ⇒ 改 `#stage.style.width` **不触发断点**。要测响应式必须 `win.setSize()`。
 - **没有测试框架**（`package.json` 只有 dev/typecheck/build）⇒ 验证固定三件套：`typecheck` 0 error + `docs/probes/` 只读探针 + 真机目视。**别写 TDD 式假测试**。
 - 探针证据**必须 `.txt`**（`.gitignore` 挡 `*.log`，否则文档引用变死链）。
 
-## 五、当前状态（2026-10-01）
+## 五、当前状态（2026-10-02）
+- **10-02 文件夹显示大小（改了服务端 ⇒ 待重启 dev）**：用缓存库**子树聚合**补 `type:'folder'` 的 `size`，**零读盘**；前端 0 行；`verify.mjs` 17/17（含针对"缓存命中路径"的端到端 ⑥ 段）。详见 `CHANGES-2026-10-02.md` §六
+- **10-02 四条（改了主进程 ⇒ 待重启 dev 后真机目视）**：窗口 `1280×860` + `minWidth/minHeight 1024×640` · 右键菜单加「复制文件名（去后缀）」（**加法，原含扩展名那项未动**）· 条目数角标挪到**面包屑当前段**（`::after`+`attr()`，不新增 DOM 子元素）· 标题 `File Finder`。详见 `docs/CHANGES-2026-10-02.md`
 - **已落地并提交**：缓存面板 A/B/C（详情见 `DESIGN-CACHE-PANEL` / `PLAN-cache-panel`，**故意不做**：chips 换下拉 / 盘改名 / 上下键选行）· P0+P1+P2 · 加密备份还原合并 · 离线只读浏览（界面待目视）· **头部+导航改造**（分区/折叠/绝对链 + 工具条收进「更多」+ 根 chip 图标化，§四索引，待真机目视）· 管理助手 Phase 1+2A+5（真机部分通过 scan 23/25，**未全验**）
 - 缓存库基线：`5 盘 · 213 目录 · 1247 条目 · 3.35 TB · 库 81.7 MB`
 - n-space 重复 key 已修；`.toolbar{flex-wrap:nowrap}` + `.header-bar .n-input{width:200px}` **两条不许删**
 - 视频扩展名单一真相源 `electron/server/videoExt.ts`；改它要同步 `index.vue` 的 `VIDEO_EXT_RE` 并重启 dev
+- **图标已接好，但 exe 里的图标未实测**：`electron-builder.json5` 原本**没有 `icon` 字段**（打包用 Electron 默认图标），现已补 `win.icon`/`mac.icon`；窗口图标走 `public/favicon.ico`（`main/index.ts:57` 与 `index.html:5` 未动）。16/24 档镜片内网格糊（等主人定要不要出"简化标记"版）
 
 ## 六、待他动作
-重启 dev · 跑 PRD §15/§16 真机自测 · 目视验收离线只读层 · **真机回归导航**（选根/下钻/返回/刷新/批量扫描 + 缓存跳转→返回，见 `PLAN-nav-header` §十一）· `ffprobe` 超时回收（泄漏实测成立）
+重启 dev · 跑 PRD §15/§16 真机自测 · 目视验收离线只读层 · **真机回归导航**（选根/下钻/返回/刷新/批量扫描 + 缓存跳转→返回，见 `PLAN-nav-header` §十一）· `ffprobe` 超时回收（泄漏实测成立）· **`npm install`**（`node_modules` 里 `app-builder-bin` 只剩 npm 暂存目录 `.app-builder-bin-YaNL61c1` ⇒ `require.resolve` MODULE_NOT_FOUND ⇒ 现在打包必失败，与图标无关）
 
 ## 七、暂缓
 视觉去重/以图搜图 **砍掉**；盘舰队看板、常驻增量索引 **短期不做**；走「功能完善」路线。
@@ -64,6 +71,24 @@
 6. `parseSize` 曾把 TB 截断（`% 1024`）⇒ 已由 `formatBytes` 取代。
 7. `HistoryTable` 换每页条数**不重置页码** ⇒ 会翻到空白页。
 8. 缓存记录入口原为无文字无 tooltip 的脚印图标；旁边 `n-badge` 是"当前目录条目数"却**像它的角标**。
+   ⇒ **2026-10-02 已挪到面包屑当前段**，此问题解决；工具条少 26px，640px 下导航区 189→224px。
+9. **本机主屏 = 逻辑 2048×1280**（物理 2560×1600 @1.25），可用区 2048×1232 ⇒
+   `screen.getPrimaryDisplay()` 给的是**逻辑值**，按物理分辨率心算会全错（探针 `probes/win-size/`）。
+10. **`minWidth` 不是脑补约束**：实测 640/800 下 `.nav-zone` 会裁内容（既有局限），1024 是崩坏线之上的第一档。
+11. **网格 = 一行 6 个**：item 是"margin 撑间距 + `width: 100%/6 − 10px` 补偿回来"的算法
+    （每格恰好占 100%/6）。⇒ 容器边缘也被吃掉 5px，**用 `.image-box` 负 margin 5px 抵消**才对得齐头部。
+    ⚠️ 别换 `gap`（要重算 5 个断点的 `--item-width`）、别用 `nth-child` 删首尾 margin（会算错且窄窗失效）。
+    ⚠️ item 有 5 个响应式断点（≤600→5 列…），但 `minWidth 1024` ⇒ 实际触不到。见 `CHANGES-2026-10-02.md` §五
+12. **Windows 上 `fs.stat()` 对目录返回 size = 0** ⇒ 网格里 `type:'folder'` 的条目 size 恒 0、title 显示 `—`。
+    收敛成封面的条目反而有大小（`handleCover` 遍历累加）。⇒ 目录大小**没有系统调用能直接给**，只能自己算；
+    唯一不读盘的路 = **缓存库子树求和**（实测中位 0.84 ms、子文件夹命中率 99%）。`relPath` 分隔符实测是 **`/`**。
+    **✅ 2026-10-02 已实现**：`nedb.ts` 的 `loadSubtreeBytes` + 纯函数 `mergeSubtreeBytes`；
+    **落点是 `wire()`（下发态唯一出口），不是 `readFolder`** —— 见下面 §十一.5 的教训。
+    查表键要用 `diskNameOf()`（拼回 ext），不能用削过的 `item.name`。
+    见 `docs/CHANGES-2026-10-02.md` §六 · 分析 `docs/ANALYSIS-folder-size-2026-10-02.md` · 验证 `probes/folder-size/verify.mjs`（17/17）
+13. **本机没有任何 SVG 光栅化器**（`sharp`/`@resvg/resvg-js`/`canvas`/`jimp`/`cairosvg`/`Pillow`/ImageMagick 全无；`/c/Windows/system32/convert` 是 NTFS 那个 convert.exe）⇒
+    要光栅化就走**无头 Electron**（先例 `probes/header-width/`）。图标那条路额外两条：**必须 `force-device-scale-factor=1`**（本机 1.25 缩放，否则"32px"变 40px）、
+    **别提前 `win.destroy()`**（没注册 `window-all-closed` 时会直接开始退出，后续 `loadFile` 报 `ERR_FAILED (-2)`）。见 `probes/icon-render/`
 
 ## 十、五条硬约束（他原话，跨会话）
 1. **不加「操作」列** —— 打开固定为**双击**；可发现性不许靠加列解决。
@@ -76,7 +101,16 @@
 1. **DataTable `render()` 生成的节点，`<style scoped>` 匹配不到** ⇒ 用不带 scoped 的 `<style>` + 外层类名前缀。先例 `HistoryTable/index.vue` 末尾。
 2. 并发别用 `if (loading) return` 守卫 ⇒ 用**请求序号** `const my=++seq; if(my!==seq) return;`。
 3. `n-input` **吃掉 composition 事件** ⇒ 外面套一层普通 div 接（会冒泡）。
-4. **布局类坑**（表头吸顶 / 弹窗内只有表格滚 / 小窗口下 flex 子项被挤压）**正文搬到 `docs/LAYOUT-GOTCHAS.md`** ——
+4. **改「下发/输出」类逻辑前，先找"唯一出口"**：本项目已立了三个 ——
+   `wire()`（唯一下发出口）· `apiUrl()`（唯一 URL 出口）· `route()`（HTTP 咽喉点）。
+   注释里写着"所有路径都必须过这里"的那个函数，**就是正确的落点**。
+   ⚠️ **补展示字段只在下发态做，绝不在存储态**：`readFolder` 的返回值会经 `scanAndCache`
+   **写进库**，在那补会让 `bytes`（= Σ `data[].size`）**双算**、面板大小列整体失真。
+   **2026-10-02 亲历**：把"文件夹 size 聚合"补在 `readFolder` ⇒ 浏览已缓存目录
+   （走 `findCache` 短路、**不经过 `readFolder`**）完全看不到，用户实测打回。
+   ⇒ 教训：**验收要覆盖用户的真实操作路径**，不是我自己顺手那条；
+   15/15 全绿也可能**一条都没碰到**真正的那条路。
+5. **布局类坑**（表头吸顶 / 弹窗内只有表格滚 / 小窗口下 flex 子项被挤压）**正文搬到 `docs/LAYOUT-GOTCHAS.md`** ——
    太长，留在这里会把注入上限撑爆。改"容器/滚动/flex"之前先读它。
 
 ## 十二、两条自检问句（血泪换来）
