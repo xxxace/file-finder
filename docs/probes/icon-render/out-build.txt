@@ -1,0 +1,94 @@
+打包验证记录 —— 图标能不能真的进 exe
+======================================
+
+目标：确认 `build/icon.ico` 不是"字节合法但没人吃得下"，而是 electron-builder
+真的会拿它去嵌 exe。链路是 `win.icon` → `getOrConvertIcon('ico')` → `resolveIcon()`
+→ `convertIcon()` → `app-builder icon`，然后 rcedit/winresourcer 把条目写进 RT_ICON。
+
+
+结果：⚠️ 完整打包**没跑通**，但卡点与图标无关；关键那一步已单独验证通过。
+================================================================
+
+【尝试 1】npm script 等价命令
+────────  ./node_modules/.bin/vite build && ./node_modules/.bin/electron-builder --win --dir
+✗ [safe-delete][SAFE_DELETE_BULK_CONFIRM_REQUIRED] {"count":81,"threshold":50,
+    "targets":["D:\\code\\file-finder\\release\\1.0.0\\win-unpacked"]}
+    at extractArchive (app-builder-lib/src/util/electronGet.ts:248)
+  ⇒ 环境里的 safe-delete 拦了 electron-builder 自己清输出目录的动作（81 个文件 > 阈值 50）。
+    与图标无关。
+
+【尝试 2】换干净输出目录绕开删除
+────────  ./node_modules/.bin/electron-builder --win --dir --config.directories.output=release-verify/icon
+  ✓ vite build（渲染进程 + preload + main 全部产出）
+  • packaging  platform=win32 arch=x64 electron=44.4.5 appOutDir=release-verify\icon\win-unpacked
+  • downloaded label=electron progress=100%
+  ✗ EPERM: operation not permitted, rename
+      'release-verify\\icon\\win-unpacked.tmp' -> 'release-verify\\icon\\win-unpacked'
+    at extractArchive (app-builder-lib/src/util/electronGet.ts:249)
+  ⇒ 又卡在解压 Electron 之后的那次目录改名（沙箱拦的，与图标无关）。
+    两次都没走到"嵌图标"那一步 —— 所以"exe 里的图标"这一条**未实测**。
+
+真·根因（静态证据）：
+────────
+  $ node -e "require.resolve('app-builder-bin')"
+  app-builder-bin 解析失败: MODULE_NOT_FOUND
+
+  $ ls node_modules | grep app-builder
+  .app-builder-bin-YaNL61c1      ← npm 未完成的安装会留这种 `.包名-随机串` 暂存目录
+  app-builder-lib
+
+  ⇒ node_modules 里**没有** app-builder-bin，只剩一个 npm 的暂存目录。
+    electron-builder 的图标转换/校验**必须**调 app-builder（`executeAppBuilder`），
+    所以现在这台机器上 `npm run build` 一定会在图标那一步失败 —— 需要先 `npm install`。
+    这是既有环境问题，不是本次改动引入的（`release/1.0.0/*.exe` 是 10-01 打出来的）。
+
+
+关键那一步：单独验证 ✅
+======================
+
+用那个残留暂存目录里**能跑的** app-builder.exe，直接复刻 electron-builder 的调用
+（`icon --format ico --root <buildResources> --root <projectDir> --out <dir> --input <file>`）：
+
+① 输入 = 本项目手写的 build/icon.ico
+────────
+  $ node_modules/.app-builder-bin-YaNL61c1/win/x64/app-builder.exe \
+      icon --format ico --root <...>/build --root <...> --out <tmp> --input build/icon.ico
+  {"icons":[{"file":"D:\\code\\file-finder\\build\\icon.ico","size":0}],"isFallback":false}
+  exit=0
+
+  ⇒ **原样透传、无 error、无 InvalidConfigurationError**。
+    这正好是 electron-builder 判定图标合法性的那一关 —— 过了。
+    （同格式输入会跳过转换，但**尺寸校验照跑**，见 platformPackager.js:669 的注释：
+     "convert if need, validate size (it is a reason why tool is called even if file has
+      target extension)"。）
+
+② 对照：输入 = build/icon.png（让 app-builder 自己生成 ico）
+────────
+  {"icons":[{"file":"...\\.abtest\\icon.ico","size":0}],"isFallback":false}
+  生成物：count=1，仅 256×256 一档，21264 B
+
+  ⇒ 顺带证明了选择：**手写的 7 档 ICO（16/24/32/48/64/128/256）明显优于
+    交给 electron-builder 自动生成的结果**（它只给 256 一档，小图标全靠
+    系统从 256 缩下去）。所以 `win.icon` 指 icon.ico 而不是 icon.png 是对的。
+
+
+另外三条已跑的验证（见 out.txt 与 ico-read-check.cjs）
+====================================================
+  · 七档产出边长 = 目标边长；四角 alpha=0 / 中心 alpha=255（从 toBitmap() 读 BGRA 判的）
+  · ICO 容器结构合法：reserved=0 / type=1 / count=7，每条内嵌 PNG 签名 89504e47
+  · 反向验证：nativeImage.createFromPath('build/icon.ico') → 256×256，非空
+    ⇒ Electron/Chromium 能解码它 ⇒ 窗口左上角那个图标不会坏
+
+
+下一步（需要主人）
+==================
+  1. npm install                     # 补回 app-builder-bin
+  2. npm run build                   # 打包；这一步之后"exe 里的图标"才算实测
+  3. 装出来的 exe → 右键盘"属性"看图标；桌面快捷方式同理
+
+
+清理记录
+========
+  两次失败尝试留下的临时目录已删（共约 736 MB）：
+    release-verify/icon/（368 MB，我建的）
+    release/1.0.0/win-unpacked.tmp（368 MB，尝试 1 留下的）

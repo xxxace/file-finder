@@ -29,15 +29,14 @@
                             </n-tag>
                         </template>
                         <div class="hstack">
-                            <n-button v-for="c in crumbFold.hidden" :key="c.path" size="small"
-                                @click="onCrumbClick(c)">
+                            <n-button v-for="c in crumbFold.hidden" :key="c.path" size="small" @click="onCrumbClick(c)">
                                 {{ c.name }}
                             </n-button>
                         </div>
                     </n-popover>
                     <n-tag v-for="(c, i) in crumbFold.tail" :key="c.path" class="crumb"
                         :class="{ 'crumb-current': i === crumbFold.tail.length - 1 }" :title="c.path"
-                        @click="onCrumbClick(c)">
+                        :data-count="i === crumbFold.tail.length - 1 ? crumbCount : null" @click="onCrumbClick(c)">
                         <span class="crumb-text">{{ c.name }}</span>
                         <n-spin v-if="loading && i === crumbFold.tail.length - 1" :size="12"
                             style="margin-left: 8px;" />
@@ -46,7 +45,8 @@
                 <template v-else>
                     <n-tag v-for="(c, i) in crumbs" :key="c.path" class="crumb"
                         :class="{ 'crumb-root': c.kind === 'root', 'crumb-current': i === crumbs.length - 1 }"
-                        :title="c.path" @click="onCrumbClick(c)">
+                        :title="c.path" :data-count="i === crumbs.length - 1 ? crumbCount : null"
+                        @click="onCrumbClick(c)">
                         <span class="crumb-text">{{ c.name }}</span>
                         <n-spin v-if="loading && i === crumbs.length - 1" :size="12" style="margin-left: 8px;" />
                     </n-tag>
@@ -71,8 +71,10 @@
                      ⚠️ 2026-10-01 变更：三个维护动作**收进「更多」**（用户批准）。原来它们是三个平铺的
                      文字按钮，实测共占 242px —— 工具条 605px 里的 40%，而它们是低频动作。
                      三条必须同时守住：
-                     ① **子元素个数仍然恒定**（5 个：更多 / 缓存记录 / 角标 / 搜索 / 刷新），
+                     ① **子元素个数仍然恒定**（4 个：更多 / 缓存记录 / 搜索 / 刷新），
                         忙碌时只置灰、不消失、不换形（原来那条铁律没变）。
+                        ⚠️ 2026-10-02：原本恒 5 个（多一个角标）。角标挪进面包屑之后这里变 4 个
+                        —— 变的是**数量**，不是"恒定"这条性质。
                      ② **文案一个字都不缩**：下拉里有地方，「这一片」表达的是"递归整片"，
                         正是它与「刷新＝只重新读当前这一层」的区分点。收进下拉把
                         "要不要缩短文案"这个取舍**直接消掉了**。
@@ -93,9 +95,7 @@
                     </n-button>
                 </n-dropdown>
                 <!-- 缓存记录入口。⚠️ 原来它是一个**只有脚印图标、没有文字、也没有 tooltip** 的按钮 ——
-                     面板做得再好，找不到入口等于零。这里补一句说明（一行成本）。
-                     紧跟着的那个 n-badge 是**当前目录的条目数**，不是这个按钮的角标；
-                     它是否让人误读，交给用户裁决（见 docs/DESIGN-CACHE-PANEL-2026-09-30.md 的待确认项），这里不动。 -->
+                     面板做得再好，找不到入口等于零。这里补一句说明（一行成本）。 -->
                 <n-tooltip>
                     <template #trigger>
                         <n-button size="small" @click="showHistory">
@@ -106,7 +106,9 @@
                     </template>
                     缓存记录（读过的目录）
                 </n-tooltip>
-                <n-badge v-if="fileList.length" :value="fileList.length" />
+                <!-- 角标原来站在这里。用户 2026-10-02 裁决：挪到面包屑的**当前段**上。
+                     它量的是"这一层有多少条目"，紧挨着「缓存记录」按钮时读起来像那个按钮的角标
+                     —— 挂到它真正描述的那一段上，位置本身就是说明，不需要再补 tooltip。 -->
                 <n-input ref="searchInput" v-model:value="searchText" placeholder="搜索" size="small" clearable>
                     <template #prefix>
                         <n-icon :component="Search" />
@@ -192,11 +194,15 @@
             </div>
         </n-popover>
         <!-- 右键上下文菜单：极简一条，定位手法和上面的 files popover 完全一致
-             （n-popover 手动定位 + clickoutside 关闭），独立状态不串台。 -->
+             （n-popover 手动定位 + clickoutside 关闭），独立状态不串台。
+             ⚠️ 2026-10-02 加了第二项「去后缀」而不是**改**原来那一项 ——
+             原来那个含扩展名的名字是**刻意的**（资源管理器里要拿它去搜），不能为了新用途把它改掉。
+             两个都留着，各有各的场合。 -->
         <n-popover :show="ctxMenu.visible" :x="ctxMenu.x" :y="ctxMenu.y" trigger="manual" placement="bottom-start"
             @clickoutside="ctxMenu.visible = false">
             <div class="hstack">
                 <n-button size="small" @click="copyName">复制文件名</n-button>
+                <n-button size="small" @click="copyNameStem">复制文件名（去后缀）</n-button>
             </div>
         </n-popover>
         <HistoryTable ref="historyTable" @openDir="openHistory" />
@@ -215,7 +221,7 @@ import folderIcon from '@/assets/fileTypeIcon/folder.png';
 import usePinYin from '@/hooks/usePinYin';
 import useNotify from '@/hooks/useNotify';
 import { Search, Refresh, FootstepsOutline, ChevronDownOutline } from '@vicons/ionicons5';
-import { NButton, NBadge, NInput, NIcon, NImage, NTag, NPopover, NSpin, NAlert, NTooltip, NDropdown, useLoadingBar, useDialog } from 'naive-ui';
+import { NButton, NInput, NIcon, NImage, NTag, NPopover, NSpin, NAlert, NTooltip, NDropdown, useLoadingBar, useDialog } from 'naive-ui';
 import FolderSelector from '@/components/FolderSelector/index.vue';
 import HistoryTable from '@/components/HistoryTable/index.vue';
 import AssistantCoverModal from './AssistantCoverModal.vue';
@@ -362,11 +368,13 @@ const ctxMenu = ref<{
     x: number;
     y: number;
     name: string;
+    stem: string;
 }>({
     visible: false,
     x: 0,
     y: 0,
-    name: ''
+    name: '',
+    stem: ''
 });
 const searchText = ref('');
 const imageBox = ref<HTMLDivElement | null>(null)
@@ -397,6 +405,14 @@ const currentPath = computed(() => history.value[history.value.length - 1]?.path
 const crumbs = computed(() => ancestorsOf(currentPath.value));
 /** 折叠决策（保首尾）。`null` = 全显。规则在 `@/utils` 的 `foldCrumbList` 里，可单独验证。 */
 const crumbFold = computed(() => foldCrumbList(crumbs.value));
+/**
+ * 面包屑**当前段**上的条目数角标。
+ *
+ * 量的是什么与原来挂在工具条上的那个 `n-badge` **逐字相同**（`fileList.length`）——
+ * 本次只换位置。返回 `null` 时绑定不渲染该属性，CSS 那边也就不会画角标
+ * （等价于原来的 `v-if="fileList.length"`；用属性有没有来选择，就不用再判一次大小）。
+ */
+const crumbCount = computed(() => fileList.value.length || null);
 const loading = ref(false);
 /**
  * 上一次取数失败的**分类**。空串 = 没失败。
@@ -683,12 +699,18 @@ const openFile = async (item: FileInfo | string) => {
  * 检查元素」），不拦掉就和我们自己的菜单叠在一起。
  * 复制的是**磁盘文件名**（含扩展名，见 `fileNameOf`）—— 那是用户看到的那个名字，
  * 也是资源管理器里真能搜到的名字；封面条目还原成封面图文件名，目录还原成目录名。
+ *
+ * ⚠️ 2026-10-02：同时备好**去后缀**那一份。它不需要自己去找最后一个 `.` ——
+ * 服务端本来就是把 `name` 与 `ext` 分开给的（`fileNameOf` 是 `${name}.${ext}`），
+ * 所以 `item.name` 拆开之前的样子就是答案。少一次字符串处理，也少一处会算错的地方
+ * （`xxx.tar.gz` 这种多后缀的名字，剥点剥不对）。
  */
 const onContextMenu = (e: MouseEvent, item: FileInfo) => {
     ctxMenu.value.visible = true;
     ctxMenu.value.x = e.clientX;
     ctxMenu.value.y = e.clientY;
     ctxMenu.value.name = fileNameOf(item);
+    ctxMenu.value.stem = item.name;
 };
 
 /**
@@ -703,6 +725,21 @@ const copyName = async () => {
     const err = await ipcRenderer.invoke('copyText', name);
     if (err) notify('error', '复制失败', String(err));
     else notify('success', '已复制文件名', name);
+};
+
+/**
+ * 菜单项「复制文件名（去后缀）」：贴到搜索框里找片用的 —— 那里带 `.mp4` 是搜不到的。
+ *
+ * 与上面那条**平行写**，不合并成一个带参数的函数：两条的差别只有"取哪个字段"，
+ * 合并省下的是 4 行，换来的是"复制"这件事多一层间接。保持两条直的。
+ */
+const copyNameStem = async () => {
+    const stem = ctxMenu.value.stem;
+    ctxMenu.value.visible = false;
+    if (!stem) return;
+    const err = await ipcRenderer.invoke('copyText', stem);
+    if (err) notify('error', '复制失败', String(err));
+    else notify('success', '已复制文件名（去后缀）', stem);
 };
 
 /**
@@ -1309,7 +1346,8 @@ onUnmounted(() => {
         transform: translateY(-50%);
         line-height: 1;
         color: #a1a1a1;
-        pointer-events: none;   /* 别挡住上一个 tag / chip 的点击 */
+        pointer-events: none;
+        /* 别挡住上一个 tag / chip 的点击 */
     }
 
     /* 当前层**永不被压掉**：它是"我在哪"的唯一答案，比任何历史段都重要 */
@@ -1318,6 +1356,34 @@ onUnmounted(() => {
         /* 与网格里条目名的字重一致（`.image-box-item span` 也是 bold）：
            一眼看出"哪个是我现在在的地方" */
         font-weight: bold;
+    }
+
+    /* 当前段的条目数角标 —— 原来是工具条里那个飘着的 `n-badge`，
+       用户 2026-10-02 裁决挪到这一段上（它本来就是"这一层有多少东西"的答案）。
+       ⚠️ 为什么用 `::after` + `attr()`、而不是真塞一个 `<span>`：
+       ① 这一组的**子元素个数在本项目是敏感量**（见文件顶部那段 n-space 重复 key 的教训），
+          伪元素不进 DOM，个数一个都不变；
+       ② tag 内部的 `.n-tag__content` 是 `overflow: hidden` 的，真塞进去的 span 会被裁掉，
+          而 `::after` 挂在**根元素**上（n-tag 是 inline-flex），是 content 的**兄弟**，
+          不在那个裁剪盒里。
+       属性为空时不画：`:data-count="null"` 时 Vue 根本不渲染这个属性，整条选择器不命中 ——
+       等价于原来的 `v-if="fileList.length"`，不需要再写判空。 */
+    .crumb-current[data-count]::after {
+        content: attr(data-count);
+        flex: 0 0 auto;
+        margin-left: 6px;
+        padding: 0 6px;
+        min-width: 18px;
+        box-sizing: border-box;
+        border-radius: 9px;
+        background: #d03050;
+        /* naive-ui 的 error 红，与原 n-badge 同色 */
+        color: #fff;
+        font-size: 12px;
+        line-height: 18px;
+        font-weight: normal;
+        /* 当前段是 bold，角标不该跟着粗 */
+        text-align: center;
     }
 
     .crumb-more {
@@ -1374,6 +1440,27 @@ onUnmounted(() => {
     overflow: hidden auto;
     justify-content: flex-start;
     align-content: flex-start;
+    /* ── 让网格左右贴边：首格 margin-left / 每行末格 margin-right 归零 ──────────────
+       `.image-box-item` 是"**用 margin 撑间距、宽度再把它补偿回来**"的算法：
+       每格 `calc(100%/6 − 10px)` 宽 + 左右各 5px margin = **恰好占 100%/6** ⇒ 一行正好 6 个。
+       代价是**容器左右边缘也各被吃掉 5px**（首格的 margin-left、每行末格的 margin-right），
+       于是整片网格比头部内缩 5px（`.header-bar` 与它同在 `.file-finder` 的 10px padding 里）
+       —— 左右不齐，这就是"第一个/最后一个还留着 margin"的来源。
+
+       解法：把容器左右各外扩 5px（= margin 的一半），边缘那 5px 就正好落回容器外。
+       首格贴左、末格贴右，与头部对齐。
+
+       ⚠️ 为什么**不用** `:nth-child(6n+1)` / `:nth-child(6n)` 去掉首尾 margin：
+       ① 那是补丁（列数一变就失效）；② **在这里还会算错** —— 格子宽度是按"margin 会被
+       补偿"设计的，只去掉首尾 margin 而宽度不变 ⇒ 每行右端空出 5px，左右不对称，比现在更糟；
+       ③ 下面的断点里列数是**会变的**（6 / 5 / 3 / 2 / 1），任何写死 `6n` 的式子都会在窄窗失效。
+
+       ⚠️ 为什么**不用** `gap`：`gap` 方向是对的（边缘天然为 0），但换过去必须**同步重算**
+       `--item-width` 在 5 个断点里的每一个值 —— 因为 `gap` 不占格子宽度、而 `margin` 占，
+       等于把"改一个百分比就能改列数"变成"每个断点要改两个数字"。
+       这里只加两行，**断点和 item 的算法一个字都不动**。 */
+    margin-left: -5px;
+    margin-right: -5px;
 }
 
 /* 空状态：占满一整行、居中一行小字。颜色沿用搜索框后缀图标那个灰 */

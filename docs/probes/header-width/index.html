@@ -111,9 +111,28 @@
          */
         const sv = () => (variant.value === 'new' ? { [SCOPE_ATTR]: '' } : {});
 
-        const crumbTag = (seg, cls, spin) => h(N.NTag, {
+        /** 角标的数值。与原来工具条里那个 `n-badge` 用同一个 35（同一个量，只换位置）。
+         *  真实实现里它是 `fileList.length`。 */
+        const CRUMB_COUNT = 35;
+
+        /**
+         * 角标开关。`__probeAll` 会**再跑一遍关掉它的对照** —— 目的是分清
+         * 「`.nav-zone` 在窄窗下裁掉内容」**是本来就有的，还是角标压出来的**。
+         * 不做这个对照，就会把既有问题误判成本次改动引入的（反之亦然）。
+         */
+        const showCount = ref(true);
+        window.__setCount = (v) => { showCount.value = v; };
+
+        /**
+         * ⚠️ `count` 有值就必须**真的把 `data-count` 打上去**：角标是 CSS 用
+         * `::after + attr()` 画出来的，不打属性量到的就是"没有角标"的布局 ——
+         * 而那不是已落地的形态，量了等于没量。传 `null` 时 Vue 不渲染该属性
+         * （在真实实现里等价于"这一层 0 条"，角标不画）。
+         */
+        const crumbTag = (seg, cls, spin, count) => h(N.NTag, {
             class: ['crumb', cls].filter(Boolean).join(' '),
             title: seg.name,
+            'data-count': count,
             ...sv(),
         }, {
             default: () => [
@@ -164,8 +183,14 @@
         /**
          * 工具条的候选形态。用来量「缩文案 / 收下拉 / 挪 badge」各自能还给导航区多少 px ——
          * 这种事**不能估**：字宽取决于字体与 padding，猜出来的数字会误导决策。
+         *
+         * ⚠️ 2026-10-02 加了 `more2`：`more` 是**上一轮**的落地形态（三个动作收进下拉，
+         * 角标**还住在工具条里**）；`more2` 是**本轮**的落地形态（角标也挪到面包屑了）。
+         * 保留 `more` 是为了让上一轮那张预算表的语义不变 —— 用 `more` 当"现在的形态"，
+         * 量出来的导航区会**偏窄 38px**（多余的那个角标 + 它占的一格 gap），
+         * 而那是幻觉：真实界面里工具条已经没有角标了。
          */
-        const TB_MODES = ['now', 'short', 'short2', 'more'];
+        const TB_MODES = ['now', 'short', 'short2', 'more', 'more2'];
         const tbMode = ref('now');
         window.__setToolbar = (v) => { tbMode.value = v; };
 
@@ -173,7 +198,7 @@
             const m = tbMode.value;
             const kids = [];
 
-            if (m === 'more') {
+            if (m === 'more' || m === 'more2') {
                 // 与真实实现一致：**图标 + 文字**（只算文字会低估 ~16px）
                 kids.push(h(N.NButton, { size: 'small' }, {
                     icon: () => h(N.NIcon, null, { default: () => '⌄' }),
@@ -188,8 +213,13 @@
 
             kids.push(h(N.NButton, { size: 'small' }, { default: () => '◉' }));
 
-            // short2 = 把角标挪出工具条（它是"内容统计"，本来就不该住在动作区）
-            if (m !== 'short2') kids.push(h(N.NBadge, { value: 35 }));
+            /**
+             * 角标住在工具条里 —— 那只属于**改造前**的形态（`now`）。
+             * `short2` 是上一轮量过的"挪出去"；`more2` 是本轮落地的形态（角标已在面包屑上）。
+             * 只有 `now` 画它：其余任何"角标不在工具条里"的形态都不该再画一个，
+             * 画了就等于复刻出一个**真实界面不存在**的双角标形态（截图时一眼就能看见）。
+             */
+            if (m === 'now') kids.push(h(N.NBadge, { value: 35 }));
 
             kids.push(h(N.NInput, {
                 size: 'small', placeholder: '搜索',
@@ -219,9 +249,17 @@
                                     crumbTag({ name: '…' }, 'crumb-more', false),
                                     ...f.tail.map((s, i) =>
                                         crumbTag(s, i === f.tail.length - 1 ? 'crumb-current' : '',
-                                            i === f.tail.length - 1)),
+                                            i === f.tail.length - 1,
+                                            i === f.tail.length - 1 && showCount.value ? CRUMB_COUNT : null)),
                                 ]
-                                : list.map((s) => crumbTag(s, s.kind === 'root' ? 'crumb-root' : '', false)),
+                                // ⚠️ 非折叠分支也要打 `crumb-current`（与真实实现一致）——
+                                // 角标的 CSS 是 `.crumb-current[data-count]::after`，
+                                // 少了这个类就**量不到角标**，而那是探针的漏，不是实现的漏。
+                                : list.map((s, i) => crumbTag(s,
+                                    s.kind === 'root' ? 'crumb-root'
+                                        : (i === list.length - 1 ? 'crumb-current' : ''),
+                                    false,
+                                    i === list.length - 1 && showCount.value ? CRUMB_COUNT : null)),
                             h(N.NButton, { size: 'small' }, { default: () => '返回' }),
                         ])
                         : h('div', { class: 'hstack' }, [
@@ -279,6 +317,15 @@
             const sep = document.querySelector('.nav-zone .crumb:not(.crumb-root)');
             const sepContent = sep ? getComputedStyle(sep, '::before').content : '(no nav-zone)';
 
+            // 「角标真的画出来了吗」——同一手法：直接问 `::after` 的 content。
+            // 得到 "35" = 那条 scoped 规则命中；得到 "none" = 没命中（等于这条改动没生效）。
+            const afterContent = cur ? getComputedStyle(cur, '::after').content : '(no .crumb-current)';
+
+            // 角标挂在 tag 的**最右侧**，而 `.nav-zone` 是 `overflow: hidden` ⇒
+            // "当前段 tag 落在头部框内"还不够，得看**导航区自己有没有内容被裁**。
+            // 伪元素拿不到 rect，这是唯一能抓到"角标被裁掉半个"的指标。
+            const navOverflow = navEl.scrollWidth > navEl.clientWidth + 1;
+
             return {
                 变体: v,
                 窗口宽: width,
@@ -289,8 +336,10 @@
                 当前段可见: curBox ? (curBox.width > 0 && Math.round(curBox.right) <= Math.round(box.right) + 1) : null,
                 工具条未溢出: Math.round(tbBox.right) <= Math.round(box.right) + 1,
                 导航区宽: Math.round(navEl.getBoundingClientRect().width),
+                导航区溢出: navOverflow,
                 头部宽: Math.round(box.width),
                 '::before内容': sepContent,
+                '::after内容': afterContent,
             };
         };
 
@@ -357,7 +406,7 @@
         window.__measureChipForms = async function () {
             const stage = document.getElementById('stage');
             window.__setVariant('new');
-            window.__setToolbar('more');
+            window.__setToolbar('more2');
             const out = [];
             for (const f of ['path', 'label', 'icon']) {
                 window.__setChipForm(f);
@@ -390,7 +439,7 @@
          */
         window.__measureCrumbs = async function (w) {
             window.__setVariant('new');
-            window.__setToolbar('more');
+            window.__setToolbar('more2');
             window.__setSegs('long');
             window.__setChipForm('path');
             const stage = document.getElementById('stage');
@@ -421,6 +470,15 @@
             };
         };
 
+        /**
+         * 要测的窗口宽度档。
+         * ⚠️ 加了 **1024** —— 那是主窗口 `minWidth` 的值（见 `electron/main/index.ts`），
+         * 也就是"用户能把窗口拖到的**最小**宽度"。判据必须覆盖"用户真能到达的每一档"，
+         * 只测 1280/1920 会正好漏掉最危险的那一档。
+         * 640/800 保留着当**既有局限**的对照（见 README 的已知局限那节）。
+         */
+        const WIDTHS = [640, 800, 1024, 1280, 1920];
+
         window.__probeAll = async function () {
             const out = [];
             const stage = document.getElementById('stage');
@@ -430,13 +488,26 @@
                 //   new = 已批准并落地的形态（nowrap 分区 + 三个动作收进「更多」）
                 // 第一版两边都用 'now' 工具条 ⇒ 对照表里 new 也带着"溢出"那个旧毛病，
                 // 判据把它报成 ❌ —— 那是口径错，不是实现错。
-                window.__setToolbar(v === 'old' ? 'now' : 'more');
-                for (const w of [640, 800, 1280, 1920]) {
+                window.__setToolbar(v === 'old' ? 'now' : 'more2');
+                for (const w of WIDTHS) {
                     window.__setVariant(v);
                     await new Promise(r => requestAnimationFrame(() => requestAnimationFrame(r)));
                     stage.style.width = w + 'px';
                     await new Promise(r => setTimeout(r, 80));
                     out.push(window.__measure(v, w));
+                }
+                // ⭐ 对照组：new 变体再跑一遍**关掉角标**的 —— 用来回答
+                //   「导航区在 640/800 裁内容」是本来就有的（面包屑 + chip + 返回本来就挤），
+                //   还是这次把角标挪进面包屑压出来的。
+                if (v === 'new') {
+                    window.__setCount(false);
+                    for (const w of WIDTHS) {
+                        await new Promise(r => requestAnimationFrame(() => requestAnimationFrame(r)));
+                        stage.style.width = w + 'px';
+                        await new Promise(r => setTimeout(r, 80));
+                        out.push({ ...window.__measure(v, w), 变体: 'new-无角标' });
+                    }
+                    window.__setCount(true);
                 }
             }
             window.__setToolbar('now');

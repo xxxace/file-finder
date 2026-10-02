@@ -13,7 +13,7 @@ import {
 import type { DriveInfo } from '../utils/driveIdentity';
 import {
     BEFORE_RESTORE_PATH, CACHE_DB_PATH, CACHE_VERSION, beginRestore, cacheBackup, endRestore,
-    findCache, insertCache, loadMeta, readExternalCache, reloadFromDisk,
+    findCache, insertCache, loadMeta, loadSubtreeBytes, readExternalCache, reloadFromDisk,
     removeCache,
 } from './nedb';
 import type { CacheMeta, OpenMode, SearchCache } from './nedb';
@@ -267,6 +267,12 @@ async function readFolder(diskDir: string, mode: string, serial: string, storeDi
                 ext,
                 // 是不是目录只认 stat，不靠扩展名猜
                 type: stat.isDirectory() ? 'folder' : getFileType(ext),
+                // ⚠️ 目录的 `stat.size` 在 Windows 上**恒为 0**（NTFS 目录项不记字节数），
+                // 所以这里存进去的就是 0 —— 别试图在这一层补"子树总量"：
+                // 这个返回值会被 `scanAndCache` **写进缓存**，而缓存面板的
+                // `bytes` = `data.reduce(Σ size)`，补进去就会**双算**（子树被累加两次）。
+                // ⇒ 补 size 只在**下发态**做，唯一出口是 `wire()`（那里构造新对象、不碰库）。
+                // 详见 docs/CHANGES-2026-10-02.md §六。
                 size: stat.size,
             };
 
@@ -506,8 +512,56 @@ export function pickFileInfo(raw: FileInfo): WiredFileInfo {
  * 所以白名单也放在这里、而不是只放在"取缓存"那一支：**出口只有一个**，
  * 谁都不需要记得自己清一遍。fresh 扫出来的条目本来就是干净的，过一遍只是幂等。
  */
-function wire(items: FileInfo[]): WiredFileInfo[] {
-    return items.map(item => {
+/**
+ * 条目在**磁盘上的真名**。
+ *
+ * `name` 存的是"去掉最后一个扩展名"的主体（那是给文件条目拆 name/ext 用的），真名要拼回去。
+ * **目录也要拼** —— 目录名带点（`v1.2` / `TST-001.2023`）时 `ext` 非空。
+ *
+ * 为什么需要它：下面查子树表用的键，来自库里 `relPath` 的段名 = `readdir` 给的**原样名字**，
+ * 而 `item.name` 是削过的 ⇒ 直接拿 `item.name` 查，带点目录名会**静默查不到**。
+ * 与渲染层的 `fileNameOf` **同构**（那边也是 `ext ? name.ext : name`），别改岔了。
+ */
+const diskNameOf = (item: FileInfo) => (item.ext ? `${item.name}.${item.ext}` : item.name);
+
+/**
+ * `loadSubtreeBytes` 的**降级包装**：缓存库不可用时返回空表。
+ *
+ * 它跑在 `wire()` 里 —— 那是**每一条下发数据的必经之路**。一旦让异常冒出去，
+ * 缓存库损坏 / 正在还原就会从"某个目录没有大小"直接退化成"**整个目录都列不出来**"，
+ * 拿小缺陷换大故障。空表 ⇒ 下游跳过补 size ⇒ 保持原值（前端渲染成 `—`），列表照常出。
+ */
+async function safeSubtreeBytes(serial: string, relPath: string): Promise<Map<string, number>> {
+    if (!serial) return new Map();          // 非盘符路径（UNC / 网络位置）不缓存，无表可查
+    try {
+        return await loadSubtreeBytes(serial, relPath);
+    } catch (e) {
+        console.log('[wire] 目录大小聚合跳过（缓存库不可用，size 保持原值）:', e);
+        return new Map();
+    }
+}
+
+async function wire(items: FileInfo[], serial = '', relPath = ''): Promise<WiredFileInfo[]> {
+    // ── 目录条目的 size 在这里补（**唯一下发出口**，见上面那段注释）──────────────
+    // Windows 上目录的 `stat.size` 恒为 0，而"目录多大"没有任何系统调用能直接给出；
+    // 又不能在上游的 `readFolder` 补 —— 那个返回值会被 `scanAndCache` 写进缓存，
+    // 而缓存面板的 `bytes` = `data.reduce(Σ size)`，补了就是**双算**。
+    //
+    // ⇒ 只能在下发态补，而且**必须**补在这里：浏览一个**已缓存**的目录走的是
+    //    `findCache` 短路，压根不经过 `readFolder` —— 第一版补在 `readFolder` 里，
+    //    结果"点刷新（noCache，真扫一遍）"能看到大小、"平时从缓存读"永远看不到。
+    //    这里是所有下发路径的唯一出口，放这才"想漏都漏不掉"。
+    //
+    // ⚠️ 必须**构造新对象**（`{ ...it, size }`），绝不原地改 `items[i].size` ——
+    //    `items` 就是 nedb 内存里那个文档的 `data`，原地改会把 size 写进库里、污染 `bytes`。
+    const subBytes = await safeSubtreeBytes(serial, relPath);
+    const sized = subBytes.size
+        ? items.map(it => (it.type === 'folder'
+            ? { ...it, size: subBytes.get(diskNameOf(it)) ?? it.size }
+            : it))
+        : items;
+
+    return sized.map(item => {
         registerThumb(item.thumb, item.thumbData);
         registerThumb(item.avatar, item.avatarThumbData);
         return pickFileInfo(item);
@@ -519,8 +573,8 @@ function wire(items: FileInfo[]): WiredFileInfo[] {
  *
  * 这一步是整套设计的关键：缓存里不存盘符，所以同一块盘今天挂 H:、明天挂 K: 都不用改数据。
  */
-function toWire(items: FileInfo[], drive: string): WiredFileInfo[] {
-    return wire(items).map(item => ({ ...item, dir: toFullPath(drive, item.dir) }));
+async function toWire(items: FileInfo[], drive: string, serial: string, relPath: string): Promise<WiredFileInfo[]> {
+    return (await wire(items, serial, relPath)).map(item => ({ ...item, dir: toFullPath(drive, item.dir) }));
 }
 
 /**
@@ -563,8 +617,8 @@ function toAnchorPath(serial: string, relPath: string): string {
  * 条目所在目录才是它的地址。这样下钻拼出的 `#serial/a/b` 和当初写进缓存时的 `relPath`
  * 逐字符一致（大小写也一样）—— `findCache` 是精确匹配，差一个字母就是未命中。
  */
-function toAnchor(items: FileInfo[], serial: string): WiredFileInfo[] {
-    return wire(items).map(item => ({ ...item, dir: toAnchorPath(serial, item.dir) }));
+async function toAnchor(items: FileInfo[], serial: string, relPath: string): Promise<WiredFileInfo[]> {
+    return (await wire(items, serial, relPath)).map(item => ({ ...item, dir: toAnchorPath(serial, item.dir) }));
 }
 
 /**
@@ -666,7 +720,7 @@ async function openFolderController(req: Req, res: http.ServerResponse) {
             err.kind = 'notCached';
             throw err;
         }
-        return sendJson(res, toAnchor(cached.data, anchor.serial));
+        return sendJson(res, await toAnchor(cached.data, anchor.serial, anchor.relPath));
     }
 
     // 路径 → 盘身份。拿不到序列号（UNC、网络位置、虚拟盘）就退化成"每次真读、不缓存"：
@@ -680,7 +734,7 @@ async function openFolderController(req: Req, res: http.ServerResponse) {
     //    前端拿到的 key 请求 /thumb 全是 404。dir 原样保留完整路径。
     if (!parts) {
         console.warn('[openFolder] 路径不是盘符开头，本次跳过缓存:', raw);
-        return sendJson(res, wire(await readFolder(raw, mode, '', raw)));
+        return sendJson(res, await wire(await readFolder(raw, mode, '', raw)));
     }
 
     // ② 是盘符，但**这个盘现在不在**（拔了 / 光驱空仓 / 还没就绪）。
@@ -705,7 +759,7 @@ async function openFolderController(req: Req, res: http.ServerResponse) {
     const cached = noCache ? null : await findCache(serial, relPath, mode);
     const doc = cached ?? (await scanAndCache(serial, drive, relPath, mode));
 
-    sendJson(res, toWire(doc.data, drive));
+    sendJson(res, await toWire(doc.data, drive, serial, relPath));
 }
 
 /**

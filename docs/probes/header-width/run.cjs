@@ -86,7 +86,7 @@ app.whenReady().then(async () => {
     ]) {
         const rect = await win.webContents.executeJavaScript(`(async () => {
             window.__setVariant('new');
-            window.__setToolbar('more');
+            window.__setToolbar('more2');
             window.__setSegs('${which}');
             window.__setChipForm('${chipForm}');
             document.getElementById('stage').style.width = '${winW}px';
@@ -105,7 +105,7 @@ app.whenReady().then(async () => {
     // 只截左边"chip + 面包屑"那一块：整条头部缩到 1256px 宽时，5px 级的间距差别看不出来，
     // 而"分隔符离边框多远"恰恰是 5px 级的问题。
     await win.webContents.executeJavaScript(`(async () => {
-        window.__setVariant('new'); window.__setToolbar('more');
+        window.__setVariant('new'); window.__setToolbar('more2');
         window.__setSegs('long'); window.__setChipForm('path');
         document.getElementById('stage').style.width = '1280px';
         await new Promise(r => requestAnimationFrame(() => requestAnimationFrame(r)));
@@ -120,16 +120,31 @@ app.whenReady().then(async () => {
     console.log(`── 截图：shot-left.png（左区局部 ${zoomRect.width}×${zoomRect.height}）`);
 
     /**
-     * 判据只有三条，全部对应"头部高度取决于内容"这个原始问题：
+     * 判据（全部对应"头部高度取决于内容"这个原始问题）：
      *   ① **头部高是常量** —— 它在四档窗口宽度下必须完全一致（这一条是核心）
      *   ② 当前段可见 —— 折叠后"我在哪"不能被挤出屏幕
      *   ③ 工具条不溢出
-     * `old` 变体只作对照打印，不参与判定。
+     *   ④ **角标不得"新增"裁剪** —— 2026-10-02 加。角标挂在当前段 tag 的最右侧，
+     *      而 `.nav-zone` 是 `overflow: hidden`，伪元素又拿不到 rect ⇒ 只能靠
+     *      `scrollWidth > clientWidth` 抓"有内容被裁"。
+     *      ⚠️ 但口径必须是**相对**的：640/800 下这个东西**本来就裁**（面包屑 + 根 chip +
+     *      返回三样本来就挤在一起，见 README「已知局限」）。要判的是
+     *      "**无角标不裁、有角标才裁**" —— 拿"所有档都不裁"当判据，
+     *      等于让本次改动去背历史债，那种 ❌ 是假的。
+     *   ⑤ 角标**真的画出来了** —— 直接问 `::after` 的 content（"none" = 那条 scoped 规则没命中）
+     * `old` 变体只作对照打印，不参与判定；`new-无角标` 只作④的对照。
      */
     const news = out.filter(r => r.变体 === 'new');
+    const ctrl = out.filter(r => r.变体 === 'new-无角标');
     const heights = [...new Set(news.map(r => r.头部高))];
     const bad = news.filter(r => r.当前段可见 !== true || !r.工具条未溢出);
-    const ok = heights.length === 1 && bad.length === 0;
+    const noCount = news.filter(r => !String(r['::after内容']).includes('35'));
+    const regressed = news.filter(r => {
+        const c = ctrl.find(x => x.窗口宽 === r.窗口宽);
+        return r.导航区溢出 === true && !!c && c.导航区溢出 !== true;
+    });
+    const ok = heights.length === 1 && bad.length === 0
+        && noCount.length === 0 && regressed.length === 0;
 
     console.log(`\nnew 变体头部高（各宽度）：${news.map(r => r.窗口宽 + '→' + r.头部高 + 'px').join('  ')}`);
     console.log(`old 变体头部高（各宽度）：${out.filter(r => r.变体 === 'old').map(r => r.窗口宽 + '→' + r.头部高 + 'px').join('  ')}`);
@@ -137,10 +152,19 @@ app.whenReady().then(async () => {
     // 这一行是"真实 scoped CSS 生效"的硬证据：`::before` 的 content 只有在那条
     // scoped 规则命中时才不会是 none
     console.log(`new 分隔符 ::before content：${JSON.stringify(news.map(r => r['::before内容']))}`);
+    // 同上，2026-10-02 这批：角标的 `::after` content
+    console.log(`new 角标   ::after  content：${JSON.stringify(news.map(r => r['::after内容']))}`);
     console.log(`new 导航区宽（各宽度）：${news.map(r => r.窗口宽 + '→' + r.导航区宽 + 'px').join('  ')}`);
+    console.log(`new 导航区是否裁掉内容：${news.map(r => r.窗口宽 + '→' + (r.导航区溢出 ? '⚠️裁了' : '没裁')).join('  ')}`);
+    // 对照：同一形态但**关掉角标**。两行一比就知道"裁内容"是既有的还是本次引入的。
+    console.log(`对照·无角标 导航区宽：${ctrl.map(r => r.窗口宽 + '→' + r.导航区宽 + 'px').join('  ')}`);
+    console.log(`对照·无角标 导航区是否裁内容：${ctrl.map(r => r.窗口宽 + '→' + (r.导航区溢出 ? '⚠️裁了' : '没裁')).join('  ')}`);
+    console.log(regressed.length === 0
+        ? '⇒ 角标**没有新增**任何一档裁剪（640/800 的裁剪在无角标时同样出现 ⇒ 既有局限，与本次改动无关）'
+        : `⇒ ⚠️ 角标新增了裁剪：${regressed.map(r => r.窗口宽 + 'px').join('、')}（无角标不裁、有角标才裁）`);
     console.log(ok
-        ? '\n✅ new：头部高在四档宽度下**完全一致**（常量），当前段可见、工具条不溢出'
-        : `\n❌ new：头部高各档=${heights.join(',')}（要求完全一致）；另有 ${bad.length} 条不满足`);
+        ? `\n✅ new：头部高在 ${news.length} 档宽度下**完全一致**（常量）；当前段可见、工具条不溢出、角标已画出且未新增裁剪`
+        : `\n❌ new：头部高各档=${heights.join(',')}（要求完全一致）；${bad.length} 条布局不满足，${noCount.length} 档没画出角标，${regressed.length} 档因角标新增裁剪`);
     app.quit();
 }).catch(e => {
     console.error('PROBE FAILED:', e && e.message ? e.message : e);

@@ -436,6 +436,76 @@ export function loadMeta(q: MetaQuery = {}): Promise<(CacheMeta & { bytes?: numb
 }
 
 /**
+ * 「当前目录的**直接子目录** → 该子目录的子树字节总量」。
+ *
+ * 为什么需要它：网格里目录条目的 `size` 显示不出来 —— 因为
+ * **Windows 上 `fs.stat()` 对目录返回的 size 恒为 0**（NTFS 不在目录项里记字节数），
+ * 而"目录多大"在 Windows 上**没有任何一次系统调用能直接给出**，只能自己算。
+ * 递归遍历磁盘算 = 读盘，直接违背本项目的最高目标。
+ *
+ * 解法：**数据早就在库里了**。每条记录都隐含了"**那一层**的文件字节总量"
+ * （`loadMeta` 的 `withBytes` = `data.reduce(Σ size)`；目录条目的 size 是 0，
+ * 所以求和恰好只算文件 ⇒ 语义正好是我们要的）。于是：
+ *
+ *     某个子目录的子树总量 = 该子目录子树内**所有记录**的 bytes 之和
+ *
+ * ⚠️ **这条路上没有任何读盘**：nedb 全库常驻内存，`loadMeta` 也是纯内存遍历。
+ * 算法（含三条边界）与实测成本见 `mergeSubtreeBytes`，这里只负责取数 + 判空。
+ *
+ * 代价是**快照语义**：显示的是**上次扫到那一刻**的大小，之后增删/移动文件都不会更新 ——
+ * 与缓存面板的 `bytes` 列**同一个语义**，用户 2026-10-02 明确接受。
+ * 也正因如此，**不能**为了"补齐没扫过的目录"去读盘：那会把这个功能变成一次隐式扫描。
+ *
+ * @param baseRel 当前目录的**盘内相对路径**（`''` = 盘根）。
+ *                注意是 relPath，**不是**完整路径 —— 库里的键就是 (serial, relPath)。
+ * @returns 子目录名 → 子树字节总量。**当前目录这一层的直接文件不计入任何子目录**
+ *          （它们不构成某个子目录的大小）。
+ */
+export async function loadSubtreeBytes(serial: string, baseRel: string): Promise<Map<string, number>> {
+    if (!serial) return new Map();
+    return mergeSubtreeBytes(await loadMeta({ withBytes: true }), serial, baseRel);
+}
+
+/**
+ * 归并算法本体。**纯函数** —— 不碰 nedb、不碰盘、不碰文件系统。
+ *
+ * 单独抽出来的理由不是"整洁"，是它有三条**容易 quietly 写错**的边界，
+ * 必须能喂构造数据单独验证（真库数据不一定覆盖得到这些形态）：
+ *
+ *   ① **路径边界**：`a` 不能吃掉 `ab` 的大小 ⇒ 用 `baseRel + '/'` 匹配，不是裸 startsWith；
+ *   ② **当前目录自己那条记录**：它的 bytes 是"这一层的直接文件"，
+ *      **不属于任何一个子目录** ⇒ 必须排除，否则每个子目录都会凭空虚增一份；
+ *   ③ **盘根**（`baseRel = ''`）：所有本盘记录都是后代，且盘根自己那条（`relPath = ''`）要跳过。
+ *
+ * 验证探针：`docs/probes/folder-size/verify.mjs`（边界用构造数据，正确性用真库 + 守恒律）。
+ *
+ * @param rows    全库元数据（含 `bytes`）
+ * @param baseRel 当前目录的**盘内相对路径**（`''` = 盘根）
+ * @returns 子目录名 → 子树字节总量
+ */
+export function mergeSubtreeBytes(
+    rows: (CacheMeta & { bytes?: number })[],
+    serial: string,
+    baseRel: string,
+): Map<string, number> {
+    const out = new Map<string, number>();
+    if (!serial) return out;
+
+    const prefix = baseRel ? baseRel + '/' : '';
+    for (const m of rows) {
+        if (m.serial !== serial) continue;
+        if (baseRel && m.relPath === baseRel) continue;          // ② 当前目录自己
+        if (prefix && !m.relPath.startsWith(prefix)) continue;   // ① 路径边界
+        const rest = baseRel ? m.relPath.slice(prefix.length) : m.relPath;
+        if (!rest) continue;                                     // ③ 盘根自己那条
+        const cut = rest.indexOf('/');
+        const child = cut === -1 ? rest : rest.slice(0, cut);    // 第一段 = 直接子目录名
+        out.set(child, (out.get(child) || 0) + (m.bytes || 0));
+    }
+    return out;
+}
+
+/**
  * 重写数据文件，回收 append-only 累积的旧版本。
  *
  * nedb 每次 insert/update/remove 都是往文件**尾部追加**（persistence 的

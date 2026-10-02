@@ -1,4 +1,4 @@
-import { app, BrowserWindow, shell, ipcMain, dialog, clipboard } from 'electron'
+import { app, BrowserWindow, shell, ipcMain, dialog, clipboard, screen } from 'electron'
 import { release } from 'os'
 import { join, win32 } from 'path'
 import '../server';
@@ -37,10 +37,31 @@ const url = process.env.VITE_DEV_SERVER_URL as string
 const indexHtml = join(ROOT_PATH.dist, 'index.html')
 
 async function createWindow() {
+  /**
+   * 初始尺寸 = 基准值，但**不超出主屏可用区**（扣掉标题栏与任务栏）。
+   *
+   * 为什么是 1280×860：这不是审美取整，是两条实测线夹出来的。
+   * 宽 —— `docs/probes/header-width/` 量到导航区宽在 640/800/1280/1920 四档分别是
+   * 188/341/616/936px，而 640/800 那两档**头部会从 37px 涨到 196px（换行）且工具条仍然溢出**；
+   * 1280 是第一个"头部恒 37px、工具条不溢出、面包屑有 616px 可用"的档位。
+   * 高 —— 860 在 1080p 的可用区里刚好留出标题栏与任务栏，且图片网格能排下 3 行以上。
+   *
+   * `Math.min(..., wa - 40)` 只为小屏兜底：1366×768 这类屏放不下 860 高，
+   * 不减的话开局就有半个窗口在屏幕外（Windows 允许窗口比屏大，不会替你收）。
+   */
+  const wa = screen.getPrimaryDisplay().workAreaSize
   win = new BrowserWindow({
-    title: 'Main window',
+    // 这一句只在**页面加载完成之前**有用（避免白屏那几百毫秒显示默认标题）；
+    // 加载完就由 index.html 的 `<title>` 接管 —— 两处要一起改。
+    title: 'File Finder',
     icon: join(ROOT_PATH.public, 'favicon.ico'),
-    height:860,
+    width: Math.min(1280, wa.width - 40),
+    height: Math.min(860, wa.height - 40),
+    // 下限就是上面那条崩坏线的上沿：800 宽时导航区只剩 341px（面包屑已经勉强），
+    // 1024 给出约 500px。不设的话用户能拖到 640 —— 那正是"头部两行 + 工具条溢出"的档。
+    // 高度下限只管到"网格还剩几行"，640 是留着头部 + 两行图的最小值。
+    minWidth: 1024,
+    minHeight: 640,
     autoHideMenuBar: true,
     webPreferences: {
       preload,

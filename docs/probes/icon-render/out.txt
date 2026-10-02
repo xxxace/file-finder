@@ -1,0 +1,40 @@
+
+(electron) 'console-message' arguments are deprecated and will be removed. Please use Event<WebContentsConsoleMessageEventParams> object instead.
+[page] %cElectron Security Warning (Insecure Content-Security-Policy) font-weight: bold; This renderer process has either no Content Security
+  Policy set or a policy with "unsafe-eval" enabled. This exposes users of
+  this app to unnecessary security risks.
+
+For more information and help, consult
+https://electronjs.org/docs/tutorial/security.
+This warning will not show up
+once the app is packaged.
+
+── 各档渲染结果（超采样 4× 后缩回）──
+┌─────────┬──────┬─────────────┬─────────────┬───────────┬───────┬─────────┬───────────┐
+│ (index) │ 尺寸 │ 超采样      │ 截图        │ 产出      │ 字节  │ 角alpha │ 中心alpha │
+├─────────┼──────┼─────────────┼─────────────┼───────────┼───────┼─────────┼───────────┤
+│ 0       │ 16   │ '64×64'     │ '64×64'     │ '16×16'   │ 837   │ 0       │ 255       │
+│ 1       │ 24   │ '96×96'     │ '96×96'     │ '24×24'   │ 1483  │ 0       │ 255       │
+│ 2       │ 32   │ '128×128'   │ '128×128'   │ '32×32'   │ 2054  │ 0       │ 255       │
+│ 3       │ 48   │ '192×192'   │ '192×192'   │ '48×48'   │ 3620  │ 0       │ 255       │
+│ 4       │ 64   │ '256×256'   │ '256×256'   │ '64×64'   │ 5018  │ 0       │ 255       │
+│ 5       │ 128  │ '512×512'   │ '512×512'   │ '128×128' │ 12126 │ 0       │ 255       │
+│ 6       │ 256  │ '1024×1024' │ '1024×1024' │ '256×256' │ 31205 │ 0       │ 255       │
+└─────────┴──────┴─────────────┴─────────────┴───────────┴───────┴─────────┴───────────┘
+尺寸精确：✅ 七档全部命中目标边长
+透明底：✅ 四角 alpha=0、中心 alpha=255（真透明，不是被拍成黑/白底）
+
+build/icon.ico      56461 字节 · 16/24/32/48/64/128/256 七档
+build/icon.png      300170 字节 · 1024×1024（取自 256 档的 4× 超采样帧）
+public/favicon.ico  56461 字节（窗口左上角图标）
+[page] %cElectron Security Warning (Insecure Content-Security-Policy) font-weight: bold; This renderer process has either no Content Security
+  Policy set or a policy with "unsafe-eval" enabled. This exposes users of
+  this app to unnecessary security risks.
+
+For more information and help, consult
+https://electronjs.org/docs/tutorial/security.
+This warning will not show up
+once the app is packaged.
+docs/probes/icon-render/preview.png  124849 字节 · 深浅两底 · 真实尺寸 256→16
+
+✅ 图标生成完成

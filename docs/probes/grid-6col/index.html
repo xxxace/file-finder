@@ -1,0 +1,102 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+
+<head>
+    <meta charset="UTF-8">
+    <title>探针 · 网格 6 列对齐</title>
+    <!-- ⚠️ 用的是**真实编译产物**（less + scoped 转换），不是手抄的等效 CSS ——
+         与 ../header-width/ 共用同一份。改了 FileFinder 的 <style scoped> 后要重跑：
+             node docs/probes/header-width/build-css.mjs -->
+    <link rel="stylesheet" href="../header-width/css-real.generated.css">
+    <style>
+        /* 探针自己的壳：去掉 body 默认 margin，否则"对齐"量的是 body 的 margin 而不是网格的 */
+        body { margin: 0; background: #1b1b1f; }
+
+        #stage { width: 1280px; }
+
+        /* 每个格子里放个方块代表图片，让格子高度/观感和真机接近（不影响横向测量） */
+        .image-box-item .probe-thumb {
+            display: block;
+            width: 70%;
+            height: 44px;
+            background: #4a4a52;
+            border-radius: 3px;
+        }
+        .image-box-item span { color: #ccc; font-size: 12px; }
+
+        /* ── 对照组：把负 margin 关掉 = **改动之前**的形态 ──────────────────────
+           特异性 `.probe-nofix[data-v-probe]`(0,2,0) 与 `.image-box[data-v-probe]`(0,2,0) 相同，
+           靠"写在生成 CSS 之后"胜出 —— 所以这段 style 必须在 <link> 后面。 */
+        .probe-nofix[data-v-probe] {
+            margin-left: 0;
+            margin-right: 0;
+        }
+    </style>
+</head>
+
+<body>
+    <div id="stage">
+        <div class="file-finder" data-v-probe>
+            <div class="header-bar" data-v-probe>
+                <div class="nav-zone" data-v-probe>
+                    <span class="crumb crumb-root" data-v-probe>
+                        <span class="crumb-text" data-v-probe>D:</span>
+                    </span>
+                    <span class="crumb crumb-current" data-v-probe>
+                        <span class="crumb-text" data-v-probe>当前层</span>
+                    </span>
+                </div>
+            </div>
+            <div class="image-box" data-v-probe id="grid"></div>
+        </div>
+    </div>
+
+    <script>
+        /** 14 个格子 ⇒ 6 列时是 3 行（第三行只有 2 个），足够看出换行点 */
+        const COUNT = 14;
+        const grid = document.getElementById('grid');
+        for (let i = 1; i <= COUNT; i++) {
+            const el = document.createElement('div');
+            el.className = 'image-box-item';
+            el.setAttribute('data-v-probe', '');
+            el.innerHTML = `<span class="probe-thumb" data-v-probe></span><span data-v-probe>文件 ${i}</span>`;
+            grid.appendChild(el);
+        }
+
+        window.__setVariant = (fix) => {
+            grid.classList.toggle('probe-nofix', !fix);
+        };
+
+        window.__measure = (variant, width) => {
+            document.getElementById('stage').style.width = width + 'px';
+            const hb = document.querySelector('.header-bar').getBoundingClientRect();
+            const ib = grid.getBoundingClientRect();
+            const items = [...grid.querySelectorAll('.image-box-item')];
+            const rects = items.map(el => el.getBoundingClientRect());
+
+            // 首行 = 与第一个格子 top 相同的那些（按渲染结果数，不是按公式推）
+            const top0 = Math.round(rects[0].top);
+            const row1 = rects.filter(r => Math.round(r.top) === top0);
+            const lastOfRow1 = row1[row1.length - 1];
+
+            return {
+                变体: variant,
+                窗口宽: width,
+                头部左: Math.round(hb.left),
+                头部右: Math.round(hb.right),
+                网格容器左: Math.round(ib.left),
+                网格容器右: Math.round(ib.right),
+                首格左: Math.round(rects[0].left),
+                首行格数: row1.length,
+                首行末格右: Math.round(lastOfRow1.right),
+                // ⭐ 两个核心数字：都应为 0（= 与头部左右对齐）
+                首格相对头部: Math.round(rects[0].left - hb.left),
+                末格相对头部: Math.round(hb.right - lastOfRow1.right),
+                // 每格占位宽（含左右 margin）—— 6 个加起来应 = 容器宽
+                格宽: Math.round(rects[0].width),
+            };
+        };
+    </script>
+</body>
+
+</html>

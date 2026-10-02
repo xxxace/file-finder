@@ -1,0 +1,44 @@
+<!doctype html>
+<html lang="zh">
+<head>
+<meta charset="utf-8">
+<!--
+  图标目视对照页 —— 由 docs/probes/icon-render/run.cjs 用无头 Chromium 截图（preview.png）。
+  也直接双击打开看：每张图都是 **1:1 像素**，没有缩放，所以你看到的就是资源管理器/任务栏里的实际大小。
+  重点是右端那几个小的（16 / 24 / 32）—— 数字对不代表"还认得出"，那只能靠看。
+-->
+<title>icon preview — real pixel sizes</title>
+<style>
+  html,body{margin:0;padding:0}
+  .strip{padding:24px;display:flex;align-items:flex-end;gap:24px}
+  .item{display:flex;flex-direction:column;align-items:center;gap:8px}
+  .item span{font:11px/14px system-ui,sans-serif}
+  .light{background:#ffffff}
+  .light span{color:#666}
+  .dark{background:#1e1e1e}
+  .dark span{color:#aaa}
+  .sep{height:1px;background:rgba(0,0,0,.15)}
+</style>
+</head>
+<body>
+  <div class="strip light">
+    <div class="item"><img src="./png/icon-256.png" width="256" height="256"><span>256</span></div>
+    <div class="item"><img src="./png/icon-128.png" width="128" height="128"><span>128</span></div>
+    <div class="item"><img src="./png/icon-64.png"  width="64"  height="64"><span>64</span></div>
+    <div class="item"><img src="./png/icon-48.png"  width="48"  height="48"><span>48</span></div>
+    <div class="item"><img src="./png/icon-32.png"  width="32"  height="32"><span>32</span></div>
+    <div class="item"><img src="./png/icon-24.png"  width="24"  height="24"><span>24</span></div>
+    <div class="item"><img src="./png/icon-16.png"  width="16"  height="16"><span>16</span></div>
+  </div>
+  <div class="sep"></div>
+  <div class="strip dark">
+    <div class="item"><img src="./png/icon-256.png" width="256" height="256"><span>256</span></div>
+    <div class="item"><img src="./png/icon-128.png" width="128" height="128"><span>128</span></div>
+    <div class="item"><img src="./png/icon-64.png"  width="64"  height="64"><span>64</span></div>
+    <div class="item"><img src="./png/icon-48.png"  width="48"  height="48"><span>48</span></div>
+    <div class="item"><img src="./png/icon-32.png"  width="32"  height="32"><span>32</span></div>
+    <div class="item"><img src="./png/icon-24.png"  width="24"  height="24"><span>24</span></div>
+    <div class="item"><img src="./png/icon-16.png"  width="16"  height="16"><span>16</span></div>
+  </div>
+</body>
+</html>

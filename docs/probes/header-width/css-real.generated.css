@@ -97,6 +97,16 @@
        **盒子正好等于那个空隙、再在盒子里居中** —— 这样就不依赖"猜一个负偏移量"，
        换字体、换字号都不会再压到边框上。 */
   /* 当前层**永不被压掉**：它是"我在哪"的唯一答案，比任何历史段都重要 */
+  /* 当前段的条目数角标 —— 原来是工具条里那个飘着的 `n-badge`，
+       用户 2026-10-02 裁决挪到这一段上（它本来就是"这一层有多少东西"的答案）。
+       ⚠️ 为什么用 `::after` + `attr()`、而不是真塞一个 `<span>`：
+       ① 这一组的**子元素个数在本项目是敏感量**（见文件顶部那段 n-space 重复 key 的教训），
+          伪元素不进 DOM，个数一个都不变；
+       ② tag 内部的 `.n-tag__content` 是 `overflow: hidden` 的，真塞进去的 span 会被裁掉，
+          而 `::after` 挂在**根元素**上（n-tag 是 inline-flex），是 content 的**兄弟**，
+          不在那个裁剪盒里。
+       属性为空时不画：`:data-count="null"` 时 Vue 根本不渲染这个属性，整条选择器不命中 ——
+       等价于原来的 `v-if="fileList.length"`，不需要再写判空。 */
   /* 两种**不可点**的段：首段（盘符 / 离线盘）与当前段。
        必须与可点的段**视觉可分** —— 现状是"所有 tag 都 cursor:pointer"，
        于是当前层看着能点、点了没反应（死交互）。 */
@@ -139,6 +149,23 @@
   /* 与网格里条目名的字重一致（`.image-box-item span` 也是 bold）：
            一眼看出"哪个是我现在在的地方" */
   font-weight: bold;
+}
+.nav-zone .crumb-current[data-count][data-v-probe]::after {
+  content: attr(data-count);
+  flex: 0 0 auto;
+  margin-left: 6px;
+  padding: 0 6px;
+  min-width: 18px;
+  box-sizing: border-box;
+  border-radius: 9px;
+  background: #d03050;
+  /* naive-ui 的 error 红，与原 n-badge 同色 */
+  color: #fff;
+  font-size: 12px;
+  line-height: 18px;
+  font-weight: normal;
+  /* 当前段是 bold，角标不该跟着粗 */
+  text-align: center;
 }
 .nav-zone .crumb-more[data-v-probe] {
   flex: 0 0 auto;
@@ -184,6 +211,27 @@
   overflow: hidden auto;
   justify-content: flex-start;
   align-content: flex-start;
+  /* ── 让网格左右贴边：首格 margin-left / 每行末格 margin-right 归零 ──────────────
+       `.image-box-item` 是"**用 margin 撑间距、宽度再把它补偿回来**"的算法：
+       每格 `calc(100%/6 − 10px)` 宽 + 左右各 5px margin = **恰好占 100%/6** ⇒ 一行正好 6 个。
+       代价是**容器左右边缘也各被吃掉 5px**（首格的 margin-left、每行末格的 margin-right），
+       于是整片网格比头部内缩 5px（`.header-bar` 与它同在 `.file-finder` 的 10px padding 里）
+       —— 左右不齐，这就是"第一个/最后一个还留着 margin"的来源。
+
+       解法：把容器左右各外扩 5px（= margin 的一半），边缘那 5px 就正好落回容器外。
+       首格贴左、末格贴右，与头部对齐。
+
+       ⚠️ 为什么**不用** `:nth-child(6n+1)` / `:nth-child(6n)` 去掉首尾 margin：
+       ① 那是补丁（列数一变就失效）；② **在这里还会算错** —— 格子宽度是按"margin 会被
+       补偿"设计的，只去掉首尾 margin 而宽度不变 ⇒ 每行右端空出 5px，左右不对称，比现在更糟；
+       ③ 下面的断点里列数是**会变的**（6 / 5 / 3 / 2 / 1），任何写死 `6n` 的式子都会在窄窗失效。
+
+       ⚠️ 为什么**不用** `gap`：`gap` 方向是对的（边缘天然为 0），但换过去必须**同步重算**
+       `--item-width` 在 5 个断点里的每一个值 —— 因为 `gap` 不占格子宽度、而 `margin` 占，
+       等于把"改一个百分比就能改列数"变成"每个断点要改两个数字"。
+       这里只加两行，**断点和 item 的算法一个字都不动**。 */
+  margin-left: -5px;
+  margin-right: -5px;
 }
 /* 空状态：占满一整行、居中一行小字。颜色沿用搜索框后缀图标那个灰 */
 .empty-tip[data-v-probe] {

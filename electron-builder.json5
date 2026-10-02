@@ -5,18 +5,24 @@
   "appId": "ace.tools.finder",
   "asar": true,
   "directories": {
-    "output": "release/${version}"
+    "output": "release/${version}",
+    // 图标等打包资源放这里（也是 electron-builder 的默认值，写出来是为了指明图标在哪）。
+    // 源文件 build/icon.svg → `bash docs/probes/icon-render/run.sh` 重新生成 icon.ico / icon.png。
+    "buildResources": "build"
   },
   "files": [
     "dist"
   ],
   "mac": {
     "artifactName": "${productName}_${version}.${ext}",
+    "icon": "build/icon.png",
     "target": [
       "dmg"
     ]
   },
   "win": {
+    // ⚠️ 不写这一行的话，exe / 桌面快捷方式 / 开始菜单用的都是 **Electron 默认图标**。
+    "icon": "build/icon.ico",
     "target": [
       {
         "target": "nsis",

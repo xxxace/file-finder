@@ -5,7 +5,10 @@
     <link rel="icon" href="/favicon.ico" />
     <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, minimum-scale=1, user-scalable=no">
     <meta http-equiv="Content-Security-Policy" content="script-src 'self' 'unsafe-inline';" />
-    <title>Vite App</title>
+    <!-- ⚠️ 窗口标题由这里决定，不是 main/index.ts 里那个 `title`：
+         页面一旦加载完成，Electron 就把窗口标题跟着 `<title>` 走。
+         改成别的值时**两处要一起改**（见 electron/main/index.ts 的注释）。 -->
+    <title>File Finder</title>
   </head>
   <body>
     <div id="app"></div>
