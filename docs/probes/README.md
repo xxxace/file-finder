@@ -55,6 +55,7 @@
 | `parse-title/` | 番号解析回归 | 1 | KICKOFF-assistant-ui · PRD-manager-assistant |
 | `reconcile/` | **增量对账**：同一层再扫时缩略图有没有被复用（计数桩，17 PASS） | 7 | IMPLEMENT-reconcile |
 | `hotplug/` | **移动硬盘热插拔**：`hookWindowMessage(0x0219)` 收不收得到插拔事件（**需人插盘**） | — | PLAN-POLISH · IMPLEMENT-reconcile |
+| `disk-offline-set/` | **离线盘全集来源**：库里每个不在线的 serial 是否都有下拉选项（恒等式 12 PASS，零读盘） | 2 | FIX-disk-offline-set |
 
 > **结论：23 个目录逐个查过，每一个都被至少一份文档引用 —— 目录级没有孤儿，没有可白删的。**
 

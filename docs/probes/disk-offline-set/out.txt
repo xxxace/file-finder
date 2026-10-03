@@ -16,12 +16,11 @@
   ✅ 交集去重：AAAAAAAA 只出现一次（registry 与库重叠）
   ✅ 库为空 ⇒ 离线表 = 注册表 - 在线（退化成原行为）
   ✅ 注册表为空 ⇒ 离线表 = 库 - 在线（旧实现此处会返回空，即"整库消失"）
-  ✅ 两边都空 ⇒ 空表
-  ✅ drives 传空 ⇒ 不抛（Iterable 语义）
-  ✅ 接受数组以外的 Iterable（Set 直传）
+  ✅ 两边都空 ⇒ 空表（返回数组，不是 null/undefined）
+  ✅ known 接受任意 Iterable（Set 直传 / 数组都行）
 
 ── ④ 空值点（`offline` 现在可能含注册表之外的盘）──
   ✅ `registry[缺失].label` 会抛 TypeError（按原样写就是 /getDisks 500）
   ✅ `registry[缺失]?.label || ""` 不抛（第 3 处改动的理由）
 
-✅ 通过 13 / 失败 0
+✅ 通过 12 / 失败 0
