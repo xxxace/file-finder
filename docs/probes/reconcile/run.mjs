@@ -79,7 +79,7 @@ await esbuild.build({
                 if (path.resolve(args.path) !== entry) return null;
                 let src = await fs.promises.readFile(args.path, 'utf8');
                 src = src.replace(/listen\(3060/g, 'listen(0');
-                src += '\nexport { scanAndCache, findDriveByLetter };\n';
+                src += '\nexport { scanAndCache, findDriveByLetter, serialOfDrive };\n';
                 return { contents: src, loader: 'ts' };
             });
         },
@@ -211,6 +211,21 @@ const n6 = calls();
 console.log(`  抽帧 ${n6}`);
 check('★ 源文件变了就必须重抽那 1 张（否则封面会被永久定格）', n6 === 1, `实际 ${n6}`);
 check('其它条目依旧复用', thumbOf(r4, 'c.png') === thumbOf(r6, 'c.png'));
+
+// ─────────────────── R7 · 拔盘降级依赖的那条"记忆" ───────────────────
+// 盘一拔，`findDriveByLetter` 当场失效 —— 把当前屏降级成只读锚点（`#serial/…`）
+// 就只能靠 `serialOfDrive`（"这个盘符**上一次**属于谁"，纯内存）。它错了，
+// 降级出来的锚点就指向别的盘，用户会看到"另一块盘的缓存"。
+console.log('\n—— R7 盘符 → 序列号（拔盘后降级成只读唯一能靠的线索）——');
+const remembered = mod.serialOfDrive(letter);
+check(
+    'serialOfDrive 记住了这个盘符此刻的身份',
+    !!remembered && remembered === drive.serial,
+    remembered ? '（与 findDriveByLetter 一致）' : '（空 —— 降级会失效）',
+);
+// `A:` 是 Windows 留给软驱的盘符，`scanDrives()` 刻意跳过它 ⇒ 永远不会被 probe 到。
+// 用它验"没见过的盘符不许瞎编身份" —— 否则调错盘符会拿到别的盘、降级到错误的缓存。
+check('从没扫到过的盘符返回 undefined（不瞎猜）', mod.serialOfDrive('A') === undefined);
 
 // ─────────────────── 收尾 ───────────────────
 console.log(`\n==========  ${pass} PASS / ${fail} FAIL  ==========`);

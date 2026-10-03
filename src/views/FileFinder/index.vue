@@ -571,7 +571,7 @@ const banner = computed(() => {
         // ⚠️ 文案跟着 openFile 的修复一起改了：原来写"打不开原文件"，那是**修复前**的行为。
         // 现在只读层在盘插回来之后**可以直接双击打开原文件**（服务端会当场把锚点解析成实时路径），
         // 只有"列表变成实时的"才需要从「缓存记录」重开这一行。
-        return { type: 'info' as const, text: '只读视图：这一层显示的是缓存内容（缩略图可用）。插上盘后可以直接双击打开原文件；想让列表也变成实时的，从「缓存记录」重新打开这一行' };
+        return { type: 'info' as const, text: '只读视图：这一层显示的是缓存内容（缩略图可用）。插上盘会自动切到实时；在那之前也可以直接双击打开原文件' };
     }
     return { type: 'default' as const, text: '' };
 });
@@ -1372,6 +1372,8 @@ const onKeyup = (e: KeyboardEvent) => {
 
 onMounted(() => {
     window.addEventListener('keyup', onKeyup);
+    // 主进程的移动硬盘插拔通知（事件驱动，零轮询 —— 见 electron/main/diskWatch.ts）
+    ipcRenderer.on('ff-disks-changed', onDisksChangedIpc);
 });
 
 // 必须写在 setup 顶层。注册在 onMounted 回调**内部**的 onUnmounted 永远不会被调用 ——
@@ -1379,8 +1381,85 @@ onMounted(() => {
 // HistoryTable 那边修过一次，这里是漏网的那处。
 onUnmounted(() => {
     window.removeEventListener('keyup', onKeyup);
+    ipcRenderer.off('ff-disks-changed', onDisksChangedIpc);
 });
 
+
+/**
+ * 实时路径的盘符（`E:/x` → `E`）。锚点不会走这里 —— 它开头的 `#` 匹配不上。
+ * 解析**实时路径**是渲染层本来的活（面包屑就在做），不违反"不解析锚点"那条约定。
+ */
+const driveLetterOf = (path: string): string => {
+    const m = /^([A-Za-z]):/.exec(path);
+    return m ? m[1].toUpperCase() : '';
+};
+
+/** 实时路径 → 只读锚点。盘拔掉之后把这一屏降级用（服务端只查一个内存 Map，**零读盘**）。 */
+const getAnchor = async (path: string): Promise<string> => {
+    try {
+        const data = await getAction(`${API_BASE}/anchorOf?path=${encodeURIComponent(path)}`);
+        return data?.anchor || '';
+    } catch {
+        return '';
+    }
+};
+
+/**
+ * 主进程报「盘列表变了」。**插拔是对称的两件事，这里都管**：
+ *
+ *   【插】正停在只读层、而那块盘回来了 ⇒ **自动切到实时**。
+ *        用户插盘这个动作本身就说明了他要看真的，再让他点一下是多余的一步。
+ *
+ *   【拔】正停在实时层、而那个盘符没了 ⇒ **自动降级成只读锚点**，继续用缓存看。
+ *        不这么做的话：列表靠内存还撑着、看着一切正常，可**一刷新就报 offline、
+ *        双击也打不开** —— 用户根本不知道发生了什么。降级之后目录和缩略图都还在，
+ *        服务端走 `findCache`，**零读盘**（比拔盘前每次 readdir + stat 还轻）。
+ *
+ * 另外每次都让「缓存记录」面板重取一次数据 —— 否则它每行的「在线 / 离线」
+ * 会一直停在插拔前的状态（面板打开时刻意不重探盘符，见那边的注释）。
+ *
+ * ⚠️ 两条路都**不解析锚点内容**（那是服务端的活，只有它才有 serial → 盘符 映射）：
+ * 靠 `/resolveAnchor`（锚点→路径）与 `/anchorOf`（路径→锚点）两个方向相反的接口，
+ * 把转换整个交给服务端。渲染层对锚点的认知仍然只有"前缀是不是 `#`"。
+ *
+ * 不用管 `loading`：切换那次请求会被 `fetchSeq` 判为最新、正在飞的那次自动作废 ——
+ * 这正是序号法存在的意义，不需要再加一道守卫。
+ */
+const onDisksChanged = async (disks: { serial: string; drive: string }[]) => {
+    historyTable.value?.refreshIfOpen();
+
+    const top = history.value[history.value.length - 1];
+    if (!top) return;
+
+    /** 换掉栈顶那一屏。**替换**而不是 push —— 用户眼里还是同一层，只是它的地址变了 */
+    const swapTop = async (path: string) => {
+        history.value.splice(history.value.length - 1, 1, { ...top, path });
+        await fetchFolder(path, top.mode);
+    };
+
+    if (!isReadOnlyPath(top.path)) {
+        // ── 拔盘：盘符没了就降级成只读 ──────────────────────────────────
+        const letter = driveLetterOf(top.path);
+        if (!letter) return;                                  // UNC / 网络位置：没有"拔盘"这回事
+        if (disks.some((d) => d.drive === letter)) return;     // 这块盘还在，不关我们的事
+        const anchor = await getAnchor(top.path);
+        if (!anchor) return;                                  // 从没扫到过这个盘符 ⇒ 没缓存可用，保持原样
+        await swapTop(anchor);
+        notify('warning', '这块盘已拔出', '已切换到缓存内容，缩略图仍可用');
+        return;
+    }
+
+    // ── 插盘：盘回来了就切实时 ────────────────────────────────────────
+    const real = await resolveAnchor(top.path);
+    if (!real) return;
+    await swapTop(real);
+    notify('success', '盘已插回', '列表已切换到实时内容');
+};
+
+/** IPC 监听器的**稳定引用**：`off` 必须拿到同一个函数，否则卸不掉、组件重建后会重复响应 */
+const onDisksChangedIpc = (_e: unknown, disks: { serial: string; drive: string }[]) => {
+    void onDisksChanged(disks || []);
+};
 
 </script>
 

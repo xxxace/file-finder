@@ -54,13 +54,33 @@ export function toSerial(dev: number): Serial {
  * 探测单个盘符。只做一次 stat —— 不存在的盘符会立刻 ENOENT，不做多余的 existsSync。
  * 用异步 API 而不是 statSync：这批探测在启动路径上，不能阻塞主进程。
  */
+/**
+ * 「这个盘符**上一次**属于哪块盘」—— 拔盘之后唯一的线索。
+ *
+ * 为什么需要它：盘一拔，`probe()` 立刻失效、`findDriveByLetter()` 返回 null，
+ * 于是"用户正看着的 `E:/…` 是哪块盘的"这个问题**当场失去答案**。
+ * 而我们要靠它把那一屏降级成只读锚点（`#serial/…`）—— 那是缓存里唯一的地址。
+ *
+ * 只在 `probe()` 成功时更新 ⇒ 它记的永远是**最后一次真的看到**的身份。
+ * 盘符被另一块盘复用时会被一起改写（那正是对的：E 现在真的是别人了）。
+ */
+const lastSeenByDrive = new Map<string, Serial>();
+
+/** 盘符 → 最后见到的序列号。从没扫到过则返回 undefined。**纯内存查询，零读盘。** */
+export function serialOfDrive(letter: string): Serial | undefined {
+    return lastSeenByDrive.get(letter.toUpperCase());
+}
+
 async function probe(letter: string): Promise<DriveInfo | null> {
     const root = `${letter}:/`;
     try {
         const stat = await fsasync.stat(root);
         // dev 为 0 表示拿不到卷信息（部分虚拟盘/网络盘会这样），不做身份使用
         if (!stat.dev) return null;
-        return { serial: toSerial(stat.dev), drive: letter, root, label: '' };
+        const serial = toSerial(stat.dev);
+        // 记下"这个盘符此刻属于谁" —— 拔盘之后这是唯一的线索（见 lastSeenByDrive）
+        lastSeenByDrive.set(letter.toUpperCase(), serial);
+        return { serial, drive: letter, root, label: '' };
     } catch {
         return null;
     }
@@ -202,8 +222,20 @@ export async function syncRegistry(drives: DriveInfo[], now: string): Promise<Di
     return registry;
 }
 
-/** 注册表里有、但当前没插的盘 —— 用来在缓存界面上把"离线盘"也列出来 */
-export function offlineSerials(registry: DiskRegistry, drives: DriveInfo[]): Serial[] {
+/**
+ * 「已知盘」里、当前没插的 —— 缓存界面上把"离线盘"也列出来用。
+ *
+ * ⚠️ `known` 必须是**缓存库里出现过的 serial ∪ 注册表**，**不能只传注册表的键**。
+ *
+ * 注册表只在 `?refresh=true`（用户点「刷新」）时才登记（见 index.ts 的 `syncRegistry` 调用点），
+ * 于是"插过、扫过、但从没点过刷新"的盘压根不在里面：它的缓存记录还在库里，
+ * 下拉框里却没有任何选项可用来过滤它。
+ * 实测（2026-10-03 真库）：命中 1 块盘 / 3 条记录；同一个原因让面板顶部「总览」的
+ * 目录数（216）与下拉框「全部盘」的目录数（213）对不上，差额正好是这部分。
+ *
+ * 全集与数据（缓存库）同源，才在结构上不可能再漏 —— 只要库里有记录，就一定有选项。
+ */
+export function offlineSerials(known: Iterable<Serial>, drives: DriveInfo[]): Serial[] {
     const online = new Set(drives.map(d => d.serial));
-    return Object.keys(registry).filter(serial => !online.has(serial));
+    return [...new Set(known)].filter(serial => !online.has(serial));
 }

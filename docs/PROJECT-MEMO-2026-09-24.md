@@ -121,7 +121,10 @@ renderer 0.14.7 / vue 3.5.43 / naive-ui 2.45.3 / typescript 5.9.3 / vue-tsc 3.3.
 
 **四条硬契约（破了是运行期炸，不是编译期报错）**
 1. 主进程/预加载**不许内联运行期依赖** → main 与 preload 各挂 `notBundle()`。
-   自检：`grep 'require("fluent-ffmpeg")' dist/electron/main/index.js` 必须命中（产物 15–16 kB）。
+   自检：`grep 'require("fluent-ffmpeg")' dist/electron/main/index.js` 必须命中（产物 **55.89 kB** —— 2026-10-04 实测。
+⚠️ 原写"15–16 kB"是 **assistant 模块加入之前**的数字，别再拿它当基线：
+主进程产物含**整个 `server/index.ts` + assistant 全部模块**（sourcemap 里 `server/index.ts` 一个文件就 52,868 字符）。
+拿旧基线比会把这个**正常体积误判成"内联了运行期依赖"** —— 判断依据要看上面那条 `require` 自检，不是大小）。
 2. **vite 不要上 8**（rolldown 把渲染层 `require("electron")` 变裸 ESM import → `file://` 白屏）。
    自检：`grep -c 'from"electron"' dist/assets/index-*.js` 必须是 0。
 3. 打包靠 electron-builder 自动收 prod `dependencies` → 两个 dependencies 的划分**决定打进包的东西**

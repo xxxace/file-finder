@@ -8,7 +8,7 @@ import { imageThumb, videoThumb } from '../utils/thumbnail';
 import { newThumbKey, putThumb, getThumb } from '../utils/thumbStore';
 import {
     findDriveByLetter, findDuplicatedSerials, getDrives, offlineSerials,
-    readRegistry, splitPath, syncRegistry, toFullPath,
+    readRegistry, serialOfDrive, splitPath, syncRegistry, toFullPath,
 } from '../utils/driveIdentity';
 import type { DriveInfo } from '../utils/driveIdentity';
 import {
@@ -703,6 +703,25 @@ async function toWire(items: FileInfo[], drive: string, serial: string, relPath:
  * ⚠️ `/raw` 天然拒绝锚点（`splitPath` 拆不开 `#` 开头的串）→ 锚点**没有任何**
  * 能读到磁盘文件的通道。离线看大图走缩略图（前端 `previewUrl` 已按只读层降级）。
  */
+/**
+ * 实时路径 → 只读锚点。**盘已经拔掉时**把这一屏降级用。
+ *
+ * 为什么不能靠 `findDriveByLetter`：盘不在了，它当场返回 null，"这个盘符是谁"就没有答案。
+ * 所以问 `serialOfDrive`（盘符 → **最后一次见到**的序列号）。
+ * 它可能指向一块已经不在的盘 —— **那正是这里要的**：那块盘的缓存仍然可用，
+ * 而锚点 `#serial/relPath` 本来就是缓存里唯一的地址。
+ *
+ * **零读盘**：只查一个内存 Map，不碰盘。
+ */
+function anchorOfController(req: Req, res: http.ServerResponse) {
+    const raw = req.params?.get('path') || '';
+    const parts = splitPath(raw);
+    if (!parts) return sendJson(res, { anchor: '' });
+    const serial = serialOfDrive(parts.drive);
+    if (!serial) return sendJson(res, { anchor: '' });
+    sendJson(res, { anchor: toAnchorPath(serial, parts.relPath) });
+}
+
 const ANCHOR_PREFIX = '#';
 
 function parseAnchor(raw: string): { serial: string; relPath: string } | null {
@@ -981,7 +1000,19 @@ async function listDisksController(req: Req, res: http.ServerResponse) {
 
     const empty = { folders: 0, covers: 0, lastScanAt: '' };
 
-    const offline = offlineSerials(registry, drives);
+    /**
+     * ⚠️ 已知盘全集 = 注册表 ∪ **缓存库里出现过的 serial**。
+     *
+     * 只取注册表的键会漏盘：注册表仅在 `?refresh=true`（用户点「刷新」）时才登记
+     * （见上面那个 `syncRegistry` 调用点），于是"插过 / 扫过 / 但从没点过刷新"的盘
+     * 不在里面 —— 它的缓存记录还在库里，下拉框里却**没有任何选项**能过滤它。
+     *
+     * 实测（2026-10-03 真库）：命中 1 块盘 / 3 条记录；同一个原因让顶部「总览」的
+     * 目录数（216）与下拉框「全部盘」的目录数（213）对不上，差额正好是这部分。
+     * 全集改与缓存库同源后，**只要库里有记录就一定有选项**，结构上不可能再漏。
+     */
+    const known = new Set([...Object.keys(registry), ...metas.map(m => m.serial)]);
+    const offline = offlineSerials(known, drives);
 
     // 库文件大小：读的是**本地数据文件**的 metadata（`~/.file-finder/searchCache.db`），
     // **不碰任何移动硬盘**。拿不到就不显示（前端按 undefined 处理），不因此报错。
@@ -999,7 +1030,11 @@ async function listDisksController(req: Req, res: http.ServerResponse) {
                 serial,
                 drive: '',
                 root: '',
-                label: registry[serial].label || '',
+                // ⚠️ 必须是 `registry[serial]?.label`：`offline` 现在可能含**只在缓存库里、
+                // 从没进过注册表**的盘（这正是上面 `known` 要修的形态）。少了可选链，
+                // 一处 `undefined.label` 就让整个 `/getDisks` 变成 500 —— 下拉框直接空掉，
+                // 比原来的"少一个选项"严重得多。
+                label: registry[serial]?.label || '',
                 online: false,
                 ...(stats.get(serial) || empty),
             })),
@@ -1372,6 +1407,8 @@ route('/mergeCache', mergeCache);
 // 把只读锚点解析成"此刻"的完整路径 —— 只读层双击打开原文件时走它。
 // 见 resolveAnchorController 的注释：修的是"用地址形态当判据"这个设计缺陷。
 route('/resolveAnchor', resolveAnchorController);
+// 反方向：实时路径 → 只读锚点。拔盘时把当前屏降级成只读用（见 anchorOfController）。
+route('/anchorOf', anchorOfController);
 
 // 管理助手（Phase 1：规则 CRUD + 单站试跑，暂无写盘）。经同一 route() 咽喉点注册，
 // 自动受 token 校验与统一错误兜底；sendJson/dataDir 以依赖注入传入，避免循环引用。

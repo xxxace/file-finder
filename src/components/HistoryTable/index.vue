@@ -611,6 +611,20 @@ const reloadAfterDataChange = () => {
  * 三件事必须分得开：真的一层都没有 / 搜索没匹配 / 读不到。
  * 最后一种由服务端 `kind` 走主界面横幅，这里只管前两种。
  */
+/**
+ * 盘列表变了（主进程热插拔事件推来的）—— **只在面板开着时**重新取数。
+ *
+ * 走 `reloadAfterDataChange`（**不重探盘符**）：服务端那份盘列表缓存**刚被主进程
+ * `getDrives(true)` 刷过**（见 `electron/main/diskWatch.ts`），这里只要重新读一遍就够。
+ * 再带 `?refresh=true` 等于拿 26 次 `stat` 去换一次刚做过的事。
+ *
+ * 关着就不打扰 —— 顺带省掉一次没人看的请求。
+ */
+const refreshIfOpen = () => {
+    if (!showModal.value) return;
+    reloadAfterDataChange();
+}
+
 const emptyText = computed(() => {
     if (loading.value || tableData.value.length) return '';
     if (model.value.path) return `没有匹配「${model.value.path}」的目录`;
@@ -898,7 +912,9 @@ watch(showModal, (val) => {
 });
 
 defineExpose({
-    setShowModal
+    setShowModal,
+    /** 盘插拔后由主界面调用（那条 IPC 见 `electron/main/diskWatch.ts`）—— 只重取数据，不重探盘符 */
+    refreshIfOpen
 })
 </script>
 

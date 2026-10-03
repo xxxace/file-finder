@@ -5,6 +5,7 @@ import '../server';
 import '../utils/ffmpeg';
 import { LOCAL_TOKEN } from '../server/token';
 import { destroyTrackedWindows } from '../server/assistant/queue';
+import { watchDiskChanges } from './diskWatch'
 import config from '../config';
 
 // Disable GPU Acceleration for Windows 7
@@ -91,6 +92,11 @@ async function createWindow() {
   // 否则只要还开着一个隐藏窗，`window-all-closed` 就**永远不触发** ——
   // 用户关掉主界面，应用却还在后台赖着不走（D12 的窗口生命周期冲突）。
   win.on('closed', destroyTrackedWindows)
+
+  // 移动硬盘插拔：**事件驱动**，零轮询。方案与参数（去抖 400ms、"消息比挂载早"的重确认）见 diskWatch.ts。
+  // 挂在主窗上而不是别处：`hookWindowMessage` 挂的是**这个窗口**的消息循环，
+  // 窗口销毁 hook 自然失效 —— 生命周期不用另写一份清理。
+  watchDiskChanges(win)
 }
 
 app.whenReady().then(createWindow)
