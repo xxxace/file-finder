@@ -1,0 +1,68 @@
+
+==============================================================
+hookWindowMessage(0x0219) 已挂上：true
+盘符基线：当前检测到 4 个可访问的盘
+==============================================================
+
+请现在 **插入** 移动硬盘（等系统认出来，1~3 秒），然后再 **拔出**。
+（收到设备消息后 20 秒自动收尾；最多等 120 秒）
+
+✅ 自证通过：hook 机制本身在工作（自己触发的 WM_SIZE/WM_MOVE 收到 4/2 次）
+
+     7.2s  ★ WM_DEVICECHANGE   wParam=0x0007   DBT_DEVNODES_CHANGED —— 有设备加入/移除了系统
+     7.2s     复核 scanDrives()：当前 4 个盘（基线 4）
+     7.2s  ★ WM_DEVICECHANGE   wParam=0x0007   DBT_DEVNODES_CHANGED —— 有设备加入/移除了系统
+     7.2s     复核 scanDrives()：当前 4 个盘（基线 4）
+     8.4s  ★ WM_DEVICECHANGE   wParam=0x0007   DBT_DEVNODES_CHANGED —— 有设备加入/移除了系统
+     8.4s  ★ WM_DEVICECHANGE   wParam=0x0007   DBT_DEVNODES_CHANGED —— 有设备加入/移除了系统
+     8.4s  ★ WM_DEVICECHANGE   wParam=0x0007   DBT_DEVNODES_CHANGED —— 有设备加入/移除了系统
+     8.4s  ★ WM_DEVICECHANGE   wParam=0x0007   DBT_DEVNODES_CHANGED —— 有设备加入/移除了系统
+     8.4s  ★ WM_DEVICECHANGE   wParam=0x8000   DBT_DEVICEARRIVAL —— 设备或介质已插入  ★
+     8.4s     复核 scanDrives()：当前 5 个盘（基线 4）
+     8.4s     复核 scanDrives()：当前 5 个盘（基线 4）
+     8.4s     复核 scanDrives()：当前 5 个盘（基线 4）
+     8.4s     复核 scanDrives()：当前 5 个盘（基线 4）
+     8.4s     复核 scanDrives()：当前 5 个盘（基线 4）
+     8.5s  ★ WM_DEVICECHANGE   wParam=0x0007   DBT_DEVNODES_CHANGED —— 有设备加入/移除了系统
+     8.5s     复核 scanDrives()：当前 5 个盘（基线 4）
+    18.3s  ★ WM_DEVICECHANGE   wParam=0x0007   DBT_DEVNODES_CHANGED —— 有设备加入/移除了系统
+    18.3s  ★ WM_DEVICECHANGE   wParam=0x0007   DBT_DEVNODES_CHANGED —— 有设备加入/移除了系统
+    18.3s     复核 scanDrives()：当前 4 个盘（基线 4）
+    18.3s     复核 scanDrives()：当前 4 个盘（基线 4）
+    19.4s  ★ WM_DEVICECHANGE   wParam=0x0007   DBT_DEVNODES_CHANGED —— 有设备加入/移除了系统
+    19.4s     复核 scanDrives()：当前 4 个盘（基线 4）
+    19.4s  ★ WM_DEVICECHANGE   wParam=0x8004   DBT_DEVICEREMOVECOMPLETE —— 设备或介质已移除  ★
+    19.4s     复核 scanDrives()：当前 4 个盘（基线 4）
+    23.2s  ★ WM_DEVICECHANGE   wParam=0x0007   DBT_DEVNODES_CHANGED —— 有设备加入/移除了系统
+    23.2s  ★ WM_DEVICECHANGE   wParam=0x0007   DBT_DEVNODES_CHANGED —— 有设备加入/移除了系统
+    23.2s     复核 scanDrives()：当前 4 个盘（基线 4）
+    23.2s     复核 scanDrives()：当前 4 个盘（基线 4）
+    30.5s  …还在等（剩余 90s）—— 插一次移动硬盘试试
+    38.3s  ★ WM_DEVICECHANGE   wParam=0x0007   DBT_DEVNODES_CHANGED —— 有设备加入/移除了系统
+    38.3s  ★ WM_DEVICECHANGE   wParam=0x0007   DBT_DEVNODES_CHANGED —— 有设备加入/移除了系统
+    38.4s  ★ WM_DEVICECHANGE   wParam=0x0007   DBT_DEVNODES_CHANGED —— 有设备加入/移除了系统
+    38.4s     复核 scanDrives()：当前 4 个盘（基线 4）
+    38.4s     复核 scanDrives()：当前 4 个盘（基线 4）
+    38.4s     复核 scanDrives()：当前 4 个盘（基线 4）
+    39.5s  ★ WM_DEVICECHANGE   wParam=0x0007   DBT_DEVNODES_CHANGED —— 有设备加入/移除了系统
+    39.5s     复核 scanDrives()：当前 4 个盘（基线 4）
+    39.5s  ★ WM_DEVICECHANGE   wParam=0x0007   DBT_DEVNODES_CHANGED —— 有设备加入/移除了系统
+    39.5s  ★ WM_DEVICECHANGE   wParam=0x0007   DBT_DEVNODES_CHANGED —— 有设备加入/移除了系统
+    39.5s     复核 scanDrives()：当前 5 个盘（基线 4）
+    39.5s     复核 scanDrives()：当前 5 个盘（基线 4）
+    39.6s  ★ WM_DEVICECHANGE   wParam=0x8000   DBT_DEVICEARRIVAL —— 设备或介质已插入  ★
+    39.6s     复核 scanDrives()：当前 5 个盘（基线 4）
+    39.6s  ★ WM_DEVICECHANGE   wParam=0x0007   DBT_DEVNODES_CHANGED —— 有设备加入/移除了系统
+    39.6s     复核 scanDrives()：当前 5 个盘（基线 4）
+    44.6s  ★ WM_DEVICECHANGE   wParam=0x0007   DBT_DEVNODES_CHANGED —— 有设备加入/移除了系统
+    44.6s     复核 scanDrives()：当前 4 个盘（基线 4）
+    44.6s  ★ WM_DEVICECHANGE   wParam=0x8004   DBT_DEVICEREMOVECOMPLETE —— 设备或介质已移除  ★
+    44.6s     复核 scanDrives()：当前 4 个盘（基线 4）
+    44.6s  ★ WM_DEVICECHANGE   wParam=0x0007   DBT_DEVNODES_CHANGED —— 有设备加入/移除了系统
+    44.6s     复核 scanDrives()：当前 4 个盘（基线 4）
+    60.6s  …还在等（剩余 60s）—— 插一次移动硬盘试试
+
+========== 结论 ==========
+收到 WM_DEVICECHANGE 共 25 条；盘数 4 → 4
+✅ 能拿到 0x8000 / 0x8004 ⇒ **事件驱动方案成立，不需要轮询**。
+==========================
