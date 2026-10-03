@@ -1,70 +1,43 @@
-# electron-vite-vue
+# File Finder
 
-<!-- 🥳 Really simple `Electron` + `Vue` + `Vite` boilerplate.
+**本地移动硬盘文件浏览器** —— Electron + Vue 3 + TypeScript + naive-ui。
 
-[![awesome-vite](https://awesome.re/mentioned-badge.svg)](https://github.com/vitejs/awesome-vite)
-[![Netlify Status](https://api.netlify.com/api/v1/badges/ae3863e3-1aec-4eb1-8f9f-1890af56929d/deploy-status)](https://app.netlify.com/sites/electron-vite/deploys)
-[![GitHub license](https://img.shields.io/github/license/caoxiemeihao/electron-vite-vue)](https://github.com/electron-vite/electron-vite-vue/blob/main/LICENSE)
-[![GitHub stars](https://img.shields.io/github/stars/caoxiemeihao/electron-vite-vue?color=fa6470)](https://github.com/electron-vite/electron-vite-vue)
-[![GitHub forks](https://img.shields.io/github/forks/caoxiemeihao/electron-vite-vue)](https://github.com/electron-vite/electron-vite-vue)
-[![GitHub Build](https://github.com/electron-vite/electron-vite-vue/actions/workflows/build.yml/badge.svg)](https://github.com/electron-vite/electron-vite-vue/actions/workflows/build.yml) -->
+设计目标只有一条：**尽可能少读盘**（移动硬盘的机械寻道 / 耗电 / 寿命是真实成本）。
+目录清单与缩略图全部落本地**加密缓存**，统计 / 过滤 / 聚合一律**纯内存**完成 —— 盘拔了也能继续浏览。
 
-<!-- ## Features
+## 能力
 
-📦 Out of the box  
-🎯 Based on the official [template-vue-ts](https://github.com/vitejs/vite/tree/main/packages/create-vite/template-vue-ts), less invasive  
-🌱 Extensible, really simple directory structure  
-💪 Support using Node.js API in Electron-Renderer  
-🔩 Support C/C++ native addons  
-🖥 It's easy to implement multiple windows  
+- **网格浏览**移动硬盘上的媒体目录（图片 / 视频），双击打开；面包屑 + 返回 + 刷新。
+- **零读盘统计**：一层目录 = 一条缓存记录，启动时**全库载入内存** ⇒ 目录大小、条目数等在内存里汇总。
+  （Windows 上目录的 `stat.size` 恒为 0，拿不到系统级目录大小，只能靠**缓存子树求和**。）
+- **缩略图缓存**：480px，本地加密落盘；视频取帧当封面。
+- **离线只读浏览**：盘不在时用 `#序列号/盘内路径` 锚点读缓存；"能不能打开"在**动作那一刻**问服务端，而不是看地址形态。
+- **封面管理助手**：在缓存上"零读盘"列出待补条目 → 按作品编号到站点抓封面 → `tmp → rename` 原子写入（带 `apply.log`，可回滚）。抓取走隐藏窗口的 Chromium 网络栈。
+- **缓存库加密备份 / 还原**。
 
-## Quick Start
+## 开发
 
-```sh
-npm create electron-vite
-```
+| 命令 | 作用 |
+|---|---|
+| `npm install` | 安装依赖 |
+| `npm run dev` | 启动开发（**改主进程后需重启**） |
+| `npm run typecheck` | 类型检查（应为 0 error） |
+| `npm run build` | 打包 |
 
-<!-- [![quick-start](https://asciinema.org/a/483731.svg)](https://asciinema.org/a/483731) -->
-<!-- 
-![electron-vite-vue.gif](https://github.com/electron-vite/electron-vite-vue/blob/main/public/electron-vite-vue.gif?raw=true)
+本项目**没有测试框架**。验证方式固定三件套：`typecheck` 0 error + `docs/probes/` 里的**只读探针** + 真机目视。
+（探针证据一律落 `.txt`，输出已脱敏。）
 
-## Debug
+## 结构
 
-![electron-vite-react-debug.gif](https://github.com/electron-vite/electron-vite-react/blob/main/public/electron-vite-react-debug.gif?raw=true)
+- `electron/` —— 主进程 + 本地 HTTP 服务（`127.0.0.1:3060`，`?t=` 口令校验）
+- `src/` —— 渲染层（Vue 3 + naive-ui）
+- `docs/` —— 设计与决策记录、只读探针。**每条结论都标了证据等级**（静态 / 推理 / 实测）；`docs/` 里的结论**可能已被后来的实测推翻**，引用前先看 `docs/VERDICT-*.md`。
+- 缓存库真身位于 `%USERPROFILE%\.file-finder\`（AES-256-CBC 加密）
 
-## Directory
+## 注意
 
-```diff
-+ ├─┬ electron
-+ │ ├─┬ main
-+ │ │ └── index.ts    entry of Electron-Main
-+ │ └─┬ preload
-+ │   └── index.ts    entry of Preload-Scripts
-  ├─┬ src
-  │ └── main.ts       entry of Electron-Renderer
-  ├── index.html
-  ├── package.json
-  └── vite.config.ts
-```
-
-## Be aware
-
-🚨 By default, this template integrates Node.js in the Renderer process. If you don't need it, you just remove the option below. [Because it will modify the default config of Vite](https://github.com/electron-vite/vite-plugin-electron/tree/main/packages/electron-renderer#config-presets-opinionated).
-
-```diff
-# vite.config.ts
-
-electron({
-- renderer: {}
-})
-```
-
-## FAQ
-
-- [dependencies vs devDependencies](https://github.com/electron-vite/vite-plugin-electron/tree/main/packages/electron-renderer#dependencies-vs-devdependencies)
-- [Using C/C++ native addons in Electron-Renderer](https://github.com/electron-vite/vite-plugin-electron/tree/main/packages/electron-renderer#load-nodejs-cc-native-modules)
-- [Node.js ESM packages](https://github.com/electron-vite/vite-plugin-electron/tree/main/packages/electron-renderer#nodejs-esm-packages) (e.g. `execa` `node-fetch`)
- -->
+- 缓存密钥 `CACHE_KEY` **写死且不可更改** —— 改了等于所有已有缓存库全部作废（密文对不上 → 整库被判损坏）。
+- 仓库内示例一律使用**占位名**（`TST-xxx`、`示例演员A…H`、`示例作品标题`、`D:/sample/videos/…`），不含真实作品编号 / 目录名 / 盘序列号 / 用户名。
 
 ## ToDo
 

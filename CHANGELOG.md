@@ -1,25 +1,10 @@
-## 2022-06-04
+# 变更记录
 
-[v2.0.0](https://github.com/electron-vite/electron-vite-vue/pull/156)
+本项目的逐期变更**不在本文件**，而在 `docs/`：
 
-- 🖖 Based on the `vue-ts` template created by `npm create vite`, integrate `vite-plugin-electron`
-- ⚡️ More simplify, is in line with Vite project structure
+- `docs/CHANGES-YYYY-MM-DD.md` —— 每期改了什么、为什么（含证据等级）
+- `docs/VERDICT-YYYY-MM-DD.md` —— 阶段性完成度评估（**权威**，会推翻自己早先的结论）
+- `docs/ANALYSIS-*.md` · `docs/probes/` —— 专项分析与只读探针
 
-## 2022-01-30
-
-[v1.0.0](https://github.com/electron-vite/electron-vite-vue/releases/tag/v1.0.0)
-
-- ⚡️ Main、Renderer、preload, all built with vite
-
-## 2022-01-27
-- Refactor the scripts part.
-- Remove `configs` directory.
-
-## 2021-11-11
-- Refactor the project. Use vite.config.ts build `Main-process`, `Preload-script` and `Renderer-process` alternative rollup.
-- Scenic `Vue>=3.2.13`, `@vue/compiler-sfc` is no longer necessary.
-- If you prefer Rollup, Use rollup branch.
-
-```bash
-Error: @vitejs/plugin-vue requires vue (>=3.2.13) or @vue/compiler-sfc to be present in the dependency tree.
-```
+> ⚠️ 本文件此前的内容（v1.0.0 / v2.0.0 等）是上游 `electron-vite-vue` 脚手架的变更记录，
+> **与本应用无关**，已移除。上游历史见 git 历史。

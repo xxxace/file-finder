@@ -1,0 +1,45 @@
+======================================================================
+文件: release/1.0.0/win-unpacked/file-finder.exe  (246052352 B)
+PE32+ · 节: .text,.rdata,.data,.pdata,.eh_fram,.fptable,.rodata,.tls,CPADinfo,LZMADEC,_RDATA,malloc_h,prot,.rsrc,.reloc
+RT_ICON 条目数: 7
+   id=1     837B  PNG 16x16
+   id=2    1483B  PNG 24x24
+   id=3    2054B  PNG 32x32
+   id=4    3620B  PNG 48x48
+   id=5    5018B  PNG 64x64
+   id=6   12126B  PNG 128x128
+   id=7   31205B  PNG 256x256
+RT_GROUP_ICON 条目数: 1
+   group id=1 声明 7 档: 16x16, 24x24, 32x32, 48x48, 64x64, 128x128, 256x256
+======================================================================
+文件: release/1.0.0/file-finder_1.0.0.exe  (154302108 B)
+PE32 · 节: .text,.rdata,.data,.ndata,.rsrc
+RT_ICON 条目数: 7
+   id=1   31205B  PNG 256x256
+   id=2   12126B  PNG 128x128
+   id=3    5018B  PNG 64x64
+   id=4    3620B  PNG 48x48
+   id=5    2054B  PNG 32x32
+   id=6    1483B  PNG 24x24
+   id=7     837B  PNG 16x16
+RT_GROUP_ICON 条目数: 1
+   group id=103 声明 7 档: 16x16, 24x24, 32x32, 48x48, 64x64, 128x128, 256x256
+======================================================================
+文件: build/icon.ico  (56461 B)
+D:\code\file-finder\docs\probes\handover-audit\pe-icon-audit.cjs:9
+    if (buf.readUInt16LE(0) !== 0x5a4d) throw new Error('不是 MZ');
+                                        ^
+
+Error: 不是 MZ
+    at parsePE (D:\code\file-finder\docs\probes\handover-audit\pe-icon-audit.cjs:9:47)
+    at Object.<anonymous> (D:\code\file-finder\docs\probes\handover-audit\pe-icon-audit.cjs:98:16)
+    at Module._compile (node:internal/modules/cjs/loader:1705:14)
+    at Object..js (node:internal/modules/cjs/loader:1838:10)
+    at Module.load (node:internal/modules/cjs/loader:1441:32)
+    at Function._load (node:internal/modules/cjs/loader:1263:12)
+    at TracingChannel.traceSync (node:diagnostics_channel:328:14)
+    at wrapModuleLoad (node:internal/modules/cjs/loader:237:24)
+    at Function.executeUserEntryPoint [as runMain] (node:internal/modules/run_main:171:5)
+    at node:internal/main/run_main_module:36:49
+
+Node.js v22.22.2
