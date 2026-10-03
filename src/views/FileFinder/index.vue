@@ -159,7 +159,7 @@
                      判断"这张糊不糊"靠格子里的图本身（6 列下也有 200~320px），不靠点开大图。 -->
                 <n-image v-if="item.type === 'image' || item.type === 'video'" :src="thumbUrl(item.thumb)"
                     :preview-src="previewUrl(item)" :previewed-img-props="previewedImgProps" :alt="item.dir"
-                    :lazy="true" objectFit="contain" :preview-disabled="picking" />
+                    :render-toolbar="previewToolbar" :lazy="true" objectFit="contain" :preview-disabled="picking" />
                 <!-- 目录的脸：只在 70% 显示、且本来就不给点开。挑封面时要看得清，所以模式下放到 100% -->
                 <n-image v-else-if="!!item.avatar" :src="thumbUrl(item.avatar)" :alt="item.dir || ''" :lazy="true"
                     objectFit="contain" :style="picking ? 'width:100%;height:100%' : 'width:70%;height:70%'"
@@ -363,8 +363,55 @@ const previewUrl = (item: FileInfo) => {
  *   关闭照旧有三条路：工具条的 ✕（常显）、最外圈空白、Esc（`ImagePreview.mjs:97`）。
  */
 const previewedImgProps = {
-    style: { width: '100%', height: '100%', objectFit: 'contain' as const }
+    style: { width: '100%', height: '100%', objectFit: 'contain' as const },
+
+    /**
+     * 双击**预览图** = 「关掉预览 + 把这一下双击还给下面那张卡片」。
+     *
+     * 为什么必须有：卡片是**双击**打开（打开那部视频 / 弹出多部组成的文件列表），
+     * 而上面那行 `width/height: 100%` 把预览图撑成**铺满视口**且 `pointer-events: all`
+     * （naive-ui 的 `.n-image-preview` 是 `pointer-events: all`，外包一层是 `none`）⇒
+     * 预览一开，**双击的第二下就落在预览图上**，卡片的 `dblclick` 再也收不到。
+     * 实测（`docs/probes/popover-pick/`，真 Chromium）：双击卡片后 `dblclick` 的 target = `.n-image-preview`。
+     * 后果正是用户反馈的那条：多部组成的封面**弹不出文件列表**；本该落在列表上的点击漏到下层卡片上，
+     * 而卡片那条路打开的是 `files.find(VIDEO_EXT_RE)` ⇒ **永远第一部片子**。
+     *
+     * 这里用的是 naive-ui 给预览图留的正规入口 —— `ImagePreview` 的 `handlePreviewDblclick`
+     * 会先把事件转给 `previewedImgProps.onDblclick`（naive-ui `ImagePreview.mjs`），不新增机制。
+     * 两件事都走**已有的路**：
+     *   ① 关预览 —— 点它自己的遮罩（遮罩的 `onClick` 就是 `close()`）。遮罩在图的**下面**，
+     *      鼠标够不到它，这也是为什么现在只剩 ✕ / Esc 能关；
+     *   ② 还事件 —— 按坐标找出那张卡片，`dispatchEvent` 一下双击，走卡片自己的 `handleOpen`。
+     * 代价：预览图本身的双击放大没了（工具条里那颗「原始大小」照旧在，功能没少）。
+     */
+    onDblclick: (e: MouseEvent) => {
+        document.querySelector<HTMLElement>('.n-image-preview-overlay')?.click();
+        const card = document
+            .elementsFromPoint(e.clientX, e.clientY)
+            .find(el => el instanceof HTMLElement && el.classList.contains('image-box-item'));
+        card?.dispatchEvent(new MouseEvent('dblclick', {
+            bubbles: true, cancelable: true, clientX: e.clientX, clientY: e.clientY,
+        }));
+    },
 };
+
+/**
+ * 预览工具条：**把「下载」那颗去掉**，其余原样。
+ *
+ * naive-ui 的工具条是写死的（旋转×2 / 原始大小 / 缩放×2 / 下载 / 关闭），**没有单独的开关**；
+ * 官方留的口子就是 `render-toolbar`（`n-image` 会把它透传给预览层，见 naive-ui `Image.mjs` 的
+ * `renderToolbar: this.renderToolbar`）。所以这里是"用官方入口少渲染一颗"，不是 CSS 藏节点。
+ *
+ * 为什么必须去掉：
+ *   ① 误触 —— 它就紧挨着「关闭」（✕ 的左邻），而预览图现在铺满视口、点图外关不掉
+ *      （遮罩在图的下面），用户只能去点工具条 ⇒ 老是点到它（本次用户反馈）；
+ *   ② 它真的读移动硬盘 —— 下载的就是 `/raw` 那条原图（封面一张几 MB），
+ *      和「少碰移动硬盘」这条第一目标直接冲突。
+ * 顺带：工具条从此只做"看"，不做"取"。
+ */
+const previewToolbar = ({ nodes }: { nodes: Record<string, any> }) =>
+    [nodes.rotateCounterclockwise, nodes.rotateClockwise, nodes.resizeToOriginalSize,
+     nodes.zoomOut, nodes.zoomIn, nodes.close];
 
 const dir = ref('');
 const historyTable = ref<typeof HistoryTable | null>(null)

@@ -1,0 +1,240 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+
+<head>
+    <meta charset="utf-8">
+    <title>双击封面：预览层 vs 文件列表 popover —— 谁吃掉了点击</title>
+
+    <link rel="stylesheet" href="css-real.generated.css">
+
+    <style>
+        html,
+        body {
+            margin: 0;
+            background: #eef0f4;
+            font-family: system-ui, "Microsoft YaHei", sans-serif;
+        }
+
+        /* 探针页自己的网格骨架（真实 .image-box / .image-box-item 的样式来自 scoped CSS） */
+        .probe-root {
+            width: 1200px;
+        }
+    </style>
+</head>
+
+<body>
+    <div id="stage"></div>
+
+    <script src="../../../node_modules/vue/dist/vue.global.js"></script>
+    <script src="../../../node_modules/naive-ui/dist/index.js"></script>
+    <script src="markup.js"></script>
+    <script>
+        const { createApp, h, reactive, ref, nextTick } = Vue;
+        const N = naive;
+        const sleep = ms => new Promise(r => setTimeout(r, ms));
+
+        /** `#fixed` = 装上本次的两处修改（预览延到双击窗口之后 + 工具条去掉下载）。
+         *  不带 hash = **改前**（复现"预览吃掉双击"）。 */
+        const FIXED = location.search.includes('fixed');
+
+        /* 一张真图（缩略图/原图都用它，避免走网络）。够大，走 object-fit: contain 会有留白。 */
+        function makeImg(w, h, text) {
+            const c = document.createElement('canvas');
+            c.width = w; c.height = h;
+            const g = c.getContext('2d');
+            g.fillStyle = '#26415e'; g.fillRect(0, 0, w, h);
+            g.fillStyle = '#fff'; g.font = `bold ${Math.round(w / 14)}px sans-serif`;
+            g.fillText(text, w / 6, h / 2);
+            return c.toDataURL('image/jpeg', 0.8);
+        }
+        const IMG = makeImg(480, 270, 'COVER');
+
+        /* ── 与 index.vue 里那几个标识符逐字对应 ── */
+        const popover = reactive({ visible: false, x: 0, y: 0, files: [], cover: undefined });
+        const loading = ref(false);
+        const picking = ref(false);
+        const calls = [];
+
+        /** ⚠️ 逐字复刻的 `previewedImgProps`（index.vue:365-367）——
+         *  就是它把预览那张 <img> 撑成"铺满视口、pointer-events:all"的一层，
+         *  本次要验的正是它对命中测试的影响。 */
+        /** 改后：多一个 onDblclick（关预览 + 把双击还给卡片）；改前：只有 style */
+        const previewedImgProps = FIXED ? {
+            style: { width: '100%', height: '100%', objectFit: 'contain' },
+            onDblclick: (e) => {
+                document.querySelector('.n-image-preview-overlay')?.click();
+                const card = document.elementsFromPoint(e.clientX, e.clientY)
+                    .find(el => el instanceof HTMLElement && el.classList.contains('image-box-item'));
+                card?.dispatchEvent(new MouseEvent('dblclick', { bubbles: true, cancelable: true, clientX: e.clientX, clientY: e.clientY }));
+            },
+        } : {
+            style: { width: '100%', height: '100%', objectFit: 'contain' },
+        };
+
+        const DATA = [
+            {
+                dir: 'D:/sample/videos', name: 'TST-046', ext: 'jpg', type: 'image', size: 999,
+                thumb: 'k1',
+                files: [
+                    { name: 'TST-046-1.mp4', size: 1 },
+                    { name: 'TST-046-2.mp4', size: 2 },
+                    { name: 'TST-046-3.mp4', size: 3 },
+                ],
+            },
+            { dir: 'D:/sample/videos', name: 'TST-047', ext: 'jpg', type: 'image', size: 999, thumb: 'k2', files: [{ name: 'TST-047-1.mp4', size: 1 }] },
+            { dir: 'D:/sample/videos', name: 'TST-048', ext: 'jpg', type: 'image', size: 999, thumb: 'k3', files: [{ name: 'TST-048-1.mp4', size: 1 }] },
+        ];
+
+        const ctx = {
+            popover,
+            loading,
+            picking,
+            fileList: DATA,
+            imageBox: ref(null),
+            emptyTip: '',
+            getSize: () => '1.0 MB',
+            thumbUrl: () => IMG,
+            previewUrl: () => IMG,
+            previewedImgProps,
+            folderIcon: IMG,
+            isPickable: () => false,
+            isPicked: () => false,
+            onItemClick: () => { },
+            previewToolbar: ({ nodes }) => [nodes.rotateCounterclockwise, nodes.rotateClockwise, nodes.resizeToOriginalSize, nodes.zoomOut, nodes.zoomIn, nodes.close],
+            /** ⚠️ 逐字复刻 handleOpen（index.vue:562-581） */
+            handleOpen: (e, item) => {
+                if (loading.value) return;
+                if (item.type === 'folder') return;
+                if (e && item.files && item.files.length > 1) {
+                    const { x, y } = e;
+                    popover.visible = true;
+                    popover.x = x;
+                    popover.y = y;
+                    popover.files = item.files;
+                    popover.cover = item;
+                } else {
+                    ctx.openFile(item);
+                }
+            },
+            /** ⚠️ 逐字复刻 openFile 的两条分支结论（index.vue:666-694）：字符串 → cover.dir 拼；对象 → 找视频 */
+            openFile: (arg) => {
+                let target;
+                if (typeof arg === 'string') {
+                    popover.visible = false;
+                    target = `${popover.cover?.dir}/${arg}`;
+                } else {
+                    if (arg.type === 'folder') return;
+                    const video = arg.files?.find(f => /\.(mp4|mkv|avi|wmv|flv|mpeg|m4v|mov|mpg|ts|m2ts|mts|webm|ogv|3gp)$/i.test(f.name));
+                    const filename = video?.name || arg.files?.[0]?.name || `${arg.name}.${arg.ext}`;
+                    target = `${arg.dir}/${filename}`;
+                }
+                calls.push({ argType: typeof arg, arg: typeof arg === 'string' ? arg : arg.name, target });
+            },
+        };
+
+        /* 演示里把 popover 也画出来 —— 两个 markup 都是**活源码切出来的** */
+        const GRID = FIXED ? window.__GRID_MARKUP : window.__GRID_MARKUP_OLD;
+        const tmpl = ('<div class="probe-root">' + GRID + window.__POPOVER_MARKUP + '</div>')
+            .replace(/<([a-zA-Z][\w-]*)/g, '<$1 data-v-probe');
+        const Root = { name: 'Root', template: tmpl, setup: () => ctx };
+
+        const app = createApp({ render: () => h(N.NConfigProvider, null, { default: () => h(Root) }) });
+        for (const [k, v] of Object.entries(N)) {
+            if (/^N[A-Z]/.test(k)) {
+                app.component(k.replace(/^N/, 'n-').replace(/([a-z0-9])([A-Z])/g, '$1-$2').toLowerCase(), v);
+            }
+        }
+        app.mount('#stage');
+
+        /* ─────────────── 探针 ─────────────── */
+        const cls = el => (el && typeof el.className === 'string' ? el.className : String(el && el.tagName));
+        const realClick = async (x, y, type) => {
+            const t = document.elementFromPoint(x, y);
+            t.dispatchEvent(new MouseEvent(type, { bubbles: true, cancelable: true, clientX: x, clientY: y }));
+            await nextTick();
+            return t;
+        };
+        const zOf = el => {
+            let n = el;
+            while (n && n.nodeType === 1) {
+                const z = getComputedStyle(n).zIndex;
+                if (z && z !== 'auto') return `${z} @ ${cls(n)}`;
+                n = n.parentElement;
+            }
+            return 'auto';
+        };
+
+        window.__probe = async () => {
+            await sleep(500);
+            const out = { variant: FIXED ? '改后' : '改前', href: location.href.slice(-24) };
+            const cardAt = (i) => document.querySelectorAll('.image-box-item')[i];
+            const center = (el) => {
+                const r = el.getBoundingClientRect();
+                return { x: Math.round(r.left + r.width / 2), y: Math.round(r.top + r.height / 2) };
+            };
+            const cls = (el) => (el && typeof el.className === 'string' ? el.className : String(el && el.tagName));
+            const realClick = async (x, y, type) => {
+                const t = document.elementFromPoint(x, y);
+                t.dispatchEvent(new MouseEvent(type, { bubbles: true, cancelable: true, clientX: x, clientY: y }));
+                await nextTick();
+                return t;
+            };
+            const dbl = async (x, y) => {
+                const seen = [];
+                for (let k = 0; k < 2; k++) {
+                    for (const ty of ['mousedown', 'mouseup', 'click']) seen.push(`${ty}@${cls(await realClick(x, y, ty))}`);
+                }
+                seen.push(`dblclick@${cls(await realClick(x, y, 'dblclick'))}`);
+                return seen;
+            };
+            const toolbarIcons = () => document.querySelectorAll('.n-image-preview-toolbar svg').length;
+
+            /* ① 单击一张卡片 → 预览该不该开（改前：立刻开；改后：200ms 后才开） */
+            const c0 = center(cardAt(0));
+            await realClick(c0.x, c0.y, 'mousedown');
+            await realClick(c0.x, c0.y, 'mouseup');
+            await realClick(c0.x, c0.y, 'click');
+            await sleep(60);
+            out.单击_60ms后_预览已开 = !!document.querySelector('.n-image-preview');
+            await sleep(400);
+            const pImg = document.querySelector('.n-image-preview');
+            out.单击_过窗口后_预览已开 = !!pImg;
+            out.单击_工具条图标数 = toolbarIcons();
+            if (pImg) {
+                out.预览图盒子 = [pImg.getBoundingClientRect().width, pImg.getBoundingClientRect().height].map(v => Math.round(v));
+            }
+            /* 关掉预览，回到干净状态 */
+            document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
+            await sleep(400);
+
+            /* ② 双击一张「多部组成」的卡片 → 文件列表该不该弹 */
+            const c1 = center(cardAt(0));
+            out.双击过程 = await dbl(c1.x, c1.y);
+            await sleep(60);
+            out.双击后_popover已开 = popover.visible;
+            out.双击后_预览被弹起来了吗 = !!document.querySelector('.n-image-preview');
+            await sleep(400);
+            out.双击_过窗口后_预览被弹起来了吗 = !!document.querySelector('.n-image-preview');
+            out.双击后_popover条目 = popover.files.map(f => f.name);
+
+            /* ③ 弹列表之后，点第 2 项（真实落点）→ openFile 收到谁 */
+            if (popover.visible) {
+                const items = Array.from(document.querySelectorAll('.file-item'));
+                out.列表命中 = items.map((el, i) => {
+                    const r = el.getBoundingClientRect();
+                    const top = document.elementFromPoint(r.left + r.width / 2, r.top + r.height / 2);
+                    return { i, text: el.textContent.trim(), 落点属于第几项: items.findIndex(x => x === top || x.contains(top)) };
+                });
+                const it2 = items[1];
+                const q = center(it2);
+                const before = calls.length;
+                out.点第2项过程 = await dbl(q.x, q.y);
+                await sleep(80);
+                out.点第2项_openFile收到 = calls.slice(before);
+            }
+            return out;
+        };
+    </script>
+</body>
+
+</html>

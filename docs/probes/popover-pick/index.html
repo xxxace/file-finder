@@ -1,0 +1,166 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+
+<head>
+    <meta charset="utf-8">
+    <title>多部组成 popover —— 点第 N 项到底打开了谁（真 Chromium + 真 scoped CSS）</title>
+
+    <!-- 真实编译产物（index.vue 的 <style scoped>，less + scoped 转换），由 build-css.mjs 生成 -->
+    <link rel="stylesheet" href="css-real.generated.css">
+
+    <style>
+        html,
+        body {
+            margin: 0;
+            background: #eef0f4;
+            font-family: system-ui, "Microsoft YaHei", sans-serif;
+        }
+    </style>
+</head>
+
+<body>
+    <div id="stage"></div>
+
+    <script src="../../../node_modules/vue/dist/vue.global.js"></script>
+    <script src="../../../node_modules/naive-ui/dist/index.js"></script>
+    <script src="markup.js"></script>
+    <script>
+        const { createApp, h, reactive, nextTick } = Vue;
+        const N = naive;
+
+        /* ── ctx：与 index.vue 里 popover 那段用到的标识符逐字对应 ── */
+        const popover = reactive({
+            visible: true, x: 60, y: 60,
+            // 用真实缓存里出现过的形态：番号 + 连写序号（见 docs/probes/popover-pick/out.txt 的数据来源说明）
+            files: [
+                { name: 'TST-046-1.mp4', size: 111111 },
+                { name: 'TST-046-2.mp4', size: 222222 },
+                { name: 'TST-046-3.mp4', size: 333333 },
+            ],
+            cover: { dir: 'D:/sample/videos/TST-046', name: 'TST-046', ext: 'jpg', type: 'image' },
+        });
+
+        const calls = [];
+        const ctx = {
+            popover,
+            getSize: () => '1.0 MB',
+            /** 复刻 openFile 的 string 分支：字符串入参 → 用 cover.dir 拼绝对路径 */
+            openFile: (arg) => {
+                calls.push({ arg, target: `${popover.cover.dir}/${arg}` });
+                popover.visible = false;
+            },
+        };
+
+        /* markup 里每个元素都要打上 scoped 标记，否则真实 scoped CSS 一条都不生效 */
+        const tmpl = ('<div class="probe-root">' + window.__POPOVER_MARKUP + '</div>')
+            .replace(/<([a-zA-Z][\w-]*)/g, '<$1 data-v-probe');
+
+        const Root = { name: 'Root', template: tmpl, setup: () => ctx };
+
+        const app = createApp({
+            render: () => h(N.NConfigProvider, null, { default: () => h(Root) })
+        });
+        for (const [k, v] of Object.entries(N)) {
+            if (/^N[A-Z]/.test(k)) {
+                app.component(k.replace(/^N/, 'n-').replace(/([a-z0-9])([A-Z])/g, '$1-$2').toLowerCase(), v);
+            }
+        }
+        app.mount('#stage');
+
+        const sleep = ms => new Promise(r => setTimeout(r, ms));
+        const rectOf = el => {
+            const r = el.getBoundingClientRect();
+            return { x: +r.left.toFixed(1), y: +r.top.toFixed(1), w: +r.width.toFixed(1), h: +r.height.toFixed(1) };
+        };
+        const ownerIndexOf = (el, items) => items.findIndex(x => x === el || x.contains(el));
+        const topClassName = el => el ? (typeof el.className === 'string' ? el.className : '') : null;
+
+        window.__probe = async () => {
+            await sleep(400);
+            const out = {};
+
+            const items = () => Array.from(document.querySelectorAll('.file-item'));
+            let list = items();
+            out.itemCount = list.length;
+            out.items = list.map(el => ({ text: (el.textContent || '').trim(), rect: rectOf(el) }));
+
+            /* ① 命中测试：每个格子中心点上，最顶层是谁 */
+            out.hit = list.map((el, i) => {
+                const r = el.getBoundingClientRect();
+                const cx = r.left + r.width / 2, cy = r.top + r.height / 2;
+                const top = document.elementFromPoint(cx, cy);
+                return {
+                    itemIndex: i,
+                    point: [+cx.toFixed(1), +cy.toFixed(1)],
+                    topClass: topClassName(top),
+                    topNumber: top ? top.tagName : null,
+                    /** 这一点上"属于第几个 .file-item"——不是 i 就是错位 */
+                    belongsToItem: ownerIndexOf(top, list),
+                };
+            });
+
+            /* ② 用**真实落点**双击每一项，记录 openFile 收到什么 */
+            out.dblclick = [];
+            for (let i = 0; i < list.length; i++) {
+                popover.visible = true;
+                await nextTick(); await sleep(80);
+                const el = items()[i];
+                const r = el.getBoundingClientRect();
+                const cx = r.left + r.width / 2, cy = r.top + r.height / 2;
+                const top = document.elementFromPoint(cx, cy) || el;
+                const before = calls.length;
+                top.dispatchEvent(new MouseEvent('dblclick', { bubbles: true, cancelable: true, clientX: cx, clientY: cy }));
+                await nextTick(); await sleep(40);
+                out.dblclick.push({
+                    clickedItem: i,
+                    clickPoint: [+cx.toFixed(1), +cy.toFixed(1)],
+                    hitBelongsTo: ownerIndexOf(top, list),
+                    openFileGot: calls.slice(before),
+                    visibleAfter: popover.visible,
+                });
+            }
+
+            /* ③ 点弹层内部会不会被当成 outside（manual trigger 的经典坑） */
+            popover.visible = true;
+            await nextTick(); await sleep(80);
+            list = items();
+            const el1 = list[1];
+            const r1 = el1.getBoundingClientRect();
+            const pt = { clientX: r1.left + 4, clientY: r1.top + 4 };
+            el1.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, cancelable: true, ...pt }));
+            await nextTick();
+            out.visibleAfterMousedownInside = popover.visible;
+            el1.dispatchEvent(new MouseEvent('mouseup', { bubbles: true, cancelable: true, ...pt }));
+            el1.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true, ...pt }));
+            await nextTick(); await sleep(40);
+            out.visibleAfterClickInside = popover.visible;
+
+            /* ④ 真实双击（mousedown/mouseup/click ×2 + dblclick）落在第 2 项上会怎样 */
+            popover.visible = true;
+            await nextTick(); await sleep(80);
+            list = items();
+            const el2 = list[1];
+            const r2 = el2.getBoundingClientRect();
+            const p2 = { clientX: r2.left + r2.width / 2, clientY: r2.top + r2.height / 2 };
+            const before2 = calls.length;
+            const evs = [];
+            for (let k = 0; k < 2; k++) {
+                for (const type of ['mousedown', 'mouseup', 'click']) {
+                    const target = document.elementFromPoint(p2.clientX, p2.clientY) || el2;
+                    evs.push({ type, target: topClassName(target) });
+                    target.dispatchEvent(new MouseEvent(type, { bubbles: true, cancelable: true, ...p2 }));
+                    await nextTick();
+                }
+            }
+            const targetNow = document.elementFromPoint(p2.clientX, p2.clientY) || el2;
+            evs.push({ type: 'dblclick', target: topClassName(targetNow) });
+            targetNow.dispatchEvent(new MouseEvent('dblclick', { bubbles: true, cancelable: true, ...p2 }));
+            await nextTick(); await sleep(40);
+            out.realDblclickOnItem2 = { events: evs, openFileGot: calls.slice(before2), visibleAfter: popover.visible };
+
+            return out;
+        };
+    </script>
+</body>
+
+</html>

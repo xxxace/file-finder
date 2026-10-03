@@ -1,0 +1,256 @@
+
+  Policy set or a policy with "unsafe-eval" enabled. This exposes users of
+  this app to unnecessary security risks.
+
+This warning will not show up
+
+########## index.html ##########
+{
+  "itemCount": 3,
+  "items": [
+    {
+      "text": "TST-046-1.mp4",
+      "rect": {
+        "x": 79,
+        "y": 88,
+        "w": 84,
+        "h": 84
+      }
+    },
+    {
+      "text": "TST-046-2.mp4",
+      "rect": {
+        "x": 185,
+        "y": 88,
+        "w": 84,
+        "h": 84
+      }
+    },
+    {
+      "text": "TST-046-3.mp4",
+      "rect": {
+        "x": 291,
+        "y": 88,
+        "w": 84,
+        "h": 84
+      }
+    }
+  ],
+  "hit": [
+    {
+      "itemIndex": 0,
+      "point": [
+        121,
+        130
+      ],
+      "topClass": "",
+      "topNumber": "SPAN",
+      "belongsToItem": 0
+    },
+    {
+      "itemIndex": 1,
+      "point": [
+        227,
+        130
+      ],
+      "topClass": "",
+      "topNumber": "SPAN",
+      "belongsToItem": 1
+    },
+    {
+      "itemIndex": 2,
+      "point": [
+        333,
+        130
+      ],
+      "topClass": "",
+      "topNumber": "SPAN",
+      "belongsToItem": 2
+    }
+  ],
+  "dblclick": [
+    {
+      "clickedItem": 0,
+      "clickPoint": [
+        121,
+        130
+      ],
+      "hitBelongsTo": 0,
+      "openFileGot": [
+        {
+          "arg": "TST-046-1.mp4",
+          "target": "D:/sample/videos/TST-046/TST-046-1.mp4"
+        }
+      ],
+      "visibleAfter": false
+    },
+    {
+      "clickedItem": 1,
+      "clickPoint": [
+        227,
+        130
+      ],
+      "hitBelongsTo": 1,
+      "openFileGot": [
+        {
+          "arg": "TST-046-2.mp4",
+          "target": "D:/sample/videos/TST-046/TST-046-2.mp4"
+        }
+      ],
+      "visibleAfter": false
+    },
+    {
+      "clickedItem": 2,
+      "clickPoint": [
+        332.8,
+        130
+      ],
+      "hitBelongsTo": 2,
+      "openFileGot": [
+        {
+          "arg": "TST-046-3.mp4",
+          "target": "D:/sample/videos/TST-046/TST-046-3.mp4"
+        }
+      ],
+      "visibleAfter": false
+    }
+  ],
+  "visibleAfterMousedownInside": true,
+  "visibleAfterClickInside": true,
+  "realDblclickOnItem2": {
+    "events": [
+      {
+        "type": "mousedown",
+        "target": ""
+      },
+      {
+        "type": "mouseup",
+        "target": ""
+      },
+      {
+        "type": "click",
+        "target": ""
+      },
+      {
+        "type": "mousedown",
+        "target": ""
+      },
+      {
+        "type": "mouseup",
+        "target": ""
+      },
+      {
+        "type": "click",
+        "target": ""
+      },
+      {
+        "type": "dblclick",
+        "target": ""
+      }
+    ],
+    "openFileGot": [
+      {
+        "arg": "TST-046-2.mp4",
+        "target": "D:/sample/videos/TST-046/TST-046-2.mp4"
+      }
+    ],
+    "visibleAfter": false
+  }
+}
+  Policy set or a policy with "unsafe-eval" enabled. This exposes users of
+  this app to unnecessary security risks.
+
+This warning will not show up
+
+########## grid-preview.html ##########
+{
+  "variant": "改前",
+  "href": "r-pick/grid-preview.html",
+  "单击_60ms后_预览已开": true,
+  "单击_过窗口后_预览已开": true,
+  "单击_工具条图标数": 7,
+  "预览图盒子": [
+    1370,
+    871
+  ],
+  "双击过程": [
+    "mousedown@",
+    "mouseup@",
+    "click@",
+    "mousedown@n-image-preview",
+    "mouseup@n-image-preview",
+    "click@n-image-preview",
+    "dblclick@n-image-preview"
+  ],
+  "双击后_popover已开": false,
+  "双击后_预览被弹起来了吗": true,
+  "双击_过窗口后_预览被弹起来了吗": true,
+  "双击后_popover条目": []
+}
+  Policy set or a policy with "unsafe-eval" enabled. This exposes users of
+  this app to unnecessary security risks.
+
+This warning will not show up
+
+########## grid-preview.html#fixed ##########
+{
+  "variant": "改后",
+  "href": "rid-preview.html?v=fixed",
+  "单击_60ms后_预览已开": true,
+  "单击_过窗口后_预览已开": true,
+  "单击_工具条图标数": 6,
+  "预览图盒子": [
+    1370,
+    871
+  ],
+  "双击过程": [
+    "mousedown@",
+    "mouseup@",
+    "click@",
+    "mousedown@n-image-preview",
+    "mouseup@n-image-preview",
+    "click@n-image-preview",
+    "dblclick@n-image-preview"
+  ],
+  "双击后_popover已开": true,
+  "双击后_预览被弹起来了吗": true,
+  "双击_过窗口后_预览被弹起来了吗": false,
+  "双击后_popover条目": [
+    "TST-046-1.mp4",
+    "TST-046-2.mp4",
+    "TST-046-3.mp4"
+  ],
+  "列表命中": [
+    {
+      "i": 0,
+      "text": "TST-046-1.mp4",
+      "落点属于第几项": 0
+    },
+    {
+      "i": 1,
+      "text": "TST-046-2.mp4",
+      "落点属于第几项": 1
+    },
+    {
+      "i": 2,
+      "text": "TST-046-3.mp4",
+      "落点属于第几项": 2
+    }
+  ],
+  "点第2项过程": [
+    "mousedown@",
+    "mouseup@",
+    "click@",
+    "mousedown@",
+    "mouseup@",
+    "click@",
+    "dblclick@"
+  ],
+  "点第2项_openFile收到": [
+    {
+      "argType": "string",
+      "arg": "TST-046-2.mp4",
+      "target": "D:/sample/videos/TST-046-2.mp4"
+    }
+  ]
+}
