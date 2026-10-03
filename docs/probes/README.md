@@ -53,6 +53,7 @@
 | `handover-audit/` | 交接件独立复核（投影体积 / PE 图标 / 116 复核） | **0** | REVIEW-handover |
 | `popover-pick/` | 「多部组成」popover 点击归属（`markup.js` 是生成物） | **0** | CHANGES-10-02 |
 | `parse-title/` | 番号解析回归 | 1 | KICKOFF-assistant-ui · PRD-manager-assistant |
+| `reconcile/` | **增量对账**：同一层再扫时缩略图有没有被复用（计数桩，13 PASS） | 6 | IMPLEMENT-reconcile |
 
 > **结论：23 个目录逐个查过，每一个都被至少一份文档引用 —— 目录级没有孤儿，没有可白删的。**
 

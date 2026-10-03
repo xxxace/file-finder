@@ -96,6 +96,35 @@ export interface FileInfo {
     avatar?: string;
     /** 目录封面缩略图的 data URI。只存不发 */
     avatarThumbData?: string;
+    /**
+     * 这张目录的脸**取自哪个文件名**（`avatar.jpg` / `cover.jpg`，见 `DIR_COVER_FILES`）。
+     *
+     * 只存不发（`pickFileInfo` 是白名单、不含它）。
+     *
+     * 存在的理由只有一个：**增量对账要判断这张脸能不能复用**。
+     * 目录条目的 `dir` / `name` 指向的是那个**目录**、不是那张图 —— 光看它俩无法确认
+     * "上次的脸和这次的脸来自同一个源文件"。上次命中 `avatar.jpg`、这次命中 `cover.jpg`，
+     * 复用就会把旧封面贴到新源上。
+     * 旧记录没有这个字段 ⇒ 判为"不确定" ⇒ 重抽一次并写入（**不需要升 `CACHE_VERSION`**）。
+     */
+    avatarSrc?: string;
+    /**
+     * 这张缩略图的**来源文件**的修改时间（`stat.mtimeMs`）。
+     *
+     * 只存不发（`pickFileInfo` 是白名单、不含它）。
+     *
+     * 为什么不能只比 `size`：**同名替换只要内容变了 mtime 一定变，而 size 可能碰巧相同**
+     * （等长替换、空文件都是 0）。实测见 `docs/probes/reconcile/` 的 R6 ——
+     * 只比 size 时，"改了内容"会被判成"没变"，于是**复用旧图、永久定格**
+     * （改动前 F5 会重抽、能更新；改动后如果判据不完整，就再也更新不了）。
+     *
+     * 三条路径的"来源"不同，但语义统一：
+     *   · 普通文件   → 它自己
+     *   · 目录的脸   → `avatar.jpg` / `cover.jpg` 那张图
+     *   · 收敛封面   → 那张封面图
+     * 旧记录没有这个字段 ⇒ 判为"不确定" ⇒ 重抽一次并写入（**不需要升 `CACHE_VERSION`**）。
+     */
+    srcMtime?: number;
 }
 
 type Req<T = any> = http.IncomingMessage & { params?: URLSearchParams; body?: T };
@@ -192,16 +221,31 @@ async function makeThumb(filepath: string, ext: string): Promise<string> {
  * 为什么不先 `readdir` 一下子目录再查名单：那是 1 次**目录读取**（要遍历整张目录表），
  * 比 1 次 stat 贵得多 —— 这条结论没变。
  */
-async function makeDirCover(dirPath: string, serial: string): Promise<{ key: string; data: string } | null> {
+async function makeDirCover(
+    dirPath: string,
+    serial: string,
+    /** 这个目录的**盘内相对路径**。它同时是增量对账里"这张脸取自哪个源"的查找键 */
+    dirRel: string,
+    prev?: Map<string, FileInfo>,
+): Promise<{ key: string; data: string; src: string; mtime: number } | null> {
     for (const name of DIR_COVER_FILES) {
         const filepath = `${dirPath}/${name}`;
+        let mtime: number;
         try {
-            await fsasync.access(filepath);
+            // `stat` 而不是 `access` —— 原先只为探存在性，现在顺带取 mtime。
+            // 两者在系统调用层是同一件事（读同一个 inode / MFT 记录）⇒ **不多读一次盘**。
+            mtime = (await fsasync.stat(filepath)).mtimeMs;
         } catch {
             continue;
         }
+        // ★ 复用闸门：上次这张脸取自这同一个文件、**并且那个文件此后没被改过** ⇒ 不重抽。
+        //   光比名字不够 —— 同名替换会永久定格在旧图（见 `FileInfo.srcMtime`）。
+        const hit = prev?.get(dirRel);
+        if (hit?.avatar && hit.avatarThumbData && hit.avatarSrc === name && hit.srcMtime === mtime) {
+            return { key: hit.avatar, data: hit.avatarThumbData, src: name, mtime };
+        }
         const data = await makeThumb(filepath, 'jpg');
-        if (data) return { key: newThumbKey(serial), data };
+        if (data) return { key: newThumbKey(serial), data, src: name, mtime };
     }
     return null;
 }
@@ -214,7 +258,14 @@ async function makeDirCover(dirPath: string, serial: string): Promise<{ key: str
  * 不缓存的降级路径给完整路径。原来是在函数内部拿 `relOf()` 从 diskDir 反推 ——
  * 那等于让一个字符串操作隐式决定数据的存储形态，调用方想说什么都插不上手。
  */
-async function readFolder(diskDir: string, mode: string, serial: string, storeDir: string): Promise<FileInfo[]> {
+async function readFolder(
+    diskDir: string,
+    mode: string,
+    serial: string,
+    storeDir: string,
+    /** 上一次这一层的条目。给了就**对账**（没变的缩略图不重抽），不给就是全量 */
+    prev?: FileInfo[],
+): Promise<FileInfo[]> {
     let files: string[];
     try {
         files = await fsasync.readdir(diskDir);
@@ -237,6 +288,23 @@ async function readFolder(diskDir: string, mode: string, serial: string, storeDi
 
     const folder: FileInfo[] = [];
 
+    // ★★ 增量对账的基线索引 —— **这个函数里唯一的一处**，三条抽帧路径共用它。
+    //    键 = `joinRel(item.dir, diskNameOf(item))`：三种条目天然落在同一个键空间里，
+    //      · 普通文件   dir=本层    name=文件名       → `本层/文件.jpg`   = 那个文件本身
+    //      · 收敛封面   dir=子目录   name=封面文件名    → `子目录/封面.jpg` = 那个文件本身
+    //      · 目录的脸   dir=本层    name=目录名       → `本层/目录名`     = 那个目录本身
+    //    ⇒ 一个 Map 就回答了"这一项取自哪个源文件"，三种情形都不用特判。
+    //
+    //    为什么**不**做"整条记录复用"：父层的条目会被子目录的收敛形态改写
+    //    （dir 指向子目录、name 变成封面名），按名字对账根本对不上；按"源路径"才对得上。
+    //
+    //    ⚠️ 它只决定"缩略图要不要重抽"，**不决定条目本身** —— 条目一律重新 readdir + stat
+    //    （认出增删靠的正是那个新的 readdir 结果）。
+    const prevAt = new Map<string, FileInfo>();
+    if (prev) {
+        for (const it of prev) prevAt.set(joinRel(it.dir, diskNameOf(it)), it);
+    }
+
     for (const file of files) {
         if (file.startsWith('.') || excludedFiles.includes(file)) continue;
         const filepath = `${diskDir}/${file}`;
@@ -248,7 +316,7 @@ async function readFolder(diskDir: string, mode: string, serial: string, storeDi
 
             if (mode === 'cover' && stat.isDirectory()) {
                 // null = 这个子目录既没封面图也没视频，不该收敛 → 落到下面当普通目录
-                const converged = await handleCover(filepath, serial, joinRel(storeDir, file));
+                const converged = await handleCover(filepath, serial, joinRel(storeDir, file), prevAt);
                 if (converged) {
                     folder.push(...converged);
                     continue;
@@ -277,18 +345,40 @@ async function readFolder(diskDir: string, mode: string, serial: string, storeDi
             };
 
             if (info.type === 'folder') {
-                // 目录自己的脸（avatar.jpg / cover.jpg）→ 这个目录条目带一张缩略图
-                const avatar = await makeDirCover(filepath, serial);
+                // 目录自己的脸（avatar.jpg / cover.jpg）→ 这个目录条目带一张缩略图。
+                // `dirRel` 传的是**这一层里这个目录的盘内路径**，与 `prevAt` 的键同构
+                const avatar = await makeDirCover(filepath, serial, joinRel(storeDir, file), prevAt);
                 if (avatar) {
                     info.avatar = avatar.key;
                     info.avatarThumbData = avatar.data;
+                    info.avatarSrc = avatar.src;
+                    info.srcMtime = avatar.mtime;
                 }
             } else if (info.type === 'image' || info.type === 'video') {
-                const thumb = await makeThumb(filepath, ext);
-                if (thumb) {
-                    info.thumb = newThumbKey(serial);
-                    info.thumbData = thumb;
+                // ★ 复用闸门（第 2 条抽帧路径）：同名**且同大小**才算"这个文件没变"
+                //   ⇒ 上次那张图仍然有效，不重抽。
+                //   `makeThumb` 是这一层唯一贵的操作（视频要起 ffmpeg 子进程抽帧、
+                //   图片要解码整图）—— "增量收录"省下来的就是它。
+                const hit = prevAt.get(joinRel(storeDir, file));
+                // ★ 判据是"**来源文件没变**"：大小 **和** mtime 都要对得上。
+                //   只比 size 会漏掉"等长替换"（探针 R6 用空文件把这条路径暴露得最清楚：
+                //   改了内容、size 还是 0 ⇒ 光比 size 判成"没变" ⇒ 旧图永久定格）。
+                const reused =
+                    hit?.thumb && hit.thumbData && hit.size === stat.size && hit.srcMtime === stat.mtimeMs
+                        ? hit
+                        : null;
+                if (reused) {
+                    info.thumb = reused.thumb;
+                    info.thumbData = reused.thumbData;
+                } else {
+                    const thumb = await makeThumb(filepath, ext);
+                    if (thumb) {
+                        info.thumb = newThumbKey(serial);
+                        info.thumbData = thumb;
+                    }
                 }
+                // 两个分支都要记来源 —— 少了它，下一次就判不出"变没变"
+                info.srcMtime = stat.mtimeMs;
             }
 
             folder.push(info);
@@ -314,7 +404,12 @@ async function readFolder(diskDir: string, mode: string, serial: string, storeDi
  *   3. 纯文件目录里有图片 → 收敛：第一个图片当封面，其余文件挂 `item.files`，
  *      双击封面时从 files 里找视频打开。
  */
-async function handleCover(diskDir: string, serial: string, storeDir: string): Promise<FileInfo[] | null> {
+async function handleCover(
+    diskDir: string,
+    serial: string,
+    storeDir: string,
+    prev?: Map<string, FileInfo>,
+): Promise<FileInfo[] | null> {
     let filenames: string[];
     try {
         filenames = await fsasync.readdir(diskDir);
@@ -407,11 +502,24 @@ async function handleCover(diskDir: string, serial: string, storeDir: string): P
 
     // 原代码这里还有一层 if (!isVideo(ext))，但 coverIndex 只会落在上面那条图片正则上，
     // 它一定是图片，那层判断是死分支
-    const thumb = await makeThumb(filepath, ext);
-    if (thumb) {
-        info.thumb = newThumbKey(serial);
-        info.thumbData = thumb;
+    // ★ 复用闸门：`storeDir` 是**这个子目录**的盘内路径、`file` 是封面图名
+    //   ⇒ `storeDir/file` 正好是那张封面图的源路径，与 `prevAt` 的键同构。
+    //   ⚠️ 这里**不能比 size** —— `info.size` 是整组之和（下面那个 `size + stat.size`），
+    //   不等于封面图的大小，拿它比会永远不等、白白重抽。所以只认"源路径 + mtime"。
+    const hit = prev?.get(joinRel(storeDir, file));
+    const reused = hit?.thumb && hit.thumbData && hit.srcMtime === stat.mtimeMs ? hit : null;
+    if (reused) {
+        info.thumb = reused.thumb;
+        info.thumbData = reused.thumbData;
+    } else {
+        const thumb = await makeThumb(filepath, ext);
+        if (thumb) {
+            info.thumb = newThumbKey(serial);
+            info.thumbData = thumb;
+        }
     }
+    // 同样两个分支都要记 —— 否则下次判不出这张封面变没变
+    info.srcMtime = stat.mtimeMs;
 
     return [info];
 }
@@ -664,7 +772,12 @@ function queueCacheWrite<T>(serial: string, relPath: string, mode: OpenMode, tas
  * 存储态里 dir 是盘内相对路径，不含盘符。
  */
 async function scanAndCache(serial: string, drive: string, relPath: string, mode: OpenMode): Promise<SearchCache> {
-    const data = await readFolder(toFullPath(drive, relPath), mode, serial, relPath);
+    // ★ 取这一层的**旧条目作对账基线**：源文件没变的那些缩略图直接复用，不再重抽。
+    //   为什么在这儿查、而不是让调用方传进来：`scanAndCache` 是**唯一**的写缓存口，
+    //   它自己保证"读旧 → 读盘 → 写新"是一件事，比要求每个调用方记得传 prev 更漏不掉。
+    //   代价只是一次 `findCache` —— **纯内存查询、零读盘**（nedb 启动时整库已载入内存）。
+    const prevDoc = await findCache(serial, relPath, mode);
+    const data = await readFolder(toFullPath(drive, relPath), mode, serial, relPath, prevDoc?.data);
 
     const doc: SearchCache = {
         v: CACHE_VERSION,

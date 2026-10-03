@@ -595,7 +595,10 @@ export async function collectFaces(serial: string, picks: FacePick[]): Promise<S
             // ⚠️⚠️ 基准必须是**条目自己的 `dir`**，不是文档的 key（`docDir`）——
             // 这两者在"收敛出来的封面卡"上**不是一回事**：
             //
-            //   `server/index.ts:251` 调 `handleCover(filepath, serial, joinRel(storeDir, file))`，
+            //   ⚠️ 这里**只写函数名、不写行号** —— 行号会随改动漂：本条原先写 `server/index.ts:251`，
+            //   增量对账（2026-10-03）改完后它已经漂到 `:300`。写函数名永不失效。
+            //   `server/index.ts` 的 `readFolder` 里调
+            //   `handleCover(filepath, serial, joinRel(storeDir, file), prevAt)`，
             //   也就是卡片拿到的是**它代表的那个子目录**（`…/演员名/番号`）；
             //   而它落库时挂在**父层文档**（`…/演员名`）的 `data` 里。
             //
