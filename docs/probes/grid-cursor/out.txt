@@ -1,0 +1,4 @@
+grid-cursor 探针
+2026-10-04T13:46:46.058Z
+45 PASS / 0 FAIL
+（一���复跑：node docs/probes/grid-cursor/run.mjs）

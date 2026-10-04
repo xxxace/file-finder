@@ -1,0 +1,591 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>grid-cursor · 焦点与键盘隔离</title>
+<!--
+  刻意**手抄等效样式**而不是引真项目的 less：本探针验的是**焦点与事件归属**，
+  不是视觉。真正要验的样式（网格 6 列算法）在别处已有探针（`docs/probes/grid-6col/`）。
+  唯一必须一致的是：格子高度被钉死 + `.image-box-item` / `.file-item` 的结构与类名。
+-->
+<style>
+  body { margin: 0; font: 14px sans-serif; }
+  .image-box {
+    width: 1000px; height: 300px; overflow: hidden auto;
+    display: flex; flex-flow: row wrap; justify-content: flex-start; align-content: flex-start;
+  }
+  .image-box-item {
+    --item-gap: 10px; --item-width: calc(100% / 6); --item-height: 1.5rem;
+    display: flex; flex-direction: column; flex-grow: 0; flex-shrink: 0;
+    width: calc(var(--item-width) - var(--item-gap));
+    min-height: 80px !important; height: var(--item-height) !important;
+    max-height: var(--item-height) !important;
+    padding: 0 2px 10px; margin: 10px 5px 0; border: 1px solid transparent;
+    box-sizing: border-box;
+  }
+  .hstack { display: flex; flex-wrap: wrap; align-items: center; gap: 12px; }
+  .file-item {
+    --item-gap: 10px;
+    width: 84px !important; height: 84px !important; max-height: 84px !important;
+    border: 1px solid transparent; box-sizing: border-box;
+  }
+  .file-list-mock {
+    position: fixed; left: 300px; top: 200px; z-index: 10;
+    background: #fff; border: 1px solid #ccc; padding: 8px;
+  }
+  .file-list-mock[hidden] { display: none; }
+  /* 焦点高亮：只改边框色 + 外发光（与 index.vue 同手法，**不加任何布局属性**） */
+  .cursor { border-color: #7a8da9; box-shadow: 0 0 0 2px rgba(122,141,169,.45); }
+</style>
+</head>
+<body>
+  <div class="image-box" id="box"></div>
+
+  <!-- 模拟「多文件封面」的弹层。结构/类名与 index.vue 的模板一致。 -->
+  <div class="file-list-mock" id="pop" hidden>
+    <div class="hstack" id="popBox" tabindex="-1">
+      <div class="file-item" data-i="0">a.mp4</div>
+      <div class="file-item" data-i="1">b.mp4</div>
+      <div class="file-item" data-i="2">c.mp4</div>
+    </div>
+  </div>
+
+<script>
+/**
+ * 复刻 `useGridCursor` + `index.vue` 里那一段键盘处理，**逐行照搬判据**。
+ *
+ * ⚠️ 为什么复刻而不是引真源码：真模块 import 了 `vue` 与 `@/utils`（要打包），
+ * 而本探针要验的是**焦点归属与事件冒泡** —— 那是 DOM 与浏览器行为，
+ * 用一个 30 行的等价实现更直接，且判据与真代码一一对应（下面每条都标了出处）。
+ */
+const log = [];
+const say = (m) => { log.push(m); };
+
+// ── 与 index.vue 的 isCoverCard / openFileList / closeFileList 等价 ──────────
+const pop = document.getElementById('pop');
+const popBox = document.getElementById('popBox');
+let fileCursor = -1;
+let popVisible = false;
+
+const closeFileList = () => {
+    popVisible = false; pop.hidden = true; fileCursor = -1;
+    (document.activeElement || null)?.blur?.();
+};
+const openFileList = () => {
+    popVisible = true; pop.hidden = false; fileCursor = 0;
+    // 与 index.vue 同：nextTick 之后才 focus（此处 DOM 已在，收不到 nextTick 用 Promise 微task）
+    Promise.resolve().then(() => popBox.focus());
+};
+
+// ── 与 useGridCursor 等价 ─────────────────────────────────────────────────
+const box = document.getElementById('box');
+const CELLS = 20;
+for (let i = 0; i < CELLS; i++) {
+    const d = document.createElement('div');
+    d.className = 'image-box-item';
+    d.dataset.key = 'k' + i;
+    d.textContent = 'k' + i;
+    box.appendChild(d);
+}
+let cursorKey = '';
+let previewOpen = false;
+const opened = [];        // onConfirm 收到过谁
+const located = [];       // locateInGrid 收到过谁
+
+/**
+ * ⚠️ **真判据由 run.cjs 注入**（esbuild 打包真的 `src/utils/index.ts`，见 build.mjs）——
+ * 这里**故意不复刻**。第一版是手抄的，结果回退真源码时探针全绿：
+ * 改探针不改真代码，断言的只是"我抄的那份对不对"，判据效力为零。
+ * 注入在 `__probeAll()` 开头做（那里能看到它是否可用）。
+ */
+let isGridKeyBlocked = () => { throw new Error('真判据尚未注入'); };
+
+const paint = () => {
+    for (const el of box.children) el.classList.toggle('cursor', el.dataset.key === cursorKey);
+};
+
+const moveCursor = (dir) => {
+    const cells = [...box.querySelectorAll('.image-box-item')].map(el => ({
+        key: el.dataset.key, top: el.getBoundingClientRect().top,
+    }));
+    // 复用真模块的分组（同一条容差规则）
+    const rows = []; let base = NaN;
+    for (const c of cells) {
+        if (rows.length === 0 || Math.abs(c.top - base) > 1) { rows.push([c.key]); base = c.top; }
+        else rows[rows.length - 1].push(c.key);
+    }
+    const at = (() => { for (let r = 0; r < rows.length; r++) { const c = rows[r].indexOf(cursorKey); if (c >= 0) return { r, c }; } return null; })();
+    if (!at) { cursorKey = rows[0] ? rows[0][0] : ''; paint(); return; }   // 首次激活
+    const d = { up: [-1, 0], down: [1, 0], left: [0, -1], right: [0, 1] }[dir];
+    const r = at.r + d[0], c = at.c + d[1];
+    if (r < 0 || r >= rows.length || c < 0 || c >= rows[r].length) return; // 到头停住
+    cursorKey = rows[r][c]; paint();
+};
+
+/**
+ * 与 useGridCursor.onGridKeydown 等价。
+ * ⚠️ 回车分支的 `e.repeat` 守卫是 2026-10-04 加的（业主报"疯狂回车疯狂打开"）。
+ * 那条判据**必须**在这里被断言住，否则将来有人"简化"掉它就会静默回归。
+ */
+let guardRepeat = true;   // 探针可关掉它做回退验证
+const onGridKeydown = (e) => {
+    if (e.key === 'Enter') {
+        if (previewOpen) return;                       // ★自查点1：预览开着要 bail
+        if (guardRepeat && e.repeat) return;           // ★自查点4：长按只算一次
+        if (!cursorKey) return;
+        e.preventDefault();
+        opened.push(cursorKey);
+        return;
+    }
+    if (!['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight'].includes(e.key)) return;
+    if (isGridKeyBlocked(e)) return;                  // ★自查点2：焦点不在 body 要 bail
+    if (previewOpen) return;
+    e.preventDefault();
+    moveCursor({ ArrowUp: 'up', ArrowDown: 'down', ArrowLeft: 'left', ArrowRight: 'right' }[e.key]);
+};
+window.addEventListener('keydown', onGridKeydown);
+
+/** 与 index.vue 的 onKeyup 等价（只保留 previewOpen 分支 + focus 守卫） */
+const onKeyup = (e) => {
+    if (isGridKeyBlocked(e)) return;
+    if (previewOpen) {
+        if (e.key === 'Enter') located.push(cursorKey);
+        return;
+    }
+};
+window.addEventListener('keyup', onKeyup);
+
+/** 与 index.vue 的 onFileListKeydown 等价 */
+popBox.addEventListener('keydown', (e) => {
+    e.stopPropagation();                // ★自查点3：.stop 让事件不到 window
+    const n = popBox.children.length;
+    if (e.key === 'ArrowDown') { fileCursor = Math.min(fileCursor + 1, n - 1); e.preventDefault(); }
+    else if (e.key === 'ArrowUp') { fileCursor = Math.max(fileCursor - 1, 0); e.preventDefault(); }
+    else if (e.key === 'Enter') { closeFileList(); e.preventDefault(); }
+    else if (e.key === 'Escape') { closeFileList(); e.preventDefault(); }
+});
+
+/** 相等断言（提到顶层：T10/T11 用它）。 */
+const eq = (label, got, want) => {
+    const a = JSON.stringify(got), b = JSON.stringify(want);
+    const R = window.__R;
+    R.push(`  ${a === b ? 'PASS' : 'FAIL'}  ${label}${a === b ? '   → ' + a : '   → 得到 ' + a + '，期望 ' + b}`);
+};
+
+/**
+ * ⚠️ **判据由 run.cjs 注入**（esbuild 打包真的 `src/views/FileFinder/openDecision.ts`）。
+ *
+ * 这里**不复刻**。2026-10-04 业主真机报「回车打开的是预览图不是文件」，
+ * 而第一版探针把判据手抄进页面 —— 回退真源码时它**依然全绿**
+ *（改探针不改真代码，断言的只是"我抄的那份对不对"）。
+ * 与 `isGridKeyBlocked` 那次是**同一个错**，同一天犯两次 ⇒ 判据必须是同一份代码。
+ */
+let decide = null, isDirCard = null, isMultiFileCard = null;
+
+// ── 测试驱动 ────────────────────────────────────────────────────────────
+/**
+ * 派发一次按键。
+ *
+ * ⚠️ 走**元素**而不是 `window`：`window.dispatchEvent` 造出的事件 `target` 是 `window`，
+ * 而真实键盘事件的 target 是**焦点所在元素**。发到 window 的话，"焦点在输入框时
+ * 守卫生效"那条根本测不到（target 压根不是那个 input）—— 探针会给出假 PASS。
+ * 这里发到 `document.activeElement`（默认 body），与真实行为同构。
+ */
+const key = (k, type = 'keydown', repeat = false) => {
+    const target = document.activeElement || document.body;
+    target.dispatchEvent(new KeyboardEvent(type, { key: k, repeat, bubbles: true, cancelable: true }));
+};
+
+const focusBody = () => { (document.activeElement)?.blur?.(); };
+const activeDesc = () => {
+    const a = document.activeElement;
+    if (!a) return 'null';
+    if (a === document.body) return 'body';
+    const cls = (a.getAttribute && a.getAttribute('class') || '').split(/\s+/).filter(Boolean)[0];
+    return `${a.tagName.toLowerCase()}${a.id ? '#' + a.id : ''}${cls ? '.' + cls : ''}`;
+};
+
+window.__probeAll = async () => {
+    const R = [];
+    window.__R = R;   // 让顶层 eq 能往同一个结果数组里写
+    const check = (label, cond, detail) => R.push(`  ${cond ? 'PASS' : 'FAIL'}  ${label}${detail ? '   → ' + detail : ''}`);
+
+    // 接管真判据（run.cjs 注入的 esbuild 产物）。⛔ 接管失败就直接报出来 ——
+    // 静默用回退实现会让探针变成"假 PASS 机器"，那比没有探针更坏。
+    try {
+        isGridKeyBlocked = __utils.isGridKeyBlocked;
+        check('真判据已注入（utils/index.ts 的 isGridKeyBlocked）', typeof isGridKeyBlocked === 'function');
+    } catch (err) {
+        check('真判据已注入（guard）', false, String(err));
+    }
+    try {
+        decide = __decide.decideOpen;
+        isDirCard = __decide.isDirCard;
+        isMultiFileCard = __decide.isMultiFileCard;
+        check('真判据已注入（openDecision.ts 的 decideOpen/isDirCard/isMultiFileCard）',
+            typeof decide === 'function' && typeof isDirCard === 'function' && typeof isMultiFileCard === 'function');
+    } catch (err) {
+        check('真判据已注入（decide）', false, String(err));
+    }
+    /** 把 decideOpen 的动作翻成中文，便于断言可读。 */
+    const KINDS = { drill: '下钻', 'open-item': '直接打开', 'open-inner': '打开内层某文件', 'pick-from-list': '弹文件列表', preview: '开内置预览' };
+    const decideOf = (it) => { const a = decide(it, false); return a ? KINDS[a.kind] : '（不打开）'; };
+
+    focusBody();
+    moveCursor('right'); // 激活到 k0
+    check('起始选择器已激活', cursorKey === 'k0', cursorKey);
+
+    // ── T1 · 焦点在 body 时方向键归网格 ────────────────────────────────
+    const before = cursorKey;
+    key('ArrowRight');
+    check('焦点在 body：→ 移动了选择器', cursorKey !== before, `${before} → ${cursorKey}`);
+
+    // ── T2 · 焦点进入弹层后，方向键**不再**动选择器（隔离） ────────────
+    openFileList();
+    await Promise.resolve(); await Promise.resolve();
+    check('弹层打开后焦点落在弹层容器上', activeDesc().startsWith('div#popBox'), activeDesc());
+    const held = cursorKey;
+    key('ArrowRight');
+    key('ArrowRight');
+    check('★焦点在弹层里：方向键**没有**动网格选择器', cursorKey === held, `仍为 ${cursorKey}`);
+
+    // ── T3 · 弹层内 ↑↓ 走的是"文件高亮"，不是网格 ──────────────────────
+    const c0 = fileCursor;
+    key('ArrowDown');
+    check('★弹层内 ↓ 移动的是文件高亮', fileCursor === c0 + 1, `${c0} → ${fileCursor}`);
+    check('弹层内 ↓ 没有冒泡到网格', cursorKey === held, cursorKey);
+
+    // ── T4 · Esc 关弹层并**收回焦点**（否则方向键永久失灵） ────────────
+    key('Escape');
+    check('Esc 后弹层关闭', !popVisible);
+    check('★Esc 后焦点回到 body（收回成功）', activeDesc() === 'body', activeDesc());
+    const after = cursorKey;
+    key('ArrowRight');
+    check('★Esc 之后方向键立刻恢复可用', cursorKey !== after, `${after} → ${cursorKey}`);
+
+    // ── T5 · 预览层开着时回车只"定位"，不"打开" ───────────────────────
+    focusBody();
+    previewOpen = true;
+    const cBefore = cursorKey;
+    opened.length = 0; located.length = 0;
+    key('Enter', 'keydown');   // 网格 keydown（应bail）
+    key('Enter', 'keyup');     // index.vue 的 keyup（应定位）
+    check('★预览开着：回车**没有**触发打开', opened.length === 0, `opened=${JSON.stringify(opened)}`);
+    check('预览开着：回车触发了定位', located.length === 1, `located=${JSON.stringify(located)}`);
+    previewOpen = false;
+    void cBefore;
+
+    // ── T6 · 预览关着时回车只"打开"，不"定位" ──────────────────────────
+    focusBody();
+    opened.length = 0; located.length = 0;
+    key('Enter', 'keydown');
+    key('Enter', 'keyup');
+    check('预览关着：回车触发打开', opened.length === 1, `opened=${JSON.stringify(opened)}`);
+    check('预览关着：回车**没有**定位', located.length === 0, `located=${JSON.stringify(located)}`);
+
+    // ── T7 · 搜索框里按方向键不抢 ──────────────────────────────────────
+    const inp = document.createElement('input');
+    document.body.appendChild(inp); inp.focus();
+    const guard = cursorKey;
+    key('ArrowRight');
+    check('★焦点在输入框：方向键不抢（守卫生效）', cursorKey === guard, cursorKey);
+    check('守卫判据：target 是 input', isGridKeyBlocked({ target: inp }) === true);
+    inp.remove(); focusBody();
+
+    // ── T7b · ★业主2026-10-04 三次报的「还是要点一下」的确切机制 ──────────
+    // 打开弹层 → 关闭 → 焦点被**还给打开它的那个按钮**（vueuc FocusTrap 的
+    // returnFocusOnDeactivated 默认 true）⇒ 焦点永远回不到 body
+    // ⇒ 旧判据 `t !== document.body` 恒为真 ⇒ 方向键永久被挡
+    // 而"点一下网格"恰好把焦点洗回 body ⇒ 这就是"每次都要点一下"。
+    R.push('');
+    R.push('—— T7b 焦点归还：弹层关后焦点在按钮上，方向键仍须可用 ——');
+    {
+        // 造一个真按钮 + 一个真弹层，模拟「点缓存记录 → 弹层开 → 弹层关」
+        const btn = document.createElement('button');
+        btn.id = 'opener';
+        btn.textContent = '缓存记录';
+        document.body.appendChild(btn);
+        const dlg = document.createElement('div');
+        dlg.id = 'fake-modal';
+        dlg.innerHTML = '<input id="dlg-input" /><span>弹层内容</span>';
+        document.body.appendChild(dlg);
+        const dlgInput = dlg.querySelector('#dlg-input');
+
+        // 场景：焦点在按钮上（弹层已关、焦点已归还）⇒ 按方向键
+        btn.focus();
+        check('★焦点确实在按钮上（弹层归还后的状态）',
+            document.activeElement === btn, activeDesc());
+
+        let ev = { target: document.activeElement };
+        check('★焦点在按钮上时**不挡**方向键（旧判据在这里会挡 ⇒ 就是那个 bug）',
+            isGridKeyBlocked(ev) === false, '按钮不吃方向键 ⇒ 放行');
+
+        // 关键：往按钮派发一个真按键，验证端到端不挡
+        let moved = false;
+        const onMove = (e) => { if (e.key === 'ArrowRight') { moved = true; e.preventDefault(); } };
+        window.addEventListener('keydown', onMove, true);
+        key('ArrowRight');
+        window.removeEventListener('keydown', onMove, true);
+        check('★端到端：焦点在按钮上时按 → 真的走通了（没被守卫吃掉）', moved);
+
+        // 对照：焦点在弹层的输入框里 ⇒ 必须挡
+        dlgInput.focus();
+        check('对照：焦点在弹层输入框 ⇒ 挡住方向键',
+            isGridKeyBlocked({ target: dlgInput }) === true);
+        dlgInput.blur();
+        btn.remove(); dlg.remove();
+    }
+
+    // ── T15 · ★code review 抓出的阻断 bug：Enter 分支漏了守卫 ──────────────
+    // 焦点在搜索框里按 Enter **不该**打开当前选中格；
+    // 中文输入法选词（IME 上屏）同样不该触发。
+    // 根因：naive-ui Input 的 handleWrapperKeydown 只 `call(props.onKeydown, e)`、**不stopPropagation**
+    // ⇒ 事件冒泡到 window，而网格的 Enter 分支**原先根本没调 isGridKeyBlocked**。
+    R.push('');
+    R.push('—— T15 Enter 分支也必须过守卫（搜索框 / IME 选词不能被抢）——');
+    {
+        // 复刻 useGridCursor.onGridKeydown 的 Enter 分支（真守卫注入，与真模块同源）
+        let openedNow = [];
+        const enterBranch = (e) => {
+            if (previewOpen) return 'bail:预览层';
+            if (isGridKeyBlocked(e)) return 'bail:守卫';       // ★这一行是本轮补的
+            if (e.repeat) return 'bail:长按';
+            if (!cursorKey) return 'bail:没选中';
+            openedNow.push(cursorKey);
+            return '打开';
+        };
+        focusBody();
+        cursorKey = 'k1';
+
+        const inp = document.createElement('input');
+        document.body.appendChild(inp);
+
+        // 场景 1：焦点在搜索框（body 态先激活，再让输入框拿焦点）
+        inp.focus();
+        let r = enterBranch({ key: 'Enter', repeat: false, target: inp });
+        check('★焦点在搜索框：回车被守卫挡下（不打开）', r === 'bail:守卫' && openedNow.length === 0,
+            `结果 ${r} · opened=${openedNow.length}`);
+
+        // 场景 2：焦点在按钮上（弹层归还后的状态）⇒ 放行
+        const btn = document.createElement('button');
+        document.body.appendChild(btn);
+        btn.focus();
+        r = enterBranch({ key: 'Enter', repeat: false, target: btn });
+        check('焦点在按钮：回车放行（按钮不吃回车的导航语义）', r === '打开' && openedNow.length === 1,
+            `结果 ${r} · opened=${openedNow.length}`);
+
+        // 场景 3：body 态（正常网格）⇒ 放行
+        focusBody();
+        r = enterBranch({ key: 'Enter', repeat: false, target: document.body });
+        check('焦点在 body：回车正常打开', r === '打开', `结果 ${r}`);
+
+        // 场景 4：长按 ⇒ 挡
+        r = enterBranch({ key: 'Enter', repeat: true, target: document.body });
+        check('长按回车仍只算一次（守卫放行但 repeat 挡下）', r === 'bail:长按', `结果 ${r}`);
+
+        inp.remove(); btn.remove(); openedNow = [];
+    }
+
+    // ── T8 · 守卫**本身**的三条判据（直接调真函数，不经事件派发） ──────
+    // ⚠️ 这一组是**唯一**能证"回退真源码会被抓到"的断言。
+    // 前面那些都经 `key()` 派发，target 恒为 `document.activeElement`（正常是 body），
+    // 所以"少写 document/window 两个节点"那种回退**照样全绿** ——
+    // 第一版探针就栽在这里（注入真源码后回退 utils，19 PASS/0 FAIL）。
+    //⇒ 守卫的每个分支都必须有一条**直接调用**的断言。
+    check('守卫：target 是 body ⇒ 放行', isGridKeyBlocked({ target: document.body }) === false);
+    check('守卫：target 是 document ⇒ 放行', isGridKeyBlocked({ target: document }) === false);
+    check('守卫：target 是 window ⇒ 放行', isGridKeyBlocked({ target: window }) === false);
+    check('守卫：target 是 null ⇒ 放行', isGridKeyBlocked({ target: null }) === false);
+    check('守卫：target 是普通 div（网格容器）⇒ 放行', isGridKeyBlocked({ target: document.getElementById('box') }) === false);
+    check('★守卫：target 是 button ⇒ **放行**（它不吃方向键；旧判据误挡 ⇒ 那正是本bug）',
+        isGridKeyBlocked({ target: document.createElement('button') }) === false);
+    check('守卫：target 是 input ⇒ 挡住', isGridKeyBlocked({ target: document.createElement('input') }) === true);
+    check('守卫：target 是 textarea ⇒ 挡住', isGridKeyBlocked({ target: document.createElement('textarea') }) === true);
+    check('守卫：target 是 select ⇒ 挡住', isGridKeyBlocked({ target: document.createElement('select') }) === true);
+    // contenteditable 只能靠属性造
+    const ce = document.createElement('div');
+    ce.setAttribute('contenteditable', 'true');
+    check('守卫：contenteditable ⇒ 挡住', isGridKeyBlocked({ target: ce }) === true);
+    // role 型控件（n-select 的触发器是 combobox 一类）
+    const cb = document.createElement('div');
+    cb.setAttribute('role', 'combobox');
+    check('守卫：role=combobox（n-select 触发器）⇒ 挡住', isGridKeyBlocked({ target: cb }) === true);
+
+    // ── T9 · 行结构在真布局下被正确识别（顺带证明 rect 分组可用） ───────
+    const tops = [...box.children].map(el => Math.round(el.getBoundingClientRect().top));
+    const uniq = [...new Set(tops)];
+    check('真布局：20 格 / 6列 ⇒ 分成 4 行', uniq.length === 4, `${uniq.length} 行，tops=${uniq.join(',')}`);
+
+    // ── T10 · 「回车打开什么」的判据（2026-10-04 真机报的两个 bug 的根因）────────
+    // 一部片子 = 封面图(cover.jpg) + 一部视频(xxx.mp4)。封面图**不进** files
+    //⇒ 这一格的 files.length === 1，而 type 是 'image'（封面图的类型）。
+    R.push('');
+    R.push('—— T10 回车打开什么：判据必须落在 files 而不是 type ——');
+    {
+        const card1 = { name: '示例作品标题', type: 'image', files: [{ name: 'a.mp4', size: 1 }] };
+        eq('目录只含 1 个文件 ⇒ 直接打开它（不是开预览）', decideOf(card1), '直接打开');
+        check('★这一格 type确实是 image（证明只看 type 会错判）', card1.type === 'image', card1.type);
+
+        const cardN = { name: '示例作品标题B', type: 'image', files: [{ name: 'a.mp4', size: 1 }, { name: 'b.mp4', size: 1 }] };
+        eq('目录含 2 个文件 ⇒ 弹文件列表', decideOf(cardN), '弹文件列表');
+
+        const realImage = { name: '壁纸.png', type: 'image' };
+        eq('真图片（无 files）⇒ 开内置预览', decideOf(realImage), '开内置预览');
+
+        const video = { name: '演示视频.mp4', type: 'video' };
+        eq('视频 ⇒ 系统打开（交给系统播放器）', decideOf(video), '直接打开');
+
+        const dir = { name: '示例演员E', type: 'folder' };
+        eq('目录 ⇒ 下钻', decideOf(dir), '下钻');
+
+        // 两个判据必须是**独立**的：合并会让双击在单文件目录上多弹一层
+        check('isDirCard(单文件目录) = true', isDirCard(card1) === true);
+        check('isMultiFileCard(单文件目录) = false（双击不弹层，既有行为）', isMultiFileCard(card1) === false);
+        check('isDirCard(真图片) = false', isDirCard(realImage) === false);
+        check('isDirCard(files:[]) = false（空数组不算目录代言）', isDirCard({ name: 'x', type: 'image', files: [] }) === false);
+    }
+
+    // ── T11 · 每屏记忆：选择器必须与滚动位置**一起**恢复 ──────────────────────
+    R.push('');
+    R.push('—— T11 每屏记忆：返回后选择器不能丢 ——');
+    {
+        // 与 index.vue 的 NavEntry / rememberCurrentScreen / onBack 等价
+        const makeEntry = (p) => ({ path: p, mode: 'cover', searchText: '', scrollY: 0, cursorKey: '' });
+        // ⚠️ 场景要摆对：**用户坐在第一层**（那里有 20 格、滚到中间、选中第 7 格），
+        // 然后回车进子目录、再退格返回。上一版把状态记在子目录上，返回时自然取不到 ——
+        // 那是**探针摆错场景**，不是实现错（真代码里 `rememberCurrentScreen` 记的
+        // 确实是 `history[length-1]`，也就是"即将离开的那一屏"）。
+        const stack = [makeEntry('H:/sample/第一层'), makeEntry('H:/sample/第一层/子目录')];
+        const top = () => stack[stack.length - 1];
+        let curCursor = '第一层/第7格';
+        let curScroll = 4200;
+
+        // 离开第一层（进子目录那一刻）⇒ 把它自己的样子记在**它自己**身上
+        top().scrollY = curScroll; top().cursorKey = curCursor;
+        // 进子目录 ⇒ 新的一屏从零开始
+        stack.push(makeEntry('H:/sample/第一层/子目录'));
+        curCursor = ''; curScroll = 0;
+        // 退格返回
+        stack.pop();
+        const to = top();
+        curScroll = to.scrollY; curCursor = to.cursorKey;
+        check('返回后滚动位置恢复', curScroll === 4200, String(curScroll));
+        check('★返回后选择器恢复（不是视口第一行）', curCursor === '第一层/第7格', curCursor);
+
+        // 反向：新的一屏**必须**是空的（否则会把上一屏的选择器带进子目录）
+        const fresh = makeEntry('H:/sample/别的目录');
+        check('★新建的一屏 cursorKey 为空（不继承上一屏）', fresh.cursorKey === '', JSON.stringify(fresh.cursorKey));
+        // 恢复用的 key 若不在这一屏里 ⇒ 不画高亮，但**不该崩、也不该乱跳**
+        curCursor = '已经不存在的格子';
+        check('恢复一个不存在的 key：只是不画高亮，不抛错', typeof curCursor === 'string', curCursor);
+    }
+
+    // ── T12 · 长按回车只算一次（2026-10-04 业主报"疯狂回车疯狂打开"）──────
+    R.push('');
+    R.push('—— T12 长按回车：e.repeat 必须挡住（否则 1 秒 = 33 次打开）——');
+    {
+        focusBody();
+        opened.length = 0;
+
+        // 模拟按住回车 1 秒：第 1 次 repeat=false，之后 32 次 repeat=true
+        // （实测数字来自无头 Chromium，见 out.txt）
+        key('Enter', 'keydown', false);
+        for (let i = 0; i < 32; i++) key('Enter', 'keydown', true);
+        check('★长按 33 次 keydown ⇒ 只打开 **1** 次', opened.length === 1,
+            `opened=${JSON.stringify(opened)}（期望 1 个）`);
+
+        // 反向：手动连按 3 下（每次都是新的一次按下，repeat=false）⇒ 应该打开 3 次
+        // （"挡repeat" 不能变成"只让按一次" —— 那是另一个 bug）
+        opened.length = 0;
+        key('Enter', 'keydown', false); await Promise.resolve();
+        key('Enter', 'keydown', false); await Promise.resolve();
+        key('Enter', 'keydown', false);
+        check('★手动连按 3 次 ⇒ 打开 3 次（挡的是repeat 不是次数）', opened.length === 3,
+            `opened 长度=${opened.length}`);
+
+        // 反向：方向键**必须**保留 repeat（长按连续移动是想要的）
+        const before2 = cursorKey;
+        key('ArrowRight', 'keydown', true);
+        check('★方向键的 repeat **不挡**（长按连续移动是特性）', cursorKey !== before2,
+            `${before2} → ${cursorKey}`);
+    }
+
+    // ── T13 · 加载完自动落焦点（业主报"加载时方向键失焦，要点一下"）──────
+    R.push('');
+    R.push('—— T13 加载完自动落焦点：不能等用户再按一次 ——');
+    {
+        // 复刻 useGridCursor 的 armed 机制：noteIntent 先置位，watch 长度 0→有 才落
+        let armed = false, watchFired = 0;
+        const noteIntent = () => { armed = true; };
+        const takeIntent = () => { const h = armed; armed = false; return h; };
+        // 与真模块等价：moveCursor 先置意图、再判空（加载中 rows 为空会return）
+        const moveCursorLoading = (rowsEmpty) => { noteIntent(); if (rowsEmpty) return '什么都不做（加载中）'; return '移动'; };
+
+        // 场景：在 A 屏按过方向键（armed=true）→ 回车进 B 屏 → 加载中
+        noteIntent();
+        const r1 = moveCursorLoading(true);
+        check('加载中按方向键：动作被跳过（格子还没渲染）', r1.startsWith('什么都不做'), r1);
+        check('★但"需要焦点"这个意图**被记下了**（置位在 return 之前）', armed === true, String(armed));
+
+        // B 屏加载完：fileList.length 0 → 有内容
+        const shouldActivate = takeIntent();
+        check('★加载完且之前有意图 ⇒ 自动落焦点', shouldActivate === true);
+        check('意图用掉即清（不会在刷新时乱跳）', takeIntent() === false);
+
+        // 反向：冷启动 / 纯鼠标浏览 —— 没有任何意图 ⇒ 不该画焦点框
+        check('★无意图（冷启动/纯鼠标）⇒ 不自动落焦点', takeIntent() === false);
+
+        // 反向：刷新（同屏，长度不变）—— 不该重置焦点
+        noteIntent(); takeIntent();          // 用掉
+        const refreshWatch = (len, prev) => (len > 0 && prev === 0);
+        check('★刷新时长度不变 ⇒ watch 不触发（不重置用户正在看的焦点）',
+            refreshWatch(200, 200) === false);
+        check('★切屏时 0 → 有内容 ⇒ watch 触发', refreshWatch(200, 0) === true);
+    }
+
+    // ── T14 · 「换了一屏」的判据（业主二次报"加了初始化还是要点一下"的根因）──
+    R.push('');
+    R.push('—— T14 换屏判据：不能用「长度 0→有」，要用「key 集合变了」——');
+    {
+        // 复刻 fetchFolder 的真实行为：**整份替换**，加载期间旧数据**留在屏幕上**
+        //（那是刻意的 —— 请求失败时列表不能被清空，见 fetchFolder 的注释）
+        const keyOf = (d) => d.dir + '/' + d.name;
+        const fp = (list) => (list.length ? `${list.length}:${keyOf(list[0])}` : '');
+        // watch(fn) 只在返回值**变化**时触发
+        const watchFp = (getter, cb) => { let last = getter(); return (nv) => { const f = getter(); if (f !== last) { last = f; cb(f); } }; };
+
+        const data = { A: [{dir:'H:/x',name:'a1'},{dir:'H:/x',name:'a2'},{dir:'H:/x',name:'a3'},{dir:'H:/x',name:'a4'}],
+                       B: [{dir:'H:/x/子',name:'b1'}] };
+        let screen = data.A;
+        const getFp = () => fp(screen);
+        let fired = 0;
+        const stop = watchFp(getFp, () => { fired++; });
+
+        // 加载中：screen 还没换 ⇒ 指纹不变 ⇒ 不触发（正确：那时 DOM 还是旧屏的）
+        stop();
+        check('加载中：指纹未变 ⇒ 不触发', fired === 0, `fired=${fired}`);
+
+        // 数据到了：换成 B 屏 ⇒ 指纹变了 ⇒ 触发
+        screen = data.B;
+        stop();
+        check('★加载完换成别的屏⇒ 触发', fired === 1, `fired=${fired}`);
+
+        // 刷新同一屏：key 不变 ⇒ 不触发（不能把焦点从用户手上抢走）
+        screen = data.B.slice();
+        stop();
+        check('★刷新同屏（key 不变）⇒ 不触发', fired === 1, `fired=${fired}`);
+
+        // ⛔ 对照：第一版那个判据（长度 0→有）在真实时序下**永不成立**
+        //    因为 dataSource 是整份替换，进新屏时 prev = **旧屏的条目数**，不是 0
+        const firstVersion = (len, prev) => len > 0 && prev === 0;
+        check('（对照）旧屏 4 个→ 新屏 1 个：旧判据 len>0&&prev===0 成立吗',
+            firstVersion(1, 4) === false, `结果 ${firstVersion(1, 4)}（这就是不落焦点的原因）`);
+        check('（对照）旧屏 0 个 → 新屏 1 个：旧判据才成立（只在冷启动那种情形）',
+            firstVersion(1, 0) === true, `结果 ${firstVersion(1, 0)}`);
+    }
+
+    return R.join('\n') + `\n\n${log.length} log\n`;
+};
+</script>
+</body>
+</html>

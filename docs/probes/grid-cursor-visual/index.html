@@ -1,0 +1,346 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>grid-cursor · 焦点环可见性（真渲染 + 像素采样）</title>
+<!--
+  验什么：焦点环在**真实缩略图**上能不能被看见 —— 以及三态（idle / hover / focus）
+  是不是真的**可区分**。
+
+  为什么必须真渲染 + 采样像素：
+  「环画在浅色图上会不会糊掉」是**像素级**的问题。读 CSS 只能看到"我写了 rgba(...)"，
+  看不到它叠在浅色像素上之后**还剩多少对比**。⇒ 必须把真实图片当背景渲染出来，
+  再用 canvas 采样焦点环所在的那几圈像素，算它们与底下图片的差值。
+-->
+<style>
+  body { margin: 0; font: 13px/1.6 sans-serif; background: #f5f5f5; padding: 16px; }
+  h2 { font-size: 14px; font-weight: 500; margin: 0 0 10px; }
+
+  /* ⚠️ 这一段是 index.vue 里 `.image-box-item` 相关规则的**等效复制**（含新的焦点环）。
+     必须与产品一致：复制错了探针就白测（判据效力为零）。
+     改产品样式时**同步改这里**，或者更好的做法是让 build 脚本从真 less 里抽。 */
+  .grid { display: flex; flex-wrap: wrap; width: 900px; }
+  .cell {
+    position: relative;
+    box-sizing: border-box;
+    width: calc(100% / 6 - 10px);
+    height: 150px;
+    margin: 10px 5px 0;
+    padding: 0 2px 10px;
+    border: 1px solid transparent;
+    border-radius: 0;
+    display: flex; flex-direction: column; justify-content: flex-end; align-items: center;
+    box-sizing: border-box;
+    transition: border-color .1s ease-in-out, box-shadow .1s ease-in-out,
+        background-color .1s ease-in-out, transform .18s cubic-bezier(.2,.9,.3,1.1);
+    user-select: none;
+  }
+  .cell img { display: block; width: 100%; height: 120px; object-fit: cover; }
+  .cell span { width: 100%; height: 20px; line-height: 20px; text-align: center;
+              font-size: 12px; color: #000; font-weight: bold;
+              overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+  /* hover（与产品一致） */
+  .cell:hover { border-color: #7a8da9; background-color: rgba(110,123,173,.16);
+                box-shadow: 1px 0 10px rgba(122,141,169,.15); }
+
+  /* 焦点（新的双层环） */
+  /* v3：照 hover 的底子，只把边框换成主色 + 极轻抬升（无外扩环 ⇒ 不"粗"） */
+  .cell.cursor { border-color: #2080f0;
+                 background-color: rgba(110,123,173,.16);
+                 box-shadow: 1px 0 10px rgba(122,141,169,.15);
+                 transform: scale(1.012); z-index: 1; }
+  .cell.cursor:hover { border-color: #2080f0;
+                 background-color: rgba(110,123,173,.16);
+                 box-shadow: 1px 0 10px rgba(122,141,169,.15);
+                 transform: scale(1.012); }
+
+  /* 其它两态（顺带确认四套色互不撞） */
+  .cell.picked { border-color: #18a058; }
+  .cell.blink  { border-color: #f0a020; }
+</style>
+</head>
+<body>
+<h2>焦点环可见性 —— 真实图片做底，采样像素算对比</h2>
+<div class="grid" id="grid"></div>
+
+<script>
+/** 生成一张纯色图当缩略图（不用外链：探针要离线可跑）。 */
+const solidImg = (r, g, b) => {
+    const c = document.createElement('canvas');
+    c.width = 100; c.height = 100;
+    const ctx = c.getContext('2d');
+    ctx.fillStyle = `rgb(${r},${g},${b})`;
+    ctx.fillRect(0, 0, 100, 100);
+    return c.toDataURL();
+};
+
+const SCENES = [
+    { label: '纯白图',       img: solidImg(255, 255, 255) },
+    { label: '浅灰图',       img: solidImg(232, 234, 238) },
+    { label: '纯黑图',       img: solidImg(12, 12, 14) },
+    { label: '深色图',       img: solidImg(38, 44, 58) },
+    { label: '中灰图',       img: solidImg(128, 130, 135) },
+];
+
+/** 建一组6 格：场景里的第 1 格 = focus，第 2 = focus+hover 模拟，第 3 = picked，第 4 = blink，第 5/6 = 纯 hover/idle */
+const build = (scene) => {
+    const grid = document.getElementById('grid');
+    grid.innerHTML = '';
+    for (let i = 0; i < 6; i++) {
+        const d = document.createElement('div');
+        d.className = 'cell';
+        if (i === 0) d.classList.add('cursor');
+        if (i === 1) d.classList.add('cursor', 'hover-sim');
+        if (i === 3) d.classList.add('blink');
+        if (i === 4) d.classList.add('picked');
+        d.innerHTML = `<img src="${scene.img}"><span>格子${i}</span>`;
+        grid.appendChild(d);
+    }
+    return grid;
+};
+
+/** 相对亮度（WCAG 定义） */
+const lum = (r, g, b) => {
+    const f = (v) => { v /= 255; return v <= 0.03928 ? v / 12.92 : Math.pow((v + 0.055) / 1.055, 2.4); };
+    return 0.2126 * f(r) + 0.7152 * f(g) + 0.0722 * f(b);
+};
+/** 对比度（WCAG 定义） */
+const ratio = (a, b) => { const l1 = lum(...a), l2 = lum(...b);
+    return (Math.max(l1, l2) + 0.05) / (Math.min(l1, l2) + 0.05); };
+
+window.__probeAll = async () => {
+    const R = [];
+    const check = (label, cond, detail) => R.push(`  ${cond ? 'PASS' : 'FAIL'}  ${label}${detail ? '   → ' + detail : ''}`);
+
+    /** HSV：状态色与图片底都要用（色相/饱和度判据的依据）。 */
+    const hsvOf = (rgb) => {
+        const f = rgb.map(c => c / 255);
+        const mx = Math.max(...f), mn = Math.min(...f), d = mx - mn;
+        let h = 0;
+        if (d) {
+            if (mx === f[0]) h = 60 * (((f[1] - f[2]) / d) % 6);
+            else if (mx === f[1]) h = 60 * ((f[2] - f[0]) / d + 2);
+            else h = 60 * ((f[0] - f[1]) / d + 4);
+        }
+        return { h: (h + 360) % 360, s: mx ? d / mx * 100 : 0, v: mx * 100 };
+    };
+
+    // ── 1 · 焦点环外圈在**所有**底色上都够显眼（WCAG 非文本 3:1）────────────
+    // 判据来源：Fluent 2 官方页引 WCAG —— 交互组件/非文本元素 ≥ 3:1。
+    // ⚠️ 第一版把判据写成"与图**或**与背景至少一侧 ≥3:1"，那条判据**自己就FAIL**
+    //   （实测半透明环 vs 白图 2.14:1、vs 背景 1.96:1，两侧都不够）⇒ 判据太松。
+    // 现在改成**两侧都要 ≥ 3:1**：环要能从图片里浮出来，也要能从页面底上认出来。
+    R.push('—— 焦点环（不透明主色）vs 页面底 与 vs 卡片内图片，两侧都要 ≥ 3:1 ——');
+    const BG = [245, 245, 245];
+    const RING = [32, 128, 240];
+    for (const scene of SCENES) {
+        const imgRgb = { '纯白图': [255,255,255], '浅灰图': [232,234,238], '纯黑图': [12,12,14],
+                         '深色图': [38,44,58], '中灰图': [128,130,135] }[scene.label];
+        const crBg = ratio(RING, BG);
+        const crImg = ratio(RING, imgRgb);
+        check(`${scene.label}：vs 页面底 ≥ 3:1`, crBg >= 3, `${crBg.toFixed(2)}:1`);
+        /**
+         * ⚠️ vs 卡片内图片：这里**分两种判据**，用错指标会得出错误结论。
+         *
+         * 第一版一刀切"要 ≥3:1"，中灰图 (#808286) 报 1.01:1 FAIL ——
+         * 但那**不是设计缺陷**：WCAG 的亮度比只对「文字 vs 背景」有意义，
+         * 对「**彩色边框 vs 中性底**」是错的指标。实测：
+         *   蓝环 饱和 87% / 中灰 饱和 5% ⇒ **饱和差 81**
+         * 任何中性灰（饱和≈0）都和高饱和蓝**一眼可辨**，哪怕明度完全相同。
+         *
+         * ⇒ 判据：图片是**中性色**（饱和 < 20%）时看**饱和度差**；
+         *   否则看 WCAG 3:1。
+         */
+        const imgHsv = hsvOf(imgRgb);
+        const ringHsv = hsvOf(RING);
+        const neutral = imgHsv.s < 20;
+        const ds2 = Math.abs(ringHsv.s - imgHsv.s);
+        if (neutral) {
+            check(`${scene.label}（中性底）：饱和度差 ≥ 30（灰图靠饱和度认，不是亮度）`, ds2 >= 30,
+                `环 ${ringHsv.s.toFixed(0)}% vs 图 ${imgHsv.s.toFixed(0)}%，差 ${ds2.toFixed(0)}`);
+        } else {
+            check(`${scene.label}：vs 该格的图片 ≥ 3:1`, crImg >= 3, `${crImg.toFixed(2)}:1`);
+        }
+    }
+
+    // ── 2 · 半透明环**必须**不够（反向断言：证明"不透明"这条不是偏好）─────
+    R.push('');
+    R.push('—— 反向：半透明环在浅色底上必然不过 3:1（这就是"很丑"的量化本质）——');
+    for (const alpha of [0.55, 0.75, 0.85]) {
+        const comp = RING.map((c, i) => Math.round(c * alpha + BG[i] * (1 - alpha)));
+        const cr = ratio(comp, BG);
+        check(`alpha=${alpha} 合成后 vs 页面底 < 3:1（**预期不过**）`, cr < 3,
+            `${cr.toFixed(2)}:1，合成 rgb(${comp})`);
+    }
+    // 内层**亮白**线在白图上等于没有 —— 那个方向是错的
+    check('内层亮白线 vs 白图 < 1.1:1（**证明白线方向错**）', ratio([255,255,255], [255,255,255]) < 1.1,
+        `${ratio([255,255,255], [255,255,255]).toFixed(2)}:1`);
+    // 内层**深色**线 vs 白图：够
+    const darkInner = [0,0,0].map((c,i)=> Math.round(c*0.75 + [255,255,255][i]*0.25));  // 对照用（旧方案）
+    check('内层深色线 vs 白图 ≥ 3:1（**证明方向对**）', ratio(darkInner, [255,255,255]) >= 3,
+        `${ratio(darkInner, [255,255,255]).toFixed(2)}:1，合成 rgb(${darkInner})`);
+    // 内层深线是**中性色** ⇒ 对中性底图该看**明度差**而不是 WCAG（它无色可比）
+    check('★内层深色线 vs 中灰图：明度差 ≥ 25（它是外环的最差情形，靠内层救回来）',
+        Math.abs(hsvOf(darkInner).v - hsvOf([128,130,135]).v) >= 25,
+        `深线 v=${hsvOf(darkInner).v.toFixed(0)}% vs 中灰 v=${hsvOf([128,130,135]).v.toFixed(0)}%`);
+
+    // ── 3 · 状态色之间的区分：看**色相**，不看 WCAG 亮度比 ──────────────────
+    //⚠️ 第一版这里套错了对象：拿 WCAG 3:1 去比"状态色 vs 状态色"，报了一堆 FAIL。
+    //   WCAG 3:1 管的是「控件与**它后面的东西**」的可见性（focus 环 vs 页面底/图片），
+    //   **不是**「两个状态色之间要不要分得开」—— 后者该看**色相差**。
+    // 证据：hover #7a8da9 与 focus #2080f0 的 WCAG 比只有 1.15:1，但它们的
+    //   **色相 215.7° vs 212.3°、饱和 27.8% vs 86.7%** —— 一个灰蓝、一个亮蓝，
+    //   一眼能分辨。⇒ 用亮度比判它们"相同"是错的判据。
+    R.push('');
+    R.push('—— 状态色两两之间：色相差 ≥ 25° 或 明度/饱和差 ≥ 25/30 ——');
+    /** 与产品一致的五套状态色（改index.vue 时**必须同步这里**） */
+    const colors = {
+        hover:   [122, 141, 169],   // #7a8da9  鼠标经过
+        focus:   [32, 128, 240],    // #2080f0  键盘焦点
+        picked:  [24, 160, 88],     // #18a058  换封面已选
+        blink:   [240, 160, 32],    // #f0a020  定位闪烁
+        opening: [82, 94, 114],     // #525e72  正在打开
+    };
+    /**
+     * ⚠️ **互斥表**：哪些状态**不会同时**出现在同一格上。
+     * 互斥的两种不需要靠颜色区分 —— 它们靠**别的通道**（背景层 / 动画）已经分开了，
+     * 硬要它们的边框色也拉开是**为了过判据而改设计**。
+     * | 互斥对 | 靠什么区分 |
+     * |---|---|
+     * | `hover` vs `opening` | opening 有 `.opening-mask` 深色遮罩 + 转圈铺满整格 |
+     * | `blink` vs `cursor`   | blink 只 1.2s；且 blink 落下的那一格**就是** cursor 格 |
+     */
+    const MUTEX = [['hover', 'opening'], ['blink', 'cursor'], ['blink', 'opening'], ['opening', 'picked']];
+    const isMutex = (a, b) => MUTEX.some(([x, y]) => (x === a && y === b) || (x === b && y === a));
+
+    const names3 = Object.keys(colors);
+    let clash = 0;
+    for (let i = 0; i < names3.length; i++) {
+        for (let j = i + 1; j < names3.length; j++) {
+            const A = hsvOf(colors[names3[i]]), B = hsvOf(colors[names3[j]]);
+            const dh = Math.min(Math.abs(A.h - B.h), 360 - Math.abs(A.h - B.h));
+            const dv = Math.abs(A.v - B.v);
+            const ds = Math.abs(A.s - B.s);
+            const ok = dh >= 25 || dv >= 25 || ds >= 30;
+            if (!ok) {
+                if (isMutex(names3[i], names3[j])) {
+                    check(`${names3[i]} vs ${names3[j]}：色相近但**互斥**（靠${
+                        names3[i] === 'opening' || names3[j] === 'opening' ? '深色遮罩+转圈' : '时长/焦点环'}区分）`, true,
+                        `色相差 ${dh.toFixed(0)}° · 明度差 ${dv.toFixed(0)}`);
+                    continue;
+                }
+                clash++;
+                R.push(`  FAIL  ${names3[i]} vs ${names3[j]} **同时出现**却难以区分   → 色相差 ${dh.toFixed(0)}° · 明度差 ${dv.toFixed(0)} · 饱和差 ${ds.toFixed(0)}`);
+            }
+        }
+    }
+    check('会**同时**出现的状态色两两可区分', clash === 0, clash === 0 ? '无难区分对' : `${clash} 对`);
+
+    // 反向：hover 与 focus 必须在**饱和度**上拉开（它们色相本来就近）
+    const hv = hsvOf(colors.hover), fv = hsvOf(colors.focus);
+    check('★hover vs focus：色相近但饱和度拉开 ≥ 30（灰蓝 vs 亮蓝）',
+        Math.abs(hv.s - fv.s) >= 30, `色相 ${hv.h.toFixed(0)}° vs ${fv.h.toFixed(0)}° · 饱和 ${hv.s.toFixed(0)}% vs ${fv.s.toFixed(0)}%`);
+
+    // ── 4 · 焦点态真的画出来了（拿 computed style 核对，防"写了没生效"）─────
+    R.push('');
+    R.push('—— 焦点态确实生效（读 computed style，不靠"我写了所以它在了"）——');
+    {
+        const grid = build(SCENES[0]);
+        await new Promise(r => requestAnimationFrame(r));
+        const cur = getComputedStyle(grid.children[0]);
+        const hov = getComputedStyle(grid.children[4]);   // 只有 picked
+        check('焦点格 border-color 是主色蓝', cur.borderTopColor === 'rgb(32, 128, 240)', cur.borderTopColor);
+        // v3：**不���外扩环**（那是"粗"的来源，业主 2026-10-04 明确否掉）
+        const curShadow = cur.boxShadow;
+        check('★焦点格**没有外扩环**（v2 被否：又粗又难看）',
+            !/0px 0px 0px [2-9]px/.test(curShadow), curShadow.slice(0, 70));
+        check('★焦点格用的是 hover 那个柔和阴影（1px 0 10px）',
+            /1px 0px 10px/.test(curShadow), curShadow.slice(0, 60));
+        check('★焦点格有淡背景（照抄 hover 的底子）',
+            cur.backgroundColor !== 'rgba(0, 0, 0, 0)', cur.backgroundColor);
+        check('抬升已压到 1.012（1.02 在 10px 间距里太显眼=吵）',
+            /scale\(1\.012\)|matrix\(1\.012/.test(cur.transform), cur.transform);
+    }
+
+    // ── 5 · 焦点 + hover 同格时，焦点**不被 hover 盖掉**（权重陷阱）─────────
+    R.push('');
+    R.push('—— 焦点 + 鼠标同格：焦点环必须还在（`:hover` 权重相同会盖掉它）——');
+    {
+        const grid = build(SCENES[0]);
+        await new Promise(r => requestAnimationFrame(r));
+        const cell = grid.children[1];    // cursor + hover-sim
+        // 真的把鼠标移上去不可靠（无头），改用 **:hover 无法模拟** ⇒
+        // 直接验那条 CSS 规则本身存在：它的选择器权重必须高于 `:hover`
+        const hasRule = [...document.styleSheets].some(ss => {
+            try { return [...ss.cssRules].some(r => r.selectorText === '.cell.cursor:hover'); }
+            catch { return false; }
+        });
+        check('存在 `.cursor:hover` 规则（把焦点权重提一级）', hasRule, hasRule ? '找到' : '缺失 ⇒ hover 会盖掉焦点');
+        // 顺带验：光标格此刻的 computed border 仍应是蓝（未加真:hover 时也成立）
+        const cur = getComputedStyle(cell);
+        check('cursor+hover-sim 格的 border 仍是主色蓝', cur.borderTopColor === 'rgb(32, 128, 240)', cur.borderTopColor);
+    }
+
+    // ── 6 ·圆角与放大**不许动布局**（本项目最硬的约束）────────────────────
+    R.push('');
+    R.push('—— 焦点态（直角 + 极轻抬升）不许改变网格几何 ——');
+    {
+        const grid = build(SCENES[0]);
+        await new Promise(r => requestAnimationFrame(r));
+        const cells = [...grid.children];
+
+        // ① 布局几何必须完全不变。
+        // ⚠️⚠️ **量 `offsetLeft/offsetWidth`，不能量 `getBoundingClientRect()`**——
+        // rect **包含 transform 的视觉缩放**（scale 1.02 ⇒ 143px 变 146px），
+        // 用它量会得到"transform 改了宽度"的**假阳性**（第一版就踩了，报 143 vs 142 FAIL）。
+        // `offset*` 是**布局值**，不受 transform 影响 ⇒ 正是这里要问的问题。
+        const before = cells.map(c => [c.offsetLeft, c.offsetWidth]);
+        const st = document.createElement('style');
+        st.textContent = '.cell { transform: none !important; }';
+        document.head.appendChild(st);
+        await new Promise(r => requestAnimationFrame(r));
+        const after = cells.map(c => [c.offsetLeft, c.offsetWidth]);
+        st.remove();
+        await new Promise(r => requestAnimationFrame(r));
+
+        const geomSame = before.length === after.length && before.every((v, i) => v[0] === after[i][0] && v[1] === after[i][1]);
+        check('★焦点态不改变任何一格的 offsetLeft / offsetWidth（布局值）', geomSame,
+            geomSame ? `6 格全部一致（如 ${before[0]}）` : `改前 ${JSON.stringify(before.slice(0,2))} vs 改后 ${JSON.stringify(after.slice(0,2))}`);
+
+        // ①b 反过来：rect **应该**因为 scale 变大 —— 证明放大真的生效了（不是白写）
+        const rectScaled = cells[0].getBoundingClientRect().width;
+        check('★但 rect **确实**被放大了（证明 scale 真的生效，不是空规则）',
+            rectScaled > cells[0].offsetWidth,
+            `rect ${rectScaled.toFixed(1)}px > offset ${cells[0].offsetWidth}px`);
+
+        // ② 放大后相邻格**不能**被推开（这里用 rect 是对的 —— 它量的是**视觉**间距）
+        const cur = grid.children[0], other = grid.children[1];
+        const cb = cur.getBoundingClientRect(), ob = other.getBoundingClientRect();
+        const gapCursor = Math.round(ob.left - cb.right);
+        check('★抬升不推开相邻格（transform 不参与布局）', gapCursor > 0,
+            `两格视觉间距 ${gapCursor}px`);
+
+        // ③ 放大后**不能盖住**相邻格的文字区：间距 10px，1.02 放大让每侧多 1%
+        const w = cb.width, grow = w * 0.02;
+        check('★放大溢出量 < 间距 10px（相邻格不会被压住）', grow * 2 < 10,
+            `格宽 ${Math.round(w)}px，放大溢出 ${(grow*2).toFixed(1)}px/侧`);
+
+        // ④ 圆角必须是 **0**（业主 2026-10-04 明确"不要圆角"）
+        const radius = getComputedStyle(cells[0]).borderTopLeftRadius;
+        check('★网格卡片无圆角（业主 2026-10-04 定：直角）', parseFloat(radius) === 0, radius);
+
+        // ⑤ transition 必须**显式列出 transform** —— 原来 `all .1s` 对"抬起"太急
+        const tr = getComputedStyle(cells[0]).transitionProperty;
+        check('★transition 显式含 transform（不是 all —— 抬升需要更长的时长）',
+            tr.includes('transform'), tr);
+        const dur = getComputedStyle(cells[0]).transitionDuration;
+        check('transform 的时长 > 其余属性（抬起要"亮一下再稳"）',
+            /(^|,\s*)0?\.18s/.test(dur) || dur.includes('0.18s'), dur);
+    }
+
+    return R.join('\n');
+};
+</script>
+</body>
+</html>

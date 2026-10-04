@@ -4,15 +4,16 @@
  * ## 为什么是composable 而不是子组件
  *
  * 子组件（`PreviewLayer.vue`）需要双向 props + 事件来回传（`previewKey` 改回去、
- * `fileList` 传进来、`imageBox` 传进来、`picking` 传进来……），而预览层**要读的是网格里
- * 真实 DOM**（`imageBox` 定位格子、`elementsFromPoint` 反查卡片）——
- * 那些 DOM 在父组件里，子组件拿不到，只能靠 ref 层层传，**props 链会比现在更长**。
- * composable 的边界正好落在"状态与计算"上，DOM 那一侧留一个 ref 进来即可。
+ * `fileList` 传进来、`picking` 传进来……），而预览层要读网格里的真实 DOM
+ * （`document.querySelector('.n-image-preview')` 量图、`'.n-image-preview-wrapper'`
+ * 量可视区）—— 那些 DOM 由 naive-ui teleport 到 body、在父组件的模板之外，
+ * 子组件拿不到，只能靠 ref 层层传，**props 链会比现在更长**。
+ * composable 的边界正好落在"状态与计算"上，DOM 那一侧留少量查询进来即可。
  *
  * ## 契约：参数进、状态出，**不反向写参数**
  *
- * 入参全是 `Ref` / `ComputedRef`（只读用），返回的 `openPreview` / `closePreview` /
- * `locateInGrid` 是全部写入口。
+ * 入参全是 `Ref` / `ComputedRef`（只读用）与两个**回调**（`onLocate` / `syncCursor`），
+ * 返回的 `openPreview` / `closePreview` / `locateInGrid` 是全部写入口。
  *
  * `previewKey`（"正在看哪一条"）是唯一真相，索引 / 显示哪张图 / 有没有升级成清晰版
  * 全部从它派生。列表一变（刷新 / 盘插拔 / 换目录 / 搜索），**不可能**留下"索引指向了
@@ -22,7 +23,15 @@
  * 关闭时 `previewKey` 是**故意留着**的，否则淡出动画期间 naive-ui 会拿到
  * `src=undefined`，屏幕上出现一个没有 src 的 `<img>`。见 `previewOpenState` 的完整注释。
  *
- * 同族手法：`currentPath → crumbs`、`dataSource + searchText → fileList`。
+ * ## 与网格选择器的关系（2026-10-04）
+ *
+ * 网格选择器住在 `useGridCursor` 那边，本模块**不持有**它，只在三个口子上
+ * **单向**同步过去（见 `syncCursor` / `onLocate` 的注释）。刻意不共用同一个状态：
+ * `watch(previewKey)` 挂着"停住就升级清晰版"，那会去读移动硬盘上的原图 ——
+ * 方向键每按一次就改一次 `previewKey` 的话，每按一次排一次读盘（第一约束）。
+ *
+ * 同族手法：`currentPath → crumbs`、`dataSource + searchText → fileList`、
+ * `cursorKey → 行结构`（`useGridCursor`）。
  */
 import { computed, h, nextTick, onMounted, ref, watch } from 'vue';
 import { NIcon } from 'naive-ui';
@@ -49,18 +58,40 @@ export function usePreview(deps: {
     previewUrlOf: (item: WiredFileInfo) => string;
     /** 「换封面」模式进行中？那时单击格子是选中，不弹预览 */
     picking: RefLike<boolean>;
-    /** 网格滚动容器，`locateInGrid` 要在里面找格子 */
-    imageBox: RefLike<HTMLElement | null>;
+    /**
+     * 「定位」时把网格选择器落到某一条。由 `useGridCursor.focusCursor` 提供。
+     *
+     * ## 为什么是注入而不是本模块自己改
+     *
+     * 选择器状态住在 `useGridCursor` 那边（它还管方向键移动）。若本模块直接写
+     * `cursorKey`，就出现**两个状态、两个写入口** —— 那正是"预览和网格高亮对不上"的来源。
+     * 只留一个写入口（`focusCursor`）之后，两条路（定位 / 方向键）天然一致。
+     */
+    onLocate: (key: string) => void;
+    /**
+     * 把 `previewKey` 同步给网格选择器。**只同步，不滚动、不闪烁。**
+     * 由 `useGridCursor` 提供（它持有 `cursorKey`）。
+     *
+     * 调用的三个口子（也就是 `previewKey → cursorKey` 单向同步的**全部**出口）：
+     * ① `openPreview` —— 打开预览
+     * ② `onPreviewCurrentChange` —— 预览里 `← →` 翻页
+     * ③ （定位那条走`onLocate`，因为它还要滚动 + 闪烁）
+     *
+     * ⚠️ 键盘 `Enter` 打开预览时**没有鼠标事件** ⇒ 单击图片那条"卡片 `@click`
+     * 顺带移了选择器"的自动生效路径（`Image.mjs:99-101` 不阻止冒泡）在键盘下不存在
+     * ⇒ 必须在这里显式同步，否则"打开预览后按 ←"会从错误的位置开始翻。
+     */
+    syncCursor: (key: string) => void;
 }) {
-    const { fileList, keyOf, displaySrcOf, previewUrlOf, picking, imageBox } = deps;
+    const { fileList, keyOf, displaySrcOf, previewUrlOf, picking, onLocate, syncCursor } = deps;
 
     // ── 状态 ────────────────────────────────────────────────────────────────
     /** 正在看哪一条（`keyOf` 的值）。空串 = 没在看。**唯一真相**：索引、图、清晰版全从它派生。 */
     const previewKey = ref('');
     /** 已经升级成清晰版的那一条。空串 = 没有 */
     const sharpKey = ref('');
-    /** 「定位」之后被描边闪一下的那一条。空串 = 没有 */
-    const locatedKey = ref('');
+    // ⚠️ `locatedKey` 已移走：定位高亮与它的闪烁现在归`useGridCursor` 管。
+    // 两个模块各留一份"哪一格在闪"就是两个写入口 ⇒ 高亮迟早对不上（见 deps 的 onLocate）。
 
     /**
      * 「停住就升级成大图」的待办计时器。
@@ -196,18 +227,35 @@ export function usePreview(deps: {
     /**
      * `← →` 键或工具条上那两颗箭头：naive-ui 算好新索引后发回来，这里把它**落回 key**。
      * 刻意不存索引 —— 存索引就等于把"列表不变"当成前提了。
+     *
+     * ⚠️ 这里也同步网格选择器：预览层里 `← →` 翻的**就是网格那一条**（同一个序列），
+     * 不同步的话"翻到第 12 张、按回车定位"会落回第 1 格 —— 用户以为在定位刚看的那张。
+     * 这是 `previewKey → cursorKey` 单向同步的**第三个也是最后一个**口子。
      */
     const onPreviewCurrentChange = (i: number) => {
         const e = previewEntries.value[i];
-        if (e) previewKey.value = e.key;
+        if (e) {
+            previewKey.value = e.key;
+            // 只同步选择器，**不滚动、不闪**：此刻遮罩还盖着，滚了也看不见。
+            // 滚动是「定位」那一刻的事（`locateInGrid` → `focusCursor({scroll, blink})`）。
+            syncCursor(e.key);
+        }
     };
 
-    /** 点网格里那张图 = 打开预览层（卡片自己的预览已被 `preview-disabled` 挡住） */
+    /**
+     * 点网格里那张图 = 打开预览层（卡片自己的预览已被 `preview-disabled` 挡住）。
+     *
+     * ⚠️ 这里同步网格选择器，是为了覆盖**键盘打开**那条路：鼠标单击图片时，
+     * 卡片的 `@click` 会顺带把选择器移过去（冒泡到卡片，`Image.mjs:99-101` 不阻止），
+     * 但 `Enter` 打开时**没有鼠标事件** ⇒ 那条自动生效的路径不存在。
+     * 在这里补上，两个入口就都齐了。
+     */
     const openPreview = (item: WiredFileInfo) => {
         if (picking.value) return;
         const e = previewEntries.value.find(x => x.key === keyOf(item));
         if (!e) return;
         previewKey.value = e.key;
+        syncCursor(e.key);
         // 开关在这里翻，而不是靠"key 从空变成有值"派生 —— 关的时候 key 是**故意留着**的
         previewOpenState.value = true;
         // 同一条重开也要重新排升级：`watch(previewKey)` 只在 key **变化**时跑，而重开同一条
@@ -216,23 +264,24 @@ export function usePreview(deps: {
     };
 
     /**
-     * 「定位」：关预览 → 网格滚到那一格 → 描边闪一下。
+     * 「定位」：关预览 → 把网格的选择器落到那一格（滚进视口 + 闪一下）。
      *
-     * 找格子用 `:data-key` 比对，**不用 CSS 选择器拼字符串** —— 目录名里什么字符都可能有
-     * （引号 / 方括号 / 空格），拼选择器迟早炸；dataset 比较不吃这一套。
-     * ⚠️ 先关再滚：留着遮罩的话，滚动结果被盖住，等于没定位。
+     * ## 为什么"找格子 + 滚动"搬走了
+     *
+     * 那是**选择器的本职**（`useGridCursor.focusCursor`）。留在这里会出现两个
+     * 各自能滚动的出口（这里一个、方向键移动一个），迟早有一处忘了更新高亮。
+     * 搬走之后"定位"和"用方向键走过去"走的是**同一条路**。
+     *
+     * ⚠️ 预览层开着时 `← / →` 是 naive-ui 自己监听的 keydown（`ImagePreview.mjs:78-100`），
+     * 它每次翻页都会回填 `previewKey` ⇒ 关掉预览时 `previewKey` 已是"最后看的那一条"
+     * ⇒ 定位落点是**当前正在看的那条**，不是打开时那条。这是现有行为，不改。
      */
     const locateInGrid = () => {
         const k = previewKey.value;
-        const box = imageBox.value;
-        if (!k || !box) return;
-        const card = Array.from(box.querySelectorAll<HTMLElement>('.image-box-item'))
-            .find(el => el.dataset.key === k);
+        // ⚠️ 先关再定位：留着遮罩的话，滚动结果被盖住，等于没定位。
+        // `closePreview` **不清** `previewKey`（见它的注释），所以这里还读得到。
         closePreview();
-        if (!card) return;
-        locatedKey.value = k;
-        card.scrollIntoView({ block: 'center', behavior: 'smooth' });
-        window.setTimeout(() => { if (locatedKey.value === k) locatedKey.value = ''; }, 1200);
+        if (k) onLocate(k);
     };
 
     watch(previewKey, scheduleSharpUpgrade);
@@ -512,7 +561,7 @@ export function usePreview(deps: {
         // 写入口
         openPreview, closePreview, locateInGrid,
         // 状态（供模板与工具条读）
-        previewKey, locatedKey,
+        previewKey,
         previewSrcList, previewIndex, previewOpen, previewFile,
         // naive-ui 事件
         onPreviewShowChange, onPreviewCurrentChange,

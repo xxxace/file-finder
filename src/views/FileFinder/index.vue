@@ -152,7 +152,12 @@
             <div v-for="(item) in fileList" :key="item.dir + '/' + item.name" class="image-box-item"
                 :class="{
                     pickable: picking && isPickable(item), picked: isPicked(item),
-                    located: locatedKey !== '' && locatedKey === keyOf(item),
+                    // 焦点（选择器）= 灰白；定位闪烁 = 蓝。三套颜色互不重叠，
+                    // 理由与手法见 `docs/DESIGN-GRID-CURSOR-2026-10-04.md` §五。
+                    // ⚠️ 判据读 `cursorItem`（派生）而不是 `cursorKey` —— `fileList` 一变
+                    // key 就成了野值，读派生量自动不画高亮，不需要任何同步代码去清它。
+                    cursor: cursorItem !== undefined && cursorKey === keyOf(item),
+                    blink: blinkKey !== '' && blinkKey === keyOf(item),
                     opening: opening !== '' && opening === keyOf(item),
                 }"
                 :data-key="keyOf(item)"
@@ -225,14 +230,24 @@
                 <span v-if="cancelling" class="scan-hint">当前这个目录扫完就停</span>
             </template>
         </div>
+        <!-- 「这个封面下有哪几个文件」那一层。
+             ⚠️ 键盘进出全靠**焦点**，不是靠额外的守卫分支：
+             `isGridKeyBlocked` 的 `e.target !== document.body` 在焦点落在某一项上时
+             自动为真 ⇒ 网格的方向键监听收不到事件，**两个选择器不会打架**。
+             而这一层若不给焦点，网格方向键就会穿透进来（用户以为在网格里按了方向键，
+             结果焦点还停在一个看得见却没焦点的弹层上）。
+             两条都是**必做项**，少任何一条键盘就失灵。-->
         <n-popover :show="popover.visible" :x="popover.x" :y="popover.y" trigger="manual" placement="bottom"
-            @clickoutside="popover.visible = false">
+            @clickoutside="closeFileList">
             <!-- 同理换掉 n-space：这里 v-for 的是文件列表，个数天生会变 -->
-            <div class="hstack">
-                <div v-for="(item) in popover.files" class="file-item" :key="item.name" @dblclick="openFile(item.name)"
-                    :title="item.name + ` ${getSize(item.size) || ''}`">
-                    <div class="file-cover" :title="item.name || ''"></div>
-                    <span>{{ item.name }}</span>
+            <div class="hstack" tabindex="-1" ref="fileListBox"
+                @keydown.stop="onFileListKeydown">
+                <div v-for="(f, i) in popover.files" class="file-item"
+                    :class="{ 'file-cursor': i === fileCursor }" :key="f.name"
+                    @dblclick="openFile(f.name)"
+                    :title="f.name + ` ${getSize(f.size) || ''}`">
+                    <div class="file-cover" :title="f.name || ''"></div>
+                    <span>{{ f.name }}</span>
                 </div>
             </div>
         </n-popover>
@@ -242,8 +257,14 @@
              原来那个含扩展名的名字是**刻意的**（资源管理器里要拿它去搜），不能为了新用途把它改掉。
              两个都留着，各有各的场合。 -->
         <n-popover :show="ctxMenu.visible" :x="ctxMenu.x" :y="ctxMenu.y" trigger="manual" placement="bottom-start"
-            @clickoutside="ctxMenu.visible = false">
-            <div class="hstack">
+            @clickoutside="closeCtxMenu">
+            <!-- ⚠️ 这里**不主动给** `tabindex` / 焦点：两个"复制文件名"是纯鼠标动作。
+                 但**必须**处理两件事（2026-10-04 code review 抓出）：
+                 ① `@keydown.stop` —— 菜单开着时按键**不许穿透到网格**
+                    （方向键在网格上乱跑、Esc 关了弹层）；
+                 ② `closeCtxMenu()` **收回焦点** —— 用户点过按钮后焦点会留在
+                    那个即将 `display:none` 的按钮上 ⇒ 之后方向键失灵且看不出原因。 -->
+            <div class="hstack" tabindex="-1" @keydown.stop="onCtxMenuKeydown">
                 <n-button size="small" @click="copyName">复制文件名</n-button>
                 <n-button size="small" @click="copyNameStem">复制文件名（去后缀）</n-button>
             </div>
@@ -274,13 +295,15 @@
 </template>
 
 <script setup lang="ts">
-import { formatBytes, ancestorsOf, foldCrumbList, ANCHOR_PREFIX } from '@/utils';
+import { formatBytes, ancestorsOf, foldCrumbList, isGridKeyBlocked, ANCHOR_PREFIX } from '@/utils';
 import type { PathCrumb } from '@/utils';
 import { apiUrl, getAction, ApiError } from '@/utils/request';
 import folderIcon from '@/assets/fileTypeIcon/folder.png';
 import usePinYin from '@/hooks/usePinYin';
 import useNotify from '@/hooks/useNotify';
 import { usePreview } from './usePreview';
+import { useGridCursor } from './useGridCursor';
+import { decideOpen, isMultiFileCard } from './openDecision';
 import { Search, Refresh, FootstepsOutline, ChevronDownOutline } from '@vicons/ionicons5';
 import { NButton, NInput, NIcon, NImage, NImageGroup, NTag, NPopover, NSpin, NAlert, NTooltip, NDropdown, useLoadingBar, useDialog } from 'naive-ui';
 import FolderSelector from '@/components/FolderSelector/index.vue';
@@ -323,6 +346,27 @@ export interface NavEntry {
     searchText: string;
     /** 离开这一屏时的滚动位置 —— 返回时恢复（原来是挂在 `openStack` 元素上的可选字段） */
     scrollY: number;
+    /**
+     * 离开这一屏时**选择器停在哪一格**（`keyOf` 的值）—— 返回时恢复。
+     *
+     * ## 为什么必须存在（2026-10-04 业主真机报）
+     *
+     * 「进子目录 → 看中某格 → 返回」之后，选择器会跳回视口第一行。
+     * 而 `scrollY` **恢复得很好**（用户还在原来那一屏的中间）——
+     * 于是屏幕上一半是"原来的位置"、一半是"选择在第一行"，**自相矛盾**。
+     * 症状比"丢失"更糟：用户会以为程序随机跳格。
+     *
+     * ## 它是"这一屏的样子"的一部分，不是例外
+     *
+     * 滚动位置、搜索词、选择器三者同族：**都是"我坐在这一屏时看到了什么"**。
+     * 已有两个存在 `NavEntry` 上，选择器漏了。现在补齐 ⇒ 切来切去时整个视口状态完整回来。
+     *
+     * ⚠️ 存 **key** 不存坐标：坐标是布局的函数（列数随窗口宽度变，见 `gridGeometry` 的注释），
+     * 存坐标就得跟着窗口宽度同步，那是会漏的同步代码。
+     * 恢复时那个 key 若不在这一屏里，`cursorItem` 算出来是 `undefined` ⇒ **不画高亮**，
+     * 下一��方向键自动重新激活 —— 这条派生链已经在了（`useGridCursor` 文件头）。
+     */
+    cursorKey: string;
 }
 
 // 与 electron/server/videoExt.ts 的 VIDEO_EXT 保持一致（渲染层不能 import server，保留正则副本）。
@@ -414,6 +458,24 @@ const popover = ref<{
     files: [],
     cover: undefined
 });
+/** 文件列表弹层里高亮的那一项（键盘用）。-1 = 没高亮 */
+const fileCursor = ref(-1);
+/** 弹层里那个可聚焦的容器。`tabindex="-1"` 让它能被 `.focus()`，但**不进Tab 序**。 */
+const fileListBox = ref<HTMLDivElement | null>(null);
+
+/**
+ * 关掉文件列表弹层，并把焦点**还给 body**。
+ *
+ * ⚠️ 收回焦点是**必做项**，不是优化：焦点若留在已被 `v-show` 隐藏的元素上，
+ * `document.activeElement` 就既不是 body 也不是可见元素 ⇒ 网格的方向键被守卫挡住
+ * （`isGridKeyBlocked` 的 `target !== body`）⇒ **方向键永久失灵**，且看不出原因。
+ * 同款风险在 `usePreview` 里已经吃过一次（那个 `<img src=undefined>` 的教训）。
+ */
+const closeFileList = () => {
+    popover.value.visible = false;
+    fileCursor.value = -1;
+    (document.activeElement as HTMLElement | null)?.blur?.();
+};
 
 /**
  * 右键上下文菜单的状态。**独立一份**，不和上面那个 `popover`（多文件封面弹层）混用 ——
@@ -598,6 +660,82 @@ const refreshAfterApply = () => {
     if (cur && !readOnlyLevel.value) fetchFolder(cur.path, cur.mode);
 }
 
+/**
+ * 弹「这个封面下有哪几个文件」那一层。**双击与回车共用这一个出口。**
+ *
+ * 为什么要抽出来：原来这段写在 `handleOpen` 里，坐标取自 `e.clientX/Y`。
+ * 键盘 `Enter` **没有事件对象** ⇒ 不抽的话，键盘打开多文件封面会**毫无反应**
+ * （静默失败：按了回车，屏幕上什么也没发生）。
+ *
+ * @param x,y 弹层左上角的视口坐标。鼠标路径传事件坐标，键盘路径传卡片中心。
+ */
+
+/**
+ * 弹「这个封面下有哪几个文件」那一层。**双击与回车共用这一个出口。**
+ *
+ * 为什么要抽出来：原来这段写在 `handleOpen` 里，坐标取自 `e.clientX/Y`。
+ * 键盘 `Enter` **没有事件对象** ⇒ 不抽的话，键盘打开多文件封面会**毫无反应**
+ * （静默失败：按了回车，屏幕上什么也没发生）。
+ *
+ * @param x,y 弹层左上角的视口坐标。鼠标路径传事件坐标，键盘路径传卡片中心。
+ */
+const openFileList = (item: WiredFileInfo, x: number, y: number) => {
+    if (!isMultiFileCard(item)) return;
+    popover.value.visible = true;
+    popover.value.x = x;
+    popover.value.y = y;
+    popover.value.files = item.files;
+    popover.value.cover = item;
+    fileCursor.value = 0;
+    // ⚠️ `nextTick` 是必需的：这一层是 `:show` 驱动的，此刻 DOM 还没渲染出来，
+    // 直接 focus 落空（`null`）⇒ 方向键就穿透到网格去了。
+    void nextTick(() => fileListBox.value?.focus());
+};
+
+/**
+ * 弹层内的键盘。**只管这一层，不碰网格。**
+ *
+ * 隔离靠两件事，都是结构性的、不靠额外判断：
+ * ① 监听挂在弹层容器上并 `.stop` ⇒ 事件不会冒泡到 window，网格的监听**收不到**
+ * ② 焦点在这一层里 ⇒ 即使事件漏过去，`isGridKeyBlocked` 的 `target !== body` 也会挡住
+ *
+ * ↑↓ 到头**停住**（不环绕）：这是一份"选哪个文件"的短列表，环绕会让人点错文件。
+ */
+const onFileListKeydown = (e: KeyboardEvent) => {
+    const n = popover.value.files.length;
+    if (!n) return;
+    if (e.key === 'ArrowDown') {
+        fileCursor.value = Math.min(fileCursor.value + 1, n - 1);
+        e.preventDefault();
+    } else if (e.key === 'ArrowUp') {
+        fileCursor.value = Math.max(fileCursor.value - 1, 0);
+        e.preventDefault();
+    } else if (e.key === 'Enter') {
+        // ⚠️ `e.repeat` 必须挡：长按回车会**重复打开同一个文件**
+        // （实测按住 1 秒 = 33 次 keydown）⇒ 33 个播放器进程。
+        // ↑↓ 相反，**要** repeat（长按连续选是想要的）。
+        if (e.repeat) return;
+        const f = popover.value.files[fileCursor.value];
+        if (f) openFile(f.name);
+        e.preventDefault();
+    } else if (e.key === 'Escape') {
+        closeFileList();
+        e.preventDefault();
+    }
+};
+
+/**
+ * 卡片在视口里的中心坐标。**键盘路径专用**（鼠标路径有事件坐标）。
+ * 拿不到元素时退回视口中心 —— 宁可弹在中间，也不能不弹。
+ */
+const cardCenterOf = (item: WiredFileInfo) => {
+    const el = imageBox.value?.querySelector<HTMLElement>(
+        `.image-box-item[data-key="${CSS.escape(keyOf(item))}"]`,
+    );
+    const r = el?.getBoundingClientRect();
+    return { x: r ? r.left + r.width / 2 : window.innerWidth / 2, y: r ? r.top + r.height / 2 : window.innerHeight / 2 };
+};
+
 const handleOpen = (e: MouseEvent, item: WiredFileInfo) => {
     if (loading.value) return;
     if (item.type === 'folder') {
@@ -606,41 +744,146 @@ const handleOpen = (e: MouseEvent, item: WiredFileInfo) => {
         // item.dir 是服务端给的"条目所在目录"，永远是准的。
         openFolderInCover(`${item.dir}/${item.name}`);
     } else {
-        if (e && item.files && item.files.length > 1) {
-            const { x, y } = e;
-            popover.value.visible = true;
-            popover.value.x = x;
-            popover.value.y = y;
-            popover.value.files = item.files;
-            popover.value.cover = item;
+        // ⚠️ 双击的判据是 `isMultiFileCard`（`> 1`），**不是** `isDirCard`（`> 0`）。
+        // 两者回答不同问题，详见 `openDecision.ts` 里那两个函数的注释。
+        // 这里的写法是**既有行为，一个字不改**：单文件目录双击直接打开（不弹层）。
+        if (isMultiFileCard(item)) {
+            openFileList(item, e.clientX, e.clientY);
         } else {
             openFile(item);
         }
     }
-}
+};
+
 /**
- * 离开当前屏之前，把"这一屏的样子"记在**它自己**身上（滚动位置 + 搜索词）。
+ * 网格里按 `Enter`：**只负责执行**，判据在 `openDecision.ts` 里。
  *
+ * ## 为什么判据不在这里
+ *
+ * 判据是被真机报过bug 的地方（2026-10-04：「回车打开的是预览图不是文件」）。
+ * 写在这里的话，探针只能**手抄**一份⇒ 回退真源码时探针依然全绿
+ * （这个错当天已经犯过一次）。现在判据是 `openDecision.ts` 里的纯函数，
+ * 探针与产品**跑同一份代码** —— 规则表与两条⚠️ 判据纪律都写在那个文件头上。
+ *
+ * 这里只做"把动作派发出去"，于是这一层没有一条业务判断。
+ *
+ * ⚠️ `open-item` 传的是 **item** 而不是 `item.files[0].name`：
+ * `openFile` 的字符串分支靠 `popover.cover` 算父目录，而这里没开弹层
+ * ⇒ `cover` 是上一次的残留 ⇒ 会打开错文件。item 分支里"在 files 里找视频"
+ * 那段逻辑（注释就叫"双击封面 = 打开里面的视频"）本来就是为这个场景写的。
+ */
+const onCursorConfirm = (item: WiredFileInfo) => {
+    if (picking.value) {
+        onItemClick(item);
+        return;
+    }
+    if (loading.value) return;
+    const action = decideOpen(item, false);
+    switch (action?.kind) {
+        case 'drill':
+            openFolderInCover(action.path);
+            return;
+        case 'open-item':
+            openFile(item);
+            return;
+        case 'pick-from-list': {
+            const c = cardCenterOf(item);
+            openFileList(item, c.x, c.y);
+            return;
+        }
+        case 'preview':
+            openPreview(item);
+            return;
+    }
+};
+/**
+ * 离开当前屏之前，把"这一屏的样子"记在**它自己**身上。
+ *
+ * 记三样：**滚动位置 + 搜索词 + 选择器停在哪**。
  * 原来是"滚动位置写进 `openStack` 的元素、搜索词压进另一个平行的 `searchStack`"，
  * 两处必须同步、长度还得差 1。现在都写在同一个对象上，不可能错位。
+ *
+ * ⚠️ 2026-10-04 补 `cursorKey`：只恢复滚动、不恢复选择器时，返回后屏幕停在
+ * 原来那一屏的中间、选择器却跳回视口第一行 ⇒ **自相矛盾**，比"丢失"更糟
+ * （用户会以为程序随机跳格）。见 `NavEntry.cursorKey` 的注释。
  */
 const rememberCurrentScreen = () => {
     const cur = history.value[history.value.length - 1];
     if (!cur) return;
     cur.scrollY = imageBox.value?.scrollTop ?? 0;
     cur.searchText = searchText.value;
+    cur.cursorKey = cursorKey.value;
 }
 
 /**
- * 进入某一屏。**所有导航动作都必须从这里过** —— 「记旧屏 → 压新屏 → 取数 → 清搜索词」
- * 这四件事只写一遍；以后新增入口（前进 / 历史列表 / 多标签）也不会漏掉其中一件。
+ * 进入某一屏。**所有导航动作都必须从这里过** —— 「记旧屏 → 压新屏 → 归零视口 → 取数 → 清搜索词」
+ * 这五件事只写一遍；以后新增入口（前进 / 历史列表 / 多标签）也不会漏掉其中一件。
+ *
+ * ## ⚠️ 为什么必须显式**归零滚动**（业主 2026-10-04 真机报）
+ *
+ * 新压的 `NavEntry.scrollY` 是 0，但**那只是一个数字**—— 网格容器的 `scrollTop`
+ * 从来没人归零过（`grep scrollTop` 只有"被记录"和"被恢复"两处，**没有写 0**）。
+ * ⇒ 上一屏滚到第 4000px 时进新屏，容器**还停在4000px**；新屏内容够长的话
+ * 用户看到的是"新目录opened 在半中间"，而面包屑说的是另一个地方 ⇒ **自相矛盾**。
+ * 旧屏的 `scrollY` 记在旧屏的 entry 上（那是"离开时它什么样"），
+ * **和"新屏该从哪儿开始"是两件事** —— 后者归零。
+ *
+ * ⚠️ 归零要**在取数之前**：新屏内容还没渲染时 `scrollTo` 会被 clamp（内容太短）
+ * 或作用在旧内容上。等 `nextTick` 之后那一屏的格子已经在 DOM 里，才归得干净。
  */
 const enterScreen = (path: string, mode: OpenMode = 'cover') => {
     rememberCurrentScreen();
-    history.value.push({ path, mode, searchText: '', scrollY: 0 });
+    // 新的一屏**从零开始**：选择器不继承上一屏的（它属于那一屏，不属于这一屏）
+    history.value.push({ path, mode, searchText: '', scrollY: 0, cursorKey: '' });
     // 进新的一屏不带上一屏的搜索词（原有行为，不动）
     searchText.value = '';
-    fetchFolder(path, mode);
+    /**
+     * 声明"用户在这一屏需要焦点" ⇒ 加载完自动落焦点。
+     *
+     * ⚠️⚠️ **必须放在 `searchText.value = ''` 之后**（业主 2026-10-04 二次报"还是要点一下"）。
+     * 原因：`fileList` 是 `computed(… filterByName(dataSource, searchText))` ——
+     * 清空搜索词**本身就会让列表变一次**（从"筛过的 N 条"变成"全部 M 条"）⇒ 指纹变了
+     * ⇒ `useGridCursor` 里那个 watch 触发 ⇒ **`takeIntent()` 把 armed 消费掉了**。
+     * 于是等真正的 `dataSource` 换新（fetchFolder 成功）时 armed 已是 false
+     * ⇒ **焦点永远不落**。而"点一下"能用，是因为 `onItemClick → focusCursor` 直写 `cursorKey`。
+     *
+     * ⇒ 顺序即依赖：任何**会引起列表变化**的动作做完之后，才声明意图。
+     */
+    noteIntent();
+    /**
+     * 视口归零 —— **两处，缺一不可**：
+     *① 立刻：否则从第 4000px 进新屏，新屏开头那一大截已经滚过去了
+     * ② 取完之后：内容替换时容器高度变化会让偏移漂移，得再压一次
+     *
+     * ⚠️ **不能塞进 `fetchFolder` 内部**：它有 6 个调用点，其中 `onBack`（恢复旧屏的
+     * scrollY）、`onRefresh`、`refreshAfterApply`、`swapTop`（换盘/拔盘）**都不该归零** ——
+     * 那几处的视口是"这一屏自己的状态"，归零会把用户正在看的位置抹掉。
+     * ⇒ 归零是**导航意图**，属于 `enterScreen` 这一个入口。
+     */
+    imageBox.value?.scrollTo(0, 0);
+
+    // 取数（内部会 `++fetchSeq`）⇒ **之后**才读序号，读到的才是"我这次"的号
+    const done = fetchFolder(path, mode);
+    const myFetchSeq = fetchSeq;
+
+    /**
+     * 视口归零的**第二次**（取数落地后再压一次 —— 内容替换会让偏移漂移）。
+     *
+     * ⚠️ 判据必须问「**我还是不是最新那次请求**」，而不是「当前栈顶是不是我去的那个路径」。
+     * `path` 相等只说明"我和别人去了同一个地方"，不等于"我是最新的"：
+     * A→B→A 连点两次时，第一个 A 的响应回来时栈顶也是 A ⇒ path 判据会放行
+     * ⇒ 归零把第二次 A 的视口抹掉。
+     *
+     * `fetchFolder` 自己用 `seq !== fetchSeq` 挡了"过期响应写 dataSource"，
+     * 但它**不把序号告诉调用方** ⇒ 这里自己取一次比。
+     * ⚠️ `fetchSeq` 声明在本文件下方（模块顶层先声明后赋值）—— 读它发生在 `enterScreen` 体内，
+     * 而 `enterScreen` 只能被 setup 之后的事件调用 ⇒ 运行时已初始化，**不是 TDZ**。
+     *（这个顺序是刻意的：别把 `const myFetchSeq` 提到 `fetchFolder` 之前。）
+     */
+    void done.then(() => {
+        if (fetchSeq !== myFetchSeq) return;   // 已被更新的请求接管 ⇒ 不碰别人的视口
+        void nextTick(() => imageBox.value?.scrollTo(0, 0));
+    });
 }
 
 /** 网格双击下钻：进子目录 */
@@ -710,7 +953,11 @@ const openFile = async (item: WiredFileInfo | string) => {
         // 父目录必须取 cover.dir：那个封面是"子目录收敛"出来的，它的真实父目录比
         // **当前屏的路径（`currentPath`）深一层**。原来用"栈顶路径"拼，会拼出
         // `E:/sample/videos/cover/xxx.mp4` 这种不存在的路径（cover 是封面图名，不是目录名）。
-        popover.value.visible = false;
+        // ⚠️ 走 `closeFileList()` 而不是直接置 false：它顺带**收回焦点**。
+        // 直接置 false 的话，焦点仍留在已被 `v-show` 隐藏的那一项上 ⇒
+        // `document.activeElement` 既不是 body 也不是可见元素 ⇒
+        // 网格方向键被守卫永久挡住（键盘打开后紧接着按方向键就失灵）。
+        closeFileList();
         target = `${popover.value.cover?.dir}/${item}`;
     } else {
         // 目录不走这条路（handleOpen 会把目录交给 openFolderInCover）
@@ -778,6 +1025,42 @@ const openFile = async (item: WiredFileInfo | string) => {
  * 所以 `item.name` 拆开之前的样子就是答案。少一次字符串处理，也少一处会算错的地方
  * （`xxx.tar.gz` 这种多后缀的名字，剥点剥不对）。
  */
+/**
+ * 关掉右键菜单，**并把焦点收回 body**。
+ *
+ * ⚠️ 收回焦点是**必做项**（2026-10-04 code review 抓出，与 `closeFileList` 同一个坑）：
+ * 用户点了菜单里的「复制文件名」，那个 `n-button` 就**拿到了焦点**；而菜单是
+ * `:show` 驱动的（`n-popover` 走`v-show`）⇒ 菜单关掉后，那个按钮变成
+ * `display:none`，可 `document.activeElement` **仍然停在它上面**。
+ *
+ * 后果：焦点停在一个不可见元素上 ⇒ 方向键的行为变得不可预期（事件 target 是那个
+ * 隐藏按钮），用户看到的现象是"按方向键毫无反应 / 选择器在看不见的地方乱跑"，
+ * 且**完全看不出原因** —— 这类 bug 最难定位。
+ *
+ * （注释里原本写"故意不给焦点 ⇒ 没有焦点要收回"：**漏了用户点按钮会给它焦点**这件事。）
+ */
+const closeCtxMenu = () => {
+    ctxMenu.value.visible = false;
+    (document.activeElement as HTMLElement | null)?.blur?.();
+};
+
+/**
+ * 右键菜单内的按键。**只有 Esc 有用**，其余一律吞掉。
+ *
+ * 为什么需要它（不能只靠 `@keydown.stop`）：`stop` 只保证事件不到 window，
+ * 但**方向键/回车在这个容器里按下去仍然什么也不该发生** —— 显式吞掉是给未来留的
+ * 护栏（将来给这个菜单加键盘导航时，这里就是入口）。
+ *
+ * ⚠️ `Esc` 关掉菜单时**顺手收回焦点**（与 `closeCtxMenu` 同一个理由）。
+ */
+const onCtxMenuKeydown = (e: KeyboardEvent) => {
+    if (e.key === 'Escape') {
+        closeCtxMenu();
+        e.preventDefault();
+    }
+    // 其余键：不处理，但也不让它们到网格（`@keydown.stop` 已经拦了冒泡）
+};
+
 const onContextMenu = (e: MouseEvent, item: WiredFileInfo) => {
     ctxMenu.value.visible = true;
     ctxMenu.value.x = e.clientX;
@@ -793,7 +1076,9 @@ const onContextMenu = (e: MouseEvent, item: WiredFileInfo) => {
  */
 const copyName = async () => {
     const name = ctxMenu.value.name;
-    ctxMenu.value.visible = false;
+    // ⚠️ 走 `closeCtxMenu()`：它顺带**收回焦点**（点过的按钮会把焦点留在
+    // 一个 `display:none` 的元素上 ⇒ 方向键随后失灵，见它的注释）
+    closeCtxMenu();
     if (!name) return;
     const err = await ipcRenderer.invoke('copyText', name);
     if (err) notify('error', '复制失败', String(err));
@@ -808,7 +1093,7 @@ const copyName = async () => {
  */
 const copyNameStem = async () => {
     const stem = ctxMenu.value.stem;
-    ctxMenu.value.visible = false;
+    closeCtxMenu();          // 同上：收回焦点
     if (!stem) return;
     const err = await ipcRenderer.invoke('copyText', stem);
     if (err) notify('error', '复制失败', String(err));
@@ -895,9 +1180,13 @@ const onBack = async () => {
     if (history.value.length <= 1) return;
     history.value.pop();
     const to = history.value[history.value.length - 1];
-    // 恢复这一屏的搜索词。fileList 是 computed，词一变列表自己会重新筛 ——
+    // 恢复这一屏的搜索词。fileList 是 computed，词一变列表自己会重新筛——
     // 不需要（也不能）再手动调一次过滤
     searchText.value = to.searchText;
+    // 恢复选择器。⚠️ **必须与scrollY 一起恢复** —— 只恢复滚动会让屏幕停在原来那一屏的
+    // 中间、选择器却跳回视口第一行（自相矛盾）。见 `NavEntry.cursorKey` 的注释。
+    // 那个 key 若不在这一屏里，`cursorItem` 是 undefined ⇒ 不画高亮（派生链已经在了）。
+    setCursorKey(to.cursorKey);
     await fetchFolder(to.path, to.mode);
     // 滚动位置必须等新列表渲染出来再恢复：在旧内容上滚会被 clamp 掉
     if (to.scrollY) {
@@ -1260,24 +1549,44 @@ const onMoreSelect = (key: string) => {
 /** 是否处于"挑封面"模式 */
 const picking = ref(false);
 
+// ── 网格选择器域接线（方向键 / 回车）───────────────────────────────────────
+// ⚠️ **必须排在 `usePreview` 之前**：下面 `usePreview` 要拿本块的两个回调
+//（`focusCursor` 与 `syncCursor`）。而本块反过来需要 `previewOpen` ——
+//那个用**函数** `() => previewOpen.value` 传（不是 `Ref`），所以它在声明之前
+// 写成也没问题：按键一定发生在挂载之后，那时 `previewOpen` 早已初始化。
+// ⇒ 这不是"侥幸"，是 `useGridCursor` 的 `isPreviewOpen` 入参**只能**收函数的原因
+// （传 `Ref` 会拿到创建那一刻的快照恒为 `false`，于是"预览开着时回车要 bail"
+//   静默失效、且没有任何报错）。
+const {
+    cursorKey, cursorItem, blinkKey,
+    focusCursor, setCursorKey, noteIntent, dispose: disposeGridCursor,
+} = useGridCursor({
+    fileList, keyOf, imageBox,
+    isPreviewOpen: () => previewOpen.value,
+    onConfirm: onCursorConfirm,
+});
+
 // ── 预览域接线 ───────────────────────────────────────────────────────────────
-// 整块搬进 ./usePreview.ts：它是本文件里最独立的一个域（只靠 6 个依赖进来，
+// 整块搬进 ./usePreview.ts：它是本文件里最独立的一个域（只靠几个依赖进来，
 // 不反向写任何外部状态），后续给预览加花样有个自己的家。
 //
-// ⚠️ **接线必须放在这里**（`picking` 声明之后）：`fileList`(L446) / `picking` / `imageBox`(L434)
-// 三个依赖都还没准备好就传进去，composable 拿到的是空壳—— `used before declaration`
-// 这类报错就是顺序错了的信号。
+// ⚠️ `onLocate` / `syncCursor` 指向上面那块：网格选择器归 `useGridCursor` 管，
+//    本模块只**单向**同步过去，不持有 `cursorKey`（理由见 usePreview 文件头）。
 // ⚠️ 渲染落点仍在组件里：模板里那个空的 `n-image-group`，以及末尾那个**非 scoped** 的
 //    style 块（工具条与图都被 naive-ui teleport 到 body，`<style scoped>` 够不到它们）。
 // ⚠️ `previewedImgProps` 必须由本组件 provide 进 `imageContextKey` —— 预览层由
 //    `n-image-group` 渲染，父链是 `ImagePreview ← ImageGroup ← 本组件`，
 //    而 naive-ui 没给 group 留 `previewed-img-props` 这个 prop。
 const {
-    openPreview, closePreview, locateInGrid, previewKey, locatedKey,
+    openPreview, closePreview, locateInGrid, previewKey,
     previewSrcList, previewIndex, previewOpen, previewFile,
     onPreviewShowChange, onPreviewCurrentChange,
     previewToolbar, previewedImgProps, dispose: disposePreview,
-} = usePreview({ fileList, keyOf, displaySrcOf, previewUrlOf, picking, imageBox });
+} = usePreview({
+    fileList, keyOf, displaySrcOf, previewUrlOf, picking,
+    onLocate: (k) => focusCursor(k, { blink: true }),
+    syncCursor: setCursorKey,
+});
 
 provide(imageContextKey, { previewedImgPropsRef: previewedImgProps });
 
@@ -1303,11 +1612,17 @@ const isPickable = (item: any) =>
 const isPicked = (item: any) => picked.value.has(`${item.dir}/${item.name}`);
 
 /**
- * 模式态下的单击 = 选中 / 取消。**非模式态直接返回**，所以"单击不打开"这条既有习惯没变
- * （双击才打开，那一条一个字没改）。
+ * 模式态下的单击 = 选中 / 取消。**非模式态**把选择器移过去。
+ *
+ * ⚠️ 常态这一句是**新增**的：单击卡片只落焦点，**不开预览** ——
+ * 开预览仍然只由单击图片触发（既有行为，见模板里 `img-props.onClick`），
+ * 双击也一个字没改。选择器与"打开"是**两件事**，不合并。
  */
 const onItemClick = (item: any) => {
-    if (!picking.value) return;
+    if (!picking.value) {
+        focusCursor(keyOf(item));
+        return;
+    }
     if (!isPickable(item)) return;
 
     const key = `${item.dir}/${item.name}`;
@@ -1383,7 +1698,11 @@ function filterByName(list: WiredFileInfo[], value: string) {
 }
 
 const onKeyup = (e: KeyboardEvent) => {
-    if (e.target !== document.body) return;
+    // ⚠️ 用共用的 `isGridKeyBlocked` 而不是原来那句 `e.target !== document.body`：
+    // 它是后者的**超集**（多一条 `contenteditable`）。方向键那边也用同一个函数，
+    // 于是"什么键归网格"这件事**只有一处定义**（见 `utils/index.ts` 的完整注释：
+    // 那里说明了为什么不能改成 DOM 类名探测）。
+    if (isGridKeyBlocked(e)) return;
 
     /**
      * 预览层（全屏遮罩）开着时：`回车` = 定位，其余单键**全部短路**。
@@ -1393,10 +1712,15 @@ const onKeyup = (e: KeyboardEvent) => {
      * 屏幕上却看不出跑偏；F5 还会把列表换掉（预览序列跟着变）。
      * ⚠️ `← / →` 不在这里管 —— 那是 naive-ui 自己监听的 keydown（`ImagePreview.mjs:78-100`），
      * 它只在预览打开时挂上，与这里不重复；`Esc` 同理（它自己关）。
-     * ⚠️ 这里用 **keyup**，naive-ui 用 **keydown**，两者不会互相吃掉。
+     * ⚠️ **方向键与回车在 keydown 阶段就已被 `useGridCursor` bail 掉了**（它先注册、
+     *     且带 `isPreviewOpen()` 判断），所以这里处理 `Enter` 不会"定位 + 打开"一起触发。
+     * ⚠️ 这里用 **keyup**，naive-ui 与网格都用 **keydown**，两者不会互相吃掉。
+     * ⚠️ **`e.repeat` 也要挡**（与网格那边同一条纪律）：keyup 在长按时**同样重复**
+     *     （实测按住回车 1 秒 = 33 次 keyup）⇒ 不挡就是"一次长按定位 33 次"，
+     *     而每次定位都会 `scrollIntoView` + 滚一次，视觉上是画面抽搐。
      */
     if (previewOpen.value) {
-        if (e.key === 'Enter') locateInGrid();
+        if (e.key === 'Enter' && !e.repeat) locateInGrid();
         return;
     }
 
@@ -1440,6 +1764,9 @@ onUnmounted(() => {
     ipcRenderer.off('ff-disks-changed', onDisksChangedIpc);
     // 预览层那个"停住 0.3s 才换清晰版"的挂起计时器：组件没了就别再起来
     disposePreview();
+    // 网格选择器：摘掉它的 keydown（方向键/回车）与 resize 监听。
+    // ⚠️ **必须摘**：留着就是"看不见的全局监听" —— 组件没了还在拦方向键。
+    disposeGridCursor();
 });
 
 
@@ -1754,6 +2081,21 @@ const onDisksChangedIpc = (_e: unknown, disks: { serial: string; drive: string }
 .image-box-item {
     position: relative;
 
+    /**
+     * ⚠️ **这里刻意不加 `border-radius`**（业主 2026-10-04 明确要求）。
+     *
+     * 2026-10-04 我按 PS5 那套观感加过 8px 圆角（PS5 官方 UI 用圆角表达"可进入"，
+     * 直角留给"这是内容"），业主看过后说**不要**。⇒ 网格卡片维持直角。
+     *
+     * 留这条注释是为了**防止将来又被加回来**：它不是"还没做"，是"做过并被否掉"。
+     * 顺带记下那条仍然有效的约束 ——
+     * ⛔ 将来若有人想加圆角，**绝不能顺手加 `overflow: hidden`**：
+     * 它会**裁掉外扩的焦点环**（`box-shadow` 画在盒子外侧），两者互斥。
+     * 只加 `border-radius` 不裁图是可行的（`box-shadow` 会自动跟随），
+     * 但既然直角是主人定的，就别动。
+     */
+    border-radius: 0;
+
     &.pickable {
         cursor: pointer;
     }
@@ -1763,22 +2105,146 @@ const onDisksChangedIpc = (_e: unknown, disks: { serial: string; drive: string }
     }
 
     /*
-     * 「定位」闪一下（1.2s 后由 locateInGrid 摘掉）。
-     * ⚠️ 与上面 `.picked` **同一个手法**：只改那个本来就存在的 border 的颜色 + 加一层
-     * 外发光（`box-shadow` 不参与布局）—— 网格 6 列的宽度是"margin 撑间距 + 宽度补偿"
-     * 算出来的，任何新增的盒模型属性都会把它带偏。
-     * 颜色用 naive-ui 的 info 蓝而**不是**绿：这个网格里绿色的意思已经是"换封面模式下已选中"
-     * （`.picked`），两个概念不能共用一个颜色。
+     * 「定位」闪一下（1.2s 后由 `useGridCursor` 摘掉 `blinkKey`）。
+     *
+     * ⚠️ 三条硬约束（与 `.picked` / `.cursor` 同一手法）：
+     *   ① **只改那个本来就存在的 `border` 的颜色 + `box-shadow`** ——
+     *      网格 6 列的宽度是"margin 撑间距 + `width:100%/6−10px` 补偿回来"算出来的，
+     *      任何新增参与布局的盒模型属性都会把它带偏。
+     *   ② **不加外发光**：焦点（`.cursor`）是**双层环**，这里再叠就是三圈。
+     *   ③ 颜色与绿（`.picked` 已选）、主色蓝（`.cursor` 焦点）**都不重叠**。
      */
-    &.located {
-        border-color: #2080f0;
-        box-shadow: 0 0 0 2px rgba(32, 128, 240, .45);
+    &.blink {
+        border-color: #f0a020;
     }
 
-    /* 与 .located 同手法：只改颜色/外发光，不碰盒模型（网格宽度是 margin 算出来的）。 */
-    &.opening {
+    /*
+     * 焦点（方向键 / 单击落点）—— **常驻**。
+     *
+     * ## 为什么是「主色**不透明**实心环 + 内层深色细线」
+     *
+     * ⚠️ **原来的样子等于没有焦点**：边框色与 `:hover` **完全相同**（都是 `#7a8da9`），
+     * 只有阴影形状不同 ⇒ 鼠标划上去和键盘选中看起来一样，用户判断不出自己在哪。
+     * 业主 2026-10-04 直接说"很丑"。**根因不是审美，是缺了区分。**
+     *
+     * 改法有官方依据，不是凭感觉：
+     * - **Apple HIG（focus-and-selection）**：*"use a focus ring for a text or search
+     *   field, but use a highlight in a list or collection"*；紧接着又说
+     *   *"Although you can use a focus ring to draw attention to an item that **fills a
+     *   cell, like a photo**, it's usually easier to..."* ⇒ **填满单元格的图片就该用环**，
+     *   我们的缩略图格正是这一类。
+     * - **Fluent 2（accessibility 官方页）**：焦点要让人能*"visually determine **what they
+     *   will interact with**"*，且引 WCAG 的**非文本元素 ≥ 3:1**。
+     *
+     * ##⚠️ 环**必须不透明**（这是实测数据，不是偏好）
+     *
+     * 探针 `docs/probes/grid-cursor-visual/` 合成后算了 WCAG 对比度：
+     * | 外圈 alpha | 合成色 | vs 页面底(#f5f5f5) |
+     * |---|---|---|
+     * | .55 | rgb(128,181,242) | **1.96:1** ✗ |
+     * | .75 | rgb(85,157,241) | 2.58:1 ✗ |
+     * | .85 | rgb(64,146,241) | 2.92:1 ✗ |
+     * | **1.0（不透明）** | rgb(32,128,240) | **3.56:1** ✓ |
+     *
+     * ⇒ **半透明的环在浅色底上必然不过 3:1**，而封面图绝大多数是浅色的。
+     * 这就是"看着糊、说不上来哪里丑"的量化本质。
+     *
+     * **内层深色细线**（`rgba(0,0,0,.75)`）的作用不是"提亮"，而是给环一条
+     * 与**任何**底色之间的暗侧分界 —— 亮图上它压住图片的亮部，暗图上外圈自己够。
+     * ⚠️ 试过"内层亮白线"，在白图上对比 **1.00:1**（等于没有）⇒ 那个方向是错的。
+     * ⚠️ 内层 alpha 也**扫过表**，不是拍的：
+     *   | alpha | 合成到白图 | vs 白图 | 与中灰图明度差 |
+     *   |---|---|---|---|
+     *   | .45 | rgb(140,140,140) | 3.36:1 | **2** ✗ 在中灰底上等于隐形 |
+     *   | .65 | rgb(89,89,89) | 7.00:1 | 18 ✗ 仍不够 |
+     *   | **.75** | rgb(64,64,64) | **10.37:1** | **28** ✓ |
+     * ⇒ .75 是**同时**满足"压住亮图"与"在中灰底上不隐形"的最小值。
+     *
+     * ## 三套颜色语义（互不重叠，网格里一格最多同时挂两个）
+     *
+     * | 状态 | 表现 | 含义 |
+     * |---|---|---|
+     * | hover | 灰边框 `#7a8da9` + 淡背景 | 鼠标经过 |
+     * | **焦点** | **主色蓝实心环 + 内层深线** | **键盘站在这一格** |
+     * | 已选 | 绿边框 `#18a058` | 已进"换封面"的结果集 |
+     * | 定位闪烁 | 琥珀 `#f0a020`，1.2s | 刚从预览层飞回来 |
+     *
+     * ⚠️ 定位闪烁**改成琥珀**：它原来也用主色蓝，与焦点撞色 ——
+     * "这一格是焦点" 与 "它刚闪了一下" 是两件事，共用颜色就分不出来了。
+     * 琥珀与绿/蓝/灰都拉得开，且"暖色 = 刚刚发生"这个联想是通的。
+     */
+    /*
+     * 焦点（方向键 / 单击落点）—— **常驻**。
+     *
+     * ## ⚠️ 改过三版，每一版都是被真机报回来打脸的（记录在此，别再走回头路）
+     *
+     * | 版 | 长相 | 业主反应 |
+     * |---|---|---|
+     * | v1 | 2px 灰边框 + 2px 同色外发光 | "很丑"（**且与 hover 同色** ⇒ 等于没有焦点）|
+     * | v2 | 4px 双环（外主色 + 内白/内黑）+ scale 1.02 | "又粗，配色又难看" |
+     * | **v3（现）** | **照 hover 的底子，只把边框换成主色 + 极轻抬升** | 待验 |
+     *
+     * ## v3 的依据：它长在 hover 上，不是另起一套
+     *
+     * `hover` 已经是这个网格里"这一格被我碰着"的既有观感：
+     * 1px 边框 + `rgba(110,123,173,.16)` 淡背景 + `1px 0 10px` 柔和阴影。
+     * v2 把它换成 4px 双环 + 抬升，等于**在同一格里叠了两套语言**（一套柔、一套硬）⇒ 视觉打架。
+     *
+     * ⇒ v3 只做**一件事**：在 hover 的基础上，**边框换成主色**（认得出是"焦点"不是"鼠标经过"），
+     * 背景与阴影**沿用 hover 的**，抬升压到 1.012（几乎察觉不到，只为了"被选中"有一点重量）。
+     * 细线 + 主色 + 淡底 = 内敛，且与网格其余部分同一套观感。
+     *
+     * ## 仍然必须与 hover 可区分（这是 v1 的教训，不能丢）
+     *
+     * hover 边框 `#7a8da9`（灰蓝，饱和 28%）vs 焦点 `#2080f0`（主色蓝，饱和 87%）
+     * ⇒ **饱和度差 59**，加上焦点有淡底而 hover 只有淡背景 ⇒ 一眼能分辨。
+     * 探针 `docs/probes/grid-cursor-visual/` 守着这条。
+     *
+     * ⚠️ **不加外扩光环**：`box-shadow` 只留 hover 那个 `1px 0 10px` 柔和阴影
+     * （焦点时略强一点）。外扩环是"粗"的来源，也是它把 `transform` 变成必需（抬起来补偿粗）。
+     * 去掉环之后抬升就不必要了—— 但留一点点，因为它让"选中"有一点**重量**（PS5 的"power-on"）。
+     */
+    &.cursor {
+        // 边框是唯一的"识别特征"：从 hover 的灰蓝换成主色蓝
         border-color: #2080f0;
-        box-shadow: 0 0 0 2px rgba(32, 128, 240, .45);
+        // 背景与阴影**照抄 hover**（略强一档，让焦点比 hover 更"实"一点）
+        background-color: rgba(110, 123, 173, .16);
+        box-shadow: 1px 0 10px rgba(122, 141, 169, .15);
+        // 极轻抬升：1.012 而不是 v2 的 1.02 —— 后者在 10px 间距里很显眼，显眼=吵
+        transform: scale(1.012);
+        /* 抬起来的那一格要压住相邻格（`z-index` 只在定位元素上生效，故 position: relative 已在） */
+        z-index: 1;
+    }
+
+    /*
+     * 焦点 + 鼠标同时在那一格上。
+     *
+     * ⚠️ 必须显式写这一条：`:hover` 的选择器权重与 `.cursor` **相同**
+     * （都是 0,1,0 —— 前者是伪类、后者是类），而 `:hover` 写在样式表**更靠后**
+     * ⇒ 鼠标停在焦点格上时，hover 的灰边框会**盖掉**焦点的主色蓝，
+     * 焦点环整个消失（业主鼠标操作时正是最需要看见焦点的时候）。
+     * 这里把焦点态**提一级权重**，让"焦点 + hover"里焦点赢。
+     */
+    &.cursor:hover {
+        border-color: #2080f0;
+        background-color: rgba(110, 123, 173, .16);
+        box-shadow: 1px 0 10px rgba(122, 141, 169, .15);
+        transform: scale(1.012);
+    }
+
+    /*
+     * 「正在双击打开」—— 只读层解析锚点那一瞬。
+     * ⚠️ 与 `.blink` 同样用主色蓝，但**不冲突**：两者互斥出现
+     *   （`opening` 要点鼠标双击才会置位，方向键移动不会置位它），
+     *   且 `opening` 那一格盖着深色遮罩 + 转圈，识别靠的是遮罩不是边框。
+     * 只改颜色/外发光，不碰盒模型（网格宽度是 margin 算出来的）。
+     */
+    &.opening {
+        border-color: #525e72;
+        // ⚠️ 原来这里也是主色蓝 + 单层发光，与新的 `.cursor` 焦点环**撞色**。
+        // 降级成中性深灰：这一态只出现在"只读层点开文件、等盘回来"的那一瞬，
+        // 而那一格盖着深色遮罩 + 转圈（识别靠的是遮罩，不是边框）⇒ 不需要抢颜色的注意力。
+        box-shadow: 0 0 0 2px rgba(82, 94, 114, .35);
     }
 
     /* 遮罩与转圈分开两层：`.opening-mask` 负责铺满，`.n-spin` 留在 naive-ui 自己的定位里
@@ -1880,7 +2346,14 @@ const onDisksChangedIpc = (_e: unknown, disks: { serial: string; drive: string }
     justify-content: flex-end;
     align-items: center;
     box-sizing: border-box;
-    transition: all .1s ease-in-out;
+    /**
+     * ⚠️ 原来是 `all .1s`。focus 现在会**放大 1.02**，`.1s` 对"抬起"这个动作太快
+     * （像抽搐）。⇒ 拆开写：颜色/阴影仍 .1s（跟手），transform 给 .18s + 缓出
+     *（PS5 那种"亮一下再稳"的手感）。`all` 也一并去掉 —— 它会让`transform`
+     * 与未来任何新属性共用同一条时长，调试时看不出是谁在动。
+     */
+    transition: border-color .1s ease-in-out, box-shadow .1s ease-in-out,
+        background-color .1s ease-in-out, transform .18s cubic-bezier(.2, .9, .3, 1.1);
     user-select: none;
     font-size: 16px;
 
@@ -1971,6 +2444,21 @@ const onDisksChangedIpc = (_e: unknown, disks: { serial: string; drive: string }
         word-break: break-all;
         text-overflow: ellipsis;
         overflow: hidden;
+    }
+
+    /*
+     * 键盘高亮的那一项（`Enter` 打开多文件封面后，↑↓ 走的就是它）。
+     * ⚠️ 沿用网格那条"只改边框色 + 外发光"的手法：`.file-item` 继承了
+     * `.image-box-item` 的 `border: 1px solid transparent` 与 `transition`，
+     * 所以**不需要**新增任何盒模型属性，只改颜色即可。
+     * 颜色用主色蓝：这一层与网格不共处一屏（它是浮在网格上的弹层），
+     * 撞色不会造成歧义，而蓝色与"当前选中"是通用联想。
+     */
+    &.file-cursor {
+        border-color: #2080f0;
+        /* 与网格的 `.cursor` 同一套焦点语言（不透明主色环 + 内层深线）——
+           这一层是浮在网格上的弹层，不与网格同屏，但"我在哪"的手感要一致。 */
+        box-shadow: 0 0 0 2px rgba(0, 0, 0, .75), 0 0 0 4px #2080f0;
     }
 }
 

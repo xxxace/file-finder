@@ -33,3 +33,9 @@ release-verify/
 
 # 探针的**构建产物**（源码是 .cjs 探针脚本，所以不能用 *.cjs，只按 bundle 文件名精确挡）
 docs/probes/*/bundle*.cjs
+# grid-cursor-focus 注入用的 IIFE（build.mjs / build-decide.mjs 从真源码生成）。
+# ⚠️ 同样不能写 *.js —— 探针页面 index.html 就是 .js，会被一起挡掉）
+docs/probes/grid-cursor-focus/generated-guard.js
+docs/probes/grid-cursor-focus/generated-decide.js
+# build-decide 的中间产物（正常会被 rmSync 清掉，兜底）
+docs/probes/grid-cursor-focus/.decide-entry.mjs

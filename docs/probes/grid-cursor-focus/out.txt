@@ -1,0 +1,96 @@
+
+(electron) 'console-message' arguments are deprecated and will be removed. Please use Event<WebContentsConsoleMessageEventParams> object instead.
+[page] %cElectron Security Warning (Insecure Content-Security-Policy) font-weight: bold; This renderer process has either no Content Security
+  Policy set or a policy with "unsafe-eval" enabled. This exposes users of
+  this app to unnecessary security risks.
+
+For more information and help, consult
+https://electronjs.org/docs/tutorial/security.
+This warning will not show up
+once the app is packaged.
+  PASS  真判据已注入（utils/index.ts 的 isGridKeyBlocked）
+  PASS  真判据已注入（openDecision.ts 的 decideOpen/isDirCard/isMultiFileCard）
+  PASS  起始选择器已激活   → k0
+  PASS  焦点在 body：→ 移动了选择器   → k0 → k1
+  PASS  弹层打开后焦点落在弹层容器上   → div#popBox.hstack
+  PASS  ★焦点在弹层里：方向键**没有**动网格选择器   → 仍为 k1
+  PASS  ★弹层内 ↓ 移动的是文件高亮   → 0 → 1
+  PASS  弹层内 ↓ 没有冒泡到网格   → k1
+  PASS  Esc 后弹层关闭
+  PASS  ★Esc 后焦点回到 body（收回成功）   → body
+  PASS  ★Esc 之后方向键立刻恢复可用   → k1 → k2
+  PASS  ★预览开着：回车**没有**触发打开   → opened=[]
+  PASS  预览开着：回车触发了定位   → located=["k2"]
+  PASS  预览关着：回车触发打开   → opened=["k2"]
+  PASS  预览关着：回车**没有**定位   → located=[]
+  PASS  ★焦点在输入框：方向键不抢（守卫生效）   → k2
+  PASS  守卫判据：target 是 input
+
+—— T7b 焦点归还：弹层关后焦点在按钮上，方向键仍须可用 ——
+  PASS  ★焦点确实在按钮上（弹层归还后的状态）   → button#opener
+  PASS  ★焦点在按钮上时**不挡**方向键（旧判据在这里会挡 ⇒ 就是那个 bug）   → 按钮不吃方向键 ⇒ 放行
+  PASS  ★端到端：焦点在按钮上时按 → 真的走通了（没被守卫吃掉）
+  PASS  对照：焦点在弹层输入框 ⇒ 挡住方向键
+
+—— T15 Enter 分支也必须过守卫（搜索框 / IME 选词不能被抢）——
+  PASS  ★焦点在搜索框：回车被守卫挡下（不打开）   → 结果 bail:守卫 · opened=0
+  PASS  焦点在按钮：回车放行（按钮不吃回车的导航语义）   → 结果 打开 · opened=1
+  PASS  焦点在 body：回车正常打开   → 结果 打开
+  PASS  长按回车仍只算一次（守卫放行但 repeat 挡下）   → 结果 bail:长按
+  PASS  守卫：target 是 body ⇒ 放行
+  PASS  守卫：target 是 document ⇒ 放行
+  PASS  守卫：target 是 window ⇒ 放行
+  PASS  守卫：target 是 null ⇒ 放行
+  PASS  守卫：target 是普通 div（网格容器）⇒ 放行
+  PASS  ★守卫：target 是 button ⇒ **放行**（它不吃方向键；旧判据误挡 ⇒ 那正是本bug）
+  PASS  守卫：target 是 input ⇒ 挡住
+  PASS  守卫：target 是 textarea ⇒ 挡住
+  PASS  守卫：target 是 select ⇒ 挡住
+  PASS  守卫：contenteditable ⇒ 挡住
+  PASS  守卫：role=combobox（n-select 触发器）⇒ 挡住
+  PASS  真布局：20 格 / 6列 ⇒ 分成 4 行   → 4 行，tops=10,100,190,280
+
+—— T10 回车打开什么：判据必须落在 files 而不是 type ——
+  PASS  目录只含 1 个文件 ⇒ 直接打开它（不是开预览）   → "直接打开"
+  PASS  ★这一格 type确实是 image（证明只看 type 会错判）   → image
+  PASS  目录含 2 个文件 ⇒ 弹文件列表   → "弹文件列表"
+  PASS  真图片（无 files）⇒ 开内置预览   → "开内置预览"
+  PASS  视频 ⇒ 系统打开（交给系统播放器）   → "直接打开"
+  PASS  目录 ⇒ 下钻   → "下钻"
+  PASS  isDirCard(单文件目录) = true
+  PASS  isMultiFileCard(单文件目录) = false（双击不弹层，既有行为）
+  PASS  isDirCard(真图片) = false
+  PASS  isDirCard(files:[]) = false（空数组不算目录代言）
+
+—— T11 每屏记忆：返回后选择器不能丢 ——
+  PASS  返回后滚动位置恢复   → 4200
+  PASS  ★返回后选择器恢复（不是视口第一行）   → 第一层/第7格
+  PASS  ★新建的一屏 cursorKey 为空（不继承上一屏）   → ""
+  PASS  恢复一个不存在的 key：只是不画高亮，不抛错   → 已经不存在的格子
+
+—— T12 长按回车：e.repeat 必须挡住（否则 1 秒 = 33 次打开）——
+  PASS  ★长按 33 次 keydown ⇒ 只打开 **1** 次   → opened=["k1"]（期望 1 个）
+  PASS  ★手动连按 3 次 ⇒ 打开 3 次（挡的是repeat 不是次数）   → opened 长度=3
+  PASS  ★方向键的 repeat **不挡**（长按连续移动是特性）   → k1 → k2
+
+—— T13 加载完自动落焦点：不能等用户再按一次 ——
+  PASS  加载中按方向键：动作被跳过（格子还没渲染）   → 什么都不做（加载中）
+  PASS  ★但"需要焦点"这个意图**被记下了**（置位在 return 之前）   → true
+  PASS  ★加载完且之前有意图 ⇒ 自动落焦点
+  PASS  意图用掉即清（不会在刷新时乱跳）
+  PASS  ★无意图（冷启动/纯鼠标）⇒ 不自动落焦点
+  PASS  ★刷新时长度不变 ⇒ watch 不触发（不重置用户正在看的焦点）
+  PASS  ★切屏时 0 → 有内容 ⇒ watch 触发
+
+—— T14 换屏判据：不能用「长度 0→有」，要用「key 集合变了」——
+  PASS  加载中：指纹未变 ⇒ 不触发   → fired=0
+  PASS  ★加载完换成别的屏⇒ 触发   → fired=1
+  PASS  ★刷新同屏（key 不变）⇒ 不触发   → fired=1
+  PASS  （对照）旧屏 4 个→ 新屏 1 个：旧判据 len>0&&prev===0 成立吗   → 结果 false（这就是不落焦点的原因）
+  PASS  （对照）旧屏 0 个 → 新屏 1 个：旧判据才成立（只在冷启动那种情形）   → 结果 true
+
+0 log
+
+─────────────────────────────
+66 PASS / 0 FAIL
+

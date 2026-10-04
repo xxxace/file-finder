@@ -202,3 +202,88 @@ export function foldCrumbList(crumbs: PathCrumb[], max = 4): CrumbFold | null {
     if (hidden.length < 2) return null;
     return { head, hidden, tail };
 }
+
+/**
+ * 这次按键**不该**被网格的方向键 / 回车接管吗？
+ *
+ * ## 判据：焦点所在元素**会不会消费方向键**（白名单，不是黑名单）
+ *
+ * ⚠️⚠️ **这里换过一次判据对象**（2026-10-04，业主三次真机报"还是要点一下才生效"）。
+ * 原来写的是 `target !== document.body` —— "焦点不在 body 上就归它"。**那是错的**：
+ *
+ * ### 为什么错的（业主自己诊断出来的，我核实后确认）
+ *
+ * 打开「缓存记录」弹层 ⇒ naive-ui 的 `VFocusTrap` 记住**打开它的那个按钮**；
+ * 关闭弹层时 `returnFocusOnDeactivated`（**默认 true**）把焦点**还给那个按钮**
+ * （vueuc `focus-trap/src/index.js:122-127`：`lastFocusedElement.focus()`）。
+ * ⇒ **焦点永远回不到 body** ⇒ `target !== document.body` 恒为真 ⇒ **方向键永久被挡**。
+ * 而"点一下网格"恰好把焦点变回 body ⇒ 这就是**"每次都要点一下"的确切机制**。
+ *
+ * ⇒ 判据必须问的是「**焦点在不在一个会吃方向键的东西上**」，
+ * 而不是「焦点在不在 body 上」。**按钮不吃方向键**（它只吃 Enter / Space）⇒ 焦点在按钮上
+ * 应当**放行**。
+ *
+ * ## 为什么用白名单（列出"要挡的"）而不是黑名单
+ *
+ * 黑名单要穷举"什么会吃方向键"，而这个列表是**开放的**（将来加个 slider、树选择、
+ * 数字输入框…都会进来）⇒ 漏一个就是"那个控件里方向键失灵"这种**极难定位**的 bug。
+ * 白名单只列**本项目真实存在的**三类（`input` / `select` / `contenteditable`）⇒ 稳。
+ *
+ * | 焦点在哪| 方向键被谁吃 | 放行？ |
+ * |---|---|---|
+ * | `body` / 网格卡片 | 没人（我们要接管） | ✅ |
+ * | **按钮**（11 个 `n-button`）| **没人**（按钮只吃 Enter/Space）| ✅ ← 修的就是这条 |
+ * | `<input>`（搜索框 / 弹层里的输入）| 输入法光标 | ❌ |
+ * | `<textarea>` / `<select>` | 同上 | ❌ |
+ * | `contenteditable` | 同上 | ❌ |
+ * | **弹层内的可交互项**（`n-select` 的下拉等）| 弹层自己 | ❌ |
+ *
+ * ##⛔ 仍然**不能**用"弹层开没开"当判据
+ *
+ * 试过 `document.querySelector('.n-modal-mask, .n-popover')`，**行不通**：
+ * `n-tooltip` 内部**就是** `n-popover`（naive-ui `Tooltip.mjs` 直接 import `Popover_default`），
+ * 而 popover 关闭后 DOM **仍留在页面上**（走 `v-show` 不是 `v-if`）——
+ * 工具条上 4 个 `n-tooltip` 只要被鼠标悬停过一次，方向键就**永久失灵**。
+ * ⇒ **DOM 类名探测 = 猜状态。**
+ *
+ * ## 弹层里的情况怎么办（`n-select` 下拉这种"焦点在弹层内、但弹层自己在处理方向键"）
+ *
+ * 靠**焦点陷阱本身**：弹层开着时 `autoFocus` 把焦点打进弹层，
+ * 而弹层内的输入框/选项**都在下面的白名单里** ⇒ 自动被挡。
+ * 我们自己那个文件列表 popover 更直接：那一层用 `@keydown.stop`（事件到不了 window）
+ * + 容器有 `tabindex="-1"`（焦点在它上面）。
+ *
+ * ## 探针记录（`docs/probes/grid-cursor-focus/`，真 Chromium）
+ *
+ * 这次换判据时补了**两条真机场景的断言**，它们是判据真正生效的原因：
+ * - 「弹层关闭后焦点回到按钮 ⇒ 方向键仍可用」（改之前这里必 FAIL）
+ * - 「焦点在搜索框 ⇒ 方向键被挡」
+ */
+export function isGridKeyBlocked(e: KeyboardEvent): boolean {
+    // ⚠️ 读 **`e.target`**（这次事件的接收者），而不是 `document.activeElement`：
+    // 二者在真事件里通常一致，但 `activeElement` 在**焦点陷阱还焦点的那一瞬**可能
+    // 还没更新，而 `e.target` 是浏览器已经算好的这次事件真正落在谁身上。
+    const t = e.target as HTMLElement | Document | Window | null;
+    if (t == null) return false;
+    // 合成事件（`dispatchEvent`、部分测试工具、iframe 内的派发）的 target 是
+    // `window` / `document` / `body` ⇒ 都没有焦点元素 ⇒ 放行。
+    if (t === document || t === window || t === document.body) return false;
+    // `DocumentFragment` 等非 HTMLElement 的 target：没有 tagName，当作"不在控件里"。
+    const el = t as HTMLElement;
+    if (typeof el.tagName !== 'string') return false;
+
+    // ── 白名单：这三类会消费方向键 ⇒ 键归它们 ──────────────────────────
+    const tag = el.tagName.toUpperCase();
+    if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT') return true;
+    if (el.isContentEditable) return true;
+    // `role` 也算：有些控件用 div + role 伪装（`n-select` 的触发器就是
+    // `role="combobox"` 一类）。不列的话，方向键会在下拉里"穿透到网格"。
+    const role = el.getAttribute?.('role');
+    if (role === 'textbox' || role === 'combobox' || role === 'listbox' || role === 'slider'
+        || role === 'spinbutton' || role === 'tree' || role === 'grid') return true;
+
+    // 其余（按钮、卡片、div…）⇒ **放行**：它们不吃方向键，按键归网格。
+    // ⚠️ 这条"放行"是修好"每次都要点一下"的关键：`n-button` 拿到焦点后
+    // 方向键现在能直接用了，不需要用户去点网格把焦点"洗"回 body。
+    return false;
+}
