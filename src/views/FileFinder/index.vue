@@ -654,27 +654,61 @@ provide(imageContextKey, { previewedImgPropsRef: previewedImgProps });
  * ⚠️ 名称/计数的样式必须**内联**：这块 DOM 由 naive-ui 渲染并 teleport 到 body，
  * 本组件的 `<style scoped>` 够不到它（scoped 只作用于本组件模板里的元素）。
  */
-const PREVIEW_NAME_STYLE = 'margin: 0 4px 0 6px; max-width: 320px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;';
-const PREVIEW_COUNT_STYLE = 'margin-right: 10px; font-size: 13px; opacity: .55; white-space: nowrap;';
+const PREVIEW_NAME_STYLE = 'margin-right: 10px; max-width: min(46vw, 720px); overflow: hidden; text-overflow: ellipsis; white-space: nowrap;';
+const PREVIEW_COUNT_STYLE = 'font-size: 13px; opacity: .55; white-space: nowrap;';
+/** 工具条里那两个分组的外壳。只用 `margin-left:auto` 分左右，不改 naive-ui 的 `justify-content`。 */
+const PREVIEW_GROUP_STYLE = 'display: flex; align-items: center;';
+const PREVIEW_GROUP_LEFT_STYLE = `${PREVIEW_GROUP_STYLE} min-width: 0;`;
+const PREVIEW_GROUP_RIGHT_STYLE = `${PREVIEW_GROUP_STYLE} margin-left: auto;`;
 
+/**
+ * 工具条：**左信息（名称 + 计数） · 右操作（全部按钮）**，底板从"居中胶囊"改成**贴底通栏**。
+ *
+ * ⚠️ 为什么底板必须通栏（2026-10-04，主人裁定「下方的空间尽可能利用，别浪费」）：
+ *   改之前是 `left:50% + translateX(-50%)` 的居中胶囊，而我们的内容（10 颗按钮 + 名称 + 计数）
+ *   在 2048 宽下只有约 844px —— 两侧各空 602px，**那是浪费掉的底板，不是留白**。
+ *   通栏之后那 1200px 变成"信息与操作之间的呼吸"，左侧信息右边操作在2048 宽下各归其位。
+ *   代价（知情选择，实测 `docs/probes/preview-bar/`）：图盒从 `100vh-32` 缩到 `100vh-80`
+ *   （少 48px），但换掉了原先被工具条压住的 88px ⇒ **可见图高净增 40px**（不是变小）。
+ *
+ * 为什么左右分组而不是一颗居中的：
+ *   名称/计数是「我在看哪一条」（信息），按钮是「我能做什么」（操作）。
+ *   2048 宽下居中一坨会让两者挤在中间、左右对称留白，读起来像"漂浮的孤岛"；
+ *   左信息右操作是资源管理器 / Photos / Figma 的通用骨架，视线有固定的落点。
+ *
+ * 顺序：**原有 6 颗一颗没动、✕ 仍在最右**（上次「下载紧邻 ✕ 造成误触」的教训，见上）。
+ * 新的三样（定位/ 上一条 / 下一条）排在按钮组**最左**，和旋转缩放分隔开 ——
+ * 「在哪 / 看哪条」是一组，「把这条图怎么变」是另一组。
+ *
+ * ⚠️ 名称/计数/分组外壳的样式必须**内联**：这块 DOM 由 naive-ui 渲染并 teleport 到 body，
+ * 本组件的 `<style scoped>` 够不到它（scoped 只作用于本组件模板里的元素）。
+ * 底板与 wrapper 的样式走下面那个**非 scoped** 的 style 块。
+ */
 const previewToolbar = ({ nodes }: { nodes: Record<string, any> }) => {
     const total = previewEntries.value.length;
     /** 只有一条时"上一条 / 下一条"是空动作（naive-ui 会首尾环绕 = 原地不动）⇒ 不显示，免得像坏了 */
     const hasNav = total > 1;
+    // 定位：icon 用 ionicons5 的 LocateOutline（准星 = "我在这儿"），tooltip 交给 title
+    const locate = h(NIcon, {
+        size: 28, component: LocateOutline, title: '定位到网格（回车）',
+        style: 'padding: 0 8px; cursor: pointer;',
+        onClick: locateInGrid,
+    });
     return [
-        // 定位：icon 用 ionicons5 的 LocateOutline（准星 = "我在这儿"），tooltip 交给 title
-        h(NIcon, {
-            size: 28, component: LocateOutline, title: '定位到网格（回车）',
-            style: 'padding: 0 8px; cursor: pointer;',
-            onClick: locateInGrid,
-        }),
-        ...(hasNav ? [nodes.prev, nodes.next] : []),
-        h('span', { style: PREVIEW_NAME_STYLE, title: previewFile.value?.name ?? '' },
-            previewFile.value?.name ?? ''),
-        ...(hasNav ? [h('span', { style: PREVIEW_COUNT_STYLE },
-            `${previewIndex.value + 1} / ${total}`)] : []),
-        nodes.rotateCounterclockwise, nodes.rotateClockwise, nodes.resizeToOriginalSize,
-        nodes.zoomOut, nodes.zoomIn, nodes.close,
+        // 左：这一条是谁 + 走到第几条
+        h('span', { style: PREVIEW_GROUP_LEFT_STYLE }, [
+            h('span', { style: PREVIEW_NAME_STYLE, title: previewFile.value?.name ?? '' },
+                previewFile.value?.name ?? ''),
+            ...(hasNav ? [h('span', { style: PREVIEW_COUNT_STYLE },
+                `${previewIndex.value + 1} / ${total}`)] : []),
+        ]),
+        // 右：能做什么。✕ 保持最右。
+        h('span', { style: PREVIEW_GROUP_RIGHT_STYLE }, [
+            locate,
+            ...(hasNav ? [nodes.prev, nodes.next] : []),
+            nodes.rotateCounterclockwise, nodes.rotateClockwise, nodes.resizeToOriginalSize,
+            nodes.zoomOut, nodes.zoomIn, nodes.close,
+        ]),
     ];
 };
 
@@ -2215,5 +2249,56 @@ const onDisksChangedIpc = (_e: unknown, disks: { serial: string; drive: string }
     object-fit: contain;
     overflow: hidden;
     background-image: url(@/assets/fileTypeIcon/blank.svg);
+}
+</style>
+
+<!--
+  预览层的**布局**（2026-10-04）。刻意**不带scoped**，理由与 `HistoryTable` 那个
+  非 scoped 块同源：工具条与图都被 naive-ui teleport 到 body，`<style scoped>`
+  的 data-v属性只打在本组件模板里的元素上，够不到它们。
+
+  隔离靠 `.n-image-preview-container` 前缀 + **多一层祖先**提高特异性 ——
+  naive-ui 的规则是 cssr 运行时注入的单类选择器（`.n-image-preview-toolbar`），
+  同特异性的先后顺序不可控（运行时注入可能排在我的静态样式之后）。加上祖先层之后
+  变成 (0,2,1) 对 (0,1,0)，**稳定赢过顺序**，因此不必写 `!important`。
+
+  ⚠️ 这不是"改naive-ui 的样式值"，是**用它在 CSS 里预留的变量/结构表达布局**：
+  `.n-image-preview-wrapper` 是 `position:absolute; inset:0` 的 flex 容器，
+  我们只给它加padding —— 图的`height:100%` / `width:100%` 是相对**内容盒**解析的，
+  所以 padding 一加，图的可得区域就跟着缩，**不需要碰图本身**（图上有 inline style，
+  碰它要先和 `previewedImgProps` 打架）。
+-->
+<style>
+/* ① 图：上/左/右各留 16px（和改之前一致），底部留 64px = 工具条 48 + 间隙 16。 */
+body > .n-image-preview-container .n-image-preview-wrapper {
+    padding: 16px 16px 64px;
+    box-sizing: border-box;
+}
+
+/* ② 工具条：从「居中胶囊」改成「贴底通栏」，并且去掉 `transform: translateX(-50%)`
+      （那是居中定位的一部分，改成left:0/right:0 之后必须一起去掉，否则整条会左移半屏）。*/
+body > .n-image-preview-container .n-image-preview-toolbar {
+    left: 0;
+    right: 0;
+    bottom: 0;
+    transform: none;
+    height: 48px;
+    padding: 0 16px;
+    border-radius: 0;
+    /* 半透明白字在通栏底板上不够清楚（原来是浮在图上的一小块）⇒ 加实一点，
+       再用一条 1px 上边线把「工具条」和「图」分开，不靠阴影（阴影在贴底时会糊成一片）。*/
+    background: rgba(0, 0, 0, .62);
+    box-shadow: inset 0 1px 0 rgba(255, 255, 255, .08);
+}
+
+/* ③ 悬停反馈：通栏之后按钮散开了，"点了才知道点在哪" 不够 —— 加一档透明度变化。
+      naive-ui 没给工具条图标写 hover（实测 `cssr/index.cssr.mjs:35-38` 只有
+      padding/font-size/cursor + 一个 fade-in transition），所以这里补的是**它没有的东西**。*/
+body > .n-image-preview-container .n-image-preview-toolbar .n-base-icon {
+    transition: opacity .15s ease;
+}
+
+body > .n-image-preview-container .n-image-preview-toolbar .n-base-icon:hover {
+    opacity: .65;
 }
 </style>

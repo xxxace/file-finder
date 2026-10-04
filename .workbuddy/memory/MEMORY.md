@@ -46,6 +46,7 @@
   ⚠️ **构建产物必须精确挡**（2026-10-04 补）：`.gitignore` 加 `docs/probes/*/bundle*.cjs` —— ⚠️ **绝不能用 `*.cjs`**（探针源码本身就是 `.cjs`）；vite 的 `dist` 已被通用规则挡。探针的**中转产物**（如 zip 路径文件）要写进 `os.tmpdir()`，别落探针目录 —— 靠 ignore 兜底不如根本别落进去。
   ⚠️ **CJS bundle 是全量求值的**：`--external:electron` 只把 `require('electron')` 留成外部调用，纯 node 跑到它照样抛 `Cannot find module 'electron'` ⇒ 含 `nativeImage` 的模块要**独立 entry**（合并过一次，`read` 段直接挂）。
   ⚠️ `run.sh` 里的 `env -u ELECTRON_RUN_AS_NODE` 是**真知识不是胶水**（漏了就退化成纯 Node、不跑窗口；**重复 8 份，应收成 1 个共享 runner**）。
+  ⚠️ **改 naive-ui 定位属性时连带清 `transform`**（2026-10-04 抓到）：`left:50% + translateX(-50%)` 改成 `left:0;right:0` 后不一起去掉 transform ⇒ 整条左移半屏，**静态读 CSS 看不出来，只有真排版现形**。同理：被 teleport 到 body 的 DOM **`<style scoped>` 够不到** ⇒ 要非 scoped 块 + **前缀多一层祖先**（cssr 是运行时注入的单类选择器，同特异性先后不可控；加祖先成 (0,2,1) 对 (0,1,0) ⇒ 不必写 `!important`）。
 
 ## 五、当前状态（2026-10-03 · 详情见 `VERDICT-2026-10-03.md`）
 - ⭐ **2026-10-03 23:40 增量对账（Q1）已落地** —— `electron/server/index.ts` 9 处、约 25 行，零入口/零前端改动；

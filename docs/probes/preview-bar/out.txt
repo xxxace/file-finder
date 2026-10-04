@@ -1,0 +1,251 @@
+
+
+===== 视口 1400×900 =====
+{
+  "viewport": {
+    "w": 1402,
+    "h": 901
+  },
+  "toolbarBox": {
+    "x": 0,
+    "y": 853,
+    "w": 1402,
+    "h": 48,
+    "right": 1402,
+    "bottom": 901
+  },
+  "wrapperBox": {
+    "x": 0,
+    "y": 0,
+    "w": 1402,
+    "h": 901,
+    "right": 1402,
+    "bottom": 901
+  },
+  "imgBox": {
+    "x": 16,
+    "y": 16,
+    "w": 1370,
+    "h": 821,
+    "right": 1386,
+    "bottom": 837
+  },
+  "toolbarStyle": {
+    "transform": "none",
+    "borderRadius": "0px",
+    "background": "rgba(0, 0, 0, 0.62)",
+    "position": "absolute",
+    "padding": "0px 16px"
+  },
+  "wrapperStyle": {
+    "transform": "none",
+    "borderRadius": "0px",
+    "background": "rgba(0, 0, 0, 0)",
+    "position": "absolute",
+    "padding": "16px 16px 64px"
+  },
+  "tbFlushBottom": true,
+  "tbFullWidth": true,
+  "tbLeft0": true,
+  "tbNoLeftoverShift": true,
+  "imgOverlapsToolbar": false,
+  "imgGapToToolbar": 16,
+  "gaps": {
+    "top": 16,
+    "left": 16,
+    "right": 16,
+    "bottom": 64
+  },
+  "nameText": "示例作品标题-01",
+  "nameBox": {
+    "x": 16,
+    "y": 866,
+    "w": 106,
+    "h": 22,
+    "right": 122,
+    "bottom": 888
+  },
+  "countText": "示例作品标题-011 / 2|示例作品标题-01|1 / 2|⌖|⌖",
+  "iconCount": 8,
+  "lastIcon": {
+    "x": 1342,
+    "y": 863,
+    "w": 44,
+    "h": 28,
+    "right": 1386,
+    "bottom": 891
+  },
+  "firstNameBox": {
+    "x": 16,
+    "y": 866,
+    "w": 145,
+    "h": 22,
+    "right": 161,
+    "bottom": 888
+  },
+  "overlayBox": {
+    "x": 0,
+    "y": 0,
+    "w": 1402,
+    "h": 901,
+    "right": 1402,
+    "bottom": 901
+  },
+  "hitTopGap": "n-image-preview-overlay",
+  "hitLeftGap": "n-image-preview-overlay",
+  "leftGapTarget": "n-image-preview-overlay",
+  "closedAfterLeftGapClick": true,
+  "tallImgBox": {
+    "x": 16,
+    "y": 16,
+    "w": 1370,
+    "h": 821,
+    "right": 1386,
+    "bottom": 837
+  },
+  "tallOverlapsToolbar": false,
+  "tallGapToToolbar": 16,
+  "longNameBox": {
+    "x": 16,
+    "y": 866,
+    "w": 645,
+    "h": 22,
+    "right": 661,
+    "bottom": 888
+  },
+  "longNameClipped": true,
+  "longNameRightEdge": 661,
+  "lastIconAfterLong": {
+    "x": 1342,
+    "y": 863,
+    "w": 44,
+    "h": 28,
+    "right": 1386,
+    "bottom": 891
+  }
+}
+
+===== 视口 2048×1280 =====
+{
+  "viewport": {
+    "w": 2050,
+    "h": 1281
+  },
+  "toolbarBox": {
+    "x": 0,
+    "y": 1233,
+    "w": 2050,
+    "h": 48,
+    "right": 2050,
+    "bottom": 1281
+  },
+  "wrapperBox": {
+    "x": 0,
+    "y": 0,
+    "w": 2050,
+    "h": 1281,
+    "right": 2050,
+    "bottom": 1281
+  },
+  "imgBox": {
+    "x": 16,
+    "y": 16,
+    "w": 2018,
+    "h": 1201,
+    "right": 2034,
+    "bottom": 1217
+  },
+  "toolbarStyle": {
+    "transform": "none",
+    "borderRadius": "0px",
+    "background": "rgba(0, 0, 0, 0.62)",
+    "position": "absolute",
+    "padding": "0px 16px"
+  },
+  "wrapperStyle": {
+    "transform": "none",
+    "borderRadius": "0px",
+    "background": "rgba(0, 0, 0, 0)",
+    "position": "absolute",
+    "padding": "16px 16px 64px"
+  },
+  "tbFlushBottom": true,
+  "tbFullWidth": true,
+  "tbLeft0": true,
+  "tbNoLeftoverShift": true,
+  "imgOverlapsToolbar": false,
+  "imgGapToToolbar": 16,
+  "gaps": {
+    "top": 16,
+    "left": 16,
+    "right": 16,
+    "bottom": 64
+  },
+  "nameText": "非常非常长的作品标题非常非常长的作品标题非常非常长的作品标题非常非常长的作品标题非常非常长的作品标题非常非常长的作品标题非常非常长的作品标题非常非常长的作品标题非常非常长的作品标题非常非常长的作品标题非常非常长的作品标题非常非常长的作品标题",
+  "nameBox": {
+    "x": 16,
+    "y": 1246,
+    "w": 720,
+    "h": 22,
+    "right": 736,
+    "bottom": 1268
+  },
+  "countText": "非常非常长的作品标题非常非常长的作品标题非常非常长的作品标题非常非常长的作品标题非常非常长的作品标题非常非常长的作品标题非常非常长的作品标题非常非常长的作品标题非常非常长的作品标题非常非常长的作品标题非常非常长的作品标题非常非常长的作品标题2 / 2|非常非常长的作品标题非常非常长的作品标题非常非常长的作品标题非常非常长的作品标题非常非常长的作品标题非常非常长的作品标题非常非常长的作品标题非常非常长的作品标题非常非常长的作品标题非常非常长的作品标题非常非常长的作品标题非常非常长的作品标题|2 / 2|⌖|⌖",
+  "iconCount": 8,
+  "lastIcon": {
+    "x": 1990,
+    "y": 1243,
+    "w": 44,
+    "h": 28,
+    "right": 2034,
+    "bottom": 1271
+  },
+  "firstNameBox": {
+    "x": 16,
+    "y": 1246,
+    "w": 759,
+    "h": 22,
+    "right": 775,
+    "bottom": 1268
+  },
+  "overlayBox": {
+    "x": 0,
+    "y": 0,
+    "w": 2050,
+    "h": 1281,
+    "right": 2050,
+    "bottom": 1281
+  },
+  "hitTopGap": "n-image-preview-overlay",
+  "hitLeftGap": "n-image-preview-overlay",
+  "leftGapTarget": "n-image-preview-overlay",
+  "closedAfterLeftGapClick": true,
+  "tallImgBox": {
+    "x": 16,
+    "y": 16,
+    "w": 2018,
+    "h": 1201,
+    "right": 2034,
+    "bottom": 1217
+  },
+  "tallOverlapsToolbar": false,
+  "tallGapToToolbar": 16,
+  "longNameBox": {
+    "x": 16,
+    "y": 1246,
+    "w": 720,
+    "h": 22,
+    "right": 736,
+    "bottom": 1268
+  },
+  "longNameClipped": true,
+  "longNameRightEdge": 736,
+  "lastIconAfterLong": {
+    "x": 1990,
+    "y": 1243,
+    "w": 44,
+    "h": 28,
+    "right": 2034,
+    "bottom": 1271
+  }
+}

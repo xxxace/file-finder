@@ -1,0 +1,55 @@
+<!doctype html>
+<html lang="zh">
+
+<head>
+    <meta charset="utf-8">
+    <title>probe: 预览层底部通栏工具条</title>
+    <style>
+        /* 视口背景刻意用**亮色**：工具条是半透明白字，若图/底板没真正让出空间，
+           亮底会立刻暴露"文字压在图上"。 */
+        html,
+        body {
+            margin: 0;
+            padding: 0;
+            background: #cfd8e3;
+        }
+
+        /* ══ 以下三条与 src/views/FileFinder/index.vue 末尾非 scoped 块**逐字相同** ══
+           隔离前缀 + 多一层祖先是为了稳定赢过 cssr 运行时注入的单类选择器。 */
+
+        /* ① 图：上/左/右各留 16px（与改之前一致），底部留 64px = 工具条 48 + 间隙 16。 */
+        body>.n-image-preview-container .n-image-preview-wrapper {
+            padding: 16px 16px 64px;
+            box-sizing: border-box;
+        }
+
+        /* ② 工具条：从「居中胶囊」改成「贴底通栏」，且必须去掉 translateX(-50%)。 */
+        body>.n-image-preview-container .n-image-preview-toolbar {
+            left: 0;
+            right: 0;
+            bottom: 0;
+            transform: none;
+            height: 48px;
+            padding: 0 16px;
+            border-radius: 0;
+            background: rgba(0, 0, 0, .62);
+            box-shadow: inset 0 1px 0 rgba(255, 255, 255, .08);
+        }
+
+        /* ③ 悬停反馈：通栏之后按钮散开了，补一档透明度变化。 */
+        body>.n-image-preview-container .n-image-preview-toolbar .n-base-icon {
+            transition: opacity .15s ease;
+        }
+
+        body>.n-image-preview-container .n-image-preview-toolbar .n-base-icon:hover {
+            opacity: .65;
+        }
+    </style>
+</head>
+
+<body>
+    <div id="app"></div>
+    <script type="module" src="./main.js"></script>
+</body>
+
+</html>
