@@ -277,7 +277,7 @@ import usePinYin from '@/hooks/usePinYin';
 import useNotify from '@/hooks/useNotify';
 import { usePreview } from './usePreview';
 import { Search, Refresh, FootstepsOutline, ChevronDownOutline } from '@vicons/ionicons5';
-import { NButton, NInput, NImage, NImageGroup, NTag, NPopover, NSpin, NAlert, NTooltip, NDropdown, useLoadingBar, useDialog } from 'naive-ui';
+import { NButton, NInput, NIcon, NImage, NImageGroup, NTag, NPopover, NSpin, NAlert, NTooltip, NDropdown, useLoadingBar, useDialog } from 'naive-ui';
 import FolderSelector from '@/components/FolderSelector/index.vue';
 import HistoryTable from '@/components/HistoryTable/index.vue';
 import AssistantCoverModal from './AssistantCoverModal.vue';
