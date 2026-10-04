@@ -74,20 +74,42 @@
                     <span class="overview">{{ overview }}</span>
                 </div>
 
+                <!-- 选盘 = 这套缓存的分组维度：先说清"这些缓存属于哪块盘"，再列那块盘缓存过哪些目录。
+                     盘符只是当前挂载点，真正的身份是卷序列号。
+                     2026-10-04 重设计：**下拉 → 盘条 chips**（见 docs/DESIGN-DISK-FILTER-2026-10-04.md）。
+                     原下拉每行写「H: · 43 个目录 / 214 个条目」，盘一多就是一堵字墙；
+                     而"条目数"根本不是选盘时的判据。现在一行 chip 扫完、一下点完，
+                     完整明细（状态 / 标识 / 目录 / 条目 / 最近扫描）挪进悬浮提示，需要时才出现。 -->
                 <div class="g2-disk">
-                    <!-- 选盘 = 这套缓存的分组维度：先说清"这些缓存属于哪块盘"，再列那块盘缓存过哪些目录。
-                         盘符只是当前挂载点，真正的身份是卷序列号。
-                         ⚠️ 不能用 `v-model:value` 再配 `:on-update:value`（两者编译成同一个 prop 名，
-                         后者会把前者的 setter 整个顶掉）。规则：**一个 update 事件只挂一个 handler**。
-                         详见 docs/FIX-2026-09-24-naive-ui-update-prop.md -->
-                    <n-select :value="model.serial" :options="diskOptions" :loading="diskLoading"
-                        style="width: 320px" size="small" :on-update:value="handleSerialChange" />
-                    <!-- 「打开存放文件夹」从总览行挪到这里（和下拉同行）——
-                         这样总览那句能独占整行、不再被挤到换行。
-                         它仍然**不进**折叠区：它是唯一一个不碰任何数据的出口
-                         （系统文件管理器自带回收站和撤销），留在外面。
-                         理由见 docs/DESIGN-CONVERGED-2026-09-24.md §三。 -->
-                    <n-button text size="small" @click="openDataDir">打开存放文件夹</n-button>
+                    <div class="disk-chips" role="group" aria-label="按盘筛选缓存记录">
+                        <n-tooltip v-for="chip in diskChips" :key="chip.key" trigger="hover" placement="top"
+                            :delay="180">
+                            <template #trigger>
+                                <!-- 用真实 <button> 而不是 n-tag / span：chip 是"可点选"的控件，
+                                     必须是键盘可达的按钮（Tab 到、Enter/Space 触发），
+                                     选中态用 aria-pressed 报给读屏。 -->
+                                <button type="button" class="disk-chip"
+                                    :class="{ 'is-active': model.serial === chip.value }"
+                                    :aria-pressed="model.serial === chip.value" :aria-label="chip.ariaLabel"
+                                    @click="handleSerialChange(chip.value)">
+                                    <span v-if="chip.tipDot" class="disk-dot"
+                                        :class="chip.tipDot === 'on' ? 'is-on' : 'is-off'"></span>
+                                    <span class="disk-chip-name">{{ chip.name }}</span>
+                                    <span v-if="chip.count !== undefined" class="disk-chip-count">{{ chip.count }}</span>
+                                </button>
+                            </template>
+                            <div class="disk-chip-tip">
+                                <div class="tip-head">
+                                    <span v-if="chip.tipDot" class="disk-dot"
+                                        :class="chip.tipDot === 'on' ? 'is-on' : 'is-off'"></span>
+                                    {{ chip.tipTitle }}
+                                </div>
+                                <div class="tip-row" v-for="r in chip.tipRows" :key="r.k">
+                                    <span class="tip-k">{{ r.k }}</span><span class="tip-v">{{ r.v }}</span>
+                                </div>
+                            </div>
+                        </n-tooltip>
+                    </div>
                 </div>
 
                 <div class="table-wrap">
@@ -115,7 +137,7 @@
                             <div class="empty-tip">
                                 <div>{{ loading ? '' : (emptyText || '暂无数据') }}</div>
                                 <div v-if="emptyText && !model.path" class="empty-sub">
-                                    在主界面选个文件夹，点「补全这一片」
+                                    {{ model.serial ? '点上面的「全部」看其它盘' : '在主界面选个文件夹，点「补全这一片」' }}
                                 </div>
                             </div>
                         </template>
@@ -145,6 +167,20 @@
                         <n-button size="small" @click="handleMergeCache">合并缓存…</n-button>
                         <span class="mi-hint">只增不删（新增 / 覆盖 / 跳过 会报给你）</span>
                     </div>
+                    <!-- 「打开存放文件夹」从顶部挪到这儿（2026-10-04，用户提的）。
+                         原来把它留在折叠区外面，理由是"它不碰任何数据，别藏起来"——那个理由站不住：
+                         这个折叠区本来就不是纯危险区（备份是安全的、合并只增不删），
+                         真正危险的只有「从文件还原」，而它是靠**自己那身红色**标出来的，不是靠分组。
+                         而且它和上面三项本就是同一件事的两面：那三项是**自动**搬运整库，
+                         这一项是**手动**搬运的入口（缓存库和备份都躺在那个文件夹里）。
+                         顺带解决一个更实在的：它原来压在盘条右侧，占掉约 110px ——
+                         而盘条正是"盘越多越需要横向空间"的那一行。
+                         ⚠️ 代价与补偿：位置原本承担着"这是安全出口"的信号，现在这信号改由 hint 明说。
+                         见 docs/DESIGN-DISK-FILTER-2026-10-04.md §11。 -->
+                    <div class="mi-row">
+                        <n-button size="small" @click="openDataDir">打开存放文件夹</n-button>
+                        <span class="mi-hint">只打开文件夹、不动任何数据（缓存库和备份都在这儿）</span>
+                    </div>
                 </n-collapse-item>
             </n-collapse>
 
@@ -169,7 +205,7 @@
                     </div>
                     <n-pagination size="small" :page="model.pageNo" :page-size="model.pageSize"
                         :disabled="loading" :item-count="model.total" show-size-picker show-quick-jumper :page-slot="7"
-                        :page-sizes="[10, 16, 20, 40, 60, 80, 100]" :on-update:page="handlePageChange"
+                        :page-sizes="[10, 16, 20, 30, 40, 60, 80, 100]" :on-update:page="handlePageChange"
                         :on-update:page-size="handlePageSizeChange">
                         <template #prefix="{ itemCount }">
                             共 {{ itemCount }} 项
@@ -187,11 +223,11 @@ import { ipcRenderer } from 'electron';
 import useNotify from '@/hooks/useNotify';
 import { Search } from '@vicons/ionicons5';
 import {
-    NInput, NButton, NCard, NModal, NPagination, NDataTable, NSpin, NSelect, NAlert, NTag, NIcon,
+    NInput, NButton, NCard, NModal, NPagination, NDataTable, NSpin, NTooltip, NAlert, NTag, NIcon,
     NCollapse, NCollapseItem, useDialog,
 } from 'naive-ui'
 import type { DataTableColumns, DataTableRowKey, DataTableSortState, InputInst } from 'naive-ui'
-import { formatBytes, offlineLabel } from '@/utils';
+import { formatBytes, serialTail } from '@/utils';
 import type { BrowseHistoryWithPagination, OpenMode } from 'electron/server/nedb';
 import { getAction, postAction } from '@/utils/request';
 
@@ -234,6 +270,36 @@ type DiskStats = {
     /** 库文件大小（本地文件）。拿不到就是 undefined，那种情况不显示这一项 */
     dbBytes?: number;
     lastScanAt: string;
+};
+
+/**
+ * 盘条 chips 的一枚（2026-10-04 重设计，见 docs/DESIGN-DISK-FILTER-2026-10-04.md）。
+ *
+ * 为什么整成"预计算好的展示模型"而不是在模板里边取边拼：
+ * chip 面上只留三样东西（状态点 / 名字 / 目录数），**其余明细全在悬浮提示里**。
+ * 把"面上"和"提示里"两类内容一次性算好，模板就只剩渲染 —— 盘一多也不会在模板里堆条件。
+ */
+type DiskChip = {
+    /** 传给 `model.serial` 的值；空串 = 「全部」 */
+    value: string;
+    /**
+     * `v-for` 的 key。**不能直接用 `value`**：克隆盘的卷序列号是同一个
+     * （整盘 Ghost 会连序列号一起复制，服务端 `findDuplicatedSerials` 专门检测这种），
+     * 于是两枚 chip 的 `value` 相同 —— 用 `value` 当 key 会撞 key（Vue 复用错乱 + 控制台告警）。
+     * 盘符才是它们之间唯一不同的东西，所以 key 用 `序列号|盘符`。
+     */
+    key: string;
+    /** 名字位：在线 = 盘符（`H:`），离线 = 序列号后 4 位，全部 = `全部` */
+    name: string;
+    /** 目录数（= 该盘缓存过的目录条数）。`undefined` = 首次加载还没拿到，此时不显示数字 */
+    count?: number;
+    /** 提示里的标题；`tipDot` 有值才画出那枚状态点（「全部」没有点） */
+    tipTitle: string;
+    tipDot?: 'on' | 'off';
+    /** 提示里的明细行（状态 / 目录 / 条目 / 最近扫描） */
+    tipRows: { k: string; v: string }[];
+    /** 读屏用的一句话 —— chip 面上的文字对读屏只是「全部 216」，不足以说明它是个什么控件 */
+    ariaLabel: string;
 };
 
 /** /getHistory 回来的一行：缓存元数据 + 这块盘此刻在不在线 */
@@ -392,9 +458,11 @@ const model = ref<HistoryQuery>({
     serial: '',
     path: '',
     pageNo: 1,
-    // 每页 16 条（用户定的）。注意 `page-sizes` 里也要有 16，
-    // 否则分页器的"每页条数"下拉表示不出当前这个值。
-    pageSize: 16,
+    // 每页 30 条（用户 2026-10-04 调，原 16）。
+    // 为什么跟着改：行高先收到了 `2px 12px`（见 style 块），一屏能放下比原来多约七成的行 ——
+    // 页还是 16 的话反而要不停翻页，等于白省下的高度不用。
+    // ⚠️ `page-sizes`（模板里的分页器）必须有 30，否则"每页条数"下拉表示不出当前这个值。
+    pageSize: 30,
     total: 0,
     // 默认排序 = **盘 → 路径**（服务端按 (serial, relPath) 排）。
     // 为什么不是"最近扫描在前"：这个面板被当成黄页/导航用，同盘相邻才好找；
@@ -406,7 +474,13 @@ const model = ref<HistoryQuery>({
 const showModal = ref(false);
 const loading = ref(false);
 const diskLoading = ref(false);
-const diskOptions = ref<{ label: string; value: string }[]>([{ label: '全部盘', value: '' }]);
+/**
+ * `/getDisks` 回来的原始盘列表（盘条 chips 的数据源）。
+ *
+ * 只存**原始行**，chip 的展示模型（名字怎么取、提示里放什么）全在 `diskChips` 里算 ——
+ * 这样"服务端给什么"和"界面怎么讲"是两件事，将来服务端加字段（比如卷标）不用回来改这里。
+ */
+const diskList = ref<DiskRow[]>([]);
 const duplicated = ref<string[]>([]);
 /** 搜索框 ref —— 打开面板时把焦点放进去（键盘路径的第一个落点） */
 const searchRef = ref<InputInst | null>(null);
@@ -434,20 +508,6 @@ function toQueryStr(val: Record<string, any>) {
     return queryStr ? `?${queryStr}&_t=${+new Date()}` : `?_t=${+new Date()}`
 }
 
-function diskLabel(d: DiskRow) {
-    // 「离线(后4位)」现在是 `@/utils` 的**共享**实现 —— 面包屑首段也要用同一个格式，
-    // 各写一份的话以后改文案要改两处（本文件原来就有一份本地的）。
-    // 为什么靠后 4 位区分：卷标从来没被赋值，两块盘都不在时下拉里会出现两行只差数字的「未插入」。
-    const where = d.online ? `${d.drive}:` : offlineLabel(d.serial);
-    // `label` 目前**永远是空串** —— 服务端 driveIdentity.ts 的 probe() 把它写死成 `''`
-    // （注释却写着"用户起的名字"，从来没实现过）。实测 disks.json 里 6 块盘全空，
-    // 所以这个分支恒不命中；留着是为了以后补上"给盘起名"时显示层不用再改。
-    const name = d.label ? ` ${d.label}` : '';
-    // `covers` 是 /getDisks 里把每条记录的 `count` 累加出来的数 —— 它是**条目数**，
-    // 不是"封面图有多少张"（原来这里写"张封面"，和数据的含义对不上）。
-    return `${where}${name} · ${d.folders} 个目录 / ${d.covers} 个条目`;
-}
-
 /**
  * 拉一次盘列表。
  *
@@ -465,11 +525,8 @@ const loadDisks = async (refresh = false) => {
         // 原来这里是 `fetch(...).then(res => res.json())`，不判 res.ok 也不判 body 里的 code，
         // 于是 `{code:500}` 会被当成正常数据一路用下去。
         const data = await getAction(`${API_BASE}/getDisks${refresh ? '?refresh=true' : ''}`);
-        const disks: DiskRow[] = data.disks || [];
-        diskOptions.value = [
-            { label: `全部盘 · ${disks.reduce((n, d) => n + d.folders, 0)} 个目录`, value: '' },
-            ...disks.map(d => ({ label: diskLabel(d), value: d.serial })),
-        ];
+        // 只存原始行；"怎么讲给用户听"交给 diskChips 算（见那里），这里不再拼文案。
+        diskList.value = data.disks || [];
         duplicated.value = data.duplicated || [];
         stats.value = data.stats || null;
     } catch (err) {
@@ -478,6 +535,80 @@ const loadDisks = async (refresh = false) => {
         diskLoading.value = false;
     }
 }
+
+/**
+ * 盘条 chips 的展示模型（**唯一的拼装点**）。
+ *
+ * 顺序：`全部` → 在线盘（按盘符）→ 离线盘（按序列号）。
+ * 为什么在线在前：在线盘才是"能真的点开"的那批，离线盘主要用于查缓存；
+ * 而两者在视觉上只差一个点的颜色，靠排序把同类聚在一起，扫视最省力。
+ *
+ * ⚠️ chip 名字位的取法（**不是猜的**，见 DESIGN-DISK-FILTER §3.4）：
+ * 盘符只在"盘插着"时存在（`d.drive` 离线时是空串，见 `electron/server/index.ts:1031`），
+ * 注册表（`DiskRecord`）也只存 label/firstSeenAt/lastSeenAt、**不存盘符** ——
+ * 所以离线盘的唯一身份是序列号后 4 位；不靠它，两块离线盘就分不清谁是谁。
+ */
+const diskChips = computed<DiskChip[]>(() => {
+    const s = stats.value;
+
+    // 只留**有缓存**的盘（`folders > 0`）：这个面板讲的就是缓存，
+    // C: 这种从没收录过的卷混进来，只会多一枚"点了什么都没有"的 chip（用户 2026-10-04 提的）。
+    // ⚠️ 例外：**当前选中的那枚永远留着**。否则走到"选中某块盘 → 把它的记录全删了"这一步，
+    // 过滤条件还在、chip 却没了 —— 界面会变成"没有任何 chip 选中、表格却是空的"，无法解释。
+    const list = [...diskList.value]
+        .filter(d => d.folders > 0 || d.serial === model.value.serial)
+        .sort((a, b) => {
+            if (a.online !== b.online) return a.online ? -1 : 1;
+            const ka = a.online ? a.drive : a.serial;
+            const kb = b.online ? b.drive : b.serial;
+            return String(ka).localeCompare(String(kb));
+        });
+
+    // 「全部」：数字取服务端 stats —— 与各盘是**同一套口径**（服务端也是把各盘 folders 累加），
+    // 所以「全部」的数正好等于各盘数字之和，不会出现"两处对不上"。
+    const all: DiskChip = {
+        value: '',
+        key: '__all__',
+        name: '全部',
+        // stats 还没回来时给 undefined ⇒ chip 上不渲染数字，避免先闪一下「全部 · 0」。
+        count: s?.folders,
+        tipTitle: '全部盘',
+        tipRows: [
+            { k: '盘数', v: `${s?.disks ?? list.length}` },
+            { k: '目录', v: `${s?.folders ?? 0}` },
+            { k: '条目', v: `${s?.entries ?? 0}` },
+            ...(s?.lastScanAt ? [{ k: '最近扫描', v: fmtScanTime(s.lastScanAt) }] : []),
+        ],
+        ariaLabel: '显示全部盘的缓存记录',
+    };
+
+    const disks: DiskChip[] = list.map(d => {
+        const letter = d.online && d.drive ? `${d.drive}:` : '';
+        // 离线盘的名字位用序列号后 4 位；工具提示里给**完整**序列号，核对时能看全。
+        const ident = letter || `序列号 ${d.serial}`;
+        return {
+            value: d.serial,
+            // 克隆盘会有两条同 serial 的记录（盘符不同），所以 key 必须带上盘符。
+            key: `${d.serial}|${d.drive || ''}`,
+            name: letter || serialTail(d.serial),
+            count: d.folders,
+            tipTitle: ident,
+            tipDot: d.online ? 'on' : 'off',
+            tipRows: [
+                // 「离线」这两个字的正式解释只出现在这里（用户 2026-10-04 明确：chip 上不写，
+                // 靠点的颜色就够了，别拿文字占版面）。
+                { k: '状态', v: d.online ? '在线' : '未插入（看的是缓存）' },
+                { k: '目录', v: `${d.folders}` },
+                // `covers` 是历史包袱名：它是**条目数**（服务端把每条记录的 count 累加，index.ts:996）。
+                { k: '条目', v: `${d.covers}` },
+                ...(d.lastScanAt ? [{ k: '最近扫描', v: fmtScanTime(d.lastScanAt) }] : []),
+            ],
+            ariaLabel: `${ident} 的缓存记录${d.online ? '' : '（这块盘未插入）'}`,
+        };
+    });
+
+    return [all, ...disks];
+});
 
 /**
  * 请求序号 —— 只让**最后一次发出的请求**写表格。
@@ -509,18 +640,19 @@ const getHistrotyList = () => {
 }
 
 /**
- * 选盘。
+ * 选盘 / 取消选盘 —— 点 chip 的**唯一入口**。
  *
- * ⚠️ 这里**不能**用 `v-model:value="model.serial"` 再配一个 `:on-update:value`：
- * 两者编译出来的 prop 名是同一个 —— `camelize('on-update:value')` 和
- * `camelize('onUpdate:value')` 都等于 `onUpdate:value`，而 naive-ui 的 Select 只认这一个 prop，
- * 后写的 handler 会把 v-model 的 setter **整个顶掉**（编译产物里就是相邻的两个 key）。
- * 症状：下拉能展开、能点，但选完值不变、列表也不动 —— 因为查询发出去时 `serial` 还是空串。
+ * 语义：点一块盘 → 只看那块盘；**再点一次已选中的 chip → 取消过滤、回到「全部」**。
+ * 为什么要这个来回：单选过滤器里"怎么回到全部"如果只能点首项，用户就得先去扫「全部」在哪；
+ * 让"选中项自己就能取消"是 chip 的通用手感（Material 的 filter chip 也是这么做的）。
+ * 而「全部」chip 依然保留 —— 它让"此刻没有过滤"是**看得见**的，而不是靠"没有高亮项"去猜。
  *
- * 规则：**一个 update 事件只挂一个 handler**，赋值和后续动作都写在它里面。
+ * ⚠️ 沿用一条老教训：**一个 update 事件只挂一个 handler**。
+ * 赋值和后续动作必须写在同一个函数里 —— 当年 `v-model` 与 `:on-update` 争同一个 prop、
+ * 后写的把前写的整个顶掉，症状是"点了没反应"（见 docs/FIX-2026-09-24-naive-ui-update-prop.md）。
  */
 const handleSerialChange = (serial: string) => {
-    model.value.serial = serial;
+    model.value.serial = model.value.serial === serial ? '' : serial;
     onSearch();
 }
 
@@ -628,6 +760,9 @@ const refreshIfOpen = () => {
 const emptyText = computed(() => {
     if (loading.value || tableData.value.length) return '';
     if (model.value.path) return `没有匹配「${model.value.path}」的目录`;
+    // 选了某块盘却一条都没有（例：把那块盘的记录删光了）。
+    // 不能笼统说"还没读过任何目录" —— 别的盘的记录还在时，那句话是错的。
+    if (model.value.serial) return '这块盘还没有缓存记录';
     return '还没读过任何目录';
 });
 
@@ -953,20 +1088,156 @@ defineExpose({
     color: #666;
 }
 
-/* 盘筛选 + 「打开存放文件夹」同一行：按钮靠右（`margin-left:auto` 在换行时也一样靠右），
-   装不下就整块换行，而不是互相挤压。 */
+/* 盘条那一行。
+   用**裸 flex**（不用 n-space）：naive-ui 2.45.3 给每个子项写死同一个 key，
+   子元素个数一变就会重复 key（先例 docs/FIX-2026-09-24-nspace-duplicate-keys.md）。
+   （「打开存放文件夹」2026-10-04 已挪进「备份与迁移」，这一行现在只剩盘条。） */
 .cache-panel .g2-disk {
     display: flex;
-    align-items: center;
-    flex-wrap: wrap;
-    gap: 8px 12px;
+    align-items: flex-start;
     padding-bottom: 10px;
 }
 
-.cache-panel .g2-disk .n-button {
-    margin-left: auto;
-    flex: 0 0 auto;
+.cache-panel .disk-chips {
+    flex: 1 1 auto;
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+    min-width: 0;
+}
+
+/* 一枚盘条 chip。
+   状态 = **圆点颜色**（在线亮绿 / 离线中灰）；名字位 = 盘符（离线用序列号后 4 位）；
+   数字 = 该盘的目录数。完整明细在悬浮提示里（见 .disk-chip-tip）。 */
+.cache-panel .disk-chip {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    height: 26px;
+    padding: 0 11px;
+    font-family: inherit;
+    font-size: 12px;
+    line-height: 1;
+    color: #4a4a46;
+    background: #fff;
+    border: 1px solid #dcdcd6;
+    border-radius: 999px;
+    cursor: pointer;
     white-space: nowrap;
+    transition: background-color .12s ease, border-color .12s ease, color .12s ease;
+}
+
+.cache-panel .disk-chip:hover {
+    border-color: #b9b9b2;
+    background: #f8f8f6;
+}
+
+/* 选中态**只换颜色，不加边框宽度** ——
+   悄悄把边框 1px 改成 2px 会让这枚比邻居高 2px、整行跟着错位。 */
+.cache-panel .disk-chip.is-active {
+    color: #185fa5;
+    background: #e6f1fb;
+    border-color: #85b7eb;
+}
+
+/* 选中态也必须有自己的 hover 反馈。
+   `.disk-chip:hover` 与 `.is-active` 的特异性相同，而后者写在后面 ⇒ 选中那枚的 hover
+   会被 `.is-active` 顶掉，鼠标压上去**一点反应都没有**。
+   偏偏它是唯一一个点下去会「取消过滤」的 chip，最需要让人知道"这里能点"。 */
+.cache-panel .disk-chip.is-active:hover {
+    background: #d8ebfb;
+    border-color: #6aa6e0;
+}
+
+.cache-panel .disk-chip:focus-visible {
+    outline: 2px solid #2080f0;
+    outline-offset: 1px;
+}
+
+/* 名字（哪块盘）比数字重一档 —— 主次就在这一处。 */
+.cache-panel .disk-chip-name {
+    font-weight: 500;
+}
+
+/* 数字比名字淡一档：名字（哪块盘）是主信息，数字是辅助。 */
+.cache-panel .disk-chip-count {
+    color: #a9a9a3;
+    font-variant-numeric: tabular-nums;
+}
+
+.cache-panel .disk-chip.is-active .disk-chip-count {
+    color: #5a92cf;
+}
+
+/* 状态点。在线那枚要"亮"到一眼看出设备活着 ——
+   亮绿本身就是"设备在线"的通用色；再补一圈 2px 淡绿环（0 模糊，是实心环、不是发光），
+   静态就把"在线"讲清楚，不用等动画。 */
+.cache-panel .disk-dot {
+    flex: 0 0 auto;
+    width: 7px;
+    height: 7px;
+    border-radius: 50%;
+}
+
+.cache-panel .disk-dot.is-on {
+    background: #22c55e;
+    box-shadow: 0 0 0 2px rgba(34, 197, 94, .22);
+}
+
+.cache-panel .disk-dot.is-off {
+    /* 比在线那枚低一档、但别淡到看不见（#dcdcd6 这种摆在白底上几乎消失）。
+       它就是"这块盘现在不在"的全部表达，必须还看得见。 */
+    background: #b4b2a9;
+}
+
+/* ⚠️ 悬浮提示的内容**不能**加 `.cache-panel` 前缀 ——
+   n-tooltip 的弹出层被 teleport 到 body，已经不在卡片内部了，加了前缀一个都命中不了。
+   所以下面这几条是全局规则，靠 `disk-chip-tip` 这个专属类名做隔离（不会漏到别处）。
+   naive-ui 浅色主题的 tooltip 是**深底白字**，所以这里只调透明度、不写死文字颜色。 */
+.disk-chip-tip {
+    font-size: 12px;
+    line-height: 1.55;
+}
+
+.disk-chip-tip .tip-head {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 12.5px;
+    font-weight: 500;
+    margin-bottom: 5px;
+}
+
+.disk-chip-tip .disk-dot {
+    flex: 0 0 auto;
+    width: 7px;
+    height: 7px;
+    border-radius: 50%;
+}
+
+.disk-chip-tip .disk-dot.is-on {
+    background: #22c55e;
+}
+
+.disk-chip-tip .disk-dot.is-off {
+    background: #a8a8a3;
+}
+
+.disk-chip-tip .tip-row {
+    display: flex;
+    gap: 18px;
+    justify-content: space-between;
+}
+
+/* 键和值都单行：工具提示靠内容自动撑宽（naive-ui 的 popover 不设死宽），
+   所以"不换行"只会让它横向长一点，不会把一行拆成两行 —— 而换行会让提示变高、更难扫。 */
+.disk-chip-tip .tip-k,
+.disk-chip-tip .tip-v {
+    white-space: nowrap;
+}
+
+.disk-chip-tip .tip-k {
+    opacity: .6;
 }
 
 
@@ -1000,6 +1271,29 @@ defineExpose({
 .cache-panel .table-wrap > .n-data-table {
     flex: 1 1 auto;
     min-height: 0;
+}
+
+/* 表格行高（用户 2026-10-04：`--n-td-padding` 收到 2px，让一屏放得下更多行）。
+ *
+ * 取 `2px 12px` 而**不是**字面的 `2px` —— 这不是自作主张，是实测出来的：
+ * 表头用的是另一个变量 `--n-th-padding`（仍是 12px）。若 td 四周都收成 2px，
+ * 左对齐的列（盘 / 目录）**表头文字会比单元格文字右移 10px**。
+ * 真 Chromium 实测（同一份内容）：
+ *   td 12px → 行高 47px、表头与单元格错位 0px
+ *   td 2px  → 行高 27px、错位 −10px
+ *   td 2px 12px → 行高 27px、错位 0px   ← 采用
+ * 也就是说"垂直 2px"拿满全部行高收益，水平留 12px 才能保住对齐。
+ * （要更紧，得连 `--n-th-padding` 一起收，那属于另一个决定，没做。）
+ *
+ * ⚠️ `!important` 在这里是**必需**的，不是偷懒：
+ * naive-ui 的主题变量是**内联**写在表格根节点上的 —— `App.vue` 的 `n-config-provider`
+ * 没开 `inline-theme-disabled`，于是 `node_modules/naive-ui/es/data-table/src/DataTable.mjs:439`
+ * 把 `--n-td-padding` 等作为 element style 挂到 `.n-data-table` 上，普通 CSS 规则赢不了它。
+ * 实测：带 `!important` 算出 2px、不带算出 12px（naive-ui medium 默认值，见 `styles/_common.mjs`）。
+ *
+ * 变量写在根节点上、td 是继承来的，所以一条就够，不用逐层写。 */
+.cache-panel .n-data-table {
+    --n-td-padding: 2px 12px !important;
 }
 
 /* 目录 = 双击打开的入口。**保持蓝色**（用户要求"和之前一样"）——

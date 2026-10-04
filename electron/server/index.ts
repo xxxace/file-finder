@@ -1050,10 +1050,20 @@ async function listDisksController(req: Req, res: http.ServerResponse) {
          *
          * `bytes` 的语义要写准：它是"**缓存里记录到的字节之和**"，
          * 不是"硬盘上有多少"。措辞在界面上写成「已读到 X」，不能写"当前"/"硬盘上"。
-         * 实测当前真库：5 块盘 / 213 个目录 / 1247 个条目 / 3.35 TB / 库 81.7 MB。
+         * 实测当前真库：213 个目录 / 1247 个条目 / 3.35 TB / 库 81.7 MB。
+         * ⚠️ 这里**不写盘数示例** —— `disks` 的含义在下方改了，写死一个数只会误导下一轮的人。
          */
         stats: {
-            disks: drives.length + offline.length,
+            /**
+             * 「盘数」= **有缓存的盘**（缓存库里出现过 serial 的个数），**不是"插着几块盘"**。
+             *
+             * 原来写的是 `drives.length + offline.length` —— 那是"所有挂载卷 + 有离线记录的盘"，
+             * 它会把 C: 这种**从没收录过**的系统盘也算进去（`scanDrives` 扫的正是 C–Z）。
+             * 而这一整句（盘数 / 目录 / 条目 / 已读到）其余每一项讲的都是"缓存里有什么"，
+             * 混进没缓存的盘，既让"盘数"和后面的目录数对不上，
+             * 也和盘条"只显示有缓存的盘"自相矛盾（用户 2026-10-04 问的正是这个）。
+             */
+            disks: new Set(metas.map(m => m.serial)).size,
             folders: metas.length,
             entries: metas.reduce((n, m) => n + (m.count || 0), 0),
             bytes: metas.reduce((n, m) => n + (m.bytes || 0), 0),

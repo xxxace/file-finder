@@ -54,7 +54,7 @@
 - **该删 7 项**（曾 8，撤回 `parseSize`）；4 项有连带（`printTree`→`interface file`/`getSpace()`/`level_stack`；注释块→`index.vue:65-67`；`getFileTree`→`index.ts:419-427`）。❌ **`flexible.ts` 绝不能删**。
 - 根目录 `searchCache.db` = **主人主动备份**（09-24·78.6MB，已过期）⇒ 保留；真库在 `%USERPROFILE%\.file-finder\`（10-02·92MB）。基线 `5 盘 · 218 记录(216 cover) · 1471 条目`。
 - 视频扩展名单一真相源 `electron/server/videoExt.ts`；改它要同步 `index.vue` 的 `VIDEO_EXT_RE` 并重启 dev。
-- **已落地**：面板 A/B/C · P0+P1+P2 · 加密备份还原 · 离线只读浏览(待目视) · 头部+导航(待目视) · 助手 Phase1+2A+5(未全验)。**待重启 dev 后目视**：文件夹 size · 预览抢点击 · 四条（窗口/右键去后缀/角标/标题）。
+- **已落地**：面板 A/B/C · P0+P1+P2 · 加密备份还原 · 离线只读浏览(待目视) · 头部+导航(待目视) · 助手 Phase1+2A+5(未全验) · **缓存面板盘筛选 下拉→盘条 chips**(2026-10-04，见 `docs/DESIGN-DISK-FILTER-2026-10-04.md`；只显示有缓存的盘 + `stats.disks` 同改 + 「打开存放文件夹」移入「备份与迁移」；`n-tooltip` 真机观感待目视)。**待重启 dev 后目视**：文件夹 size · 预览抢点击 · 四条（窗口/右键去后缀/角标/标题）· 盘条 chip 悬浮提示。
 - n-space 重复 key 已修；`.toolbar{flex-wrap:nowrap}` + `.header-bar .n-input{width:200px}` **两条不许删**。
 
 ## 六、待他动作
@@ -79,7 +79,7 @@
 1. **不加「操作」列** —— 打开固定为**双击**。 2. **不要读盘** —— 统计必须纯内存汇总。 3. **尽量不加扫盘功能**，若有**必须主动告诉他**（每轮方案附读盘清单）。 4. 交付前自查：**自洽／有没有误解／有没有把握**（未实测必须标出）。 5. **不允许手动输入/编辑路径**（2026-09-30）—— 路径只能由"点击/选择"产生。
 
 ## 十一、已验证写法 · 全文 → `docs/MEMORY-APPENDIX-2026-10-03.md` §十一
-`render()` 节点 `<style scoped>` 匹配不到 ⇒ 不带 scoped + 外层前缀 · 并发用**请求序号**不用 `if(loading)` · `n-input` 吃 composition ⇒ 外套 div · 改下发逻辑先找**唯一出口**(`wire()`/`apiUrl()`/`route()`)；字段只在**下发态**补（否则 `bytes` 双算）；**验收要覆盖用户真实路径** · 布局坑见 `docs/LAYOUT-GOTCHAS.md`
+`render()` 节点 `<style scoped>` 匹配不到 ⇒ 不带 scoped + 外层前缀 · 并发用**请求序号**不用 `if(loading)` · `n-input` 吃 composition ⇒ 外套 div · 改下发逻辑先找**唯一出口**(`wire()`/`apiUrl()`/`route()`)；字段只在**下发态**补（否则 `bytes` 双算）；**验收要覆盖用户真实路径** · **覆盖 naive-ui 主题变量必须 `!important`**（主题变量默认内联在组件根上，普通规则赢不了） · 布局坑见 `docs/LAYOUT-GOTCHAS.md`
 
 ## 十二、两条自检问句 · 全文 → `docs/MEMORY-APPENDIX-2026-10-03.md` §十二
 1. **判据落在"事实"还是"快照"上？** 曾用 `path.startsWith('#')` 判能否打开 ⇒ 盘插回也永久打不开。正解：`/resolveAnchor` 在**动作那一刻**问服务端。改任何 UI 条件前先过这一问。

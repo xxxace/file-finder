@@ -88,12 +88,21 @@ export function printTree(tree: file[], level: number, tab: number = 2, treeStr:
 export const ANCHOR_PREFIX = '#';
 
 /**
- * 离线盘的显示名。**唯一实现** —— 原来只写在 `HistoryTable` 的 `diskLabel()` 里（本地实现），
- * 面包屑首段也要用同一个格式，所以收上来（否则以后改文案要改两处）。
- * 为什么用序列号后 4 位：`DriveInfo.label` 从来没被赋值（`driveIdentity.ts` 的 `probe()` 写死 `''`），
- * 只能靠序列号区分"是哪一块盘"；两块盘都不在时，笼统的「未插入」会变成两行一样的字。
+ * 一块盘的"短标识" —— 卷序列号后 4 位。
+ *
+ * 为什么需要它：`DriveInfo.label` 从来没被赋值（`driveIdentity.ts` 的 `probe()` 写死 `''`），
+ * 而盘符只在"盘插着"时存在（离线时 `drive` 是空串，注册表 `DiskRecord` 也不存盘符）——
+ * 所以"这块盘是哪一块"在离线时只能靠序列号后 4 位。
+ *
+ * ⚠️ "取哪几位"这条规则**只有这一处**：离线 chip（`HistoryTable` 的盘条）与离线标签
+ * 用的是同一个口径，各写一份的话以后改位数就会两边不一致。
  */
-export const offlineLabel = (serial: string) => `离线(${String(serial || '').slice(-4)})`;
+export const serialTail = (serial: string) => String(serial || '').slice(-4);
+
+/**
+ * 离线盘的显示名（面包屑首段用）。
+ */
+export const offlineLabel = (serial: string) => `离线(${serialTail(serial)})`;
 
 /** 面包屑的一段。`kind: 'root'` = 首段（盘符 / 离线锚点），**永远不可点** */
 export interface PathCrumb { name: string; path: string; kind: 'root' | 'dir' }
