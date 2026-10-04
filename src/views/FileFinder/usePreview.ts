@@ -24,7 +24,7 @@
  *
  * 同族手法：`currentPath → crumbs`、`dataSource + searchText → fileList`。
  */
-import { computed, h, ref, watch } from 'vue';
+import { computed, h, nextTick, onMounted, ref, watch } from 'vue';
 import { NIcon } from 'naive-ui';
 import { LocateOutline } from '@vicons/ionicons5';
 import type { ImgHTMLAttributes } from 'vue';
@@ -244,52 +244,135 @@ export function usePreview(deps: {
     });
 
     /**
-     * 预览面板里的图：**按可视区最大化**（扣除底部工具条），图周围留白 ⇒ 点图外即关。
+     * 可视区（wrapper 的**内容盒**）尺寸，单位 px。
      *
-     * ## 为什么不是 `width/height: 100%`（那版把「点图外关闭」弄丢了）
-     *
-     * naive-ui 关闭预览的**唯一**入口是 overlay 的 `onClick`（`ImagePreview.mjs:510`），
-     * 而 `.n-image-preview-wrapper` 自带 `pointer-events:none`（`styles/index.cssr.mjs:45`）
-     * —— **官方正是靠这个让点击穿到 overlay**。但 `.n-image-preview`（图）是
-     * `pointer-events:all`（`:52`），所以图铺满视口时就把 overlay 完全盖死 ⇒ 点哪都关不掉。
-     *⚠️ 缩小也救不了：`object-fit:contain` 的黑边在**元素盒子内**，盒子恒为全屏；
-     * 而 naive-ui 的缩放下限是 0.5（`ImagePreview.mjs:291`），最小也有半屏大。
-     *
-     * ## 现在怎么做
-     *
-     * 回到官方那套「`max-*` + `margin:auto`」，只把**约束源**从视口换成 wrapper 的**内容盒**
-     *（`index.vue` 给 wrapper 加了 `padding:16px16px 64px`，64px 正是底部工具条那一条）。
-     * 于是：图按比例缩到**装得下且尽量大**，元素盒子精确贴合图像 ⇒ 四周留白可点 ⇒
-     * 点图外关、点图内不关、工具条那条由 z-index:1 天然在上（`styles/…:21`）不关。
-     *
-     * 为什么**必须**带 `width/height: auto`：没有它，`<img>` 会用内在尺寸，
-     * 视频抽帧那种 480px 的就只占中间一小块（那正是 2026-10-04 引入 100% 的原因，见
-     * `docs/DESIGN-PREVIEW-BAR-2026-10-04.md` §五）。`auto` 让它按比例缩放而不是按原尺寸摆。
+     * 为什么不是 `window.innerWidth/Height`：wrapper 被 `index.vue` 加了
+     * 读不出来时返回 0 ⇒ 调用方回落到「不设尺寸」那条路。
      */
-    const previewedImgProps = computed<ImgHTMLAttributes>(() => ({
-        style: isIconEntry.value
-            // 图标：原尺寸居中，不放大（放大图标没有信息增益，只会糊成色块）
-            ? { height: '128px', width: 'auto', objectFit: 'contain' as const }
-            : {
-                // 约束源 = wrapper 内容盒（它已扣掉底部工具条那64px）
-                maxWidth: '100%', maxHeight: '100%',
-                width: 'auto', height: 'auto',
-                objectFit: 'contain' as const,
-            },
+    const readViewportBox = () => {
+        const el = document.querySelector<HTMLElement>('.n-image-preview-wrapper');
+        if (!el) return { w: 0, h: 0 };
+        // ⚠️ **必须自己减 padding**：`clientWidth/Height` 给的是**含 padding 的外框**
+        //（实测 1602×903，而真可视区 = 903−16−64 = 823）。拿外框算 ⇒ 图撑出内容盒、比例也歪。
+        const cs = getComputedStyle(el);
+        const px = (v: string) => parseFloat(v) || 0;
+        return {
+            w: el.clientWidth - px(cs.paddingLeft) - px(cs.paddingRight),
+            h: el.clientHeight - px(cs.paddingTop) - px(cs.paddingBottom),
+        };
+    };
 
-        onDblclick: (e: MouseEvent) => {
-            // ⚠️ 这里**故意什么都不做**（2026-10-04 业主裁定「双击单击都没有行为」）。
-            //
-            // 它曾经是「关预览 + 把双击还给下面那张卡片」，为修「多部组成的封面弹不出文件列表」。
-            // 但那个设计抢走了双击这个动作：双击预览图会**直接开视频 / 进文件夹**，
-            // 而双击图片看细节是所有看图器的既有肌肉记忆（naive-ui 本来就实现了）——
-            // **一个动作被两种意图抢，输的那个是用户**。
-            //
-            // 缩放改走两条不需要抢占的路径（见下面 `previewedImgProps` 外的 `installWheelZoom`）：
-            // 工具条的放大/缩小按钮，以及**滚轮**。关预览走 Esc / ✕ / 点图外。
-            e.preventDefault();
-        },
-    }));
+    /**
+     * 按 `contain` 规则算出「图在可视区内能占的最大尺寸」。
+     *
+     * ⚠️ 不用 `object-fit:contain` 让浏览器算：它把黑边放在**元素盒子内**，而盒子就是
+     * `<img>` 自己 ⇒ 那圈黑边仍会吃掉点击，「点图外关闭」又坏。必须让盒子精确贴合图像。
+     *
+     * 返回 null = 算不出来（还没打开/ 还没量到）⇒ 调用方不写尺寸，交回原尺寸。宁可小不要错。
+     */
+    const fitToViewport = (natW: number, natH: number) => {
+        if (!(natW > 0 && natH > 0)) return null;
+        const { w: boxW, h: boxH } = readViewportBox();
+        if (!(boxW > 0 && boxH > 0)) return null;
+        // 取小的比例 ⇒ 必然装得下（业主要的「不能超过」），且至少一边贴边（「占满」）
+        const scale = Math.min(boxW / natW, boxH / natH);
+        return { w: Math.round(natW * scale), h: Math.round(natH * scale) };
+    };
+
+    /**
+     * 当前显示的那张 `<img>` 的**自然尺寸**（`naturalWidth/Height`）。
+     *
+     * 必须是响应式：尺寸只在**图加载完之后**才有值，而 computed 求值那刻通常还没加载完
+     * ⇒ 自己读 DOM 只会算一次并永远停在「量不到」那支。用 ref 由 load 事件**推**进去。
+     *
+     * ⚠️ 不可缓存：`<img>` 的 `key` 就是 `src`（`ImagePreview.mjs:560`）⇒ 换条目/换清晰版
+     * 都是**全新元素**，`naturalWidth` 归零再重新加载。
+     */
+    const previewImgNatural = ref<{ w: number; h: number } | null>(null);
+
+    /**
+     * 图 load 之后把自然尺寸喂进响应式状态。
+     *
+     * 挂 `<img>` 的 `load`（不用 ResizeObserver/轮询）：`key=src` ⇒ 换图就是新元素、
+     * 新 load 事件，挂一次只对这一张图有效。
+     */
+    const watchPreviewImgLoad = () => {
+        const el = document.querySelector<HTMLImageElement>('.n-image-preview');
+        if (!el) { previewImgNatural.value = null; return; }
+        const feed = () => {
+            previewImgNatural.value = el.naturalWidth
+                ? { w: el.naturalWidth, h: el.naturalHeight }
+                : null;
+        };
+        feed();
+        // 已缓存完成的图不会再触发 load ⇒ 上面 feed 一次就够；
+        // 未完成的走 load 事件。两者都要，因为缓存状态事先不可知。
+        if (!el.complete) el.addEventListener('load', feed, { once: true });
+    };
+    /** 视口/面板尺寸变了要重量一次 —— 可视区变了，同一张图的「占满」尺寸也变了。 */
+    const onViewportResize = () => { if (previewOpen.value) watchPreviewImgLoad(); };
+
+    /**
+     * 预览图**按可视区最大化**：尽量占满（已扣掉底部工具条那一条），四周留出可点空白。
+     *
+     * **占满可视区、又不超、且图外可点** —— 三条同时成立。
+     *
+     * ⚠️ 两条不能碰的机制：
+     * ① **不能用 `width/height:100%`**：关闭的唯一入口是 overlay 的 `onClick`
+     *   （`ImagePreview.mjs:510`），官方靠 wrapper 的 `pointer-events:none`
+     *   （`styles/index.cssr.mjs:45`）让点击穿到它；而图是 `pointer-events:all`（`:52`），
+     *   图元素一旦铺满就把 overlay 盖死。缩小也救不了（黑边在盒内 + 缩放下限 0.5，`:291`）。
+     * ② **不能用 `transform: scale()` 放大**：`max-*` 只缩小不放大，而 transform 那段是
+     *   naive-ui 自己的，`derivePreviewStyle` 每次缩放/拖动都重写整个 `style.cssText`
+     *   （`:317`）⇒ 我写的会被当场抹掉；它算好的比例只在 `resizeToOrignalImageSize()`（`:332`）
+     *   里用，而那个方法没对外暴露（`exposedMethods` 只有 `setThumbnailEl`）。
+     *
+     * ⇒ 办法：把尺寸写成 `width/height`。同一个 `cssText` 里它与 transform 是**叠加**的
+     *（`:314` 先写我的、`:316` 再追加它的）⇒ 我只管"图该占多大"，缩放/拖动/旋转全归它。
+     * 尺寸 = `contain` 公式取较小者 ⇒ 必然不超、且至少一边贴边；而盒子精确贴合图像
+     * ⇒ 盒外那圈是 wrapper 空白（`pointer-events:none`）⇒ 穿透到 overlay 能关。
+     */
+    const previewedImgProps = computed<ImgHTMLAttributes>(() => {
+        // 图标条目：原尺寸居中，不放大（放大图标没有信息增益，只会糊成色块）
+        if (isIconEntry.value) {
+            return { style: { height: '128px', width: 'auto', objectFit: 'contain' as const } };
+        }
+        const fitted = (() => {
+            const nat = previewImgNatural.value;
+            return nat ? fitToViewport(nat.w, nat.h) : null;
+        })();
+        return {
+            style: fitted
+                ? { width: `${fitted.w}px`, height: `${fitted.h}px`, objectFit: 'contain' as const }
+                // 量不到自然尺寸 ⇒ 交回naive-ui 的原尺寸那一档（不猜尺寸）。
+                // `max-*` 兜住超大图别超出视口。
+                : { maxWidth: '100%', maxHeight: '100%', width: 'auto', height: 'auto', objectFit: 'contain' as const },
+            onDblclick: (e: MouseEvent) => {
+                // ⚠️ 这里**故意什么都不做**（2026-10-04 业主裁定「双击单击都没有行为」）。
+                //
+                // 它曾经是「关预览 + 把双击还给下面那张卡片」，为修「多部组成的封面弹不出文件列表」。
+                // 但那个设计抢走了双击这个动作：双击预览图会**直接开视频 / 进文件夹**，
+                // 而双击图片看细节是所有看图器的既有肌肉记忆（naive-ui 本来就实现了）——
+                // **一个动作被两种意图抢，输的那个是用户**。
+                //
+                // 缩放改走两条不需要抢占的路径（见下面 `previewedImgProps` 外的 `installWheelZoom`）：
+                // 工具条的放大/缩小按钮，以及**滚轮**。关预览走 Esc / ✕ / 点图外。
+                e.preventDefault();
+            },
+        };
+    });
+
+    /**
+     * 「显示哪张图」变了就重量一次。
+     *
+     * 挂 `previewSrcList`（=显示中那张图 src 的**唯一产出点**）而不是分别挂到
+     * 「打开/换条目/升级大图」三个动作 ⇒ 三条路径收在一处，将来加第四条也不会漏。
+     * `nextTick`：src 变了 DOM 要下一帧才更新完，那时才查得到新 `<img>`。
+     */
+    watch(previewSrcList, () => { if (previewOpen.value) nextTick(watchPreviewImgLoad); });
+
+    /** 视口变了要重量 —— 可视区变了，同一张图的「占满」尺寸也变了。 */
+    onMounted(() => window.addEventListener('resize', onViewportResize));
 
     /**
      * 滚轮缩放。**复用 naive-ui 已有的机制，不新增任何缩放实现。**
@@ -393,13 +476,15 @@ export function usePreview(deps: {
     };
 
     /**
-     * 卸载时收干净：挂起的清晰版计时器 + 滚轮监听。
+     * 卸载时收干净：挂起的清晰版计时器 + 滚轮监听 + resize 监听。
      * `installWheelZoom` 返回它自己的撤销函数（对称于 `addEventListener`）——
      * **不返回就是"看不见的全局监听"**，组件没了还会一直拦滚轮。
      */
     const dispose = () => {
         cancelSharpTimer();
         removeWheelZoom?.();
+        // 与上面同一条纪律：全局监听不摘就是"看不见的残留"
+        window.removeEventListener('resize', onViewportResize);
     };
 
     return {

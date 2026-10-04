@@ -1,12 +1,19 @@
 
-PASS  ① 图未铺满视口（四周有留白）  — 图占 99×258，视口 1602×903
+---视口 1602×903 / 图 317×823 @ 643,16 ---
+PASS  ① 图未铺满视口（四周有留白）  — 图占 317×823，视口 1602×903
+--- wrapper外框 1602×903 / padding 16px 16px 64px 16px ⇒ 内容盒 1570×823 ---
+PASS  ★a 图撑满可视区（至少一边贴边）  — 图 317×823 vs 可视区 1570×823
+PASS  ★b 图不超出可视区  — 图 317×823 ≤ 可视区 1570×823
+PASS  ★c 保持原图比例（未拉伸变形）  — 原图 0.385 vs 显示 0.385
 PASS  ②a 点图上命中的是图（不关闭）  — (801,428) → n-image-preview
-PASS  ②b 点图外留白命中 overlay（关闭）  — (1226,428) → n-image-preview-overlay fade-in-transiti
-PASS  ②c 点上方留白命中 overlay（关闭）  — (801,149) → n-image-preview-overlay fade-in-transiti
-PASS  ③ 底部工具条命中工具条（不误关）  — (801,879) → n-image-preview-toolbar fade-in-transiti
-PASS  ④ 缩到最小后仍有图外留白  — 缩小后 100×260
-PASS  ④b 缩小后点图外仍命中 overlay  — (1227,428) → n-image-preview-overlay
+PASS  ②b 点图外留白命中 overlay（关闭）  — (1281,428) → n-image-preview-overlay
+PASS  ②c 点上方留白命中 overlay（关闭）  — (801,8) → n-image-preview-overlay
+PASS  ③ 底部工具条命中工具条（不误关）  — (801,879) → n-image-preview-toolbar
+PASS  ④ 缩到最小后仍有图外留白  — 缩小后 317×823
+PASS  ④b 缩小后点图外仍命中 overlay  — (1281,428) → n-image-preview-overlay
 PASS  ⑤ 点遮罩真的能关闭  — 点击前在场=true，30 帧后在场=false
-== 8 PASS / 0 FAIL ==
+PASS  ⑥ 横图靠宽度贴边（宽>高的分支）  — 图 1570×471 vs 可视区 1570×823（贴宽=true 贴高=false）
+PASS  ⑥b 横图也不超出  — 1570×471 ≤ 1570×823
+== 13 PASS / 0 FAIL ==
 
-== 探针汇总（buggy）：8 PASS / 0 FAIL ==
+== 探针汇总（buggy）：13 PASS / 0 FAIL ==

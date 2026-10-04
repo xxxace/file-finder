@@ -33,24 +33,69 @@ const PORTRAIT = (() => {
     return c.toDataURL('image/jpeg', 0.9);
 })();
 
+/** 横构图（400×120）：宽>高 ⇒ 必须靠**宽度**贴边，否则公式有漏洞。 */
+const LANDSCAPE = (() => {
+    const c = document.createElement('canvas'); c.width = 400; c.height = 120;
+    const g = c.getContext('2d'); g.fillStyle = '#26415e'; g.fillRect(0, 0, 400, 120);
+    g.fillStyle = '#fff'; g.font = 'bold 22px sans-serif'; g.fillText('L', 20, 70);
+    return c.toDataURL('image/jpeg', 0.9);
+})();
+
 const App = {
     setup() {
         const show = ref(false);
         const current = ref(0);
-        const srcList = ref([PORTRAIT]);
-        // 与 usePreview.ts 现在的写法**逐字同构**
-        const previewedImgProps = computed(() => ({
-            style: { maxWidth: '100%', maxHeight: '100%', width: 'auto', height: 'auto', objectFit: 'contain' },
-            onDblclick: (e) => e.preventDefault(),
-        }));
+        const srcList = ref([PORTRAIT, LANDSCAPE]);
+        // 与 usePreview.ts 现在的写法**逐字同构**：按contain 规则算「可视区内能占的最大尺寸」
+        // 并写成 width/height（naive-ui 的 transform 叠在上面，不打架）。
+        const previewImgNatural = ref(null);
+        const readViewportBox = () => {
+            const el = document.querySelector('.n-image-preview-wrapper');
+            if (!el) return { w: 0, h: 0 };
+            const cs = getComputedStyle(el);
+            const px = v => parseFloat(v) || 0;
+            return {
+                w: el.clientWidth - px(cs.paddingLeft) - px(cs.paddingRight),
+                h: el.clientHeight - px(cs.paddingTop) - px(cs.paddingBottom),
+            };
+        };
+        const fitToViewport = (natW, natH) => {
+            if (!(natW > 0 && natH > 0)) return null;
+            const { w: boxW, h: boxH } = readViewportBox();
+            if (!(boxW > 0 && boxH > 0)) return null;
+            const k = Math.min(boxW / natW, boxH / natH);
+            return { w: Math.round(natW * k), h: Math.round(natH * k) };
+        };
+        const previewedImgProps = computed(() => {
+            const nat = previewImgNatural.value;
+            const fitted = nat ? fitToViewport(nat.w, nat.h) : null;
+            return {
+                style: fitted
+                    ? { width: fitted.w + 'px', height: fitted.h + 'px', objectFit: 'contain' }
+                    : { maxWidth: '100%', maxHeight: '100%', width: 'auto', height: 'auto', objectFit: 'contain' },
+                onDblclick: (e) => e.preventDefault(),
+            };
+        });
+        const watchPreviewImgLoad = () => {
+            const el = document.querySelector('.n-image-preview');
+            if (!el) { previewImgNatural.value = null; return; }
+            const feed = () => { previewImgNatural.value = el.naturalWidth ? { w: el.naturalWidth, h: el.naturalHeight } : null; };
+            feed();
+            if (!el.complete) el.addEventListener('load', feed, { once: true });
+        };
         provide(imageContextKey, { previewedImgPropsRef: previewedImgProps });
-        return { show, current, srcList, previewedImgProps };
+        return { show, current, srcList, previewedImgProps, watchPreviewImgLoad };
     },
+    mounted() { ctl = this; },
     render() {
         return h('div', [
             h(NImage, {
                 src: PORTRAIT, width: 80, previewDisabled: true,
                 imgProps: { onClick: () => { this.show = true; this.current = 0; } },
+            }),
+            h(NImage, {
+                src: LANDSCAPE, width: 80, previewDisabled: true,
+                imgProps: { onClick: () => { this.show = true; this.current = 1; } },
             }),
             h(NImageGroup, {
                 srcList: this.srcList, current: this.current, show: this.show,
@@ -64,7 +109,11 @@ const App = {
 };
 
 const app = createApp(App);
+// 与主界面同一条重量路径；run() 在 src 变化后调它。
+// 用 ref 拿实例而不是 `app._instance`（Options API 下它为空）。
+let ctl = null;
 app.mount('#app');
+window.__watchLoad = () => ctl && ctl.watchPreviewImgLoad();
 
 const nextFrames = (n) => new Promise(res => { let i = 0; const s = () => (++i >= n ? res() : requestAnimationFrame(s)); requestAnimationFrame(s); });
 
@@ -76,7 +125,11 @@ const isImg = (x, y) => { const e = document.elementFromPoint(x, y); return !!(e
 const run = async () => {
     await nextFrames(3);
     document.querySelector('.n-image img').click();
-    await nextFrames(10);
+    // 与主界面同构：src 变 ⇒ 下一帧重量 naturalWidth（主界面由 img 的 load 事件喂，
+    // 探针这里直接调同一个函数——同一条路径，不是另写一套）
+    await nextFrames(4);
+    window.__watchLoad && window.__watchLoad();
+    await nextFrames(12);
 
     const imgEl = document.querySelector('.n-image-preview');
     const box = imgEl.getBoundingClientRect();
@@ -87,6 +140,29 @@ const run = async () => {
     const fillsH = box.height >= vh - 2, fillsW = box.width >= vw - 2;
     check('① 图未铺满视口（四周有留白）', !(fillsH || fillsW),
         `图占 ${Math.round(box.width)}×${Math.round(box.height)}，视口 ${vw}×${vh}`);
+
+    // ★ 新增判据：图必须**撑满可视区**（至少一边贴边），且**不超出**可视区。
+    //   可视区 = wrapper 内容盒（已扣掉 padding:16px16px64px 那 64px 的工具条）
+    const wr = document.querySelector('.n-image-preview-wrapper');
+    const cs = getComputedStyle(wr);
+    const px = v => parseFloat(v) || 0;
+    const vpx = {   // 内容盒 = 外框 − padding（与实现同一个口径）
+        w: wr.clientWidth - px(cs.paddingLeft) - px(cs.paddingRight),
+        h: wr.clientHeight - px(cs.paddingTop) - px(cs.paddingBottom),
+    };
+    console.log(`--- wrapper外框 ${wr.clientWidth}×${wr.clientHeight} / padding ${cs.paddingTop} ${cs.paddingRight} ${cs.paddingBottom} ${cs.paddingLeft} ⇒ 内容盒 ${vpx.w}×${vpx.h} ---`);
+    const touches = Math.abs(box.height - vpx.h) <= 2 || Math.abs(box.width - vpx.w) <= 2;
+    const within = box.width <= vpx.w + 2 && box.height <= vpx.h + 2;
+    check('★a 图撑满可视区（至少一边贴边）', touches,
+        `图 ${Math.round(box.width)}×${Math.round(box.height)} vs 可视区 ${vpx.w}×${vpx.h}`);
+    check('★b 图不超出可视区', within,
+        `图 ${Math.round(box.width)}×${Math.round(box.height)} ≤ 可视区 ${vpx.w}×${vpx.h}`);
+    // 比例必须保持（contain 的本质），容差 2px 是四舍五入
+    const imgEl0 = document.querySelector('.n-image-preview');
+    const natRatio = imgEl0.naturalWidth / imgEl0.naturalHeight;
+    const boxRatio = box.width / box.height;
+    check('★c 保持原图比例（未拉伸变形）', Math.abs(natRatio - boxRatio) / natRatio < 0.02,
+        `原图 ${natRatio.toFixed(3)} vs 显示 ${boxRatio.toFixed(3)}`);
 
     // ②a 图上 ⇒ 命中图（点了不关）
     const cx = Math.round(box.left + box.width / 2), cy = Math.round(box.top + box.height / 2);
@@ -131,6 +207,18 @@ const run = async () => {
     await nextFrames(30);
     const after = !!document.querySelector('.n-image-preview');
     check('⑤ 点遮罩真的能关闭', before && !after, `点击前在场=${before}，30 帧后在场=${after}`);
+
+    // ── 第二轮：换**横图**（宽>高）⇒ 必须靠宽度贴边（与竖图那轮是不同分支）──
+    document.querySelectorAll('.n-image img')[1].click();
+    await nextFrames(4);
+    window.__watchLoad && window.__watchLoad();
+    await nextFrames(12);
+    const lb = document.querySelector('.n-image-preview').getBoundingClientRect();
+    const touchW = Math.abs(lb.width - vpx.w) <= 2, touchH = Math.abs(lb.height - vpx.h) <= 2;
+    check('⑥ 横图靠宽度贴边（宽>高的分支）', touchW,
+        `图 ${Math.round(lb.width)}×${Math.round(lb.height)} vs 可视区 ${vpx.w}×${vpx.h}（贴宽=${touchW} 贴高=${touchH}）`);
+    check('⑥b 横图也不超出', lb.width <= vpx.w + 2 && lb.height <= vpx.h + 2,
+        `${Math.round(lb.width)}×${Math.round(lb.height)} ≤ ${vpx.w}×${vpx.h}`);
 
     const failed = results.filter(r => !r.pass).length;
     console.log(`== ${results.length - failed} PASS / ${failed} FAIL ==`);

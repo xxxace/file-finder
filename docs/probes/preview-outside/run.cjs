@@ -45,7 +45,7 @@ app.whenReady().then(async () => {
     win.webContents.on('console-message', (_e, lvl, msg) => {
         const text = String(msg);
         // 收页面上所有断言输出（page.log 会带 [page] 前缀）
-        if (/PASS|FAIL|probe error/.test(text)) {
+        if (/PASS|FAIL|probe error|---|视口/.test(text)) {
             lines.push(text);
             console.log(text);
         }
