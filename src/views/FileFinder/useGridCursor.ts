@@ -117,50 +117,41 @@ export function useGridCursor(deps: {
         cursorKey.value ? fileList.value.findIndex(f => keyOf(f) === cursorKey.value) : -1,
     );
 
-    // ── 定位闪烁：常驻高亮之上的那一下"我在这儿" ────────────────────────────
-    /**
-     * 刚被"定位"到的那一格，1.2s 后落回常驻态。
-     *
-     * 为什么要有这一下：定位是**动作**（从预览层飞回网格），而常驻高亮是**状态**。
-     * 动作不给反馈，用户会以为"定位没生效"。但状态本身已经够显眼了，
-     * 所以只闪**边框色**、不加外发光（否则与高亮自己的发光叠成两圈）。
-     */
-    const blinkKey = ref('');
-    let blinkTimer: number | undefined;
-    const cancelBlink = () => {
-        window.clearTimeout(blinkTimer);
-        blinkTimer = undefined;
-    };
-    /**
-     * 声明在 `focusCursor` **之前**（顺序即依赖）：`focusCursor` 要调它，
-     * 而调用它的键盘处理是运行时事件。
-     */
-    const startBlink = (key: string) => {
-        cancelBlink();
-        blinkKey.value = key;
-        blinkTimer = window.setTimeout(() => {
-            // 只有"闪的仍是这一格"才清 —— 连点定位两格时，第一格的计时器不能把第二格的闪停掉
-            if (blinkKey.value === key) blinkKey.value = '';
-        }, 1200);
-    };
+    // ── 定位闪烁：⛔ 已整条移除（业主 2026-10-04 六次报"丑死了"）─────────────────
+    //
+    // 原来这里有 `blinkKey` + `startBlink` + 1.2s 计时器：定位那一格闪一下**橙色边框**，
+    // 理由是"定位是动作、常驻高亮是状态，动作不给反馈用户会以为没生效"。
+    //
+    // ⚠️⚠️ **实测它与焦点框叠在一起**（主人截图：同一个格子上蓝框 + 橙框同时在）
+    // ⇒ **两套焦点语言叠成双框**，这才是"丑"的来源。
+    // 而它想解决的那个问题（"以为没生效"）**本就不存在**：
+    // 定位后焦点框**本来就落在那一格**、而且网格只有 1px 细框 + 淡蓝灰底 ——
+    // "焦点在哪"已经一目了然，不需要第二个颜色来重复说一遍。
+    //
+    // ⇒ 结论：**动作反馈 ≠ 加第二种状态色**。真要强化，用 `scale` 那一下抬起
+    //   （`transition` 里已有）就够了，不该另开一套配色。
+    // ⇒ 整条链路（状态 / 计时器 / `opts.blink` / 模板 class / CSS）一并删掉，
+    //   不留"暂时不用但留着以防万一"的残件。
 
     // ── 行列结构：一次 DOM 探测 + 缓存 ───────────────────────────────────
     /**
      * 上一次探测的结果。`null` =还没探过（或已失效）。
      *
-     * 缓存的**唯一目的**是省掉同一次按键内的重复探测（探测要读上百个 rect）。
-     * 失效点只有两个，都在下面显式写着—— 宁可多探一次，也不能留一个"忘了失效"的雷。
+     * 缓存的**唯一目的**是省掉同一次按键内的重复探测（探测要读上百个 `offsetTop`）。
+     * 失效点在下面显式写着—— 宁可多探一次，也不能留一个"忘了失效"的雷。
      */
     let layoutCache: GridLayout | null = null;
     /**
-     * 让**行结构**失效。`fileList` 变（条目增减 / 换屏）与窗口变宽是仅有的两个原因。
+     * 让**整块**缓存失效。
+     *
+     * `fileList` 变（条目增减 / 换屏）与窗口变宽是仅有的两个原因。
      */
     const invalidateLayout = () => { layoutCache = null; };
     /**
-     * 只让 `rowTops` 失效 —— **滚动**时必须做这件事（2026-10-04 code review 抓出）。
+     * 只让 `rowTops` 失效 —— **滚动**时必须做这件事。
      *
      * ⚠️ 缓存里两个量的**生命周期不同**，不能绑在一起：
-     * - `rows`（哪一格在第几行第几列）**与滚动无关** ⇒ 滚动时不该重算（白花一次上百个 rect）
+     * - `rows`（哪一格在第几行第几列）**与滚动无关** ⇒ 滚动时不该重算
      * - `rowTops`（每行的 `getBoundingClientRect().top`）是**视口坐标** ⇒ **滚动就变**
      *
      * 原实现只让整块缓存失效，而失效点只有 `fileList` 与 `resize`（**没有滚动**）
@@ -172,34 +163,67 @@ export function useGridCursor(deps: {
     /**
      * 探测当前网格的行结构。
      *
-     * ⚠️ **为什么用 `getBoundingClientRect().top` 而不是 `offsetTop`**：
-     * `offsetTop` 是相对 **`offsetParent`** 的，而 `.image-box-item` 自己带
-     * `position: relative`（`index.vue` 的 `.image-box-item` 块）⇒ 它的 `offsetParent`
-     * 是自己，读出来的 `offsetTop` 恒为 0。用rect 拿的是**视口坐标**，
-     * 一视同仁、且与任何祖先的定位方式无关。
+     * ## ⚠️ 这里读的是 `offsetTop`（布局坐标），**不是** `getBoundingClientRect().top`
+     *
+     * 2026-10-04 三轮真机报障（"按右不一定动"/"上半部分正常"/"前三行正常第四行开始错"）
+     * 的**同一个根因**：`getBoundingClientRect()` 返回 **CSS transform 之后**的矩形，
+     * 而焦点格带 `transform: scale(1.012)`（"极轻抬升"，`index.vue` 的 `.cursor`）
+     * ⇒ 它的 `top` 比同排兄弟高 `(scale−1)/2 × 格高` = 主屏 **1.843px**
+     * > `groupRows` 的 `ROW_EPS = 1` ⇒ **那一格被单独判成一行**
+     * ⇒ 方向键的行列整体错位（按 → 撞边界不动、按 ↓ 横着跳）。
+     *
+     * 实测（三个无头 Electron 探针共 46 断言，`docs/probes/cursor-scale-row` 等）：
+     * - 用 `rect.top`：焦点在 `k5` ⇒ 行结构碎成 `5/1/6`；焦点在 `k2` ⇒ 碎成 `2/1/3`
+     * - 换成 `offsetTop`：对焦点格偏移 **0.0000px**、行结构恒定 `10×6`
+     * - 只换这一处、其它一字不改（含缓存逻辑）⇒ 长按 26 次按键 **0 步走错**
+     *
+     * "为什么前几行正常"：焦点跨出视口才滚动、才作废缓存、才重新探测。
+     * 主屏可视区 1145px ÷ 格高 307.2px = **3.73 行** ⇒ 第 4 行才第一次滚动
+     * ⇒ 那条线是**视口边界**，不是数据分界（**随窗口高度移动**，别当设计固化）。
+     * 完整分析：`docs/ANALYSIS-arrow-key-misalign-2026-10-04.md`
+     *
+     * ## 两种坐标的分工（**不能只用一个**，实测滚动 234px 后两者差 −234）
+     *
+     * | 用途 | 用哪个 | 为什么 |
+     * |---|---|---|
+     * | 分行（`rows`） | **`offsetTop`** | 布局坐标，**不含 transform** |
+     * | 判"这行在不在视口内"（`rowTops`） | **`getBoundingClientRect().top`** | 视口坐标，必须跟着滚动变 |
+     *
+     * ⚠️ **旧注释的错**（已实测推翻）：曾写「`.image-box-item` 自带 `position: relative`
+     * ⇒ `offsetParent` 是自己 ⇒ `offsetTop` 恒为 0」。**不成立**——
+     * `.image-box` 自己没有 `position`，`offsetParent` 一路回落到 **`BODY`**
+     * （实测第一格 `offsetTop` = 10 = 它的 `margin-top`，且行间取值数 = 行数）。
+     * `position: relative` 影响的是**它自己子元素**的 `offsetParent`，不是它自己。
      *
      * 顺序：模板里 `v-for` 直接铺 `fileList`，flex `row wrap` **保持 DOM 顺序**
      * ⇒ 探测顺序就是视觉顺序（从上到下、从左到右），不需要额外排序。
      *
      * 不需要等图片加载：格子高度被 `height: var(--item-height) !important` 钉死
-     * ⇒ 懒加载的图没到也不会改变行高。
+     * ⇒ 懒加载的图没到也不会改变行高（实测图片到达前后 `offsetTop` 漂移 **0.000px**）。
+     *
+     * ⚠️ `offsetTop` 会触发**强制同步布局**，比读 `rect` 贵 ⇒ 这也是缓存必须真的生效的原因。
+     * `rows` 只在 `fileList`/窗口变宽时重算，滚动**不**重算它（见 `invalidateRowTops`）。
      */
     const probeLayout = (): GridLayout => {
-        // `rowTops` 空 ⇒ 滚动把它作废了（见 invalidateRowTops）⇒ 必须重新探测
+        // `rowTops` 空 ⇒ 滚动把它作废了（见 invalidateRowTops）⇒ 必须重新探测。
+        // ⚠️ 重新探测会**连`rows` 一起重算**（它们在同一个对象里）——
+        //    修复前这正是"滚动一次就永久变脏"的机制；换成 `offsetTop` 后重算也不再产生脏数据。
         if (layoutCache && layoutCache.rowTops.length) return layoutCache;
         const box = imageBox.value;
         if (!box) return { rows: [], rowTops: [] };
 
+        // 一次遍历同时取两个坐标：**每格只做一次布局查询**（`offsetTop` 与 rect 分开读会多触发一次回流）
         const cells: CellBox[] = [];
+        const viewportTops = new Map<string, number>();
         for (const el of Array.from(box.querySelectorAll<HTMLElement>('.image-box-item'))) {
             const key = el.dataset.key;
             if (!key) continue;                // 没有 data-key 的不是条目格（防御性，模板保证了）
-            cells.push({ key, top: el.getBoundingClientRect().top });
+            cells.push({ key, rowTop: el.offsetTop });
+            viewportTops.set(key, el.getBoundingClientRect().top);
         }
         const rows = groupRows(cells);
-        // 每行第一格的 top：`firstVisibleKey` 判"这行在不在视口内"要用，
-        // 重新算一遍 rect 是不必要的（同批元素，取该行首个即可）
-        const rowTops = rows.map((r, i) => cells.find(c => c.key === r[0]!)?.top ?? Number.NaN);
+        // 每行第一格的**视口** top：`firstVisibleKey` 判"这行在不在视口内"要用
+        const rowTops = rows.map(r => viewportTops.get(r[0]!) ?? Number.NaN);
         layoutCache = { rows, rowTops };
         return layoutCache;
     };
@@ -227,15 +251,39 @@ export function useGridCursor(deps: {
      * `block: 'nearest'` 而不是 `'center'`：`center` 会让**每按一次方向键都把目标
      * 顶到屏幕正中**，连按 5 下画面就在猛跳。`nearest` 只在它真的看不见时才滚，
      * 看得见就一动不动。
+     *
+     * ## ⚠️⚠️ 但 `nearest` 有个盲区，必须补（业主 2026-10-04 真机报）
+     *
+     * `nearest` 的判据是"**这个元素**看得见吗"⇒ 焦点在**首行第一格**时它已可见
+     * ⇒ **不滚** ⇒ 滚动条永远停在中间；
+     * 同理焦点在**末行**时也永远够不到底。
+     * 业主原话：「到第一行和最后一行都不会到顶和到底（滚动条），体验不好」。
+     *
+     * ⚠️ 这不是"要不要加一点余量"的问题，而是**两个不同的问题**：
+     * - `nearest` 解决的是"**焦点这一格**别跑出视口" ⇒ 保留
+     * - "**首行要滚到顶、末行要滚到底**"是**视口对齐**问题 ⇒ 单独补
+     *
+     * ⇒ 判据：**落点已经在首行（`r === 0`）⇒ 直接滚到顶；在末行 ⇒ 滚到底**。
+     * 只在这两种情况下强制对齐，中间行仍然交给 `nearest`（不动画面）。
+     * 零横轴滚动条 ⇒ 纵向对齐就是全部（不用管 `inline`）。
      */
     const scrollIntoViewIfNeeded = (key: string) => {
-        const el = imageBox.value?.querySelector<HTMLElement>(
+        const box = imageBox.value;
+        const el = box?.querySelector<HTMLElement>(
             `.image-box-item[data-key="${CSS.escape(key)}"]`,
         );
+        if (!box || !el) return;
         // ⚠️ 用 `CSS.escape` 而不是拼选择器：目录名里什么字符都可能有（引号 / 方括号 / 空格），
         // 拼出来迟早炸。同款处理见 `usePreview.locateInGrid`（那里用 dataset 比对，
         // 因为它要拿的是**已知存在**的格子；这里每次移动都可能遇到特殊字符，逃不掉）。
-        el?.scrollIntoView({ block: 'nearest' });
+        el.scrollIntoView({ block: 'nearest' });
+
+        // 纵向对齐：首行⇒ 顶、末行 ⇒ 底。中间行不做（画面不该乱跳）。
+        const rows = probeLayout().rows;
+        const at = posOf(rows, key);
+        if (!at) return;
+        if (at.r === 0) box.scrollTop = 0;
+        else if (at.r === rows.length - 1) box.scrollTop = box.scrollHeight;
     };
 
     /**
@@ -245,11 +293,10 @@ export function useGridCursor(deps: {
      * 所以"从预览层飞回来"和"用方向键走过去"走的是**同一条路** ——
      * 两个入口的行为差异被结构性地消掉了。
      */
-    const focusCursor = (key: string, opts: { blink?: boolean; scroll?: boolean } = {}) => {
+    const focusCursor = (key: string, opts: { scroll?: boolean } = {}) => {
         if (!key) return;
         cursorKey.value = key;
         if (opts.scroll !== false) scrollIntoViewIfNeeded(key);
-        if (opts.blink) startBlink(key);
     };
 
     /**
@@ -257,6 +304,34 @@ export function useGridCursor(deps: {
      *
      * ⚠️ 不能取 `rows[0][0]`：`onBack` 会恢复这一屏的 `scrollY` ⇒
      * 从子目录返回时屏幕可能停在中间，落第一行等于放到屏幕外（按了方向键却什么都没看见）。
+     *
+     * ## ⚠️⚠️ 这里**必须不滚动**（业主 2026-10-04 五次报"按返回没恢复 scroll 位置"）
+     *
+     * 原来这里是 `focusCursor(key)` —— 默认 `scroll: true` ⇒ 会调 `scrollIntoViewIfNeeded`
+     * ⇒ **把视口滚走**。
+     *
+     * ⛔ 而它跑在**比 `onBack` 的 `scrollTo` 更晚一拍**的位置上：
+     * ```
+     * onBack: setCursorKey → await fetchFolder → nextTick → scrollTo(恢复到 to.scrollY)
+     *                ↓（watch 是 pre flush，此刻排队）
+     *         watch 触发 → void nextTick(activateCursor)      ← ★晚一拍
+     *                ↓
+     *         activateCursor → focusCursor → scrollIntoView  ← ★把恢复值覆盖掉
+     * ```
+     * ⇒ 症状：**滚动位置"恢复了一点但不对"**（`scrollTo` 的值被 `scrollIntoView` 顶掉）。
+     *
+     * ## 为什么"不滚动"在三个调用点上全都安全
+     *
+     * `activateCursor` 只有三个入口，**每一个的视口都已经就位**：
+     * ① 首次按方向键：`cursorKey` 为空 ⇒ 用户还没滚动过
+     * ② 新屏加载完：`enterScreen` 已把视口**归零**（`imageBox.scrollTo(0,0)`）
+     * ③ `onBack` 恢复的 key 不在新屏 ⇒ 视口刚被 `onBack` **恢复**到 `to.scrollY`
+     *
+     * 而 `firstVisibleKey` 的定义本身就是"**视口里**最靠上那一行"
+     * ⇒ 落点按定义就在视口内 ⇒ **不需要滚**。
+     *
+     * ⇒ 这是**职责分离**：**视口归导航层（`enterScreen` / `onBack`）管，焦点归本模块管。**
+     * 一个动作只做一件事，两边都不越界 —— 不是加条件绕过症状。
      */
     const activateCursor = () => {
         const { rows, rowTops } = probeLayout();
@@ -271,11 +346,12 @@ export function useGridCursor(deps: {
         const r = box ? box.getBoundingClientRect() : null;
         // ⚠️ **两个边界都要给**（`viewTop` 是2026-10-04 code review 补上的）：
         // 只给下界时，屏幕停在中间（onBack 恢复 scrollY 之后）会选出**屏幕上方**
-        // 看不见的那一行，然后 `scrollIntoView` 把视口猛拉到最顶。
+        // 看不见的那一行—— 那时**更不能滚**（滚了就把恢复好的视口顶掉）。
         // 容器量不到 ⇒ 退成 `[-Inf, +Inf]`（与可视区相交）⇒ 由函数末尾的兜底处理。
         const viewTop = r ? r.top : Number.NEGATIVE_INFINITY;
         const viewBottom = r ? r.bottom : Number.POSITIVE_INFINITY;
-        focusCursor(firstVisibleKey(rows, rowTops, viewTop, viewBottom));
+        // ⚠️⚠️ **`scroll: false`** —— 见上文"这里必须不滚动"的整段推导
+        focusCursor(firstVisibleKey(rows, rowTops, viewTop, viewBottom), { scroll: false });
     };
 
     /**
@@ -379,7 +455,6 @@ export function useGridCursor(deps: {
         // ⚠️ 这个监听挂在 `imageBox` 上（不是 window）⇒ 摘的必须是**同一个元素**。
         // `imageBox.value` 若在卸载时已变成 null，就抓不到那个元素了 ⇒ 缓存引用。
         scrollHost?.removeEventListener('scroll', invalidateRowTops);
-        cancelBlink();
     };
 
     // ⚠️ 注册 `onUnmounted` **必须**写在 setup 顶层。写在 `onMounted` 回调内部的那个
@@ -445,17 +520,31 @@ export function useGridCursor(deps: {
     watch(listFingerprint, (fp) => {
         // 空列表（加载中 / 空目录 / 请求失败）⇒ 不落，那不是"一屏内容"
         if (!fp || !takeIntent()) return;
+        /**
+         * ⚠️⚠️ **已经有有效焦点时不许覆盖**（2026-10-04 业主真机报"进子目录再回来，焦点回到第一个"）。
+         *
+         * `onBack` 会先 `setCursorKey(to.cursorKey)` 恢复这一屏的记忆，
+         * 而恢复出来的 key **若在这一屏里**，它就是**正确的焦点位置**。
+         * ⚠️ 但 `setCursorKey` 写在 `fetchFolder` **之前** —— 那一刻 `dataSource` 还是**旧屏**，
+         * ⇒ `cursorItem` 是 `undefined`（派生判据，key 在旧屏里找不到），
+         * ⇒ 等新屏数据到位、这个 watch 触发时，**必须重新看一眼**"key 现在在不在这一屏里"。
+         *
+         * ⇒ 判据：**`cursorItem` 存在 ⇒ 有人已经站好了，别动它**。
+         * 那个"落视口第一行"只该服务于**真的没有焦点**的情况
+         * （冷启动、刚点过目录、恢复的 key 不在这一屏里）。
+         */
+        if (cursorItem.value) return;
         // ⚠️ `nextTick` 是必需的：此刻 DOM 还是**旧屏的格子**（`dataSource` 已换但未渲染），
-        // 直接激活会量到旧布局的行高⇒ 焦点落到一个算错的位置上。
+        // 直接激活会量到旧布局的行高 ⇒ 焦点落到一个算错的位置上。
         void nextTick(activateCursor);
     });
 
     return {
         // 状态（供模板读）
-        cursorKey, cursorItem, cursorIndex, blinkKey,
+        cursorKey, cursorItem, cursorIndex,
         // 写入口（**全部**只改`cursorKey`，没有别的副作用）
         /** 鼠标单击卡片 / 定位 / 首次激活：落焦点 + 滚进视口（+ 可选闪一下） */
-        focusCursor: (key: string, opts?: { blink?: boolean; scroll?: boolean }) => {
+        focusCursor: (key: string, opts?: { scroll?: boolean }) => {
             noteIntent();
             focusCursor(key, opts);
         },

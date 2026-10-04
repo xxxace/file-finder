@@ -1,0 +1,98 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8" />
+<style>
+/* ═══════════════════════════════════════════════════════════════════
+   网格卡片排版· 官方规范对照实验
+   每一档都只改**一组变量**，其余全部相同 ⇒ 差异可直接归因。
+   判据不是"好看"，是后面那张表里的官方规则。
+   ═══════════════════════════════════════════════════════════════════ */
+body { margin:0; padding:20px; background:#f6f7f9;
+       font-family:-apple-system,"Segoe UI","Microsoft YaHei",sans-serif; }
+h2 { font-size:13px; color:#6b7280; margin:22px 0 8px; font-weight:600; }
+.row { display:flex; gap:28px; flex-wrap:wrap; }
+
+/* ── 档 A：**改前**（照抄 index.vue 改前的真实值） ────────────────── */
+.variant .cell {
+    width:150px; height:170px; margin:5px;
+    background: transparent;                   /* ⚠️ 改前也**没有**静止底色 —— 这条是被实测纠正的认知 */
+    border:1px solid transparent;
+    box-sizing:border-box; padding:8px;
+    display:flex; flex-direction:column; justify-content:flex-end;
+}
+.variant .cell .name { font-size:16px; font-weight:700; color:#000; text-align:center; }
+.variant .cell.on {
+    border-color:#2080f0;
+    background-color: rgba(110,123,173,.16);
+    box-shadow: 1px 0 10px rgba(122,141,169,.15);   /* ⚠️ 单侧发光 */
+    transform: scale(1.012);
+}
+.variant .cell:hover { border-color:#7a8da9; background:rgba(110,123,173,.16);
+                      box-shadow: 1px 0 10px rgba(122,141,169,.15); }
+
+/* ── 档 B：**改后**（照抄 index.vue 改后的真实值）─────────────────── */
+.v-clean .cell {
+    width:150px; height:170px; margin:5px;
+    background: transparent;
+    border:1px solid transparent;
+    box-sizing:border-box; padding:8px;
+    display:flex; flex-direction:column; justify-content:flex-end;
+    transition:border-color .1s, background-color .1s;
+}
+.v-clean .cell .name { font-size:13px; font-weight:400; color:#4b5563; text-align:center; }
+.v-clean .cell.on {
+    border-color:#2080f0;
+    background-color: rgba(110,123,173,.10);/* 更淡 */
+    transform: scale(1.012);                   /* 抬起保留 */
+    /* 无 box-shadow —— 单侧发光已去掉 */
+}
+.v-clean .cell:hover { border-color:#7a8da9; background:rgba(110,123,173,.12); }
+
+.thumb { width:100%; height:120px; background:#c8cfda; margin-bottom:6px; }
+.demo { display:flex; }
+</style>
+</head>
+<body>
+<h2>A · 改前：16px 粗体纯黑 + 焦点带单侧发光</h2>
+<div class="row demo variant" id="a"></div>
+
+<h2>B · 改后：13px 常规字重次级灰 + 焦点只留边框与更淡的底</h2>
+<div class="row demo v-clean" id="b"></div>
+
+
+
+<script>
+const NAMES = ['[TST-5…', '[TST-5…', '[TST-5…', '[TST-5…'];
+for (const id of ['a', 'b']) {
+    const host = document.getElementById(id);
+    NAMES.forEach((n, i) => {
+        const d = document.createElement('div');
+        d.className = 'cell' + (i === 0 ? ' on' : '');
+        d.innerHTML = '<div class="thumb"></div><div class="name">' + n + '</div>';
+        host.appendChild(d);
+    });
+}
+
+/** 量三档的「视觉噪声」：非焦点格的底色亮度差 + 文字的字号/字重 */
+window.__measure = function () {
+    const out = {};
+    for (const [k, id] of [['variant','a'], ['clean','b']]) {
+        const cells = Array.from(document.querySelectorAll('#' + id + ' .cell'));
+        const idle = cells.find(c => !c.classList.contains('on'));
+        const cs = getComputedStyle(idle);
+        const nameCs = getComputedStyle(idle.querySelector('.name'));
+        const bg = cs.backgroundColor;
+        out[k] = {
+            idleBg: bg,
+            idleBgOpaque: !/rgba\(0, 0, 0, 0\)|transparent/.test(bg),
+            fontSize: nameCs.fontSize,
+            fontWeight: nameCs.fontWeight,
+        };
+    }
+    return out;
+};
+window.__ready = true;
+</script>
+</body>
+</html>

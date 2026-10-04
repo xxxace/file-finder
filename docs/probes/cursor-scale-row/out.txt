@@ -1,0 +1,64 @@
+
+(electron) 'console-message' arguments are deprecated and will be removed. Please use Event<WebContentsConsoleMessageEventParams> object instead.
+[page] %cElectron Security Warning (Insecure Content-Security-Policy) font-weight: bold; This renderer process has either no Content Security
+  Policy set or a policy with "unsafe-eval" enabled. This exposes users of
+  this app to unnecessary security risks.
+
+For more information and help, consult
+https://electronjs.org/docs/tutorial/security.
+This warning will not show up
+once the app is packaged.
+—— D1 基线（无 .cursor）：6 列 × 2 行 ——
+  实测：2 行，每行 6/6 格
+  同排 top 极差 = 0.0000px
+  PASS  无焦点格时正好 2 行   → 2 行
+  PASS  无焦点格时每行 6 格   → 6/6
+  PASS  无焦点格时格高 ≈ 1.5rem = 307.2px   → 307.19px
+
+—— D2 焦点格在第 6 格（k5）· 转场已跑完 ——
+  实测：3 行，每行 5/1/6 格
+  焦点格 k5.top = 8.157
+  同排兄弟 k4.top = 10.000
+  ★ 抬升造成的偏移 = 1.843px
+  实测行结构 = [["k0","k1","k2","k3","k4"],["k5"],["k6","k7","k8","k9","k10","k11"]]
+  PASS  ★ 焦点格的抬升偏移 > ROW_EPS（这就是缺陷本身）   → 1.843px > 1px
+  PASS  ★ 后果：行结构被破坏（不再是 2 行 × 6 格）   → 3 行：5/1/6
+  PASS  ★ 焦点格被单独判成一行   → [5,1,6]
+
+—— D3 焦点格在行中间（k2）——
+  实测行结构 = [["k0","k1"],["k2"],["k3","k4","k5"],["k6","k7","k8","k9","k10","k11"]]
+  每行格数 = 2/1/3/6
+  PASS  ★ 行中间的焦点格同样把行劈开   → 4 行：2/1/3/6
+
+—— D4 转场进行中就探测（真实运行时的常态）——
+  转场刚开头的行结构 = [["k0","k1","k2","k3","k4","k5"],["k6","k7","k8","k9","k10","k11"]]
+  PASS  转场刚开头那一帧还不会劈开（说明劈开取决于"转场进行到多少"）   → 2 行：6/6
+
+—— D4b 转场中段（.18s 的一半 ≈ 90ms）——
+  中段偏移 = 1.859px，行结构 = [["k0","k1","k2"],["k3"],["k4","k5"],["k6","k7","k8","k9","k10","k11"]]
+  PASS  ★ 转场中段会把行劈开（真实运行时确实会读到这一帧）   → 4 行：3/1/2/6
+
+—— D5 对照：把 scale 拿掉，偏移应回到 0 ——
+  去scale 后偏移 = 0.0000px，行结构 = 6/6
+  PASS  去 scale 后偏移 = 0   → 0.0000px
+  PASS  去 scale 后行结构恢复正常（2×6）   → 2 行：6/6
+
+—— D6 治本验证：offsetTop 不受 transform 影响 ——
+  offsetTop 偏移 = 0.0000px，行结构 = 6/6
+  PASS  ★ offsetTop 对焦点格的偏移 = 0（治本量可用）   → 0.0000px
+  PASS  ★ 用 offsetTop 分行：行结构正确（2×6）   → 2 行：6/6
+  PASS  ★ 焦点格在行中间时 offsetTop 分行同样正确   → 2 行：6/6
+
+—— D7 两种量各有分工（不能只用一个）——
+  滚动 234px 后 rect.top − offsetTop = -234.00px
+  PASS  滚动后 rect.top 与 offsetTop 确实不同（视口坐标 vs 布局坐标，各有分工）   → -234.00px
+  PASS  未选中格无 transform（污染源只在 .cursor 一处）   → none
+
+—— D8 offsetParent 是谁（修法的可行性前提）——
+  offsetParent = BODY（是 .image-box？ false；是 BODY？ true）
+  第一格 offsetTop = 10，不同取值个数 = 2（2 行 ⇒ 应为 2）
+  PASS  offsetTop 可读且行间有差异（能用来分行）   → 2 个不同取值
+  PASS  ★ 实测推翻 gridGeometry.ts:177 的前提：offsetParent 是 BODY，不是"自己"   → BODY（注释说会是"自己"、offsetTop 恒 0）
+─────────────────────────────
+18 PASS / 0 FAIL
+

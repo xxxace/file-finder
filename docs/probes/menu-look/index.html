@@ -1,0 +1,157 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8" />
+<!-- 真 naive-ui 编译出来的 CSS（`header-width` 探针已验过它是真的） -->
+<link rel="stylesheet" href="../header-width/css-real.generated.css">
+<style>
+    /* 只给容器一点尺寸，菜单本身是 teleport 到 body 的 */
+    body { margin: 0; font-family: sans-serif; }
+    .toolbar { display: flex; gap: 12px; align-items: center; padding: 12px; }
+    .header-bar { padding: 4px; margin-bottom: 4px; border-radius: 4px;
+                  box-shadow: 1px 0 6px rgba(113,147,192,.25); }
+</style>
+</head>
+<body>
+<div class="header-bar">
+    <div class="toolbar">
+    </div>
+</div>
+<!-- 真 naive-ui UMD + 真 vue.global：量到的是**真组件 + 真 CSS**，
+     与 `header-width` 探针同一套做法（那份已经验过 CSS 是真编译出来的）。 -->
+<script src="../../../node_modules/vue/dist/vue.global.prod.js"></script>
+<script src="../../../node_modules/naive-ui/dist/index.js"></script>
+<script>
+const { createApp, h, ref, computed } = Vue;
+const N = naive;   // ⚠️ naive-ui UMD 的全局名是 `naive`，组件要**用对象**（N.NDropdown）而不是字符串
+
+const options = [
+    { label: '补全这一片', key: 'fill' },
+    { label: '重读这一片', key: 'rescan' },
+    { label: '补封面', key: 'cover' },
+    { label: '换封面', key: 'faces' },
+];
+
+// ⚠️ 与 index.vue 的 moreMenuProps **逐字相同**（等效复制）。
+// 改产品那份必须同步改这里，否则探针测的不是产品。
+const moreMenuProps = () => ({
+    style: [
+        '--n-border-radius: 4px',
+        '--n-font-size: 14px',
+        '--n-option-height: 32px',
+        '--n-option-color-hover: rgba(110, 123, 173, .16)',
+        '--n-option-color-active: rgba(110, 123, 173, .16)',
+    ].join('; '),
+});
+
+const App = {
+    setup() {
+        return () => h(N.NDropdown, {
+            trigger: 'click', options, menuProps: moreMenuProps,
+        }, { default: () => h(N.NButton, { size: 'small' }, { default: () => '更多' }) });
+    },
+};
+// ⚠️ 挂进 `.toolbar`（页面里那个空槽）—— 与产品同构：菜单的定位基准是那个按钮
+createApp(App).mount(document.querySelector('.toolbar'));
+
+window.__open = async function () {
+    // 点开菜单：naive-ui 的 dropdown 靠 click 触发
+    const btn = document.querySelector('.n-button');
+    btn.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    await new Promise(r => setTimeout(r, 400));
+    return !!document.querySelector('.n-dropdown-menu');
+};
+
+/** 量菜单的实际观感：圆角 / 字号 / 选项高度 / 悬停底色变量是否生效 */
+window.__measure = function () {
+    const menu = document.querySelector('.n-dropdown-menu');
+    if (!menu) return { found: false };
+    const cs = getComputedStyle(menu);
+    const opt = menu.querySelector('.n-dropdown-option');
+    const ocs = opt ? getComputedStyle(opt) : null;
+    return {
+        found: true,
+        // 变量是否真落到 DOM 上（这是本探针的核心判据）
+        varRadius: menu.style.getPropertyValue('--n-border-radius'),
+        varFontSize: menu.style.getPropertyValue('--n-font-size'),
+        varOptHeight: menu.style.getPropertyValue('--n-option-height'),
+        // 计算值：验证变量真的被 CSS 消费了，而不只是躺在 style 上
+        radius: cs.borderRadius,
+        fontSize: ocs ? ocs.fontSize : '',
+        optHeight: opt ? opt.getBoundingClientRect().height : 0,
+        // 形态：选项是不是竖排（这是"按内容形态"的判据）
+        optionCount: menu.querySelectorAll('.n-dropdown-option').length,
+        firstRects: Array.from(menu.querySelectorAll('.n-dropdown-option')).slice(0, 4).map(o => {
+            const r = o.getBoundingClientRect();
+            return { x: Math.round(r.x), y: Math.round(r.y), w: Math.round(r.width) };
+        }),
+        // 悬停/选中底色（读变量值，不实际 hover —— 要用 :before 伪元素，getComputedStyle 读不到）
+        varHover: menu.style.getPropertyValue('--n-option-color-hover'),
+        varActive: menu.style.getPropertyValue('--n-option-color-active'),
+    };
+};
+
+/** 三种写法对比：哪种真能让 CSS 变量落到 .n-dropdown-menu 上 */
+window.__try = async function (kind) {
+    const opts = [{ label: 'A', key: 'a' }, { label: 'B', key: 'b' }];
+    const props = {
+        flat: { '--n-border-radius': '4px' },   // ⛔ 实测**不生效**（被 naive-ui 自己的 cssVars 覆盖）
+        styleStr: { style: '--n-border-radius: 4px;' },
+        styleObj: { style: { '--n-border-radius': '4px' } },
+    }[kind];
+    const host = document.createElement('div');
+    host.style.cssText = 'position:absolute;left:0;top:400px';
+    document.body.appendChild(host);
+    const a = Vue.createApp({
+        setup() {
+            return () => Vue.h(naive.NDropdown, { trigger: 'click', options: opts, menuProps: () => props },
+                { default: () => Vue.h(naive.NButton, { size: 'small' }, { default: () => 'x' }) });
+        },
+    });
+    a.mount(host);
+    await new Promise(r => setTimeout(r, 200));
+    host.querySelector('.n-button').dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    await new Promise(r => setTimeout(r, 400));
+    const menus = document.querySelectorAll('.n-dropdown-menu');
+    const menu = menus[menus.length - 1];
+    const res = menu ? {
+        inline: menu.getAttribute('style'),
+        computed: getComputedStyle(menu).borderRadius,
+    } : { inline: '(no menu)', computed: '' };
+    a.unmount(); host.remove();
+    return res;
+};
+
+/** 对照组：同样的4 项，但**不传 menu-props** —— 量naive-ui 的默认值 */
+window.__openControl = async function () {
+    const host = document.createElement('div');
+    host.style.cssText = 'position:absolute;left:0;top:400px';
+    document.body.appendChild(host);
+    const a = Vue.createApp({
+        setup() {
+            return () => Vue.h(naive.NDropdown, {
+                trigger: 'click',
+                options: [{ label: 'A', key: 'a' }, { label: 'B', key: 'b' }],
+                // ⚠️ 故意**不传** menu-props
+            }, { default: () => Vue.h(naive.NButton, { size: 'small' }, { default: () => 'ctl' }) });
+        },
+    });
+    a.mount(host);
+    await new Promise(r => setTimeout(r, 200));
+    host.querySelector('.n-button').dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    await new Promise(r => setTimeout(r, 400));
+    const menus = document.querySelectorAll('.n-dropdown-menu');
+    const menu = menus[menus.length - 1];
+    const opt = menu ? menu.querySelector('.n-dropdown-option') : null;
+    const res = menu ? {
+        radius: getComputedStyle(menu).borderRadius,
+        fontSize: opt ? getComputedStyle(opt).fontSize : '',
+        optHeight: opt ? opt.getBoundingClientRect().height : 0,
+    } : { radius: '(no menu)', fontSize: '', optHeight: 0 };
+    a.unmount(); host.remove();
+    return res;
+};
+window.__ready = true;
+</script>
+</body>
+</html>

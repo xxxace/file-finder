@@ -1,0 +1,52 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+
+<head>
+    <meta charset="utf-8">
+    <title>多文件弹层 · 改前 / 改后（一图对照）</title>
+    <style>
+        html,
+        body {
+            margin: 0;
+            /* 抓拍只取窗口可见区 ⇒ 藏掉滚动条，免得它进画 */
+            overflow: hidden;
+            background: #eef0f4;
+            font-family: system-ui, "Microsoft YaHei", sans-serif;
+        }
+
+        .cap {
+            font-size: 13px;
+            font-weight: 600;
+            color: #4b5563;
+            padding: 10px 16px 6px;
+        }
+
+        iframe {
+            display: block;
+            width: 840px;
+            border: 0;
+            background: #fff;
+            border-top: 1px solid #d8dee8;
+            border-bottom: 1px solid #d8dee8;
+        }
+
+        #b {
+            height: 190px;
+        }
+
+        #a {
+            height: 240px;
+        }
+    </style>
+</head>
+
+<body>
+    <!-- 用 iframe 隔开两套 CSS：改前的 `.file-item` 规则和改后的会互相覆盖，
+         同一个文档里没法同时渲染两种。 -->
+    <div class="cap">改前 —— 84×84 空盒子 + 截断到前缀的文件名（4 格长得一样，没法选）</div>
+    <iframe id="b" src="before.html"></iframe>
+    <div class="cap">改后 —— 类型图标 + 可换行的文件名 + 大小</div>
+    <iframe id="a" src="after.html"></iframe>
+</body>
+
+</html>

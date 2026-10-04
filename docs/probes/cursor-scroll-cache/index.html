@@ -1,0 +1,139 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8" />
+<style>
+    /* ⚠️ `index.vue` 的等效复制（只保留与几何/滚动有关的）。
+       容器高度刻意做小 ⇒ 10 行内容放不下 ⇒ **必须滚动才能走到底部**，
+       这正是"长按方向键到底部"的场景。 */
+    html { font-size: 204.8px; }        /* 主屏 2048 宽⇒ 1rem=204.8px */
+    body { margin: 0; }
+    .stage { width: 2048px; height: 600px; padding: 0; }   /* 视口 600px ≈ 1.95 行 */
+
+    .image-box {
+        display: flex;
+        flex-flow: row wrap;
+        overflow: hidden auto;
+        justify-content: flex-start;
+        align-content: flex-start;
+        margin-left: -5px;
+        margin-right: -5px;
+        width: 2048px;
+        height: 100%;
+    }
+
+    .image-box-item {
+        --item-gap: 10px;
+        --item-width: calc(100% / 6);
+        --item-height: 1.5rem;
+        display: flex;
+        flex-direction: column;
+        flex-grow: 0;
+        flex-shrink: 0;
+        width: calc(var(--item-width) - var(--item-gap));
+        min-height: 80px !important;
+        height: var(--item-height) !important;
+        max-height: var(--item-height) !important;
+        padding: 0 2px 10px;
+        margin: 10px 5px 0px;
+        border: 1px solid transparent;
+        justify-content: flex-end;
+        align-items: center;
+        box-sizing: border-box;
+        position: relative;
+        transition: border-color .1s ease-in-out, box-shadow .1s ease-in-out,
+            background-color .1s ease-in-out, transform .18s cubic-bezier(.2, .9, .3, 1.1);
+    }
+
+    .image-box-item.cursor {
+        border-color: #2080f0;
+        background-color: rgba(110, 123, 173, .16);
+        box-shadow: 1px 0 10px rgba(122, 141, 169, .15);
+        transform: scale(1.012);
+        z-index: 1;
+    }
+
+    /* ★ 懒加载占位：模拟 n-image :lazy 未加载时的样子。
+       关键问题：懒加载图片**加载完成时会不会改变行的 top**？
+       `.image-box-item` 的 height 被 !important 钉死 ⇒ 不该变。 */
+    .ph {
+        width: 100%; height: calc(100% - 36px);
+        background: #ccc;
+    }
+</style>
+</head>
+<body>
+<div class="stage">
+    <div class="image-box" id="box"></div>
+</div>
+<script>
+window.__build = function (n) {
+    const box = document.getElementById('box');
+    box.innerHTML = '';
+    for (let i = 0; i < n; i++) {
+        const d = document.createElement('div');
+        d.className = 'image-box-item';
+        d.dataset.key = 'k' + i;
+        const ph = document.createElement('div');
+        ph.className = 'ph';
+        d.appendChild(ph);
+        d.appendChild(document.createTextNode('k' + i));
+        box.appendChild(d);
+    }
+    return true;
+};
+
+/** 把cursor 移到第 idx 格（模拟 focusCursor 改cursorKey ⇒ class 变化） */
+window.__setCursor = function (idx) {
+    const box = document.getElementById('box');
+    Array.from(box.querySelectorAll('.image-box-item')).forEach((el, i) => {
+        el.classList.toggle('cursor', i === idx);
+    });
+    return true;
+};
+
+window.__measure = function () {
+    const box = document.getElementById('box');
+    return Array.from(box.querySelectorAll('.image-box-item')).map(el => ({
+        key: el.dataset.key,
+        top: el.getBoundingClientRect().top,
+        offsetTop: el.offsetTop,
+    }));
+};
+
+window.__scrollTop = function () { return document.getElementById('box').scrollTop; };
+
+/** 量scrollHeight / 能否滚 —— 用来确认"底部"这个概念真的存在 */
+window.__scrollInfo = function () {
+    const box = document.getElementById('box');
+    return {
+        scrollTop: box.scrollTop,
+        scrollHeight: box.scrollHeight,
+        clientHeight: box.clientHeight,
+        maxScroll: box.scrollHeight - box.clientHeight,
+    };
+};
+
+/**
+ * 模拟"懒加载图片到达"：把占位 div 换成真img（src 用data URI，不发网络请求）。
+ * 用来验：懒加载会不会改变行的 top（进而影响 groupRows）。
+ */
+window.__loadImages = function (useRealImg) {
+    const box = document.getElementById('box');
+    const px = 'data:image/svg+xml;base64,' + btoa(
+        '<svg xmlns="http://www.w3.org/2000/svg" width="10" height="10"><rect width="10" height="10" fill="#888"/></svg>');
+    Array.from(box.querySelectorAll('.ph')).forEach(ph => {
+        if (!useRealImg) return;
+        const img = document.createElement('img');
+        img.style.width = '100%';
+        img.style.height = '100%';
+        img.src = px;
+        ph.replaceWith(img);
+    });
+    return true;
+};
+
+window.__ready = true;
+</script>
+</body>
+</html>

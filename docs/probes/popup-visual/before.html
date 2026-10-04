@@ -1,0 +1,51 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+
+<head>
+    <meta charset="utf-8">
+    <title>多文件弹层 · 改前</title>
+
+    <!-- 改前那一版的编译产物快照（2026-10-05 从 popover-pick/css-real.generated.css 拷来）。
+         ⚠️ 不能直接引用 popover-pick 那个文件 —— 它会被 re-run 覆盖成"改后"的 CSS，
+         这个对照就静默失真了。 -->
+    <link rel="stylesheet" href="css-before.snapshot.css">
+    <!-- 图标字体（顺序同 after.html：fiv 在后 —— 与真实产物一致） -->
+    <link rel="stylesheet" href="../../../node_modules/file-icon-vectors/dist/file-icon-classic.min.css">
+
+    <style>
+        html,
+        body {
+            margin: 0;
+            background: #f4f6f9;
+            font-family: system-ui, "Microsoft YaHei", sans-serif;
+        }
+
+        #stage {
+            padding: 24px;
+        }
+    </style>
+</head>
+
+<body>
+    <div id="stage"></div>
+
+    <script src="../../../node_modules/vue/dist/vue.global.js"></script>
+    <script src="../../../node_modules/naive-ui/dist/index.js"></script>
+    <script>
+        /* 改前的模板**逐字**照抄（`file-cover` 没有 fiv 类、没有 size 那行、容器没有 file-list 类） */
+        window.__HARNESS_MARKUP = `
+<n-popover :show="popover.visible" :x="popover.x" :y="popover.y" trigger="manual" placement="bottom">
+    <div class="hstack" tabindex="-1">
+        <div v-for="(f, i) in popover.files" class="file-item" :class="{ 'file-cursor': i === fileCursor }"
+            :key="f.name" :title="f.name">
+            <div class="file-cover"></div>
+            <span>{{ f.name }}</span>
+        </div>
+    </div>
+</n-popover>
+`;
+    </script>
+    <script src="harness.js"></script>
+</body>
+
+</html>

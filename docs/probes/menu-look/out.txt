@@ -1,0 +1,37 @@
+
+—— 打开菜单 ——
+  PASS  点击后菜单真的弹出来了   → __open() = true
+
+—— M1 CSS 变量是否落到 DOM ——
+  —— 实测 ——
+  --n-border-radius      = "4px"
+  --n-font-size          = "14px"
+  --n-option-height      = "32px"
+  --n-option-color-hover  = "rgba(110, 123, 173, .16)"
+  --n-option-color-active = "rgba(110, 123, 173, .16)"
+  PASS  ★ 5 个变量全部落到了菜单根节点上   → 5/5
+
+—— M2 计算值：CSS 是否真的消费了变量 ——
+  getComputedStyle(menu).borderRadius = 4px
+  选项字号 = 14px · 选项高度 = 32.0px
+  PASS  ★ 圆角真的变成 4px（不是 naive-ui 默认的 6px）   → 4px
+  PASS  ★ 字号真的变成 14px   → 14px
+  PASS  ★ 选项高度真的变成 32px（默认 34px）   → 32.0px
+
+—— M3 形态：4 个文字动作应当竖排 ——
+  选项矩形（x, y, w）：
+    (16, 54, 100)
+    (16, 86, 100)
+    (16, 118, 100)
+    (16, 150, 100)
+  PASS  ★ 四个选项 y 各不相同（真的是竖排，不是横排）   → 54,86,118,150
+  PASS  ★ 四个选项 x 相同（同一列）   → 16,16,16,16
+  PASS  ★ 四个选项等宽（不是四个独立按钮）   → 100,100,100,100
+  PASS  ★ 恰好 4 个选项   → 4 个
+
+—— M4 控制组：不传 menu-props 时的默认值 ——
+  默认：圆角=3px · 字号=14px · 选项高=34.0px
+  PASS  ★ 对照组与改后确实不同（否则"改后"没意义）   → 默认 3px/34.0px vs 改后 4px/32.0px
+─────────────────────────────
+10 PASS / 0 FAIL
+

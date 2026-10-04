@@ -1,0 +1,58 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+
+<head>
+    <meta charset="utf-8">
+    <title>多文件弹层 · 改后</title>
+
+    <!-- 真实编译产物（改后 index.vue 的 <style scoped>） -->
+    <link rel="stylesheet" href="css-real.generated.css">
+    <!-- 真图标字体（`.fiv-cla` / `.fiv-icon-*` 的 background-image 是 CSS 相对路径，
+         必须从 node_modules 里加载才解析得到）。
+
+         ⚠️⚠️ **顺序不能反**：`.file-cover` 的 `blank.svg`（兜底空白页）与
+         `.fiv-cla.fiv-icon-mp4` 特异性**打平**（都是 0,2,0）⇒ 谁在后面谁赢。
+         真实产物里 fiv **在后**（实测 `dist/assets/index-*.css`：`.file-cover[` 在 12124 偏移、
+         `.fiv-cla.fiv-icon-mp4` 在 595983 ⇒ fiv 覆盖 blank）⇒ 这里必须照抄这个顺序，
+         否则探针会渲染出一个"图标全空"的假象。 -->
+    <link rel="stylesheet" href="../../../node_modules/file-icon-vectors/dist/file-icon-classic.min.css">
+
+    <style>
+        html,
+        body {
+            margin: 0;
+            background: #f4f6f9;
+            font-family: system-ui, "Microsoft YaHei", sans-serif;
+        }
+
+        #stage {
+            padding: 24px;
+        }
+    </style>
+</head>
+
+<body>
+    <div id="stage"></div>
+
+    <script src="../../../node_modules/vue/dist/vue.global.js"></script>
+    <script src="../../../node_modules/naive-ui/dist/index.js"></script>
+    <script>
+        /* 与 index.vue 里 popover 那段用到的标识符逐字对应。
+           文件名刻意用**同前缀**的形态 —— 那正是业主截图里"4 个格子长一样、没法选"的场景。 */
+        window.__HARNESS_MARKUP = `
+<n-popover :show="popover.visible" :x="popover.x" :y="popover.y" trigger="manual" placement="bottom">
+    <div class="hstack file-list" tabindex="-1">
+        <div v-for="(f, i) in popover.files" class="file-item" :class="{ 'file-cursor': i === fileCursor }"
+            :key="f.name" :title="f.name">
+            <div class="file-cover fiv-cla" :class="'fiv-icon-' + extOf(f.name)" aria-hidden="true"></div>
+            <span>{{ f.name }}</span>
+            <i class="file-size">{{ getSize(f.size) }}</i>
+        </div>
+    </div>
+</n-popover>
+`;
+    </script>
+    <script src="harness.js"></script>
+</body>
+
+</html>

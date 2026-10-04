@@ -1,0 +1,89 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8" />
+<style>
+    /* ⚠️ `index.vue` 的等效复制（按主屏 2048×1280 一比一）。
+       `.file-finder` 骨架 + `.image-box-item` 宽度算法/行高 + `.cursor` 的 scale
+       全部与产品一致 —— 缺任何一项，"第 4 行那条线"就会漂。 */
+    html { font-size: 204.8px; }        /* 主屏 2048 ⇒ 1rem = 204.8px（flexible.ts 公式） */
+    body { margin: 0; }
+    .file-finder {
+        display: flex; flex-flow: column;
+        padding: 10px 10px 0 10px; height: 100vh; box-sizing: border-box;
+    }
+    .header-bar { display: flex; flex-wrap: nowrap; padding: 4px; margin-bottom: 4px; height: 40px; box-sizing: border-box; background:#f3f4f7; }
+    .toolbar { flex: 0 0 auto; display: flex; gap: 12px; align-items: center; height: 34px; }
+    .image-box {
+        flex: 1;
+        display: flex; flex-flow: row wrap;
+        overflow: hidden auto;
+        justify-content: flex-start; align-content: flex-start;
+        margin-left: -5px; margin-right: -5px;
+    }
+    .image-box-item {
+        --item-gap: 10px;
+        --item-width: calc(100% / 6);
+        --item-height: 1.5rem;
+        display: flex; flex-direction: column;
+        flex-grow: 0; flex-shrink: 0;
+        width: calc(var(--item-width) - var(--item-gap));
+        min-height: 80px !important;
+        height: var(--item-height) !important;
+        max-height: var(--item-height) !important;
+        padding: 0 2px 10px;
+        margin: 10px 5px 0px;
+        border: 1px solid transparent;
+        justify-content: flex-end; align-items: center;
+        box-sizing: border-box; position: relative;
+        transition: border-color .1s ease-in-out, box-shadow .1s ease-in-out,
+            background-color .1s ease-in-out, transform .18s cubic-bezier(.2,.9,.3,1.1);
+    }
+    /* ★ 与产品同款：焦点格"极轻抬升"—— 这就是本探针要对抗的那个 transform */
+    .image-box-item.cursor {
+        border-color: #2080f0;
+        background-color: rgba(110,123,173,.16);
+        box-shadow: 1px 0 10px rgba(122,141,169,.15);
+        transform: scale(1.012);
+        z-index: 1;
+    }
+    .image-box-item .ph { width: 100%; height: calc(100% - 36px); background: #ccc; }
+    .image-box-item span { width: 100%; height: 38px !important; line-height: 16px; font-size: 14px;
+        word-break: break-all; text-overflow: ellipsis; overflow: hidden; }
+</style>
+</head>
+<body>
+<div class="file-finder">
+    <div class="header-bar"></div>
+    <div class="toolbar"></div>
+    <!-- 多个挂载点：每个用例一份，互不干扰（避免上一次的滚动/焦点残留） -->
+    <div class="image-box" id="app"></div>
+</div>
+<script src="__BUNDLE__"></script>
+<script>
+/**
+ * 为每个用例准备一个**真实的、在文档流里、可滚动**的挂载点。
+ *
+ * ⚠️⚠️ 第一版把挂载点写成 `position:absolute; left:-99999px`
+ *    ⇒ 它们**被挪出视口** ⇒ `scrollIntoView` 认为目标已在视口内 ⇒ **根本不滚动**
+ *    ⇒ "长按越过第 4 行那条线"这条判据**测的其实是没滚动的情况**
+ *      （V3 的 `scrollTop=0` 就是这么来的，差点把"没测到"当成"没问题"）。
+ *
+ * ⇒ 改成**重建主容器**：把旧的 `.image-box` 换成一个全新的，
+ *    容器始终在 `.file-finder` 的正常流里、有真实高度 ⇒ 滚动行为与产品一致。
+ */
+window.__newStation = function () {
+    const old = document.getElementById('app');
+    const fresh = document.createElement('div');
+    fresh.className = 'image-box';
+    fresh.id = 'app';
+    old.replaceWith(fresh);
+    // ⚠️ 上个用例的 Vue app 还挂在已移除的节点上 —— 它的 window keydown 监听必须摘掉，
+    //    否则**多个用例的监听会叠加**，一次按键被处理多次。
+    if (window.__lastApp) { window.__lastApp.unmount(); window.__lastApp = null; }
+    return fresh;
+};
+window.__ready = true;
+</script>
+</body>
+</html>

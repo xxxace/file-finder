@@ -1,0 +1,401 @@
+/* ⚠️ 生成产物，别手改 —— 由 docs/probes/popover-pick/build-css.mjs 真实编译
+   （less + scoped 转换）。改了组件样式就重跑。 */
+
+/* ── src/views/FileFinder/index.vue  style[0] ── */
+.file-finder[data-v-probe] {
+  display: flex;
+  flex-flow: column;
+  padding: 10px 10px 0 10px;
+  height: 100vh;
+  box-sizing: border-box;
+}
+.file-finder .header-bar[data-v-probe] {
+  display: flex;
+  /* ⚠️ 「头部永远只有一行」的第一道保险。
+           不加它，两个子区（导航区 / 动作区）会退化成"谁装不下谁换行"，
+           头部高度就成了**用户数据（路径长度、层级数）的函数**。 */
+  flex-wrap: nowrap;
+  padding: 4px;
+  margin-bottom: 4px;
+  border-radius: 4px;
+  box-shadow: 1px 0 6px rgba(113, 147, 192, 0.25);
+  justify-content: space-between;
+  /* 批量扫描的进度文字。颜色沿用搜索框后缀图标那个灰 */
+}
+.file-finder .header-bar .n-input[data-v-probe] {
+  /* ⚠️ 这一行不能删。n-input 天生 `width: 100%`（为表单布局设计的），
+               而这里是 flex 行 —— 100% 会把它撑成整行宽、独霸一行，把「刷新」
+               挤到下一行，工具条从一行涨到三行（实测 1805px 窗口下头部高 ~150px）。
+               原来 n-space 会给每个子项包一层 div，恰好把这个 100% 关在盒子里；
+               换成裸容器之后就露出来了（见 docs/FIX-2026-09-24-nspace-duplicate-keys.md）。
+               搜索框本来就该是固定宽度 —— 资源管理器里它也是固定的一小段。 */
+  width: 200px;
+}
+.file-finder .header-bar .n-input[data-v-probe] .n-input-wrapper {
+  padding-top: 1px;
+  padding-right: 6px;
+}
+.file-finder .header-bar .n-input[data-v-probe] .n-input-wrapper .n-input__suffix .suffix-icon {
+  display: inline-block;
+  box-sizing: border-box;
+  padding: 7px;
+  height: 22px;
+  line-height: 8px;
+  border: 1px solid #dbdbdb;
+  border-radius: 4px;
+  color: #a1a1a1;
+}
+/**
+ * 横向单行容器 —— 顶替 naive-ui 的 `n-space`。
+ *
+ * 不是审美选择，是**避开一个真 bug**：naive-ui 2.45.3 的 Space 给每个子项硬编码
+ * 同一个 key（`key: 1`），子元素个数变化时 Vue 的 keyed diff 会让两个旧节点认领
+ * 同一个新槽位，界面上就多出重复节点。用裸 flex + `gap` 之后子元素按位置 patch，
+ * 根本没有 key 可比 —— 这类错位在结构上不可能发生。
+ *
+ * 12px 就是 n-space 默认 size（medium）的间距，所以观感与原来一致。
+ * 见 docs/FIX-2026-09-24-nspace-duplicate-keys.md
+ */
+.hstack[data-v-probe] {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 12px;
+}
+/**
+ * 导航区 —— 头部**唯一**的弹性槽位（现在只用在头部；两个 popover 仍用 `.hstack`）。
+ *
+ * `min-width: 0` 是这整套的地基：flex 子项默认 `min-width: auto`（≈ 内容宽），
+ * 不给 0 的话，**哪怕写了 `overflow` 也不会真的收窄**，头部照样被长路径撑开。
+ * `max-width: 50%` 来自 Fluent 2 的宽度预算（面包屑占整体 30–50% 是安全的）：
+ * 它保证动作区**永远拿得到 ≥50%**，超出的部分交给折叠规则消化。
+ *
+ * 实测：`docs/probes/header-width/`（真 Chromium + 真 naive-ui，窗口 640/800/1280/1920 四档）。
+ */
+.nav-zone[data-v-probe] {
+  /* ⚠️ 分隔符的定位依赖"两个 tag 之间的空隙有多宽"，所以空隙宽度**只能有一个来源**：
+       这个变量。gap 与 ::before 的 left/width 共用它，改一处就够。
+       原实现写的是 `left: -13px`（魔数），而 gap 是 8px ⇒ 它往左多插了 5px，
+       压在**前一个标签的右边框**上（用户 2026-10-01 截图报的就是这个）。 */
+  --crumb-gap: 12px;
+  flex: 1 1 auto;
+  min-width: 0;
+  max-width: 50%;
+  display: flex;
+  flex-wrap: nowrap;
+  align-items: center;
+  gap: var(--crumb-gap);
+  overflow: hidden;
+  /* 面包屑每一段：**单个名字有界**（层级深度问题已由折叠解决，这里只管"一段太长"）。
+       ⚠️ 中文不能用 Fluent 那条「超过 30 字符就截断」——那是**拉丁文**语境的量级：
+       中文一个字约等于拉丁两个字宽，30 个字 ≈ 360px，照抄等于没截断。所以用像素。 */
+  /* 层级之间的方向符。
+       ⚠️ 用 CSS 生成，**不插 DOM 子元素** —— 这一组的子元素个数在本项目是敏感量
+       （n-space 重复 key 事故同族）。
+       `position: absolute` 让它不占 tag 内部空间（tag 自带 `position: relative`）；
+       **盒子正好等于那个空隙、再在盒子里居中** —— 这样就不依赖"猜一个负偏移量"，
+       换字体、换字号都不会再压到边框上。 */
+  /* 当前层**永不被压掉**：它是"我在哪"的唯一答案，比任何历史段都重要 */
+  /* 当前段的条目数角标 —— 原来是工具条里那个飘着的 `n-badge`，
+       用户 2026-10-02 裁决挪到这一段上（它本来就是"这一层有多少东西"的答案）。
+       ⚠️ 为什么用 `::after` + `attr()`、而不是真塞一个 `<span>`：
+       ① 这一组的**子元素个数在本项目是敏感量**（见文件顶部那段 n-space 重复 key 的教训），
+          伪元素不进 DOM，个数一个都不变；
+       ② tag 内部的 `.n-tag__content` 是 `overflow: hidden` 的，真塞进去的 span 会被裁掉，
+          而 `::after` 挂在**根元素**上（n-tag 是 inline-flex），是 content 的**兄弟**，
+          不在那个裁剪盒里。
+       属性为空时不画：`:data-count="null"` 时 Vue 根本不渲染这个属性，整条选择器不命中 ——
+       等价于原来的 `v-if="fileList.length"`，不需要再写判空。 */
+  /* 两种**不可点**的段：首段（盘符 / 离线盘）与当前段。
+       必须与可点的段**视觉可分** —— 现状是"所有 tag 都 cursor:pointer"，
+       于是当前层看着能点、点了没反应（死交互）。 */
+}
+.nav-zone .crumb[data-v-probe] {
+  /* ⚠️ `0 1 auto`（**可收缩**）而不是 `0 0 auto`：
+           宽度不够时先压历史段，而不是把"当前层"直接挤出屏幕右边缘被裁掉。
+           收缩下界交给 `min-width: 0` + 文本省略号 —— 极窄时显示成「…」，与资源管理器一致。 */
+  flex: 0 1 auto;
+  min-width: 0;
+  max-width: 160px;
+  cursor: pointer;
+  /* 文本真的收窄之后 `text-overflow` 才会出现 —— 同理，这一层也要 `min-width: 0` */
+}
+.nav-zone .crumb[data-v-probe] .n-tag__content {
+  min-width: 0;
+  overflow: hidden;
+}
+.nav-zone .crumb .crumb-text[data-v-probe] {
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.nav-zone .crumb[data-v-probe]:not(.crumb-root)::before {
+  content: '›';
+  position: absolute;
+  left: calc(-1 * var(--crumb-gap));
+  width: var(--crumb-gap);
+  text-align: center;
+  top: 50%;
+  transform: translateY(-50%);
+  line-height: 1;
+  color: #a1a1a1;
+  pointer-events: none;
+  /* 别挡住上一个 tag / chip 的点击 */
+}
+.nav-zone .crumb-current[data-v-probe] {
+  flex: 0 0 auto;
+  /* 与网格里条目名的字重一致（`.image-box-item span` 也是 bold）：
+           一眼看出"哪个是我现在在的地方" */
+  font-weight: bold;
+}
+.nav-zone .crumb-current[data-count][data-v-probe]::after {
+  content: attr(data-count);
+  flex: 0 0 auto;
+  margin-left: 6px;
+  padding: 0 6px;
+  min-width: 18px;
+  box-sizing: border-box;
+  border-radius: 9px;
+  background: #d03050;
+  /* naive-ui 的 error 红，与原 n-badge 同色 */
+  color: #fff;
+  font-size: 12px;
+  line-height: 18px;
+  font-weight: normal;
+  /* 当前段是 bold，角标不该跟着粗 */
+  text-align: center;
+}
+.nav-zone .crumb-more[data-v-probe] {
+  flex: 0 0 auto;
+  padding: 0 8px;
+}
+.nav-zone .crumb-root[data-v-probe],
+.nav-zone .crumb-current[data-v-probe] {
+  cursor: default;
+}
+/**
+ * 头部右侧那一组：**单行 + 不参与压缩**。
+ *
+ * `flex: 0 0 auto` 是「动作区永远拿得到自己需要的宽度」的保证：
+ * 默认的 `flex-shrink: 1` 会让它在窄窗口里被压到内容宽以下（按钮文字被挤），
+ * 而那正是"换行 / 溢出"的起点。宽度不够时该被裁的是**导航区**（那里有折叠规则兜底）。
+ */
+.toolbar[data-v-probe] {
+  flex: 0 0 auto;
+  display: flex;
+  flex-wrap: nowrap;
+  align-items: center;
+  gap: 12px;
+}
+/* 扫描状态条：贴着网格下方一条，整条随 scanning 出现/消失 */
+.scan-bar[data-v-probe] {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 4px 4px 8px;
+}
+.scan-bar .scan-progress[data-v-probe] {
+  font-size: 12px;
+  color: #a1a1a1;
+}
+.scan-bar .scan-hint[data-v-probe] {
+  font-size: 12px;
+  color: #a1a1a1;
+}
+/*
+ * 「换封面」模式：可选 / 已选 / 角标。
+ *
+ * ⚠️ 三条硬约束：
+ *   ① 选中态**复用已有的 `border`**（那条 `1px solid transparent` 本来就在）只改颜色 ——
+ *      绝不能新增参与布局的属性。网格 6 列的宽度是"margin 撑间距 + `width:100%/6−10px`
+ *      补偿回来"算出来的（见 `.image-box-item` 的注释），任何新增的盒模型属性都会带偏它。
+ *   ② 角标**绝对定位**（配 `position: relative`，它不脱流、不影响几何）。
+ *   ③ 颜色取 naive-ui 默认主色 —— 本项目没有自定义主题（`App.vue` 无 `themeOverrides`）。
+ */
+.image-box-item[data-v-probe] {
+  position: relative;
+}
+.image-box-item.pickable[data-v-probe] {
+  cursor: pointer;
+}
+.image-box-item.picked[data-v-probe] {
+  border-color: #18a058;
+}
+.image-box-item .pick-badge[data-v-probe] {
+  position: absolute;
+  top: 2px;
+  right: 2px;
+  display: block;
+  width: 16px;
+  height: 16px;
+  flex-shrink: 0;
+  box-sizing: border-box;
+  font-style: normal;
+  border-radius: 50%;
+  background-color: #18a058;
+  box-shadow: 0 0 0 1px #fff;
+}
+.image-box-item .pick-badge[data-v-probe]::after {
+  content: '';
+  position: absolute;
+  left: 4px;
+  top: 3px;
+  width: 7px;
+  height: 4px;
+  border-left: 2px solid #fff;
+  border-bottom: 2px solid #fff;
+  transform: rotate(-45deg);
+}
+.image-box[data-v-probe] {
+  flex: 1;
+  display: flex;
+  flex-flow: row wrap;
+  overflow: hidden auto;
+  justify-content: flex-start;
+  align-content: flex-start;
+  /* ── 让网格左右贴边：首格 margin-left / 每行末格 margin-right 归零 ──────────────
+       `.image-box-item` 是"**用 margin 撑间距、宽度再把它补偿回来**"的算法：
+       每格 `calc(100%/6 − 10px)` 宽 + 左右各 5px margin = **恰好占 100%/6** ⇒ 一行正好 6 个。
+       代价是**容器左右边缘也各被吃掉 5px**（首格的 margin-left、每行末格的 margin-right），
+       于是整片网格比头部内缩 5px（`.header-bar` 与它同在 `.file-finder` 的 10px padding 里）
+       —— 左右不齐，这就是"第一个/最后一个还留着 margin"的来源。
+
+       解法：把容器左右各外扩 5px（= margin 的一半），边缘那 5px 就正好落回容器外。
+       首格贴左、末格贴右，与头部对齐。
+
+       ⚠️ 为什么**不用** `:nth-child(6n+1)` / `:nth-child(6n)` 去掉首尾 margin：
+       ① 那是补丁（列数一变就失效）；② **在这里还会算错** —— 格子宽度是按"margin 会被
+       补偿"设计的，只去掉首尾 margin 而宽度不变 ⇒ 每行右端空出 5px，左右不对称，比现在更糟；
+       ③ 下面的断点里列数是**会变的**（6 / 5 / 3 / 2 / 1），任何写死 `6n` 的式子都会在窄窗失效。
+
+       ⚠️ 为什么**不用** `gap`：`gap` 方向是对的（边缘天然为 0），但换过去必须**同步重算**
+       `--item-width` 在 5 个断点里的每一个值 —— 因为 `gap` 不占格子宽度、而 `margin` 占，
+       等于把"改一个百分比就能改列数"变成"每个断点要改两个数字"。
+       这里只加两行，**断点和 item 的算法一个字都不动**。 */
+  margin-left: -5px;
+  margin-right: -5px;
+}
+/* 空状态：占满一整行、居中一行小字。颜色沿用搜索框后缀图标那个灰 */
+.empty-tip[data-v-probe] {
+  width: 100%;
+  padding-top: 48px;
+  text-align: center;
+  font-size: 14px;
+  color: #a1a1a1;
+}
+.image-box-item[data-v-probe],
+.file-item[data-v-probe] {
+  --item-gap: 10px;
+  --item-width: calc(100% / 6);
+  --item-height: 1.5rem;
+  display: flex;
+  flex-direction: column;
+  flex-grow: 0;
+  flex-shrink: 0;
+  width: calc(var(--item-width) - var(--item-gap));
+  min-height: 80px !important;
+  height: var(--item-height) !important;
+  max-height: var(--item-height) !important;
+  padding: 0 2px 10px;
+  margin: 10px 5px 0px;
+  border: 1px solid transparent;
+  justify-content: flex-end;
+  align-items: center;
+  box-sizing: border-box;
+  transition: all 0.1s ease-in-out;
+  user-select: none;
+  font-size: 16px;
+}
+.image-box-item .n-image[data-v-probe],
+.file-item .n-image[data-v-probe] {
+  height: calc(100% - 16px - 20px);
+  margin: 10px 0;
+}
+.image-box-item .n-image[data-v-probe] img,
+.file-item .n-image[data-v-probe] img {
+  width: 100%;
+}
+.image-box-item img[data-v-probe],
+.file-item img[data-v-probe] {
+  display: block;
+  margin: 10px 0;
+  object-fit: contain;
+  overflow: hidden;
+}
+.image-box-item span[data-v-probe],
+.file-item span[data-v-probe] {
+  display: inline-block;
+  width: 100%;
+  height: 38px !important;
+  line-height: 1em;
+  font-size: 1em;
+  color: #000;
+  font-weight: bold;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  text-align: center;
+}
+.image-box-item[data-v-probe]:hover,
+.file-item[data-v-probe]:hover {
+  border-color: #7a8da9;
+  background-color: rgba(110, 123, 173, 0.16);
+  box-shadow: 1px 0 10px rgba(122, 141, 169, 0.15);
+}
+.image-box-item[data-v-probe]:active,
+.file-item[data-v-probe]:active {
+  border-color: #525e72;
+  background-color: rgba(75, 83, 116, 0.16);
+}
+@media screen and (max-width: 1100px) {
+.image-box-item[data-v-probe],
+  .file-item[data-v-probe] {
+    font-size: 12px;
+}
+}
+@media screen and (max-width: 600px) {
+.image-box-item[data-v-probe],
+  .file-item[data-v-probe] {
+    --item-width: 20%;
+}
+}
+@media screen and (max-width: 400px) {
+.image-box-item[data-v-probe],
+  .file-item[data-v-probe] {
+    --item-width: 33.33%;
+}
+}
+@media screen and (max-width: 300px) {
+.image-box-item[data-v-probe],
+  .file-item[data-v-probe] {
+    --item-width: 50%;
+}
+}
+@media screen and (max-width: 200px) {
+.image-box-item[data-v-probe],
+  .file-item[data-v-probe] {
+    --item-width: 100%;
+}
+}
+.file-item[data-v-probe] {
+  width: 84px !important;
+  height: 84px !important;
+  max-height: 84px !important;
+}
+.file-item span[data-v-probe] {
+  display: inline-block;
+  max-height: 48px;
+  line-height: 16px;
+  font-size: 14px;
+  word-break: break-all;
+  text-overflow: ellipsis;
+  overflow: hidden;
+}
+.file-cover[data-v-probe] {
+  display: block;
+  margin: 10px 0;
+  object-fit: contain;
+  overflow: hidden;
+  background-image: url(@/assets/fileTypeIcon/blank.svg);
+}

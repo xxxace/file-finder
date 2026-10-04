@@ -1,0 +1,95 @@
+
+—— V0 打包：产品源码 useGridCursor.ts + gridGeometry.ts + utils ——
+  PASS  esbuild 打包产品源码成功   → 632120 bytes
+(electron) 'console-message' arguments are deprecated and will be removed. Please use Event<WebContentsConsoleMessageEventParams> object instead.
+
+—— V1 冒烟：真代码装得上、按键有响应 ——
+  挂载结果：{"ok":true,"cells":72}
+  PASS  真useGridCursor 装上且网格渲染 72 格   → 72 格
+  首次按 ↓：按下瞬间=k0 / 稳定后=k0
+  PASS  首次按 ↓ 有响应（首探→ 激活到视口第一行）   → 落在 k0
+
+—— V1b 守卫：keydown 监听是否真的挂上了 ——
+  首次按 ↓ 后 cursorKey = "k0"
+  PASS  ★探针接得上：首次 ↓ 落点非空   → "k0"
+
+—— V2 ★ 方向键真落点：与 6 列真值逐格比对 ——
+  步期望实际
+  0  激活   k0
+  1  k6   k6
+  2  k12  k12
+  3  k18  k18
+  4  k24  k24
+  5  k30  k30
+  6  k36  k36
+  7  k42  k42
+  8  k48  k48
+  9  k54  k54
+  PASS  ★ 连续 9 次 ↓ 每次都精确 +6（一路越过第 4 行那条线）   → 9 对 / 0 错
+
+—— V3 ★ 长按 ↓ 越过视口边界（第 4 行那条线）——
+  40 次按键：对对对对对对对对对对对对对对对对对对对对对对对对对对对对对对对对对对对对对对对对
+  前 8 步落点：k6,k12,k18,k24,k30,k36,k42,k48
+  后 4 步落点：k66,k66,k66,k66
+  PASS  ★ 长按 40 次全程落点正确（越过第 4 行、第 11 行，直到末行停住）   → 0 步走错
+  PASS  ★ 落点真的走远了（不是一开始就卡住 ⇒ 判据有效）   → 第 8 步落在 k48
+  PASS  ★ 末行之后停住不环绕（连按到底不越界）   → k66,k66,k66,k66,k66,k66
+
+—— V3b ★ 强制滚动 + 重新探测（无头环境 scrollIntoView 不生效，手动触发等价条件）——
+  容器可滚 2661px；手动滚动后 scrollTop=0
+  手动滚动后 10 次 ↓：k66,k66,k66,k66,k66,k66,k66,k66,k66,k66
+  缓存刚作废后 → 2 次：k67 k68
+  缓存刚作废后 ← 2 次：k67 k66
+  PASS  ★ 手动滚动触发缓存作废后，↓ 仍然正确（已到底 ⇒ 停住在末行区域）   → k66,k66,k66,k66,k66,k66,k66,k66,k66,k66
+  PASS  ★ 缓存刚作废后，→ 仍逐格对   → [{"got":"k67","expect":"k67"},{"got":"k68","expect":"k68"}]
+  PASS  ★ 缓存刚作废后，← 仍逐格对   → [{"got":"k67","expect":"k67"},{"got":"k66","expect":"k66"}]
+  PASS  ★ 前 24 步（滚动发生前）全对   → 0 步走错
+
+—— V4 边界：首行按 ↑ / 末行按 ↓ 停住（不环绕）——
+  首次激活=k0 · 按 ↑ 后=k0（期望停住）
+  走到末行=k6 · 再按 ↓ =k6（期望停住）
+  PASS  ★ 首行按 ↑ 停住（不环绕到末行）   → k0（起点 k0）
+  PASS  ★ 末行按 ↓ 停住（不环绕回首行）   → k6（末行 k6）
+
+—— V5 横向：← → 逐格比对 ——
+  起点=k0 · 连按 5 次 →：k1,k2,k3,k4,k5
+  再连按 5 次 ←：k4,k3,k2,k1,k0 · 终点=k0
+  PASS  ★ 连按 → 5 次逐格右移   → 5/5
+  PASS  ★ 连按 ← 5 次回到起点   → k0 vs k0
+
+—— V6 跨视口边界之后，左右键仍然逐格对 ——
+  越界后落点=k36（scrollTop=0）
+  → 3 次：k37 k38 k39
+  ← 3 次：k38 k37 k36
+  PASS  ★ 越界后 → 仍逐格右移   → 3/3
+  PASS  ★ 越界后 ← 仍逐格左移   → 3/3
+
+—— V7 控制组：重新引入 scale 后，本探针能否抓到（判据效力）——
+  重新加 scale 后 12 次 ↓ 的走错次数 = 1
+  PASS  ★ 判据有效：探针能抓到 scale 造成的错（>0）   → 1 步走错
+
+—— V8 第2 条：首行滚到顶 / 末行滚到底 ——
+  可滚 2661px；中间（第5行=k24）scrollTop=441
+  回到首行（k0）scrollTop=10 · 焦点格距容器顶=-1.8431243896484375px
+  到末行（k66）scrollTop=2661 / scrollHeight=3806
+  PASS  ★ 焦点在末行时滚动条真的到底（scrollTop === maxScroll）   → scrollTop=2661，期望 2661
+  PASS  ★ 中间行不强制对齐（画面不该乱跳）   → 中间 scrollTop=441
+
+—— V9 第1 条：恢复的焦点不会被"新屏初始焦点"覆盖 ——
+  移动到 k36 → 恢复后 k36 → 换屏后 k36
+  PASS  ★ 恢复的焦点在换屏后**仍然在**（没被落回视口第一行）   → k36 → k36
+─────────────────────────────
+22 PASS / 0 FAIL
+
+页面控制台输出（供参考）：
+%cElectron Security Warning (Insecure Content-Security-Policy) font-weight: bold; This renderer process has either no Content Security
+  Policy set or a policy with "unsafe-eval" enabled. This exposes users of
+  this app to unnecessary security risks.
+
+For more information and help, consult
+https://electronjs.org/docs/tutorial/security.
+This warning will not show up
+once the app is packaged.
+Feature flag __VUE_PROD_HYDRATION_MISMATCH_DETAILS__ is not explicitly defined. You are running the esm-bundler build of Vue, which expects these compile-time feature flags to be globally injected via the bundler config in order to get better tree-shaking in the production bundle.
+
+For more details, see https://link.vuejs.org/feature-flags.

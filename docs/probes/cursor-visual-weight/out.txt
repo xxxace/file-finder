@@ -1,0 +1,21 @@
+
+—— W1 网格焦点 `.image-box-item.cursor` ——
+  border-width = 1px
+  box-shadow   = rgba(122, 141, 169, 0.15) 1px 0px 10px 0px
+  transform    = matrix(1.012, 0, 0, 1.012, 0, 0)
+  ⇒ 可见环总厚 ≈ 1px（border + spread）
+  PASS  ★ 网格焦点是**细**的（1–2px），不是粗双环   → 1px
+  PASS  网格焦点没有 4px 那种外扩环   → rgba(122, 141, 169, 0.15) 1px 0px 10px 0px
+
+—— W2 预览层 `.file-item.file-cursor`（修前是 2px黑+4px蓝双环 = 5px）——
+  border-width = 1px
+  box-shadow   = rgba(122, 141, 169, 0.15) 1px 0px 10px 0px
+  ⇒ 可见环总厚 ≈ 1px
+  PASS  ★ 预览层不再有粗外扩环（总厚 ≤2px，与网格同一套）   → 1px
+
+—— W3 两者落差 ——
+  预览层 1px ÷ 网格 1px = 1.00 倍（修前是 5.0 倍）
+  PASS  ★ 两处焦点粗细已一致（差 ≤1.5 倍，"同一套语言"这次是真的了）   → 1.00 倍
+─────────────────────────────
+4 PASS / 0 FAIL
+

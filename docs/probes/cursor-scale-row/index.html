@@ -1,0 +1,121 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8" />
+<style>
+    /* ⚠️ 这是 index.vue 里 `.image-box` / `.image-box-item` / `.cursor` 的**等效复制**。
+       只保留与「行的 top 坐标」有关的部分：宽度算法、间距、固定行高、margin。
+       probe 里断言的是"焦点格的 rect.top 与同排兄弟的差值"，所以复制保真即可。 */
+    html { font-size: 204.8px; }   /* 主屏 2048 宽 => 1rem = 204.8px（flexible.ts 的公式） */
+    body { margin: 0; font-family: sans-serif; }
+
+    .image-box {
+        display: flex;
+        flex-flow: row wrap;
+        overflow: hidden auto;
+        justify-content: flex-start;
+        align-content: flex-start;
+        margin-left: -5px;
+        margin-right: -5px;
+        width: 2048px;
+        height: 400px;   /* ⚠️ 故意做矮 ⇒ 内容可滚动 ⇒ D7 能真的滚起来验坐标系 */
+    }
+
+    .image-box-item {
+        --item-gap: 10px;
+        --item-width: calc(100% / 6);
+        --item-height: 1.5rem;
+        display: flex;
+        flex-direction: column;
+        flex-grow: 0;
+        flex-shrink: 0;
+        width: calc(var(--item-width) - var(--item-gap));
+        min-height: 80px !important;
+        height: var(--item-height) !important;
+        max-height: var(--item-height) !important;
+        padding: 0 2px 10px;
+        margin: 10px 5px 0px;
+        border: 1px solid transparent;
+        justify-content: flex-end;
+        align-items: center;
+        box-sizing: border-box;
+        position: relative;
+        transition: border-color .1s ease-in-out, box-shadow .1s ease-in-out,
+            background-color .1s ease-in-out, transform .18s cubic-bezier(.2, .9, .3, 1.1);
+    }
+
+    /* ★ 本次要验的那一条：焦点格被 scale 抬起 */
+    .image-box-item.cursor {
+        border-color: #2080f0;
+        background-color: rgba(110, 123, 173, .16);
+        box-shadow: 1px 0 10px rgba(122, 141, 169, .15);
+        transform: scale(1.012);
+        z-index: 1;
+    }
+</style>
+</head>
+<body>
+<div class="image-box" id="box"></div>
+<script>
+/**
+ * 造 N 个格子（6 列），把第 `cursorIdx` 格标上 `.cursor`，
+ * 然后量每一格的 `getBoundingClientRect().top`。
+ *
+ * ⚠️ **转场必须去掉**才能量到稳态：`transform` 有 .18s 的 transition，
+ *    刚设 class 就量会量到中间值。真实运行时 `probeLayout` 是在
+ *    「上一次移动的转场还在跑」时读的——那正是要验的场景，
+ *    所以下面两个函数都返回**立即量**与**转场结束后量**两组数。
+ */
+window.__build = function (n, cursorIdx) {
+    const box = document.getElementById('box');
+    box.innerHTML = '';
+    for (let i = 0; i < n; i++) {
+        const d = document.createElement('div');
+        d.className = 'image-box-item' + (i === cursorIdx ? ' cursor' : '');
+        d.dataset.key = 'k' + i;
+        d.textContent = 'k' + i;
+        box.appendChild(d);
+    }
+    return true;
+};
+
+window.__measure = function () {
+    const box = document.getElementById('box');
+    return Array.from(box.querySelectorAll('.image-box-item')).map(el => ({
+        key: el.dataset.key,
+        top: el.getBoundingClientRect().top,
+        left: el.getBoundingClientRect().left,
+        h: el.getBoundingClientRect().height,
+    }));
+};
+
+/** 模拟"转场进行中"的那一帧：只加 class 不等，取 0ms 后的值 */
+window.__measureImmediateAfterCursor = function (cursorIdx) {
+    const box = document.getElementById('box');
+    Array.from(box.querySelectorAll('.image-box-item')).forEach((el, i) => {
+        el.classList.toggle('cursor', i === cursorIdx);
+    });
+    void box.offsetHeight;              // 强制回流，量到的是"转场刚开始"的中间值
+    return window.__measure();
+};
+
+/**
+ * 治本方案要用的量：`offsetTop`（**布局**坐标，不含 transform）。
+ *
+ * ⚠️ `.image-box-item` 自己带 `position: relative`，所以它的 `offsetParent`
+ *    **不是** `.image-box` —— `offsetTop` 会是相对某个祖先的值。
+ *    但这**不影响本探针的判据**：分行只关心"同一行的格子 offsetTop 相等"，
+ *    而它们共用同一个 offsetParent ⇒ 相等关系成立。
+ *    真代码里要配offsetParent 一起读（见 docs 里的方案说明）。
+ */
+window.__measureOffset = function () {
+    const box = document.getElementById('box');
+    return Array.from(box.querySelectorAll('.image-box-item')).map(el => ({
+        key: el.dataset.key,
+        top: el.offsetTop,
+    }));
+};
+
+window.__ready = true;</script>
+</body>
+</html>

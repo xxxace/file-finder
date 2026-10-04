@@ -1,0 +1,293 @@
+
+  Policy set or a policy with "unsafe-eval" enabled. This exposes users of
+  this app to unnecessary security risks.
+
+This warning will not show up
+
+########## after.html ##########
+{
+  "itemCount": 4,
+  "popoverRect": {
+    "w": 664,
+    "h": 132
+  },
+  "listRect": {
+    "w": 636,
+    "h": 116
+  },
+  "focusProbe": {
+    "activeClass": "hstack file-list",
+    "outlineStyle": "none",
+    "outlineWidth": "3px",
+    "outlineColor": "rgb(51, 54, 57)",
+    "outlineOffset": "0px",
+    "focusVisible": false,
+    "outlineColorResolved": "#333639"
+  },
+  "items": [
+    {
+      "i": 0,
+      "itemRect": {
+        "w": 150,
+        "h": 116
+      },
+      "nameText": "[TST-593] 示例作品标题 CD1.mp4",
+      "iconRect": {
+        "w": 18.7,
+        "h": 26
+      },
+      "iconBgImage": "mp4.svg",
+      "iconFontSize": "26px",
+      "nameWhiteSpace": "normal",
+      "nameFontSize": "13px",
+      "nameLineHeight": "15px",
+      "nameRect": {
+        "w": 132,
+        "h": 30
+      },
+      "nameScrollHeight": 30,
+      "nameClientHeight": 30,
+      "nameDisplay": "flow-root",
+      "nameLineClamp": "3",
+      "sizeText": "1.29 GB",
+      "sizeFontSize": "12px"
+    },
+    {
+      "i": 1,
+      "itemRect": {
+        "w": 150,
+        "h": 116
+      },
+      "nameText": "[TST-593] 示例作品标题 CD2.mp4",
+      "iconRect": {
+        "w": 18.7,
+        "h": 26
+      },
+      "iconBgImage": "mp4.svg",
+      "iconFontSize": "26px",
+      "nameWhiteSpace": "normal",
+      "nameFontSize": "13px",
+      "nameLineHeight": "15px",
+      "nameRect": {
+        "w": 132,
+        "h": 30
+      },
+      "nameScrollHeight": 30,
+      "nameClientHeight": 30,
+      "nameDisplay": "flow-root",
+      "nameLineClamp": "3",
+      "sizeText": "1.18 GB",
+      "sizeFontSize": "12px"
+    },
+    {
+      "i": 2,
+      "itemRect": {
+        "w": 150,
+        "h": 116
+      },
+      "nameText": "[TST-593] 示例作品标题 cover.jpg",
+      "iconRect": {
+        "w": 18.7,
+        "h": 26
+      },
+      "iconBgImage": "jpg.svg",
+      "iconFontSize": "26px",
+      "nameWhiteSpace": "normal",
+      "nameFontSize": "13px",
+      "nameLineHeight": "15px",
+      "nameRect": {
+        "w": 132,
+        "h": 30
+      },
+      "nameScrollHeight": 30,
+      "nameClientHeight": 30,
+      "nameDisplay": "flow-root",
+      "nameLineClamp": "3",
+      "sizeText": "2 MB",
+      "sizeFontSize": "12px"
+    },
+    {
+      "i": 3,
+      "itemRect": {
+        "w": 150,
+        "h": 116
+      },
+      "nameText": "[TST-593] 示例作品标题 这是一个特别长的补丁说明文件名_最终版_v3_修正字幕.srt",
+      "iconRect": {
+        "w": 18.7,
+        "h": 26
+      },
+      "iconBgImage": "blank.svg",
+      "iconFontSize": "26px",
+      "nameWhiteSpace": "normal",
+      "nameFontSize": "13px",
+      "nameLineHeight": "15px",
+      "nameRect": {
+        "w": 132,
+        "h": 45
+      },
+      "nameScrollHeight": 60,
+      "nameClientHeight": 45,
+      "nameDisplay": "flow-root",
+      "nameLineClamp": "3",
+      "sizeText": "43 KB",
+      "sizeFontSize": "12px"
+    }
+  ]
+}
+  Policy set or a policy with "unsafe-eval" enabled. This exposes users of
+  this app to unnecessary security risks.
+
+This warning will not show up
+
+########## before.html ##########
+{
+  "itemCount": 4,
+  "popoverRect": {
+    "w": 440,
+    "h": 110
+  },
+  "listRect": {
+    "w": 412,
+    "h": 94
+  },
+  "focusProbe": {
+    "activeClass": "",
+    "outlineStyle": "none",
+    "outlineWidth": "3px",
+    "outlineColor": "rgb(0, 0, 0)",
+    "outlineOffset": "0px",
+    "focusVisible": false,
+    "outlineColorResolved": "#000000"
+  },
+  "items": [
+    {
+      "i": 0,
+      "itemRect": {
+        "w": 84,
+        "h": 84
+      },
+      "nameText": "[TST-593] 示例作品标题 CD1.mp4",
+      "iconRect": {
+        "w": 0,
+        "h": 0
+      },
+      "iconBgImage": "blank.svg",
+      "iconFontSize": "12px",
+      "nameWhiteSpace": "nowrap",
+      "nameFontSize": "14px",
+      "nameLineHeight": "16px",
+      "nameRect": {
+        "w": 78,
+        "h": 38
+      },
+      "nameScrollHeight": 38,
+      "nameClientHeight": 38,
+      "nameDisplay": "block",
+      "nameLineClamp": "none",
+      "sizeText": null,
+      "sizeFontSize": null
+    },
+    {
+      "i": 1,
+      "itemRect": {
+        "w": 84,
+        "h": 84
+      },
+      "nameText": "[TST-593] 示例作品标题 CD2.mp4",
+      "iconRect": {
+        "w": 0,
+        "h": 0
+      },
+      "iconBgImage": "blank.svg",
+      "iconFontSize": "12px",
+      "nameWhiteSpace": "nowrap",
+      "nameFontSize": "14px",
+      "nameLineHeight": "16px",
+      "nameRect": {
+        "w": 78,
+        "h": 38
+      },
+      "nameScrollHeight": 38,
+      "nameClientHeight": 38,
+      "nameDisplay": "block",
+      "nameLineClamp": "none",
+      "sizeText": null,
+      "sizeFontSize": null
+    },
+    {
+      "i": 2,
+      "itemRect": {
+        "w": 84,
+        "h": 84
+      },
+      "nameText": "[TST-593] 示例作品标题 cover.jpg",
+      "iconRect": {
+        "w": 0,
+        "h": 0
+      },
+      "iconBgImage": "blank.svg",
+      "iconFontSize": "12px",
+      "nameWhiteSpace": "nowrap",
+      "nameFontSize": "14px",
+      "nameLineHeight": "16px",
+      "nameRect": {
+        "w": 78,
+        "h": 38
+      },
+      "nameScrollHeight": 38,
+      "nameClientHeight": 38,
+      "nameDisplay": "block",
+      "nameLineClamp": "none",
+      "sizeText": null,
+      "sizeFontSize": null
+    },
+    {
+      "i": 3,
+      "itemRect": {
+        "w": 84,
+        "h": 84
+      },
+      "nameText": "[TST-593] 示例作品标题 这是一个特别长的补丁说明文件名_最终版_v3_修正字幕.srt",
+      "iconRect": {
+        "w": 0,
+        "h": 0
+      },
+      "iconBgImage": "blank.svg",
+      "iconFontSize": "12px",
+      "nameWhiteSpace": "nowrap",
+      "nameFontSize": "14px",
+      "nameLineHeight": "16px",
+      "nameRect": {
+        "w": 78,
+        "h": 38
+      },
+      "nameScrollHeight": 38,
+      "nameClientHeight": 38,
+      "nameDisplay": "block",
+      "nameLineClamp": "none",
+      "sizeText": null,
+      "sizeFontSize": null
+    }
+  ]
+}
+
+########## 最小复现：脚本 focus 一个 tabindex=-1 的 div ##########
+  Policy set or a policy with "unsafe-eval" enabled. This exposes users of
+  this app to unnecessary security risks.
+
+This warning will not show up
+{
+  "focusVisible": false,
+  "outlineStyle": "none",
+  "outlineWidth": "3px",
+  "outlineColor": "rgb(0, 0, 0)",
+  "forceFocusVisible": {
+    "focusVisible": false,
+    "outlineStyle": "none",
+    "outlineWidth": "3px",
+    "outlineColor": "rgb(0, 0, 0)"
+  }
+}
+
+对照图：D:\code\file-finder\docs\probes\popup-visual\popup-before-after.png  28845 B

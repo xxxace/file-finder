@@ -52,39 +52,37 @@
                     </n-tag>
                 </template>
 
-                <!-- 「返回」的出现条件是 **`history.length > 1`：此刻真有上一屏**（事实），
+                <!-- 「返回 / 清空」的出现条件是 **`history.length > 0`：此刻真有屏可谈**（事实），
                      不是 `dir`（"曾经选过根"的快照）—— 后者在「根层」和「跳转后」都会
-                     造成"按钮看得见、点不动"的死交互。 -->
+                     造成"按钮看得见、点不动"的死交互。
+
+                     ⚠️ 2026-10-05 业主加的一条：**栈底（只剩一屏）也得有出口**。
+                     那时"返回"无事可做，而那颗按钮正是「离开当前这个文件夹」最顺手的位置
+                     ⇒ 同一个位置换成「清空」（`clearNav`）。
+
+                     ⚠️ 只换文案、**不加图标**：两个词都是两个字 ⇒ 按钮宽度一个像素都不变，
+                     导航区（头部唯一的弹性槽位）的宽度预算完全不动。
+                     ⚠️ Backspace **仍然只走 `onBack`**（它在栈底是空操作）——
+                       不把清空挂上去，就不会出现"在根层误按退格把视图清掉"。 -->
                 <n-tooltip v-if="history.length > 1">
                     <template #trigger>
                         <n-button size="small" @click="onBack">返回</n-button>
                     </template>
                     返回上一屏（Backspace）
                 </n-tooltip>
+                <n-tooltip v-else-if="history.length === 1">
+                    <template #trigger>
+                        <n-button size="small" @click="clearNav">清空</n-button>
+                    </template>
+                    清空导航历史，回到选文件夹的界面（缓存不动）
+                </n-tooltip>
             </div>
             <!-- <n-space>
                 <FolderSelector v-model="dirRoot" label="请选择文件夹2(D)" @change="handleDirRootChange" />
             </n-space> -->
             <div class="toolbar">
-                <!-- 工具条 = PC 文件管理器那套：**动作常驻，忙碌时只置灰，绝不消失、绝不换形**。
-                     进度和取消在网格下方的状态条（见 .scan-bar），工具条这一组**一个字都不随状态变**。
-                     ⚠️ 2026-10-01 变更：三个维护动作**收进「更多」**（用户批准）。原来它们是三个平铺的
-                     文字按钮，实测共占 242px —— 工具条 605px 里的 40%，而它们是低频动作。
-                     三条必须同时守住：
-                     ① **子元素个数仍然恒定**（4 个：更多 / 缓存记录 / 搜索 / 刷新），
-                        忙碌时只置灰、不消失、不换形（原来那条铁律没变）。
-                        ⚠️ 2026-10-02：原本恒 5 个（多一个角标）。角标挪进面包屑之后这里变 4 个
-                        —— 变的是**数量**，不是"恒定"这条性质。
-                     ② **文案一个字都不缩**：下拉里有地方，「这一片」表达的是"递归整片"，
-                        正是它与「刷新＝只重新读当前这一层」的区分点。收进下拉把
-                        "要不要缩短文案"这个取舍**直接消掉了**。
-                     ③ 「重读」的确认从 `n-popconfirm` 改成 `n-dialog` —— 这是**有意偏离**
-                        `docs/DESIGN-UIUX-2026-09-24.md` §4.1 的"不用 modal"。那条原则的理由是
-                        "高频动作弹窗会造成警报疲劳（F5 一天按几十次）"，而重读是**低频**动作
-                        （用户原话"并不常用"）；且从下拉里触发的动作再挂一个受控 popconfirm
-                        在下拉按钮上，反而更绕。低频 ⇒ 模态的打断成本可以忽略。
-                     门槛本身没降：它仍然是唯一带确认的动作（不可逆 × 波及面最大）。 -->
-                <n-dropdown trigger="click" :options="moreOptions" :disabled="scanning" @select="onMoreSelect">
+                <n-dropdown trigger="click" :options="moreOptions" :disabled="scanning" :menu-props="moreMenuProps"
+                    @select="onMoreSelect">
                     <n-button size="small" :disabled="scanning">
                         <template #icon>
                             <n-icon>
@@ -157,7 +155,6 @@
                     // ⚠️ 判据读 `cursorItem`（派生）而不是 `cursorKey` —— `fileList` 一变
                     // key 就成了野值，读派生量自动不画高亮，不需要任何同步代码去清它。
                     cursor: cursorItem !== undefined && cursorKey === keyOf(item),
-                    blink: blinkKey !== '' && blinkKey === keyOf(item),
                     opening: opening !== '' && opening === keyOf(item),
                 }"
                 :data-key="keyOf(item)"
@@ -240,56 +237,33 @@
         <n-popover :show="popover.visible" :x="popover.x" :y="popover.y" trigger="manual" placement="bottom"
             @clickoutside="closeFileList">
             <!-- 同理换掉 n-space：这里 v-for 的是文件列表，个数天生会变 -->
-            <div class="hstack" tabindex="-1" ref="fileListBox"
+            <div class="hstack file-list" tabindex="-1" ref="fileListBox"
                 @keydown.stop="onFileListKeydown">
                 <div v-for="(f, i) in popover.files" class="file-item"
                     :class="{ 'file-cursor': i === fileCursor }" :key="f.name"
                     @dblclick="openFile(f.name)"
                     :title="f.name + ` ${getSize(f.size) || ''}`">
-                    <div class="file-cover" :title="f.name || ''"></div>
+                    <!-- 类型图标（`.file-cover` + fiv）。**必须带上 `fiv-cla fiv-icon-*`** ——
+                         漏掉后半截时它只剩 `blank.svg` 且没有尺寸 ⇒ 高 0、等于没画，
+                         整个条目就变成"一大块空白 + 一行截断的名字"（2026-10-05 业主报的丑） -->
+                    <div class="file-cover fiv-cla" :class="`fiv-icon-${extOf(f.name)}`" aria-hidden="true"></div>
                     <span>{{ f.name }}</span>
+                    <!-- 大小用 `<i>`：`.file-item span` 那条规则会吃掉 `span` -->
+                    <i class="file-size">{{ getSize(f.size) }}</i>
                 </div>
             </div>
         </n-popover>
-        <!-- 右键上下文菜单：极简一条，定位手法和上面的 files popover 完全一致
-             （n-popover 手动定位 + clickoutside 关闭），独立状态不串台。
-             ⚠️ 2026-10-02 加了第二项「去后缀」而不是**改**原来那一项 ——
-             原来那个含扩展名的名字是**刻意的**（资源管理器里要拿它去搜），不能为了新用途把它改掉。
-             两个都留着，各有各的场合。 -->
         <n-popover :show="ctxMenu.visible" :x="ctxMenu.x" :y="ctxMenu.y" trigger="manual" placement="bottom-start"
             @clickoutside="closeCtxMenu">
-            <!-- ⚠️ 这里**不主动给** `tabindex` / 焦点：两个"复制文件名"是纯鼠标动作。
-                 但**必须**处理两件事（2026-10-04 code review 抓出）：
-                 ① `@keydown.stop` —— 菜单开着时按键**不许穿透到网格**
-                    （方向键在网格上乱跑、Esc 关了弹层）；
-                 ② `closeCtxMenu()` **收回焦点** —— 用户点过按钮后焦点会留在
-                    那个即将 `display:none` 的按钮上 ⇒ 之后方向键失灵且看不出原因。 -->
             <div class="hstack" tabindex="-1" @keydown.stop="onCtxMenuKeydown">
                 <n-button size="small" @click="copyName">复制文件名</n-button>
                 <n-button size="small" @click="copyNameStem">复制文件名（去后缀）</n-button>
             </div>
         </n-popover>
-        <!-- ── 预览层（上一条 / 下一条 + 定位）────────────────────────────────────────
-             ⚠️ 它必须是**空节点**：srcList 模式下任何 `<n-image>` 子节点一注册就 throwError
-             （naive-ui `Image.mjs:53-57`）⇒ 它和网格是**并列**关系，不能把网格包进来。
-
-             为什么不用"把网格包进 group"那条更省事的路（那样点击/铺满全都不用管）：
-             `Image.mjs:93-98` 每个 `<n-image>` 都会**无条件** registerImageUrl（连
-             preview-disabled 的也注册）⇒ 集合会掺进「目录的脸」（cover 模式下 avatar 是活的，
-             见 electron/server/index.ts:347-356），而且顺序是 **Map 插入序 = 组件挂载序**，
-             不由我们控制。而「定位」要求"预览里这一条 = 网格里那一格"，对应关系**必须是我们给的、
-             不是猜的**。srcList + 受控 current 正是为此 —— 索引由 fileList 现算。
-
-             `show/current/src-list` 三个 prop + 两个 update 事件 = 全受控；因此
-             「上一条/下一条」的状态只有一个来源：`previewKey`（见脚本里的注释）。
-             ← / → 键是 naive-ui 自带的（`ImagePreview.mjs:78-100`），不额外挂监听。 -->
         <n-image-group :src-list="previewSrcList" :current="previewIndex" :show="previewOpen"
             :render-toolbar="previewToolbar" @update:show="onPreviewShowChange"
             @update:current="onPreviewCurrentChange" />
         <HistoryTable ref="historyTable" @openDir="openHistory" />
-        <!-- 管理助手 · 补封面（全屏面板：选盘 → 扫描 → 抓取 → 写盘）。
-             写盘完成后它会失效对应目录的缓存并发 refresh —— 这里刷新当前这层，
-             让新封面立刻出现在网格里（不需要重启、也不需要重新选盘）。 -->
         <AssistantCoverModal ref="assistantModal" @refresh="refreshAfterApply" />
     </div>
 </template>
@@ -577,10 +551,17 @@ const loadFailed = computed(() => failKind.value !== '');
 const emptyTip = computed(() => {
     if (loading.value || loadFailed.value || fileList.value.length) return '';
     if (searchText.value) return '没找到匹配的内容';
-    // "是否已经进入浏览"要用**当下事实**（有没有一屏），不能用 `dir`（那只是"曾经选过根"的快照）。
-    // ⚠️ 这一条是自查 S-1 的回归防护：从缓存跳转**不再写 `dir`**，
-    // 冷启动直接跳进一个空目录时，用 `dir` 判断会让这句话不显示 —— 一片空白、连"空的"都不说。
-    if (!history.value.length) return '';
+    /**
+     * "有没有进入浏览"要用**当下事实**（有没有一屏），不能用 `dir`（那只是"曾经选过根"的快照）。
+     * ⚠️ 这一条是自查 S-1 的回归防护：从缓存跳转**不再写 `dir`**，
+     * 冷启动直接跳进一个空目录时，用 `dir` 判断会让提示不显示 —— 一片空白、什么都不说。
+     *
+     * ⚠️ 而"一屏都没有" ≠ "空目录"：那种情况当前**压根没有目录**，
+     * 沿用下面那句"这个目录是空的"就是骗人（`loadFailed` 那条注释讲的是同一件事）。
+     * 但它同样不该什么都不说 —— 2026-10-05 加了「清空」之后，这条路径是**用户主动点出来**的，
+     * 落在纯空白页上会像是把程序点坏了 ⇒ 给"下一步做什么"。
+     */
+    if (!history.value.length) return '还没选文件夹 —— 点左上角那个图标选一个';
     return '这个目录是空的';
 });
 
@@ -644,6 +625,13 @@ const dialog = useDialog();
  */
 const getSize = (size: number | undefined) => formatBytes(size);
 
+/**
+ * 扩展名（小写、不带点）。只有多文件弹层用它选 `fiv-icon-*` 的类型图标 ——
+ * 服务端下发的 `files[]` 只带 `name` + `size`（`FileInfoFiles`），没有 ext 字段，
+ * 而名字里本来就有。取不到就返回空串 ⇒ `fiv-icon-` 不匹配 ⇒ 兜底 `blank.svg`。
+ */
+const extOf = (name: string) => (name.includes('.') ? name.split('.').pop()!.toLowerCase() : '');
+
 
 const showHistory = () => {
     historyTable.value!.setShowModal(true);
@@ -704,16 +692,30 @@ const openFileList = (item: WiredFileInfo, x: number, y: number) => {
 const onFileListKeydown = (e: KeyboardEvent) => {
     const n = popover.value.files.length;
     if (!n) return;
-    if (e.key === 'ArrowDown') {
-        fileCursor.value = Math.min(fileCursor.value + 1, n - 1);
-        e.preventDefault();
-    } else if (e.key === 'ArrowUp') {
-        fileCursor.value = Math.max(fileCursor.value - 1, 0);
-        e.preventDefault();
+    /**
+     * ⚠️⚠️ **主轴是「左右」**（业主 2026-10-05 八次报：「这个弹出层的方向键应该用左右而不是上下」）。
+     *
+     * 判据很简单：**键要跟着布局走**。这一层的内容容器是 `.hstack`
+     * （`display:flex; flex-wrap:wrap`）⇒ **横向排布，主轴是左右**。
+     * 而原来只绑了 `ArrowUp` / `ArrowDown` —— **上下键在一行横排里按"上下"移动**，
+     * 方向与视觉完全不符（按 ↓ 却往右跳一格）。
+     *
+     * ⚠️ 为什么上下**也保留**（不删）：它是**别名**，不是第二个方向。
+     * 这一层装的是"同一部作品的多个文件"，通常**只有一行**
+     * ⇒ 此时"前一个/后一个"与"上/下"是**同一件事**，两种键都该有效（列表控件的通行做法）。
+     * ⚠️ 真换行了（文件特别多）时上下会失去意义 —— 但那种情况下**左右也只在行内移动**，
+     *   两个都不完美；不值得为这个罕见场景引入"按行高判断该用哪组键"的复杂度。
+     */
+    const prev = () => { fileCursor.value = Math.max(fileCursor.value - 1, 0); e.preventDefault(); };
+    const next = () => { fileCursor.value = Math.min(fileCursor.value + 1, n - 1); e.preventDefault(); };
+    if (e.key === 'ArrowRight' || e.key === 'ArrowDown') {
+        next();
+    } else if (e.key === 'ArrowLeft' || e.key === 'ArrowUp') {
+        prev();
     } else if (e.key === 'Enter') {
         // ⚠️ `e.repeat` 必须挡：长按回车会**重复打开同一个文件**
         // （实测按住 1 秒 = 33 次 keydown）⇒ 33 个播放器进程。
-        // ↑↓ 相反，**要** repeat（长按连续选是想要的）。
+        // ← → 相反，**要** repeat（长按连续选是想要的）。
         if (e.repeat) return;
         const f = popover.value.files[fileCursor.value];
         if (f) openFile(f.name);
@@ -1185,14 +1187,170 @@ const onBack = async () => {
     searchText.value = to.searchText;
     // 恢复选择器。⚠️ **必须与scrollY 一起恢复** —— 只恢复滚动会让屏幕停在原来那一屏的
     // 中间、选择器却跳回视口第一行（自相矛盾）。见 `NavEntry.cursorKey` 的注释。
-    // 那个 key 若不在这一屏里，`cursorItem` 是 undefined ⇒ 不画高亮（派生链已经在了）。
+    // 那个 key 若不在这一屏里，`cursorItem` 是 undefined ⇒ 不画高亮，
+    // 且下面那个指纹 watch 会发现"没有有效焦点" ⇒ 自动落一个到视口第一行。
+    //
+    // ⚠️⚠️ **必须声明"这一屏需要焦点"**（业主 2026-10-04 真机报"回来就不对，没记住"）。
+    // `dataSource` 换新会触发 `useGridCursor` 里的指纹 watch，那个 watch 只在
+    // `armed` 为真时才落焦点。而 `armed` 是**一次性**的 —— 进子目录时 `enterScreen`
+    // 调过一次 `noteIntent()`，**返回时没有人再调** ⇒ `armed` 已是 false
+    // ⇒ 恢复出来的 key 若不在这屏（`cursorItem` 为 undefined），就**没人补一个焦点**
+    // ⇒ 键盘用户在这一屏上完全失能（按方向键会激活，但那得先知道要按方向键）。
+    //
+    // ⇒ 顺序即依赖：必须在**会引起列表变化**的动作（`searchText` 赋值）**之后**才声明，
+    // 否则会被那个 watch 提前消费掉（同 `enterScreen` 里那条纪律）。
+    noteIntent();
     setCursorKey(to.cursorKey);
-    await fetchFolder(to.path, to.mode);
-    // 滚动位置必须等新列表渲染出来再恢复：在旧内容上滚会被 clamp 掉
-    if (to.scrollY) {
-        await nextTick();
-        imageBox.value?.scrollTo(0, to.scrollY)
+    /**
+     * ⚠️ 记下"我这次请求"的序号 —— 后面两处恢复都要用它挡**过期**的那次
+     *（手法照抄 `enterScreen` 的 `myFetchSeq`，不新发明）。
+     *
+     * 为什么必须有：`waitForGridOf` 的判据是"**数据与 DOM 同屏**"，它回答的是
+     * "新内容铺上去了没"，**不回答"这还是不是我要回的那一屏"**。
+     * 而它最多等 20 帧（≈300ms），这期间用户完全可能再按一次返回、或点进别的目录
+     * ⇒ 判据对着**新屏**成立 ⇒ 把**上一个 `to` 的偏移**滚到**另一屏**上。
+     * `fetchFolder` 自己用 `seq !== fetchSeq` 挡住了过期响应写 `dataSource`，
+     * 但它**不把序号告诉调用方** ⇒ 这里自己取一次比（同 `enterScreen` 的理由）。
+     */
+    const done = fetchFolder(to.path, to.mode);
+    const myFetchSeq = fetchSeq;
+    await done;
+    /**
+     * 恢复滚动位置。
+     *
+     * ## ⚠️⚠️ 我第一版写错了：**回读确认骗了我自己**（业主 2026-10-04 五次报"没恢复"）
+     *
+     * 第一版是这样：
+     * ```ts
+     * await nextTick();// 只等一帧
+     * imageBox.value?.scrollTo(0, to.scrollY);
+     * ```
+     * 改成"回读确认 + 重试"也没用 —— 因为：
+     * `fetchFolder` 的 `then` 里只做了 `dataSource.value = data`（**改了数据，Vue 还没 patch**）
+     * ⇒ 那一刻 DOM 还是**旧屏** ⇒ **旧屏也足够长、也能滚到 `to.scrollY`**
+     * ⇒ `scrollTo` 成功 ⇒ **回读也一致** ⇒ 判据通过、提前 break
+     * ⇒ **在旧内容上就"恢复"完了**，新内容铺上来后一切白搭。
+     *
+     * ⚠️ **教训**：「回读确认」只能证明"滚动停在了要的位置"，
+     * **不能证明"滚动发生在正确的那个内容上"**。⚠️ 缺的是"**内容换了吗**"这个判据。
+     *
+     * ## 现在的判据：等 DOM 真的换成新屏
+     *
+     * 不用"等几帧"这种碰运气的写法 —— **直接量"当前列表的指纹"**：
+     * `fileList` 是 `computed(dataSource 过滤后)`，它一换新屏就换。
+     * 等到「**数据里的第一条**」与「**DOM 里的第一条**」是同一条，才说明新内容真的铺上去了。
+     *
+     * ⚠️⚠️ **我第一版只等 `fileList`** —— 而 `dataSource` 在 `fetchFolder` 的 then 里就换了
+     * ⇒ `waitFor...` 第一次检查就通过、**一帧都没等** ⇒ `scrollTo` 打在**旧屏的 DOM** 上。
+     * ⇒ 症状是**间歇性**的：
+     *   · `to.scrollY === 0`（没滚动过）⇒ 整个恢复分支被跳过 ⇒ **看起来是对的，其实没执行**
+     *   · `to.scrollY > 0`（滚动过）⇒ 进分支 ⇒ 在旧屏上滚 ⇒ **"A 返回后停在 B 的高度"**
+     * 主人原话：「没触发滚动就正常，滚动了再返回就不对」⇒ 与这个解释**逐条吻合**。
+     * 之后再 `scrollTo` + **回读确认**（这时回读才有意义）。
+     */
+    /**
+     * 恢复滚动位置。**必须无条件恢复 —— 包括"恢复成 0"。**
+     *
+     * ## ⚠️⚠️ 2026-10-05 业主真机报，根因就是这里原来那句 `if (to.scrollY) { … }`
+     *
+     * 症状：「A→B 时返回 A 正常；但 B 里滚过 300px 再回 A，A 也停在 300」。
+     *
+     * 因为**这条路径上**没人归零：容器只在**前进**时被归零 —— `enterScreen` 里那两处
+     * `scrollTo(0, 0)`（取数前 + 取数落地后）。而 `onBack` **绕过 `enterScreen`**、
+     * 直接调 `fetchFolder` ⇒ 返回时容器的 `scrollTop` 原样留在身上
+     *（`fetchFolder` 换的是**数据**，容器元素没换）。
+     *
+     * ⇒ 目标屏记的位置是 0 时整段被跳过，容器就把**上一屏的偏移**一直带着。
+     * 为什么"B 没滚过就正常"：那时容器本来就是 0 ⇒ 跳过后**看起来是对的，其实没执行**
+     *（上面那段历史里已经记下这个现象，只是当时把它当成"间歇性"的解释，没当成 bug 本身）。
+     *
+     * ⚠️ **别写"全项目没有任何一处写 0"**（我第一版就这么写的，被 code review 当场纠正）：
+     * `enterScreen` 就是写 0 的地方。错在**取证方式** —— 用 `grep scrollTop` 枚举，
+     * 结构上就漏掉了 `scrollTo(0, 0)` 这种写法。判据是"**返回这条路上有没有人归零**"，
+     * 不是"全项目有没有 `= 0`"。
+     *
+     * ⚠️ 归零**不需要等 DOM**：`scrollTop = 0` 在任何内容上都成立，新内容铺上来之后仍是 0。
+     * 只有恢复**非 0** 才必须等 DOM 换新 —— 否则会在旧屏上"成功"滚到那个位置
+     *（回读也一致 ⇒ 判据抓不到），新内容铺上来后一切白搭。
+     */
+    const box = imageBox.value;
+    if (!box) return;
+    if (!to.scrollY) {
+        // 过期请求不许碰视口（理由见上面 `myFetchSeq` 那段）
+        if (fetchSeq !== myFetchSeq) return;
+        box.scrollTo(0, 0);
+        return;
     }
+    const ready = await waitForGridOf(to.path);
+    /* ⚠️ **再查一次**：`waitForGridOf` 最多等 20 帧，它本身就是第二个窗口。 */
+    if (fetchSeq !== myFetchSeq) return;
+    if (!ready) {
+        // ⚠️ 没就位就**不恢复**（宁可不动，也不要恢复到一个错的位置 ——
+        //    那是"看起来恢复了一半"，比不恢复更难判断）。
+        //    真的会发生吗：目标屏是**空目录**时（`fileList` 为空）——
+        //    那种情况下 `to.scrollY` 本来就该是 0，所以正常不会进这里。
+        notify('warning', '这一屏没能定位', `记=${to.scrollY} 现=${box.scrollTop}`);
+        return;
+    }
+    box.scrollTo(0, to.scrollY);
+    // 回读确认：**clamp 是静默的**（`scrollTo` 不会报错）⇒ 必须回读。
+    // ⚠️ 目标超出新屏内容高度时会被 clamp 到更小 —— 那是**正确行为**
+    //（新屏本来就短，恢复不上去），此时补一帧再试一次即可。
+    if (Math.abs(box.scrollTop - to.scrollY) > 2) {
+        await nextTick();
+        box.scrollTo(0, to.scrollY);
+    }
+}
+
+/**
+ * 等到「DOM 里的第一条」已经是目标屏为止（数据与 DOM **两者对上**才算）。
+ *
+ * ## 为什么需要它（`onBack` 恢复 scroll 的前置条件）
+ *
+ * `fetchFolder` 只保证**数据**换新（`dataSource.value = data`），
+ * **不保证 DOM 已 patch** ⇒ 那一刻量 `scrollHeight` / `scrollTo` 都是在**旧内容**上做的。
+ * ⚠️ 而"旧内容也能滚到那个位置、回读也一致" ⇒ **回读确认抓不到这个问题**。
+ *
+ * ## 判据：**列表里第一条的 `dir`**（不是"等几帧"）
+ *
+ * `keyOf` = `${item.dir}/${item.name}` ⇒ 条目自带它属于哪个目录。
+ * `fileList` 是 `computed(dataSource 过滤后)`，它一换新屏，`fileList[0].dir` 就换成新屏的目录。
+ * ⇒ **"第一条的 dir 等于目标 path"= 新屏内容已就位** —— 这是**事实**，不是碰运气。
+ *
+ * ⚠️ 为什么不能"等固定几帧"：新屏内容够不够长、渲染耗时都不确定，
+ *   固定帧数要么不够（白等）、要么多余（白等）；而这个判据**要么成立要么不成立**，没有中间态。
+ * ⚠️ 空列表**不能**判"已就位"（`fileList[0]` 不存在）—— 那时列表是空的，
+ *   滚动位置无从谈起，也不该在这里等（空目录本来就没得滚）。
+ *
+ * @param path 目标屏路径
+ * @param maxFrames 最多等几帧（兜底防死循环；正常情况 1 帧内成立）
+ * @returns 是否在 maxFrames 内就位
+ */
+const waitForGridOf = async (path: string, maxFrames = 20) => {
+    void path;   // ⚠️ 形参留着是为了调用点可读（"在等哪一屏"），但**判据不能用它** —— 见下
+    for (let i = 0; i < maxFrames; i++) {
+        // ⚠️⚠️ **必须先让出一帧再检查**（我第一版把它写在检查之后 ⇒ 一帧都没等就返回了）。
+        await nextTick();
+        const first = fileList.value[0];
+        const el = imageBox.value?.querySelector<HTMLElement>('.image-box-item');
+        /**
+         * 判据 = 「数据里的第一条」与「DOM 里的第一条」**是同一条**。
+         *
+         * ⚠️ 进入这里时 `dataSource` **一定已经是新屏**了（`await fetchFolder` 的 then 里设的）
+         * ⇒ 所以只要 DOM 跟上了数据，就说明新内容真的铺上去了。
+         *
+         * ⚠️⚠️ **不要再加 `first.dir === path` 这种"屏身份"校验** —— 我加过，它是错的：
+         * `cover` 模式下**子目录会收敛成封面条目**，那些条目的 `dir` 是"封面图所在的目录"，
+         * 与"这一屏的路径"**不一定相同**（例如整屏都是收敛出来的目录脸时，`dir` 全都对不上）。
+         * ⇒ 那个条件会**永远为 false** ⇒ 恢复分支被跳过 ⇒
+         * **返回到哪都停在上一屏的滚动位置**（业主报的"A 返回后停在 B 的高度"）。
+         *
+         * 孤立证据（探针 `docs/probes/onback-real/` 复现）：
+         * `history` 里记的值是对的（800），但诊断报"未就位" ⇒ 说明问题在判据，不在记录。
+         */
+        if (first && el && el.dataset.key === keyOf(first)) return true;
+    }
+    return false;
 }
 
 const onRefresh = () => {
@@ -1219,6 +1377,20 @@ const setRoot = (value: string) => {
         // 否则界面上留着上一个目录的东西，而选择框已经空了
         dataSource.value = [];
         searchText.value = '';
+        /**
+         * ⚠️ `failKind` **必须一起清**（2026-10-05 code review 抓到）。
+         *
+         * 它描述的是"**当前这一屏**取数失败了"，而上面刚把"当前这一屏"整个拿掉
+         *（`history = []`）⇒ 留着它就是在陈述一个已经不存在的对象。两处后果：
+         *  ① `banner` 继续显示"移动硬盘不在…插好后按 F5 重读"，而 F5 已因
+         *     `!history.value.length` 被拦掉（见 `onRefresh`）⇒ **文案指向一个不存在的操作**；
+         *  ② `emptyTip` 的守卫把 `loadFailed` 排在 `!history.length` **前面**
+         *     ⇒ 那句"还没选文件夹"永远显示不出来 ⇒ 用户落在**纯空白页**上。
+         *
+         * 缓解面：这条路以前只有 chip 上的 × 走得到；2026-10-05 加了「清空」按钮之后，
+         * 它变成"在任意一屏一键可达" ⇒ 必须在这里收口（唯一的状态复位点）。
+         */
+        failKind.value = '';
         return;
     }
     dir.value = value;
@@ -1229,6 +1401,32 @@ const setRoot = (value: string) => {
     // 而第二层反而显示封面。同一个规则两层表现不一致，所以首层也统一成 cover。
     enterScreen(value, 'cover');
 }
+
+/**
+ * 栈底那一颗按钮：**清空导航历史，回到"还没选文件夹"的界面**。
+ *
+ * ## 为什么栈底也要有出口（业主 2026-10-05 原话）
+ *
+ * 「返回只在栈 > 1 时出现，可我在栈底也想能清空」——
+ * 栈底时"返回"无事可做（`onBack` 第一行就 return），而那颗按钮是
+ * 「离开当前这个文件夹」最顺手的位置 ⇒ 同一位置换成「清空」。
+ *
+ * ## ⚠️ 走既有出口 `setRoot('')`，不自己发明一套清栈逻辑
+ *
+ * `setRoot` 的定义上写着"**唯一**一个重新开始的入口" —— 保留这条。
+ * 代价必须说清楚（已写进 tooltip）：**当前视图 + 整个导航历史 + 搜索词**一起重置，
+ * 不可撤销，回去要重新选文件夹。
+ *
+ * ## ⚠️⚠️ 所以它**只**挂在这个显式按钮上，绝不挂 Backspace
+ *
+ * 这正是 `FolderSelector` 那条注释立过的规矩：「门槛 ∝ 不可逆 × 波及面」——
+ * 那里曾经因为把"对话框取消"当成清空而触发 `setRoot('')`，被判为"最轻的动作造成
+ * 最大范围且不可逆的后果，原则是反的"。⇒ 清空只归用户**主动点**（和 chip 上那个 × 同理）。
+ * 误按退格就清视图的事故，靠"不绑快捷键"从结构上排除。
+ *
+ * ⚠️ 它**不删任何数据**：缓存 / 缩略图 / 扫描结果一个不动，只是导航态归零。
+ */
+const clearNav = () => setRoot('');
 
 /**
  * 从缓存记录打开一个目录。**这是一次「跳转」，不是"以它为根"**。
@@ -1494,6 +1692,58 @@ const onScanCancel = () => {
  * 搬家不该顺手改门槛。扫描中整组不可用，由触发按钮自己的 `:disabled="scanning"` 挡住
  * （下拉不弹出来 = 三项都点不到），与"忙碌时只置灰、不消失"是同一条铁律。
  */
+/**
+ * 「更多」菜单的外观。**只走naive-ui 自己预留的 CSS 变量**，不覆盖任何选择器。
+ *
+ * ## 为什么是"按内容形态"而不是"全统一"（业主 2026-10-04 五次报明确裁决）
+ *
+ * 业主原话：「如果更多也要应该是上下，应该**根据实际布局来的，而不是全统一**」。
+ * ⇒ 菜单**保持竖排**（4 个文字动作，Windows 资源管理器的「更多」也是竖排；
+ *横排要为它另写一个浮层，与本项目"不新增界面"的立场冲突）。
+ *
+ * ## 那"丑"是什么 —— 是**它与本项目其他浮层不像**，不是它竖排
+ *
+ * 本项目浮层的既有语言（`.header-bar`、`.crumb`、输入框后缀图标）：
+ * **4px 圆角** + 淡蓝灰交互色 + 14px 字号。
+ * 而 `n-dropdown` 用的是naive-ui 默认值（圆角更大、悬停是灰底）⇒ 同一个界面里两种语言。
+ *
+ * ⚠️ 写法必须是 `style`，**不能扁平写在顶层**（实测三种写法逐一验过）
+ *
+ * `Dropdown.mjs:345` 那一行是关键：
+ * ```js
+ * style: [...style, this.cssVars]      // ← naive-ui 自己的变量在这里
+ * h(DropdownMenu, mergeProps(this.$attrs, dropdownProps, menuNodeProps))
+ * ```
+ * ⇒ 顶层的 `--n-border-radius`（`menuNodeProps` 里那份）**同名输给** `dropdownProps.style`
+ * 里的那份 ⇒ 传了等于没传。**实测：扁平写法算出来还是 `3px`（naive-ui 默认）。**
+ *
+ * ⚠️ `style` 用**字符串**而不是对象：`menu-props` 的返回类型是
+ * `HTMLAttributes & Record<string, string|number|undefined>`，那个索引签名要求
+ * `style` 是 `string` ⇒ 给对象会 TS2322（实测）。字符串同样生效（实测 `4px`）。
+ *
+ * ⚠️ 这条**读代码读不出来**：`mergeProps` 的覆盖关系要真跑一遍，
+ * 且要读 `getComputedStyle` 的**计算值**（inline style 里有不代表被消费）。
+ * 见 `docs/probes/menu-look/`。
+ *
+ * ## 为什么用 `menu-props` 传变量而不是写 CSS 覆盖
+ *
+ * ⚠️ `n-dropdown` 的样式**全部走 `var(--n-*)`**（实测 26 个变量）
+ * ⇒ 它**预留了正规口子**。覆盖选择器要写 `.n-dropdown-menu {...}`，
+ * 那是 (0,1,0) 对上 cssr **运行时注入**的同权重 ⇒ **先后顺序不可控**
+ * （与预览层工具条那个教训同族，见本文件末尾那个非 scoped 块）。
+ * ⇒ 传变量是"用它的机制表达外观"，不是"打它的补丁"。
+ */
+const moreMenuProps = () => ({
+    style: [
+        '--n-border-radius: 4px',        // 与 `.header-bar` / `.crumb` 同一档
+        '--n-font-size: 14px',            // 与面包屑、输入框后缀文字一致
+        '--n-option-height: 32px',        // 默认 34px 对 14px 字号偏挤
+        // 悬停/选中底色用项目自己的蓝灰（与网格 hover 同一个色相 family）
+        '--n-option-color-hover: rgba(110, 123, 173, .16)',
+        '--n-option-color-active: rgba(110, 123, 173, .16)',
+    ].join('; '),
+});
+
 const moreOptions = computed(() => [
     // ⚠️ 扫描类动作在「挑封面」模式下**也禁用**：它们会把网格重扫一遍，
     // 而状态条那边是 `v-if="scanning || picking"` 且扫描优先 —— 扫描条会把挑选 UI
@@ -1558,7 +1808,7 @@ const picking = ref(false);
 // （传 `Ref` 会拿到创建那一刻的快照恒为 `false`，于是"预览开着时回车要 bail"
 //   静默失效、且没有任何报错）。
 const {
-    cursorKey, cursorItem, blinkKey,
+    cursorKey, cursorItem,
     focusCursor, setCursorKey, noteIntent, dispose: disposeGridCursor,
 } = useGridCursor({
     fileList, keyOf, imageBox,
@@ -1584,7 +1834,7 @@ const {
     previewToolbar, previewedImgProps, dispose: disposePreview,
 } = usePreview({
     fileList, keyOf, displaySrcOf, previewUrlOf, picking,
-    onLocate: (k) => focusCursor(k, { blink: true }),
+    onLocate: (k) => focusCursor(k),
     syncCursor: setCursorKey,
 });
 
@@ -1612,19 +1862,22 @@ const isPickable = (item: any) =>
 const isPicked = (item: any) => picked.value.has(`${item.dir}/${item.name}`);
 
 /**
- * 模式态下的单击 = 选中 / 取消。**非模式态**把选择器移过去。
+ * 切换某一格的选中状态（换封面模式）。**鼠标点击与键盘 Enter 共用这一个实现。**
  *
- * ⚠️ 常态这一句是**新增**的：单击卡片只落焦点，**不开预览** ——
- * 开预览仍然只由单击图片触发（既有行为，见模板里 `img-props.onClick`），
- * 双击也一个字没改。选择器与"打开"是**两件事**，不合并。
+ * ## 为什么抽出来（业主 2026-10-04 四次报连带发现）
+ *
+ * 原来这段逻辑**内嵌在 `onItemClick` 里**，而 `picking` 分支的第一句是 `if (!isPickable) return`
+ * —— 也就是说**键盘 Enter 走的 `onCursorConfirm → onItemClick` 与鼠标走的是同一个函数**，
+ * 这部分本来是对的。真正缺的是：**`picking` 分支从不调 `focusCursor`**
+ * ⇒ 单击格子时焦点没落上去 ⇒ 方向键一动就"跑到别处"，
+ * 用户以为是自己点的那格被选中。
+ *
+ * ⇒ 修法是让 `picking` 分支**也落焦点**（见 `onItemClick`），
+ * 本函数则保持"只管 `picked` 这一个状态"，**不碰焦点**——
+ * 焦点归`useGridCursor` 管（它是唯一的焦点真相），选中归这里管，两件事不混。
  */
-const onItemClick = (item: any) => {
-    if (!picking.value) {
-        focusCursor(keyOf(item));
-        return;
-    }
+const togglePick = (item: any) => {
     if (!isPickable(item)) return;
-
     const key = `${item.dir}/${item.name}`;
     const next = new Map(picked.value);
     if (next.has(key)) next.delete(key);
@@ -1637,6 +1890,27 @@ const onItemClick = (item: any) => {
         kind: item.type === 'folder' ? 'dir' : 'item',
     });
     picked.value = next;
+};
+
+/**
+ * 模式态下的单击 = 选中 / 取消。**非模式态**把选择器移过去。
+ *
+ * ⚠️ 常态这一句是**新增**的：单击卡片只落焦点，**不开预览** ——
+ * 开预览仍然只由单击图片触发（既有行为，见模板里 `img-props.onClick`），
+ * 双击也一个字没改。选择器与"打开"是**两件事**，不合并。
+ */
+const onItemClick = (item: any) => {
+    if (!picking.value) {
+        focusCursor(keyOf(item));
+        return;
+    }
+    /**
+     * ⚠️ 必须先落焦点：`picking` 分支原来**直接 return**，
+     * 而 `focusCursor` 只在非 picking 分支里调
+     * ⇒ 焦点与选中各说各话（详见 `togglePick` 的注释）。
+     */
+    focusCursor(keyOf(item), { scroll: true });
+    togglePick(item);
 };
 
 const clearPicked = () => { picked.value = new Map(); };
@@ -1722,6 +1996,42 @@ const onKeyup = (e: KeyboardEvent) => {
     if (previewOpen.value) {
         if (e.key === 'Enter' && !e.repeat) locateInGrid();
         return;
+    }
+
+    /**
+     *⚠️⚠️ **有浮层开着时，`Esc` 与 `Backspace` 都只用来"关掉它"**（业主 2026-10-04 五次报）。
+     *
+     * 原症状：「多步/更多」浮层开着时按 Backspace ⇒ **直接退回上一层文件夹**，
+     * 而那个浮层**还留在屏幕上** ⇒ 状态自相矛盾（人已经走了，菜单还挂着）。
+     *
+     * ## 为什么这是**真缺陷**而不是"顺手加的体验"
+     *
+     * 浮层是**盖在当前屏之上的**，Backspace 的语义是"回到**上一屏**"——
+     * 也就是说它操作的是**被遮住的那一屏**，而屏幕上可见的却是浮层。
+     * ⇒ 用户的直觉是"先把这个东西弄掉"。
+     * ⇒ 正确顺序是**分层消费**：`Esc` / `Backspace` 先交给浮层，浮层不在了才轮到导航。
+     *
+     *## 为什么判据是「有没有浮层开着」而不是"按Esc 还是 Backspace"
+     *
+     * 两者**都**应该先关浮层 —— 浮层开着时它们**不该**穿透到背后那一屏，
+     * 与 `previewOpen` / `picking` 那两条短路是**完全同一条纪律**。
+     *（`previewOpen` 与 `picking` 各有专属键：回车定位 / Esc 退出；
+     *  但这两个小浮层**没有专属键**，所以 `Backspace` 必须也能关它们。）
+     *
+     * ⛔ 不做 DOM 探测（去body 里找`.n-popover` 之类）：浮层由 naive-ui teleport，
+     *    类名与显隐都由它自己管，探测它等于把它的实现细节抄一遍。
+     *    **状态在 `popover.visible` / `ctxMenu.visible` 里，那才是判据。**
+     */
+    if (popover.value.visible || ctxMenu.value.visible) {
+        if (e.key === 'Escape' || e.key === 'Backspace') {
+            e.preventDefault();
+            // ⚠️ 两个都要关：它们**互斥**（一个封面弹层、一个右键菜单），
+            //    但"哪个开着关哪个"这件事必须**明确写出来**，
+            //    否则将来某个时刻两者同时开着就会只关一个、另一个留在屏幕上。
+            if (popover.value.visible) closeFileList();
+            if (ctxMenu.value.visible) closeCtxMenu();
+        }
+        return;                     // ★ 其余按键一律不穿透到背后那一屏
     }
 
     // 「换封面」模式态：Esc 退出，并**短路那几个会跑到别处去的单键**。
@@ -2104,112 +2414,22 @@ const onDisksChangedIpc = (_e: unknown, disks: { serial: string; drive: string }
         border-color: #18a058;
     }
 
-    /*
-     * 「定位」闪一下（1.2s 后由 `useGridCursor` 摘掉 `blinkKey`）。
-     *
-     * ⚠️ 三条硬约束（与 `.picked` / `.cursor` 同一手法）：
-     *   ① **只改那个本来就存在的 `border` 的颜色 + `box-shadow`** ——
-     *      网格 6 列的宽度是"margin 撑间距 + `width:100%/6−10px` 补偿回来"算出来的，
-     *      任何新增参与布局的盒模型属性都会把它带偏。
-     *   ② **不加外发光**：焦点（`.cursor`）是**双层环**，这里再叠就是三圈。
-     *   ③ 颜色与绿（`.picked` 已选）、主色蓝（`.cursor` 焦点）**都不重叠**。
-     */
-    &.blink {
-        border-color: #f0a020;
-    }
-
-    /*
-     * 焦点（方向键 / 单击落点）—— **常驻**。
-     *
-     * ## 为什么是「主色**不透明**实心环 + 内层深色细线」
-     *
-     * ⚠️ **原来的样子等于没有焦点**：边框色与 `:hover` **完全相同**（都是 `#7a8da9`），
-     * 只有阴影形状不同 ⇒ 鼠标划上去和键盘选中看起来一样，用户判断不出自己在哪。
-     * 业主 2026-10-04 直接说"很丑"。**根因不是审美，是缺了区分。**
-     *
-     * 改法有官方依据，不是凭感觉：
-     * - **Apple HIG（focus-and-selection）**：*"use a focus ring for a text or search
-     *   field, but use a highlight in a list or collection"*；紧接着又说
-     *   *"Although you can use a focus ring to draw attention to an item that **fills a
-     *   cell, like a photo**, it's usually easier to..."* ⇒ **填满单元格的图片就该用环**，
-     *   我们的缩略图格正是这一类。
-     * - **Fluent 2（accessibility 官方页）**：焦点要让人能*"visually determine **what they
-     *   will interact with**"*，且引 WCAG 的**非文本元素 ≥ 3:1**。
-     *
-     * ##⚠️ 环**必须不透明**（这是实测数据，不是偏好）
-     *
-     * 探针 `docs/probes/grid-cursor-visual/` 合成后算了 WCAG 对比度：
-     * | 外圈 alpha | 合成色 | vs 页面底(#f5f5f5) |
-     * |---|---|---|
-     * | .55 | rgb(128,181,242) | **1.96:1** ✗ |
-     * | .75 | rgb(85,157,241) | 2.58:1 ✗ |
-     * | .85 | rgb(64,146,241) | 2.92:1 ✗ |
-     * | **1.0（不透明）** | rgb(32,128,240) | **3.56:1** ✓ |
-     *
-     * ⇒ **半透明的环在浅色底上必然不过 3:1**，而封面图绝大多数是浅色的。
-     * 这就是"看着糊、说不上来哪里丑"的量化本质。
-     *
-     * **内层深色细线**（`rgba(0,0,0,.75)`）的作用不是"提亮"，而是给环一条
-     * 与**任何**底色之间的暗侧分界 —— 亮图上它压住图片的亮部，暗图上外圈自己够。
-     * ⚠️ 试过"内层亮白线"，在白图上对比 **1.00:1**（等于没有）⇒ 那个方向是错的。
-     * ⚠️ 内层 alpha 也**扫过表**，不是拍的：
-     *   | alpha | 合成到白图 | vs 白图 | 与中灰图明度差 |
-     *   |---|---|---|---|
-     *   | .45 | rgb(140,140,140) | 3.36:1 | **2** ✗ 在中灰底上等于隐形 |
-     *   | .65 | rgb(89,89,89) | 7.00:1 | 18 ✗ 仍不够 |
-     *   | **.75** | rgb(64,64,64) | **10.37:1** | **28** ✓ |
-     * ⇒ .75 是**同时**满足"压住亮图"与"在中灰底上不隐形"的最小值。
-     *
-     * ## 三套颜色语义（互不重叠，网格里一格最多同时挂两个）
-     *
-     * | 状态 | 表现 | 含义 |
-     * |---|---|---|
-     * | hover | 灰边框 `#7a8da9` + 淡背景 | 鼠标经过 |
-     * | **焦点** | **主色蓝实心环 + 内层深线** | **键盘站在这一格** |
-     * | 已选 | 绿边框 `#18a058` | 已进"换封面"的结果集 |
-     * | 定位闪烁 | 琥珀 `#f0a020`，1.2s | 刚从预览层飞回来 |
-     *
-     * ⚠️ 定位闪烁**改成琥珀**：它原来也用主色蓝，与焦点撞色 ——
-     * "这一格是焦点" 与 "它刚闪了一下" 是两件事，共用颜色就分不出来了。
-     * 琥珀与绿/蓝/灰都拉得开，且"暖色 = 刚刚发生"这个联想是通的。
-     */
-    /*
-     * 焦点（方向键 / 单击落点）—— **常驻**。
-     *
-     * ## ⚠️ 改过三版，每一版都是被真机报回来打脸的（记录在此，别再走回头路）
-     *
-     * | 版 | 长相 | 业主反应 |
-     * |---|---|---|
-     * | v1 | 2px 灰边框 + 2px 同色外发光 | "很丑"（**且与 hover 同色** ⇒ 等于没有焦点）|
-     * | v2 | 4px 双环（外主色 + 内白/内黑）+ scale 1.02 | "又粗，配色又难看" |
-     * | **v3（现）** | **照 hover 的底子，只把边框换成主色 + 极轻抬升** | 待验 |
-     *
-     * ## v3 的依据：它长在 hover 上，不是另起一套
-     *
-     * `hover` 已经是这个网格里"这一格被我碰着"的既有观感：
-     * 1px 边框 + `rgba(110,123,173,.16)` 淡背景 + `1px 0 10px` 柔和阴影。
-     * v2 把它换成 4px 双环 + 抬升，等于**在同一格里叠了两套语言**（一套柔、一套硬）⇒ 视觉打架。
-     *
-     * ⇒ v3 只做**一件事**：在 hover 的基础上，**边框换成主色**（认得出是"焦点"不是"鼠标经过"），
-     * 背景与阴影**沿用 hover 的**，抬升压到 1.012（几乎察觉不到，只为了"被选中"有一点重量）。
-     * 细线 + 主色 + 淡底 = 内敛，且与网格其余部分同一套观感。
-     *
-     * ## 仍然必须与 hover 可区分（这是 v1 的教训，不能丢）
-     *
-     * hover 边框 `#7a8da9`（灰蓝，饱和 28%）vs 焦点 `#2080f0`（主色蓝，饱和 87%）
-     * ⇒ **饱和度差 59**，加上焦点有淡底而 hover 只有淡背景 ⇒ 一眼能分辨。
-     * 探针 `docs/probes/grid-cursor-visual/` 守着这条。
-     *
-     * ⚠️ **不加外扩光环**：`box-shadow` 只留 hover 那个 `1px 0 10px` 柔和阴影
-     * （焦点时略强一点）。外扩环是"粗"的来源，也是它把 `transform` 变成必需（抬起来补偿粗）。
-     * 去掉环之后抬升就不必要了—— 但留一点点，因为它让"选中"有一点**重量**（PS5 的"power-on"）。
-     */
     &.cursor {
         // 边框是唯一的"识别特征"：从 hover 的灰蓝换成主色蓝
         border-color: #2080f0;
-        // 背景与阴影**照抄 hover**（略强一档，让焦点比 hover 更"实"一点）
-        background-color: rgba(110, 123, 173, .16);
-        box-shadow: 1px 0 10px rgba(122, 141, 169, .15);
+        /**
+         * 淡底**比 hover 更淡**（hover 是 .16，这里 .10）—— 焦点要"认得出"但不能"跳出来"。
+         * ⚠️ 它是**唯一**给焦点铺底色的规则：静止态与 `picked` 都不铺底
+         *（网格这么密，每格都铺色会糊成一块色板 —— 那是"AI 味"的主要来源）。
+         */
+        background-color: rgba(110, 123, 173, .10);
+        /**
+         * ⚠️ 原来是 `1px 0 10px` —— **只向右发光**的不对称阴影，典型的"AI 味"装饰。
+         * ⇒ 去掉：焦点已经由「主色边框 + 淡底」两样表达了，第三样是冗余。
+         * （`scale(1.012)` 的抬起**保留**：它是"这一格被拿起来了"的重量感，主人认可过，
+         *   且它有别的功能——见 `docs/probes/cursor-scale-row/`：抬起会污染
+         *   `getBoundingClientRect().top`，行结构探测必须用 `offsetTop` 才不受影响。）
+         */
         // 极轻抬升：1.012 而不是 v2 的 1.02 —— 后者在 10px 间距里很显眼，显眼=吵
         transform: scale(1.012);
         /* 抬起来的那一格要压住相邻格（`z-index` 只在定位元素上生效，故 position: relative 已在） */
@@ -2226,17 +2446,18 @@ const onDisksChangedIpc = (_e: unknown, disks: { serial: string; drive: string }
      * 这里把焦点态**提一级权重**，让"焦点 + hover"里焦点赢。
      */
     &.cursor:hover {
+        // ⚠️ 底色/边框/抬起必须与 `.cursor` **逐条相同** ——
+        //   唯一目的是「焦点 + 悬停时焦点不被 hover 盖掉」（权重同、写在后面）。
+        //   阴影同样去掉，与 `.cursor` / `:hover` 一致（单侧发光是装饰，不是语言）。
         border-color: #2080f0;
-        background-color: rgba(110, 123, 173, .16);
-        box-shadow: 1px 0 10px rgba(122, 141, 169, .15);
+        background-color: rgba(110, 123, 173, .10);
         transform: scale(1.012);
     }
 
     /*
      * 「正在双击打开」—— 只读层解析锚点那一瞬。
-     * ⚠️ 与 `.blink` 同样用主色蓝，但**不冲突**：两者互斥出现
-     *   （`opening` 要点鼠标双击才会置位，方向键移动不会置位它），
-     *   且 `opening` 那一格盖着深色遮罩 + 转圈，识别靠的是遮罩不是边框。
+     * ⚠️ 与 `.cursor` **不冲突**：`opening` 要点鼠标双击才会置位，方向键移动不会置位它，
+     *   而 `opening` 那一格盖着深色遮罩 + 转圈，识别靠的是遮罩不是边框。
      * 只改颜色/外发光，不碰盒模型（网格宽度是 margin 算出来的）。
      */
     &.opening {
@@ -2327,25 +2548,23 @@ const onDisksChangedIpc = (_e: unknown, disks: { serial: string; drive: string }
     color: #a1a1a1;
 }
 
+/**
+ * 卡片底座：网格格子与弹层条目**共用**的那一点东西（盒模型 + 边框 + 过渡）。
+ *
+ * ⚠️⚠️ **只放两者真的共用的属性。** 原来这个选择器里还塞着网格的整套尺寸算法
+ *（`--item-height` 的 `!important` 高度、`white-space:nowrap`…），于是它们**原样漏进了弹层**：
+ * 弹层的 `.file-cover` 被压成 0 高（等于从来没画出来）、文件名被压成单行 + 尾部省略
+ *（业主 2026-10-05：「多个文件弹出层好丑」，4 个文件显示成一模一样的 `[TST-59…`）。
+ * ⇒ 按"谁的属性谁持有"拆开：网格那半在下面 `.image-box-item`，弹层那半在 `.file-item`。
+ * 拆开之后"网格的规则漏到弹层"在**结构上**不再可能，弹层那边也因此一个 `!important` 都不需要。
+ */
 .image-box-item,
 .file-item {
-    --item-gap: 10px;
-    --item-width: calc(100% / 6);
-    --item-height: 1.5rem;
     display: flex;
     flex-direction: column;
-    flex-grow: 0;
-    flex-shrink: 0;
-    width: calc(var(--item-width) - var(--item-gap));
-    min-height: 80px !important;
-    height: var(--item-height) !important;
-    max-height: var(--item-height) !important;
-    padding: 0 2px 10px;
-    margin: 10px 5px 0px;
-    border: 1px solid transparent;
-    justify-content: flex-end;
     align-items: center;
     box-sizing: border-box;
+    border: 1px solid transparent;
     /**
      * ⚠️ 原来是 `all .1s`。focus 现在会**放大 1.02**，`.1s` 对"抬起"这个动作太快
      * （像抽搐）。⇒ 拆开写：颜色/阴影仍 .1s（跟手），transform 给 .18s + 缓出
@@ -2355,6 +2574,46 @@ const onDisksChangedIpc = (_e: unknown, disks: { serial: string; drive: string }
     transition: border-color .1s ease-in-out, box-shadow .1s ease-in-out,
         background-color .1s ease-in-out, transform .18s cubic-bezier(.2, .9, .3, 1.1);
     user-select: none;
+
+    /**
+     * 悬停：**只**换边框色 + 一层极淡底。
+     *
+     * ⚠️ 原来还有 `box-shadow: 1px 0 10px`（**只向右发光**的不对称阴影）——
+     * 那是"AI 味"的典型装饰：单侧发光没有功能作用，纯粹是"让它看起来有设计过"。
+     * ⇒ 去掉。悬停的反馈由「边框变主色 + 淡底」承担，足够了。
+     * （与 `.cursor` 同步去掉 —— 焦点那层也去掉，两处保持同一套语言。）
+     */
+    &:hover {
+        border-color: #7a8da9;
+        background-color: rgba(110, 123, 173, .12);
+    }
+
+    &:active {
+        border-color: #525e72;
+        background-color: rgba(75, 83, 116, 0.16);
+    }
+}
+
+/**
+ * 网格卡片：6 列算法 + 图 + 名字。**这一段只属于网格**（弹层条目见下面 `.file-item`）。
+ *
+ * ⚠️ 这里的 `min-height / height / max-height` 那三条 `!important` 是**网格的生命线**
+ *（`--item-height` 由 `utils/flexible.ts` 的 `1rem = clientWidth/10` 推出；
+ * 去掉它们 192px 的格子会塌成 24px）。所以它们必须留在**只有网格会命中**的选择器上。
+ */
+.image-box-item {
+    --item-gap: 10px;
+    --item-width: calc(100% / 6);
+    --item-height: 1.5rem;
+    flex-grow: 0;
+    flex-shrink: 0;
+    width: calc(var(--item-width) - var(--item-gap));
+    min-height: 80px !important;
+    height: var(--item-height) !important;
+    max-height: var(--item-height) !important;
+    padding: 0 2px 10px;
+    margin: 10px 5px 0px;
+    justify-content: flex-end;
     font-size: 16px;
 
     .n-image {
@@ -2385,29 +2644,57 @@ const onDisksChangedIpc = (_e: unknown, disks: { serial: string; drive: string }
         overflow: hidden;
     }
 
+    /**
+     * 文件名。**2026-10-05 重做**（业主：「整体很不协调」「反 slop」）。
+     *
+     * ## 改了什么、为什么
+     *
+     * | 项 | 原 | 现 | 依据 |
+     * |---|---|---|---|
+     * | 字号 | `1em`(16px) | **13px** | 列表项的**文件名是内容**，不是标题。Fluent 的 `body-1`=14 / `caption-1`=12；资源管理器缩略图视图 ≈12–13px |
+     * | 字重 | `bold`(700) | **400常规** | M3 `body`=400；`label`=500 是给"功能性文字"（按钮/标签）的。文件名是**内容**，用 body 那一档 |
+     * | 颜色 | `#000` 纯黑 | **次级灰** | 纯黑 + 粗体 = 标题待遇。文件名是**辅助信息**，不该抢图片的戏|
+     * | 静止底色 | 每格铺淡蓝灰 | **透明** | 底色是给 `hover` / `cursor` / `picked` 用的。**静止的卡片就该是内容本身** —— 铺满底色会让整片网格糊成一块色板（"AI 味"的主要来源） |
+     *
+     * ## ⚠️ 取值依据的效力（必须诚实标注）
+     *
+     * ✅ **可信**：资源管理器/相册类产品的**实际观感**（这是 PC 文件管理器，主人要的就是"专业"）
+     * ✅ **可信**：两个独立来源（Fluent / M3）**收敛到同一条** —— "列表项正文用 body 档 12–14px、常规字重"
+     * ⚠️ **未回官方原文核实**：`m3.material.io` 是 JS 渲染、抓不到正文；`learn.microsoft.com` 那页确认了
+     *    Fluent 有 type ramp 且 base 是 body，但**没给出 caption 的具体数值**。
+     *    ⇒ 上表的 13px 是"两个第三方转述 + 资源管理器观感"的**交集**，不是从官方原文抄来的。
+     *
+     * ## 为什么"居中"保留
+     *
+     * 资源管理器的缩略图视图文件名也是**居中**（图在上、名在下、居中对齐）⇒ 居中是对的，
+     * 不协调的是**字号与字重**，不是对齐方式。
+     *
+     * ## ⚠️ 连带影响：面包屑的字重**不再**与这里一致
+     *
+     * `.crumb-current` 当初加粗的理由是"与网格条目名字重一致"（那条注释仍在面包屑那边）。
+     * 现在网格是常规字重 ⇒ 面包屑的加粗**失去了一致性依据**。
+     * ⇒ 但**不动它**：面包屑要表达"我在哪"，靠 `n-tag` 自己的边框表达位置，
+     * 加粗在这里是**功能性的**（它不是内容列表的一项）。要改应作为**独立一件事**评估，
+     * 不该搭这次排版调整的便车。
+     */
     span {
         display: inline-block;
         width: 100%;
         height: 38px !important;
         line-height: 1em;
-        font-size: 1em;
-        color: #000;
-        font-weight: bold;
+        // ⚠️ 14px（Fluent `body-1` 的标准值），不是 13px ——
+        //   **13px 是我第一次改过头了**：这一格宽 326px（主屏 6 列），
+        //   13px 的字在这么大的卡片上**明显偏小**，与图片不成比例（业主当场质疑）。
+        //   ⇒ 取值要跟**容器尺寸**挂钩：小列表项才用 12–13px。
+        font-size: 14px;
+        // 中性深灰（比纯黑柔、比次级灰实）—— 文件名是**这个格子的唯一文字**，
+        // 太淡了就"看不清是什么"（业主报的"合理吗"就是指这个）
+        color: #374151;
+        font-weight: 400;                    // 常规；加粗是给"当前层/选中"这类功能性位置用的
         overflow: hidden;
         text-overflow: ellipsis;
         white-space: nowrap;
         text-align: center;
-    }
-
-    &:hover {
-        border-color: #7a8da9;
-        background-color: rgba(110, 123, 173, 0.16);
-        box-shadow: 1px 0 10px rgba(122, 141, 169, 0.15);
-    }
-
-    &:active {
-        border-color: #525e72;
-        background-color: rgba(75, 83, 116, 0.16);
     }
 
     @media screen and (max-width:1100px) {
@@ -2431,34 +2718,142 @@ const onDisksChangedIpc = (_e: unknown, disks: { serial: string; drive: string }
     }
 }
 
-.file-item {
-    width: 84px !important;
-    height: 84px !important;
-    max-height: 84px !important;
+/**
+ * 弹层里的文件列表容器（与 `.hstack` 同一个节点）。
+ *
+ * `.hstack` 本身已经会换行，这里只补一条**宽度上限**：4 个 150px 的条目
+ * 加间距正好 636px，所以 660px 恰好「一行 4 个」；再多就换行，
+ * 而不是把弹层横向撑到屏幕外。
+ */
+.file-list {
+    max-width: min(660px, 88vw);
 
+    /**
+     * ⚠️ 抑制**浏览器默认焦点环**（业主 2026-10-05：「弹出层是橙色边框」）。
+     *
+     * 那个橙色不是项目里的颜色 —— 全仓 grep 没有任何橙色字面量，naive-ui 的 popover
+     * 样式里也没有 `outline`。它是 UA 的 `:focus-visible { outline: auto }`，
+     * 而 `outline: auto` 的色值取自**系统强调色**（这台机器的强调色是橙的）
+     * ⇒ 换个系统主题它就换颜色，属于"界面里冒出一个谁也解释不了的框"。
+     *
+     * 为什么该抑制：这个容器 `tabindex="-1"` 的意义就是**接住方向键**
+     *（`openFileList` 里那句 `focus()`，见它上面的注释），它不是一个"控件"；
+     * 这一层的"我在哪"由 `.file-cursor` 的蓝色边框表达 ⇒ 焦点环纯属噪音。
+     * 声明放在**元素自己**身上，而不是给将来每个 focus 调用点加守卫。
+     */
+    &:focus,
+    &:focus-visible {
+        outline: none;
+    }
+}
+
+/**
+ * 弹层条目 —— 「同一部作品的多个文件」，双击封面时弹出来问"打开哪一个"。
+ *
+ * ## ⚠️ 2026-10-05 重做（业主：「这个多文件弹出层好丑，想办法美化或者修正」）
+ *
+ * 原来长这样：84×84 的**空盒子** + 一行截断到约 9 个字符的文件名。
+ * 而这一层的文件名**往往是同前缀的**（`[TST-593] … CD1 / CD2`）⇒
+ * 4 个格子显示成**一模一样**的 `[TST-59…` —— 根本没法选。
+ * 两个原因都不是"调参能救"的，是上面那次拆分的直接后果：
+ *
+ * | 症状 | 根因 |
+ * |---|---|
+ * | 每格上方一大块空白 | `.file-cover` 漏了 `fiv-cla fiv-icon-*`（网格那边写的是 `file-cover fiv-cla fiv-icon-${ext}`），只剩 `blank.svg` 又没尺寸 ⇒ **高 0，从来没画出来过** |
+ * | 名字只剩前缀（选不了） | 继承了网格那条 `white-space:nowrap` + `height:38px!important` ⇒ 这里写的 `word-break` / 多行**全是死代码** |
+ *
+ * ⇒ 现在：类型图标 + **可换行**的文件名（最多 3 行，尾部才是区分点）+ 灰色大小。
+ * ⚠️ 注意这里**一个 `!important` 都没有** —— 原来那 3 个 `!important` 全是在跟网格那条抢，
+ * 拆分之后它们自然消失，这本身就是"拆对了"的证据。
+ */
+.file-item {
+    width: 150px;
+    height: 116px;
+    padding: 10px 8px;
+    margin: 0;                     // 间距只由 `.hstack` 的 gap 提供 → 一处来源
+    justify-content: flex-start;   // 图标统一贴顶 ⇒ 一排卡片的图标对齐，好扫
+    gap: 4px;
+
+    /**
+     * 类型图标。`fiv-cla` 的尺寸就是 `1em`（`line-height:1em; width:.72em`）
+     * ⇒ 用 `font-size` 定大小。`.file-cover` 自带的 `blank.svg` 是**未知扩展名的兜底**
+     *（`fiv-icon-*` 有匹配时按注入顺序覆盖它）。
+     */
+    .file-cover {
+        font-size: 26px;
+        margin: 0;
+        flex: 0 0 auto;
+    }
+
+    /**
+     * 文件名。**必须换行** —— 这一层几个文件名的前缀往往一样，
+     * 尾部省略等于把**唯一的区分点**藏起来。最多 3 行，装不下就截断
+     *（完整名字在整格的 `title` 里）。
+     */
     span {
-        display: inline-block;
-        max-height: 48px;
-        line-height: 16px;
-        font-size: 14px;
-        word-break: break-all;
-        text-overflow: ellipsis;
+        /* 多行"..."：**只有 `-webkit-box` 这一种 display 能让 `-webkit-line-clamp` 生效**
+           （`block` / `-webkit-box` 之外都不吃这个属性 —— 设了也静默无效）。
+           业主 2026-10-05：「标题过长没有省略号」—— 上一版只 `overflow:hidden`，
+           长名字是被**硬切**的，看不出"后面还有"。 */
+        display: -webkit-box;
+        -webkit-box-orient: vertical;
+        -webkit-line-clamp: 3;     // 与下面 `max-height` 同一个预算：3 行 × 15px
+        width: 100%;
+        max-height: 45px;          // ⚠️ 兜底：万一哪个版本不认 line-clamp，也不许把卡片撑破
+        line-height: 15px;
+        font-size: 13px;
+        color: #374151;
+        font-weight: 400;
+        text-align: center;
+        white-space: normal;
+        /* ⚠️ 不能写 `word-break: break-all`（那会**逐字符**断，把 `[TST-593]`、`CD1.mp4`
+           这种拉丁串也从中间劈开 —— 第一版就是，读起来很碎）。
+           `overflow-wrap: break-word` 只在"整词放不下"时才断，中日韩本来就能逐字折行。 */
+        overflow-wrap: break-word;
         overflow: hidden;
     }
 
+    /**
+     * 大小。⚠️ 用 `<i>` 而**不是** `<span>` —— 否则会被上面那条 `span` 规则
+     * （`max-height: 45px` / `font-size: 13px`）一起吃掉。
+     * 与网格里那个选中角标用 `<i>` 同一个理由。
+     */
+    .file-size {
+        flex: 0 0 auto;
+        /* 钉在卡片底部：名字 1～3 行都能变 ⇒ 让多出来的空白落在**名字和大小之间**，
+           而不是整块吊在卡片下方（`align-items/justify-content` 都做不到这一条 ——
+           它们的作用对象是整组子元素，不是"最后一个"). */
+        margin-top: auto;
+        font-style: normal;
+        font-size: 12px;
+        line-height: 14px;
+        color: #9ca3af;
+    }
+
     /*
-     * 键盘高亮的那一项（`Enter` 打开多文件封面后，↑↓ 走的就是它）。
-     * ⚠️ 沿用网格那条"只改边框色 + 外发光"的手法：`.file-item` 继承了
-     * `.image-box-item` 的 `border: 1px solid transparent` 与 `transition`，
+     * 键盘高亮的那一项（`Enter` 打开多文件封面后，←→ 走的就是它）。
+     * ⚠️ 沿用网格那条"只改边框色"的手法：`.file-item` 从上面那个**共用底座**
+     * 继承了 `border: 1px solid transparent` 与 `transition`，
      * 所以**不需要**新增任何盒模型属性，只改颜色即可。
-     * 颜色用主色蓝：这一层与网格不共处一屏（它是浮在网格上的弹层），
-     * 撞色不会造成歧义，而蓝色与"当前选中"是通用联想。
+     *
+     * ## ⚠️⚠️ 原来是 `0 0 0 2px 黑, 0 0 0 4px 蓝` 的**双环**（业主 2026-10-04 六次报"丑死了"）
+     *
+     * 实测（`docs/probes/cursor-visual-weight/`，真 Chromium 量`getComputedStyle`）：
+     * 那一版可见环总厚 **5px**，而网格的 `.cursor` 只有 **1px** ——
+     * **同一屏里两种焦点粗细差 5 倍**。弹层是**盖在网格上**的，
+     * 两者会**同时出现在一个视野里** ⇒ 那个突兀是设计出来的，不是错觉。
+     *
+     * ⚠️ 而且这**与它自己的注释矛盾**：注释写着"与网格的 `.cursor` 同一套焦点语言
+     *（不透明主色环 + 内层深线）"，而网格那条**从来没有**"内层深线"。
+     * ⇒ 那是 v2 方案（被否掉的那版）的残留，注释没跟着改。
+     *
+     * ⇒ 现在与网格**真的**同一套：1px 主色边框 + 同一份淡蓝灰底 + 同一份柔和阴影。
+     * 这一层与网格不共处一屏，但"我在哪"的手感必须一致 —— 一致靠**同一份值**，不靠注释。
      */
     &.file-cursor {
         border-color: #2080f0;
-        /* 与网格的 `.cursor` 同一套焦点语言（不透明主色环 + 内层深线）——
-           这一层是浮在网格上的弹层，不与网格同屏，但"我在哪"的手感要一致。 */
-        box-shadow: 0 0 0 2px rgba(0, 0, 0, .75), 0 0 0 4px #2080f0;
+        // 与 `.image-box-item.cursor` **逐条相同**（边框 + 淡底，不碰盒模型、不加阴影）
+        background-color: rgba(110, 123, 173, .10);
     }
 }
 

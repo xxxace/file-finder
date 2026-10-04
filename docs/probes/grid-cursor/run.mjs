@@ -66,7 +66,7 @@ const cellsOf = (cols, rows, jitter = 0) => {
         for (let c = 0; c < cols; c++) {
             // 同一行内噪声相同（同行必须被归到一起），行间差异远大于容差
             const noise = jitter ? (r * cols + c) % 2 === 0 ? 0 : jitter : 0;
-            out.push({ key: `k${r}-${c}`, top: r * ROW_H + noise });
+            out.push({ key: `k${r}-${c}`, rowTop: r * ROW_H + noise });
         }
     }
     return out;
@@ -79,7 +79,7 @@ const cellsOf = (cols, rows, jitter = 0) => {
 const cellsUntil = (cols, total) => {
     const out = [];
     for (let i = 0; i < total; i++) {
-        out.push({ key: `k${Math.floor(i / cols)}-${i % cols}`, top: Math.floor(i / cols) * ROW_H });
+        out.push({ key: `k${Math.floor(i / cols)}-${i % cols}`, rowTop: Math.floor(i / cols) * ROW_H });
     }
     return out;
 };
@@ -136,8 +136,8 @@ console.log('\n—— R4 边界：四个方向到头都停住 ——');
     check('第 1 行第 1 格按 ← **没有**跳到第 6 格（= 没环绕）', wrapped.c === 0, JSON.stringify(wrapped));
 }
 
-// ─────────────────── R5 · 上下移动时列号不变（残行上不许悄悄挪列） ───────────────────
-console.log('\n—— R5 残行上的上下：列号保持不变 ——');
+// ─────────────────── R5 · 残行上的上下：投影到目标行（2026-10-04 修正）───────────────────
+console.log('\n—— R5 残行上的上下：投影到目标行，而不是停住 ——');
 {
     // 3 行：前两行各 6 格，最后一行只有 2 格（同 R2）⇒ 行号 0 / 1 / 2
     const rows = groupRows(cellsUntil(6, 14));
@@ -153,15 +153,47 @@ console.log('\n—— R5 残行上的上下：列号保持不变 ——');
     eq('第1行c=1 按 ↓ 落到末行第 2 格（末行有 c=1）',
         stepPos(rows, { r: 1, c: 1 }, 'down'), { r: 2, c: 1 });
 
-    // ⚠️ 满行 → 末行，但末行**没有**那一列（末行只有 c=0/c=1）
-    // 这条是本方案一个刻意取舍：从c=5 按 ↓ 就**停住**，不挪到末行最后一格。
-    //理由：悄悄挪列会让"↓ 就是往下"这个直觉在末行失效（用户以为在 c=5，其实到了 c=1），
-    //      而"按了没动"是诚实的 —— 他能看见自己还站在第 1 行，可以按 ← 或换行。
-    eq('第1行c=5 按 ↓ **停住**（末行没有 c=5，不许悄悄挪到 c=1）',
-        stepPos(rows, { r: 1, c: 5 }, 'down'), { r: 1, c: 5 });
-    // 反向：从末行往上，列号同样保持
+    // ⚠️ 满行 → 短行，且末行**没有**那一列（末行只有 c=0/c=1）
+    //
+    // ⚠️⚠️ **这条断言在 2026-10-04 被推翻过一次。**
+    // 它原来锁的是「**停住**」，理由是"悄悄挪列会让『↓ 就是往下』的直觉失效"。
+    // 业主真机报：`[[1 2 3 4 5][1 2 3 4]]` 焦点在 `5` 按 ↓ **没反应**。
+    //
+    // 那条理由**只看了"最后一行"**，漏了残行可以出现在**任何位置**
+    // （搜索过滤后、封面收敛后、任何非列数整数倍的数据量）。
+    // 一旦残行在中间，"按 ↓ 停住"就变成**在网格中间卡死** ——
+    // 用户按 ↓ 看到焦点不动会以为程序坏了，而下面明明有格子。
+    //
+    // ⇒ 正解是**投影到目标行的末格**：`min(列号, 目标行长度−1)`。
+    // 「↓ 是往下」这个直觉要求的恰恰是**焦点确实往下走了**，停在原地才是背离直觉的那一个。
+    eq('第1行c=5 按 ↓ 落到末行**末格** c=1（投影，不卡住）',
+        stepPos(rows, { r: 1, c: 5 }, 'down'), { r: 2, c: 1 });
+    // 反向对称：从末行往上，列号同样投影
     eq('末行c=1 按 ↑ 回到第 1 行第 2 格',
         stepPos(rows, { r: 2, c: 1 }, 'up'), { r: 1, c: 1 });
+    // ⚠️ 末行c=0 按 ↑：第 1 行有 c=0 ⇒ 不投影
+    eq('末行c=0 按 ↑ 回到第 1 行第 1 格（上一行有这一列，不投影）',
+        stepPos(rows, { r: 2, c: 0 }, 'up'), { r: 1, c: 0 });
+
+    // ★ 残行在**中间**才是真正的坑（业主没提，但更严重）：搜索过滤后就会出现
+    const mid = [['a', 'b', 'c', 'd', 'e', 'f'], ['g', 'h'], ['i', 'j', 'k', 'l', 'm', 'n']];
+    eq('残行在中间：c=5 按 ↓ 落到短行末格 c=1（不停住）',
+        stepPos(mid, { r: 0, c: 5 }, 'down'), { r: 1, c: 1 });
+    eq('残行在中间：短行 c=1 按 ↓ 落到满行 c=1（恢复原列）',
+        stepPos(mid, { r: 1, c: 1 }, 'down'), { r: 2, c: 1 });
+    eq('残行在中间：满行 c=4 按 ↑ 落到短行末格 c=1（↑ 同样投影）',
+        stepPos(mid, { r: 2, c: 4 }, 'up'), { r: 1, c: 1 });
+
+    // ★ 真正的边界不能被投影吃掉：已在最后一行 ⇒ 停住
+    eq('末行按 ↓ 停住（真边界）', stepPos(rows, { r: 2, c: 1 }, 'down'), { r: 2, c: 1 });
+    eq('首行按 ↑ 停住（真边界）', stepPos(rows, { r: 0, c: 3 }, 'up'), { r: 0, c: 3 });
+
+    // ★ 左右**不投影**：横向越界是"这一行到头了"，与纵向语义不同
+    eq('第0行c=5 按 → 停住（横向不投影）', stepPos(rows, { r: 0, c: 5 }, 'right'), { r: 0, c: 5 });
+    eq('末行c=1 按 → 停住（末行到头）', stepPos(rows, { r: 2, c: 1 }, 'right'), { r: 2, c: 1 });
+    eq('第0行c=0 按 ← 停住（首列）', stepPos(rows, { r: 0, c: 0 }, 'left'), { r: 0, c: 0 });
+    //短行的第 0 格按 → 正常走
+    eq('短行c=0 按 → 到c=1（短行内正常横移）', stepPos(mid, { r: 1, c: 0 }, 'right'), { r: 1, c: 1 });
 }
 
 // ─────────────────── R6 · 退化输入：空 / 单行 / 单元素 ───────────────────
@@ -171,7 +203,7 @@ console.log('\n—— R6 退化输入 ——');
     eq('空网格 → posOf 为 null', posOf([], 'x'), null);
     eq('空网格 → firstVisibleKey 为空串', firstVisibleKey([], [], 500), '');
 
-    const one = groupRows([{ key: 'only', top: 0 }]);
+    const one = groupRows([{ key: 'only', rowTop: 0 }]);
     eq('单元素 → 1 行 1 格', one, [['only']]);
     const p = { r: 0, c: 0 };
     eq('单元素：四个方向全部不动（唯一格是所有方向的边界）',
@@ -194,7 +226,7 @@ console.log('\n—— R7 posOf：同一批 key 在不同列数下坐标不同（
      */
     const flat = (cols, total) => {
         const out = [];
-        for (let i = 0; i < total; i++) out.push({ key: `k${i}`, top: Math.floor(i / cols) * ROW_H });
+        for (let i = 0; i < total; i++) out.push({ key: `k${i}`, rowTop: Math.floor(i / cols) * ROW_H });
         return out;
     };
     const six = groupRows(flat(6, 18));

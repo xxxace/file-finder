@@ -32,7 +32,9 @@
    ⚠️⚠️ **最容易漏的一类：探针的输出文件**（`docs/probes/*/out*.txt`）——它们是**机器生成**的，
    会把临时目录/库路径连同**当前用户名**一起打出来（2026-10-04 抓到 4 处）。**根治不是事后手改证据文件，
    而是改探针让它别打绝对路径**（删掉那个字段、或换成 `%USERPROFILE%` 占位），然后重跑。
-   提交前必扫：`73116`、`<盘符>:\\Users`、`AppData`。
+   提交前必扫：**当前用户名**（`echo $USERNAME` / `%USERNAME%` 取动态值 —— ⚠️ 别把字面值写进这一行，
+   写进来这条规则自己就成了泄漏源）、`<盘符>:\\Users`、`AppData`。
+   ⚠️ 扫描必须 `git status --porcelain **-uall**` —— 默认把未跟踪**目录**列成一项，目录里的文件会全漏。
    ⚠️ 遗留未清（等他定）：`HEAD` 12 个文件含真实标识、都不是当轮新增（最重 `PRD-manager-assistant-2026-09-25.md`、`CODE-REVIEW.md`）。**不擅动别的会话的文档。**
 
 ## 四、文档索引
@@ -62,6 +64,10 @@
 - 根目录 `searchCache.db` = **主人主动备份**（09-24·78.6MB，已过期）⇒ 保留；真库在 `%USERPROFILE%\.file-finder\`（10-02·92MB）。基线 `5 盘 · 218 记录(216 cover) · 1471 条目`。
 - 视频扩展名单一真相源 `electron/server/videoExt.ts`；改它要同步 `index.vue` 的 `VIDEO_EXT_RE` 并重启 dev。
 - **已落地**：面板 A/B/C · P0+P1+P2 · 加密备份还原 · 离线只读浏览(待目视) · 头部+导航(待目视) · 助手 Phase1+2A+5(未全验) · **缓存面板盘筛选 下拉→盘条 chips**(2026-10-04，见 `docs/DESIGN-DISK-FILTER-2026-10-04.md`；只显示有缓存的盘 + `stats.disks` 同改 + 「打开存放文件夹」移入「备份与迁移」；`n-tooltip` 真机观感待目视) · **预览层 上一条/下一条 + 定位到网格**(2026-10-04，见 `docs/DESIGN-PREVIEW-NAV-2026-10-04.md`；`n-image-group` srcList 模式 + `provide(imageContextKey)`；探针 `docs/probes/preview-nav/` 9 断言全过；顺手修掉"预览图双击被处理两次"的既有缺陷)。**待重启 dev 后目视**：文件夹 size · 预览抢点击 · 四条（窗口/右键去后缀/角标/标题）· 盘条 chip 悬浮提示 · 预览层定位与名称排版 · 网格 384 观感/停住换清晰的手感/离线看大图/zip 备份还原。**2026-10-04 已落地**：**缓存大图 + 缩略图出库**（`docs/DESIGN-PREVIEW-CACHE-2026-10-04.md`；探针 `probes/thumb-tier`、`probes/bin-migrate`）。
+- **2026-10-05 已落地**：**多文件弹层重做 + 返回后滚动串屏修复**（`docs/FIX-2026-10-05-popup-and-scroll.md`；探针 `probes/popup-visual/`）。
+  ⚠️ 弹层丑的根因＝**网格的 CSS 漏进弹层**（`.image-box-item, .file-item` 同选择器）⇒ 已按「谁的属性谁持有」**拆成三块**（`.file-item` 现在一个 `!important` 都没有）；
+  串屏根因＝`onBack` 那句 `if (to.scrollY)` ⇒ **记 0 时整段被跳过、容器不自己归零**⇒ 改成**无条件恢复**。
+  另：`返回` 扩成 `>1 返回 / ==1 清空`（`clearNav = setRoot('')`，**只换文案不加图标**⇒头部宽度不动；⚠️ **绝不挂 Backspace** —— 「门槛 ∝ 不可逆 × 波及面」）；`emptyTip` 补"还没选文件夹"（原来无栈时返回空 ⇒ 清空后纯空白）。
 - n-space 重复 key 已修；`.toolbar{flex-wrap:nowrap}` + `.header-bar .n-input{width:200px}` **两条不许删**。
 
 ## 六、待他动作

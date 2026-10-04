@@ -1,0 +1,40 @@
+
+—— R0 从 index.vue 抽真源码 ——
+  onBack         抽取 3535 字符
+  waitForGridOf  抽取 1059 字符
+  PASS  两个函数都抽到了（没被改名/重构）   → 3535 / 1059
+(electron) 'console-message' arguments are deprecated and will be removed. Please use Event<WebContentsConsoleMessageEventParams> object instead.
+[page] %cElectron Security Warning (Insecure Content-Security-Policy) font-weight: bold; This renderer process has either no Content Security
+  Policy set or a policy with "unsafe-eval" enabled. This exposes users of
+  this app to unnecessary security risks.
+
+For more information and help, consult
+https://electronjs.org/docs/tutorial/security.
+This warning will not show up
+once the app is packaged.
+  PASS  ★ 抽出的源码能编译（R1 冒烟）   → true
+
+—— R0b 直接调用 waitForGridOf 看它到底为什么不成立 ——
+  {"fileList0":{"dir":"D:/sample/A","name":"k000"},"elKey":"D:/sample/A/k000","keyOfFirst":"D:/sample/A/k000","domCount":30,"typeofWait":"function","returned":false,"err":null}
+  FAIL  ★ waitForGridOf 在"DOM 已就位"时应当返回 true   → returned=false err=null
+
+—— R2 ★ A（滚到 800）→ 进 B → B 里滚动 → 返回 A ——
+  A 离开时 scrollTop = 800
+  在 B 里滚到        = 1186
+  返回 A 之后        = 1186（内容高 1586，可滚 1186）
+  history            = [{"path":"D:/sample/A","scrollY":800}]
+  诊断消息           = [{"type":"warning","title":"诊断：未就位","msg":"记=800 现=1186"}]
+  FAIL  ★ **返回 A 后必须回到 800**（这就是主人报的场景）   → 实际 1186，期望 800
+
+—— R3 对照：A 没滚动（scrollY=0）⇒ 那条"看起来正常"的路 ——
+  返回后 scrollTop = 900
+  FAIL  ★ 没滚动过 ⇒ 返回后应当停在 0（且**不是靠"跳过分支"实现的**）   → 900
+
+—— R4 快速返回：进 B 后**不等加载完**就返回 ——
+  返回后 scrollTop = 0（内容高 1586）
+  FAIL  ★ 快速返回也要回到 700   → 0
+─────────────────────────────
+2 PASS / 4 FAIL
+
+⚠️ 本探针的已知边界：`fetchFolder` 是**假的**（可控延迟 + 假数据）。
+   真应用里它走 HTTP(:3060)，时序可能不同 ⇒ 结论要标注这一点。

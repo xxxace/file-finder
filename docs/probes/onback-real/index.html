@@ -1,0 +1,132 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8" />
+<style>
+    html { font-size: 204.8px; }      /* 主屏 2048 ⇒ 1rem=204.8px */
+    body { margin: 0; }
+    .image-box {
+        display: flex; flex-flow: row wrap;
+        overflow: hidden auto;
+        justify-content: flex-start; align-content: flex-start;
+        margin-left: -5px; margin-right: -5px;
+        width: 2048px; height: 400px;      /* 刻意做矮 ⇒ 内容可滚 */
+    }
+    .image-box-item {
+        --item-gap: 10px; --item-width: calc(100% / 6); --item-height: 1.5rem;
+        flex-grow: 0; flex-shrink: 0;
+        width: calc(var(--item-width) - var(--item-gap));
+        min-height: 80px !important;
+        height: var(--item-height) !important;
+        max-height: var(--item-height) !important;
+        padding: 0 2px 10px; margin: 10px 5px 0px;
+        border: 1px solid transparent;
+        box-sizing: border-box; position: relative;
+        display: flex; flex-direction: column; justify-content: flex-end; align-items: center;
+    }
+</style>
+</head>
+<body>
+<div class="image-box" id="box"></div>
+<script src="../../../node_modules/vue/dist/vue.global.prod.js"></script>
+<script>
+/* ══════════════════════════════════════════════════════════════════
+   `onBack` 的**真函数体**会被 `run.cjs` 用 `__installOnBack(src)` 注入。
+   ⚠️ 这里所有依赖都写成 `var` —— 挂到 window 才能被 `new Function` 里的
+      自由变量引到（`const`/`let` 在块作用域里不挂 window）。
+   ══════════════════════════════════════════════════════════════════ */
+var { ref, computed, nextTick } = Vue;
+
+/* ── 与被测代码同名的依赖（值都是我造的假环境） ─────────────────── */
+var history = ref([]);
+var dataSource = ref([]);
+var searchText = ref('');
+var fileList = computed(() => dataSource.value.filter(i => !searchText.value || i.name.includes(searchText.value)));
+var imageBox = ref(null);
+var notes = [];                       // 假装是 notify
+var notify = (type, title, msg) => { notes.push({ type, title, msg: String(msg) }); };
+var setCursorKey = () => {};
+var noteIntent = () => {};
+var fetchSeq = 0;
+/** ⚠️ `waitForGridOf` 的真源码里用了 `keyOf` —— 探针环境必须提供它，
+ *   否则那个函数**抛 ReferenceError** ⇒ `onBack` 中途断掉 ⇒ 后面 `scrollTo` 永不执行
+ *   ⇒ 会**误诊成"产品 bug"**（我第一版就是这样：R2 报"停在 1186"，其实是探针缺依赖）。 */
+var keyOf = (item) => item.dir + '/' + item.name;
+
+/** 假数据：`dir` 决定是哪个屏；`count` 决定内容高度 */
+function makeData(dir, count) {
+    // ⚠️ `key` **必须**等于 `dir + '/' + name` —— 与产品的 `keyOf(item)` 同口径。
+    //    我第一版写成了 `dir + '/k' + i`（不补零）而 `name` 是补零的
+    //    ⇒ `el.dataset.key !== keyOf(first)` ⇒ `waitForGridOf` 永远 false
+    //    ⇒ 探针把"自己的数据造错了"表现成"产品没恢复"，差点误诊。
+    return Array.from({ length: count }, (_, i) => {
+        const name = 'k' + String(i).padStart(3, '0');
+        return { key: dir + '/' + name, dir, name, size: 1024, type: 'image' };
+    });
+}
+
+/** 假 fetchFolder：真正把 dataSource 换掉（延迟可控），返回 Promise */
+var FETCH_DELAY = 30;
+var fetchFolder = (path, mode) => {
+    const seq = ++fetchSeq;
+    return new Promise(resolve => {
+        setTimeout(() => {
+            if (seq !== fetchSeq) { resolve('stale'); return; }
+            dataSource.value = makeData(path, path.includes('B') ? 60 : 30);
+            resolve('ok');
+        }, FETCH_DELAY);
+    });
+};
+
+/** 渲染：把 dataSource 铺成真 DOM（模拟模板的 v-for） */
+function render() {
+    const box = imageBox.value;
+    if (!box) return;
+    box.innerHTML = '';
+    for (const it of fileList.value) {
+        const d = document.createElement('div');
+        d.className = 'image-box-item';
+        d.dataset.key = it.key;          // ⚠️ 与 `keyOf(item)` 同口径：dir/name
+        d.textContent = it.name;
+        box.appendChild(d);
+    }
+}
+// Vue 的响应式 → 真 DOM（`watchEffect` 等价于模板重新渲染的时机）
+Vue.watchEffect(() => { void fileList.value; void nextTick(render); });
+
+/** `waitForGridOf` 的**真函数体**也由 run.cjs 注入（它同样是被测代码） */
+
+/** 装 onBack：把源码函数体编译成可调用函数 */
+window.__install = function (onBackSrc) {
+    // ⚠️ 用 `new Function` 编译**源码原样**（不手抄、不改写）。
+    //    自由变量（history / imageBox / …）解析到 window 上的同名 var ⇒ 用的是真依赖。
+    // ⚠️ 拼装方式：`'return (async () => {' + body + '})'` ——
+    //    只能这样包，**不能**写成 `window.x = const f = ...`（那是语法错）。
+    window.__onBack = new Function('return (async () => {' + onBackSrc + '})')();
+    return true;
+};
+
+/** 造一屏：设 history + 铺 DOM + 同步到指定 scrollTop */
+window.__enter = function (path, count, scrollTop) {
+    dataSource.value = makeData(path, count);
+    render();
+    return nextTick().then(() => {
+        if (scrollTop != null && imageBox.value) imageBox.value.scrollTop = scrollTop;
+        return { scrollTop: imageBox.value.scrollTop, max: imageBox.value.scrollHeight - imageBox.value.clientHeight };
+    });
+};
+
+window.__mountBox = function () { imageBox.value = document.getElementById('box'); return true; };
+window.__peek = () => ({
+    scrollTop: imageBox.value ? imageBox.value.scrollTop : -1,
+    max: imageBox.value ? imageBox.value.scrollHeight - imageBox.value.clientHeight : -1,
+    content: imageBox.value ? imageBox.value.scrollHeight : -1,
+    history: history.value.map(h => ({ path: h.path, scrollY: h.scrollY })),
+    notes: notes.slice(),
+});
+window.__clearNotes = () => { notes.length = 0; return true; };
+window.__setHistory = (arr) => { history.value = arr; return true; };
+window.__ready = true;
+</script>
+</body>
+</html>

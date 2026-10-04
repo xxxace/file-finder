@@ -1,0 +1,157 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8" />
+<style>
+    /* ⚠️ `index.vue` 的等效复制，**按主屏真实尺寸 1:1 搭**：
+       主屏逻辑 2048×1280（见 `docs/probes/win-size/`）⇒ 1rem = 204.8px。
+       外层 `.file-finder{ height:100vh; padding:10px 10px 0; display:flex; column }`
+       + `.header-bar` + `.toolbar` + `.image-box{flex:1}` —— 与产品同构。 */
+    html { font-size: 204.8px; }      /* = clientWidth/10，flexible.ts 的公式 */
+    body { margin: 0; }
+
+    .file-finder {
+        display: flex;
+        flex-flow: column;
+        padding: 10px 10px 0 10px;
+        height: 100vh;
+        box-sizing: border-box;
+    }
+    .header-bar {
+        display: flex; flex-wrap: nowrap;
+        padding: 4px; margin-bottom: 4px;
+        /* 真实头部有 FolderSelector / 面包屑 / 动作区，高度按 n-tag 撑出来的量给 */
+        height: 40px; box-sizing: border-box; background: #f3f4f7;
+    }
+    .toolbar { flex: 0 0 auto; display: flex; gap: 12px; align-items: center; height: 34px; }
+
+    .image-box {
+        flex: 1;
+        display: flex;
+        flex-flow: row wrap;
+        overflow: hidden auto;
+        justify-content: flex-start;
+        align-content: flex-start;
+        margin-left: -5px;
+        margin-right: -5px;
+    }
+    .image-box-item {
+        --item-gap: 10px;
+        --item-width: calc(100% / 6);
+        --item-height: 1.5rem;
+        display: flex; flex-direction: column;
+        flex-grow: 0; flex-shrink: 0;
+        width: calc(var(--item-width) - var(--item-gap));
+        min-height: 80px !important;
+        height: var(--item-height) !important;
+        max-height: var(--item-height) !important;
+        padding: 0 2px 10px;
+        margin: 10px 5px 0px;
+        border: 1px solid transparent;
+        justify-content: flex-end; align-items: center;
+        box-sizing: border-box; position: relative;
+        transition: border-color .1s ease-in-out, box-shadow .1s ease-in-out,
+            background-color .1s ease-in-out, transform .18s cubic-bezier(.2, .9, .3, 1.1);
+    }
+    .image-box-item.cursor {
+        border-color: #2080f0;
+        background-color: rgba(110, 123, 173, .16);
+        box-shadow: 1px 0 10px rgba(122, 141, 169, .15);
+        transform: scale(1.012);
+        z-index: 1;
+    }
+    .ph { width: 100%; height: calc(100% - 36px); background: #ccc; }
+</style>
+</head>
+<body>
+<div class="file-finder">
+    <div class="header-bar"></div>
+    <div class="toolbar"></div>
+    <div class="image-box" id="box"></div>
+</div>
+<script>
+window.__build = function (n) {
+    const box = document.getElementById('box');
+    box.innerHTML = '';
+    for (let i = 0; i < n; i++) {
+        const d = document.createElement('div');
+        d.className = 'image-box-item';
+        d.dataset.key = 'k' + i;
+        const ph = document.createElement('div'); ph.className = 'ph';
+        d.appendChild(ph);
+        d.appendChild(document.createTextNode('k' + i));
+        box.appendChild(d);
+    }
+    return true;
+};
+window.__setCursor = function (idx) {
+    const box = document.getElementById('box');
+    Array.from(box.querySelectorAll('.image-box-item')).forEach((el, i) => {
+        el.classList.toggle('cursor', i === idx);
+    });
+    return true;
+};
+
+/** 每一行：{r, top, 完整可见?, 露出多少%, 需要滚动才完整?} */
+window.__rowReport = function () {
+    const box = document.getElementById('box');
+    const br = box.getBoundingClientRect();
+    const cells = Array.from(box.querySelectorAll('.image-box-item')).map(el => ({
+        key: el.dataset.key,
+        top: el.getBoundingClientRect().top,
+        bottom: el.getBoundingClientRect().bottom,
+        h: el.getBoundingClientRect().height,
+    }));
+    // 视觉分行（用 offsetTop 避开 transform 污染）
+    const byOffset = new Map();
+    Array.from(box.querySelectorAll('.image-box-item')).forEach(el => {
+        const o = el.offsetTop;
+        if (!byOffset.has(o)) byOffset.set(o, []);
+        byOffset.get(o).push(el.dataset.key);
+    });
+    const rowTops = Array.from(byOffset.keys()).sort((a, b) => a - b);
+    return {
+        viewTop: br.top, viewBottom: br.bottom, viewH: br.height,
+        scrollTop: box.scrollTop, scrollHeight: box.scrollHeight, maxScroll: box.scrollHeight - br.height,
+        rowH: cells.length ? cells[0].h : 0,
+        rows: rowTops.map((o, r) => {
+            const first = cells.find(c => c.key === byOffset.get(o)[0]);
+            return {
+                r, n: byOffset.get(o).length,
+                top: first.top, bottom: first.bottom,
+                fullyVisible: first.top >= br.top - 0.5 && first.bottom <= br.bottom + 0.5,
+                visiblePct: Math.max(0, Math.min(1,
+                    (Math.min(first.bottom, br.bottom) - Math.max(first.top, br.top)) / first.h)) * 100,
+            };
+        }),
+    };
+};
+
+window.__scrollToRow = function (r) {
+    const box = document.getElementById('box');
+    const els = Array.from(box.querySelectorAll('.image-box-item'));
+    const offs = Array.from(new Set(els.map(e => e.offsetTop))).sort((a, b) => a - b);
+    const el = els.find(e => e.offsetTop === offs[r]);
+    el.scrollIntoView({ block: 'nearest' });
+    return true;
+};
+
+/**
+ * ★ 复刻 `useGridCursor.focusCursor` 的**完整**行为：设焦点 + `scrollIntoView({block:'nearest'})`。
+ *    上一版探针只设 class、不调 scrollIntoView ⇒ 量不到"跨过视口边界"这件事。
+ *    ⚠️ `scrollIntoView` 会滚动**所有**可滚祖先（不只 `.image-box`）——
+ *       真实产品里`.file-finder{height:100vh}`，页面本身**不可滚**，
+ *       所以只有 `.image-box` 会滚。探针刻意保持同构，才能量到同一件事。
+ */
+window.__focusCursor = function (idx) {
+    const box = document.getElementById('box');
+    const els = Array.from(box.querySelectorAll('.image-box-item'));
+    els.forEach((el, i) => el.classList.toggle('cursor', i === idx));
+    els[idx].scrollIntoView({ block: 'nearest' });
+    return true;
+};
+
+window.__ready = true;
+</script>
+</body>
+</html>
