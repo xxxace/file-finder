@@ -275,14 +275,14 @@ import { apiUrl, getAction, ApiError } from '@/utils/request';
 import folderIcon from '@/assets/fileTypeIcon/folder.png';
 import usePinYin from '@/hooks/usePinYin';
 import useNotify from '@/hooks/useNotify';
-import { Search, Refresh, FootstepsOutline, ChevronDownOutline, LocateOutline } from '@vicons/ionicons5';
-import { NButton, NInput, NIcon, NImage, NImageGroup, NTag, NPopover, NSpin, NAlert, NTooltip, NDropdown, useLoadingBar, useDialog } from 'naive-ui';
+import { usePreview } from './usePreview';
+import { Search, Refresh, FootstepsOutline, ChevronDownOutline } from '@vicons/ionicons5';
+import { NButton, NInput, NImage, NImageGroup, NTag, NPopover, NSpin, NAlert, NTooltip, NDropdown, useLoadingBar, useDialog } from 'naive-ui';
 import FolderSelector from '@/components/FolderSelector/index.vue';
 import HistoryTable from '@/components/HistoryTable/index.vue';
 import AssistantCoverModal from './AssistantCoverModal.vue';
 import { ipcRenderer } from 'electron';
-import { computed, h, nextTick, onMounted, onUnmounted, provide, ref, watch } from 'vue';
-import type { ImgHTMLAttributes } from 'vue';
+import { computed, nextTick, onMounted, onUnmounted, provide, ref, watch } from 'vue';
 import type { FileInfoFiles, WiredFileInfo } from '../../../electron/server/index';
 import type { OpenMode } from 'electron/server/nedb';
 /**
@@ -385,278 +385,12 @@ const displaySrcOf = (item: WiredFileInfo) => {
     return thumbUrl(item.thumb);
 };
 
-/**
- * 预览层当前该显示哪张图：**停住之后能升级就升级**。
- *
- * 2026-10-04 改：原来升级那一档是"直接读 `/raw` 原图"（每次打开都真读一次移动硬盘，
- * 而且 `/raw` 连一个缓存头都没有 ⇒ 同一张图重复打开也照读）。现在改成
- * **先探一次 `/preview`**：本地有大图就几乎瞬时换上；没有才由服务端读一次原图、
- * 生成并存下来（**只此一次**，之后连请求都被浏览器缓存挡住）。
- * 离线因此也能看到清晰版（只要看过一次）。
- */
-const previewSrcOf = (item: WiredFileInfo) => {
-    if (keyOf(item) !== sharpKey.value) return displaySrcOf(item);
-    return previewUrlOf(item) || displaySrcOf(item);
-};
-
-/**
- * ── 预览层（上一条 / 下一条 + 定位）的状态 ─────────────────────────────────────
- *
- * **只有 `previewKey` 是可写的** —— 它是"正在看哪一条"的唯一真相；索引、是否打开、
- * 有没有升级成原图，全部从它派生。本项目一直是这个手法（`currentPath → crumbs`、
- * `dataSource + searchText → fileList`），好处也一样：
- * 列表一变（刷新 / 盘插拔 / 换目录 / 搜索），**不可能**留下"索引指向了别的条目"这种
- * 脱钩状态 —— 条目没了 ⇒ 索引算出来是 -1 ⇒ 预览层自己关掉，不需要任何同步代码。
- */
-const previewKey = ref('');
-/** 已经升级成原图的那一条（见 previewSrcOf）。换条目 / 关预览就清空 */
-const sharpKey = ref('');
-/** 「定位」之后被描边闪一下的那一条（值 = `keyOf`）。空串 = 没有 */
-const locatedKey = ref('');
-
-/**
- * 预览序列：与网格**同序**的每一条 + 它要显示的图。
- * **一个数组装一对**，不拆成两个平行数组 —— "长度必须相等"是没有任何类型约束的隐式不变量
- * （本项目在导航栈上正是吃过这个亏，见 `NavEntry` 的注释）。
- *
- * 谁在序列里：网格里**有图可显示**的条目 —— 图片 / 视频 / 目录（含会话里的每一格，
- * 因为主人要的是"上一条 / 当前 / 下一条"，序列必须与网格逐格一致，否则「定位」对不上）。
- * 非图片类文件不进序列：预览层能给的只有 `<img>`，而网格里那些文件用的是
- * `file-icon-vectors` 的**字体图标**（CSS 类 `fiv-icon-*`），塞不进 img；何况它们今天
- * 本来也没有"点开"的入口（卡片上那个 `div.file-cover` 不是 n-image）⇒ 保持现状。
- * naive-ui 的上一张/下一张天然跳过空 url（`ImageGroup.mjs:96-115`），所以它们只是不被翻到。
- */
-const previewEntries = computed(() =>
-    fileList.value
-        .map(file => ({ file, key: keyOf(file), src: previewSrcOf(file) }))
-        .filter(e => !!e.src),
-);
-/** 交给组的 `src-list`（顺序 = 网格顺序） */
-const previewSrcList = computed(() => previewEntries.value.map(e => e.src));
-/** 当前索引。算不出来（条目没了）= -1 ⇒ 预览层自动关 */
-const previewIndex = computed(() => previewEntries.value.findIndex(e => e.key === previewKey.value));
-/** 正在看的那一条（= `{ file, key, src }`；空对象 = 没在看） */
-const previewEntry = computed(() => previewEntries.value[previewIndex.value]);
-/** 正在看的那条文件本体（模板与工具条读名字/类型都走它，免得各处写一遍 `.file`） */
-const previewFile = computed(() => previewEntry.value?.file);
-const previewOpen = computed(() => previewIndex.value >= 0);
-
-/** 关预览层。`previewOpen` 是派生的，所以"关"就是把 key 清掉 —— 只此一处 */
-const closePreview = () => { previewKey.value = ''; };
-
-/** naive-ui 的 ✕ / Esc / 点遮罩都会发这个事件 —— 统一落回 closePreview，不各写一遍 */
-const onPreviewShowChange = (v: boolean) => { if (!v) closePreview(); };
-
-/**
- * `← →` 键或工具条上那两颗箭头：naive-ui 算好新索引后发回来，这里把它**落回 key**。
- * 刻意不存索引 —— 存索引就等于把"列表不变"当成前提了。
- */
-const onPreviewCurrentChange = (i: number) => {
-    const e = previewEntries.value[i];
-    if (e) previewKey.value = e.key;
-};
-
-/**
- * 点网格里那张图 = 打开预览层（n-image 自己的预览已被 `preview-disabled` 挡住，见模板注释）。
- */
-const openPreview = (item: WiredFileInfo) => {
-    // 「换封面」模式下单击格子是"选中 / 取消"，那时不弹预览（与原行为一致）
-    if (picking.value) return;
-    const e = previewEntries.value.find(x => x.key === keyOf(item));
-    if (e) previewKey.value = e.key;
-};
-
-/**
- * 「定位」：关预览 → 网格滚到那一格 → 描边闪一下。
- *
- * 滚动手法是 `scrollIntoView`（`.image-box` 就是它最近的滚动祖先，`overflow: hidden auto`）。
- * 找格子用 `:data-key` 比对，**不用 CSS 选择器拼字符串** —— 目录名里什么字符都可能有
- * （引号 / 方括号 / 空格），拼选择器迟早炸；dataset 比较不吃这一套。
- *
- * ⚠️ 先关再滚：留着遮罩的话，滚动结果被盖住，等于没定位。
- */
-const locateInGrid = () => {
-    const k = previewKey.value;
-    const box = imageBox.value;
-    if (!k || !box) return;
-    const card = Array.from(box.querySelectorAll<HTMLElement>('.image-box-item'))
-        .find(el => el.dataset.key === k);
-    closePreview();
-    if (!card) return;
-    locatedKey.value = k;
-    card.scrollIntoView({ block: 'center', behavior: 'smooth' });
-    window.setTimeout(() => { if (locatedKey.value === k) locatedKey.value = ''; }, 1200);
-};
-
-/**
- * 「停住 0.3 秒才去换成清晰的那张」。
- *
- * 先 `new Image()` 把它拉进浏览器缓存，再让 `src-list` 换成 `/preview` 的地址 ——
- * 换 src 时 Vue 会重建那个 `<img>`（naive-ui 给它的 key 就是 src），没预载就会闪一瞬空白。
- * 预载成功才换 ⇒ 无空白的渐进清晰；预载失败（404 / 源读不出来）就停在缩略图上，
- * 不报错、也不留下坏状态。
- *
- * ⚠️ 这一档换的是 `/preview`，**不是 `/raw` 原图**：那条路每次都真读一遍移动硬盘，
- * 而且它连一个缓存头都没有（实测）⇒ 同一张图重复打开也照读。`/preview` 命中本地
- * 缓存时 0 读盘；缺了才读一次源、并**顺手存下来**（只此一次，之后连请求都不发）。
- */
-let sharpTimer: number | undefined;
-watch(previewKey, () => {
-    window.clearTimeout(sharpTimer);
-    sharpTimer = undefined;
-    sharpKey.value = '';
-    const file = previewFile.value;
-    if (!file) return;
-    // 有得升级才升级：视频/离线/服务端还没生成过的那种，探测只会拿到 404
-    const big = previewUrlOf(file);
-    if (!big) return;
-    const k = previewKey.value;
-    sharpTimer = window.setTimeout(() => {
-        // 先把它拉进浏览器缓存，成功了再换 src —— 换 src 时 Vue 会重建那个 <img>
-        // （naive-ui 给它的 key 就是 src），没预载就会闪一瞬空白。
-        // 探测失败（404 / 图读不出来）就**停在缩略图上**：不报错、不留坏状态。
-        const im = new Image();
-        im.onload = () => { if (previewKey.value === k) sharpKey.value = k; };
-        im.src = big;
-    }, 300);
-});
-
-/**
- * 这一条显示的是不是"图标"（目录且没有脸）。
- * 图标**不铺满视口** —— 放大一个文件夹图标没有任何信息增益，只会糊成一片色块。
- * 128px ≈ 网格里那张卡片自己的尺寸（`folder.png` 只有 76×64，网格本来就把它拉到 ~210px，
- * 这里给的倍率还更低）。
- */
-const isIconEntry = computed(() => {
-    const f = previewFile.value;
-    return !!f && f.type === 'folder' && !f.avatar;
-});
-
-/** 上一次已处理的预览图双击事件（同一个事件只处理一次，见下面 onDblclick 的说明） */
-let lastPreviewDblclick: MouseEvent | null = null;
-
-/**
- * 预览面板里的图按比例**填满视口** —— 打开就是大的，不用再去点工具栏的放大。
- *
- * 为什么需要：预览那张 img 的脚手架样式**只有 `max-width/max-height`、没有 `width/height`**
- * （`.n-image-preview`）⇒ 它按**自然尺寸**显示。图片走 /raw 原图本来就比视口大，看不出问题；
- * 但视频的预览图是 480px 宽的抽帧，在 1920 的窗口里就只有一个小方块。
- * 这里用 naive-ui 给预览图留的正规入口 `previewed-img-props` 补上 100% × 100% + contain：
- * contain 保证不变形，脚手架自带的 max-* 会把二者钳到 (100vw-32) × (100vh-32)
- * ⇒ **那圈边距不是我们另设的魔法数字**。
- *
- * ⚠️ 它现在必须**由本组件 provide 进 `imageContextKey`**：预览层改由 `n-image-group` 渲染后，
- * 父链是 `ImagePreview ← ImageGroup ← 本组件`，而 naive-ui 没给 group 留这个 prop。
- * 不 provide 就会同时丢掉"铺满"和下面那个"双击穿透"两件已实测的特性。
- *
- * 代价与实测数据见 `docs/DESIGN-PREVIEW-BAR-2026-10-04.md` §五、`docs/probes/preview-fill/`。
- */
-const previewedImgProps = computed<ImgHTMLAttributes>(() => ({
-    style: isIconEntry.value
-        // 图标：原尺寸居中（`margin:auto` + 外面的 flex 居中），不放大
-        ? { height: '128px', width: 'auto', objectFit: 'contain' as const }
-        : { width: '100%', height: '100%', objectFit: 'contain' as const },
-
-    /**
-     * 双击**预览图** = 「关掉预览 + 把这一下双击还给下面那张卡片」。
-     *
-     * 为什么必须有：卡片是**双击**打开（打开那部视频 / 弹出多部组成的文件列表），
-     * 而上面那行 `width/height: 100%` 把预览图撑成**铺满视口**且 `pointer-events: all`
-     * （`.n-image-preview` 是 `all`，外包一层是 `none`）⇒ 预览一开，**双击的第二下就落在预览图上**，
-     * 卡片的 `dblclick` 再也收不到。后果：多部组成的封面**弹不出文件列表**；
-     * 而卡片那条路打开的是 `files.find(VIDEO_EXT_RE)` ⇒ **永远第一部片子**。
-     *
-     * 走naive-ui 给的正规入口（`handlePreviewDblclick` 会先把事件转给我们，不新增机制），
-     * 两件事都走**已有的路**：① 关预览 —— 点它自己的遮罩（遮罩在图的**下面**，鼠标够不到，
-     * 这也是为什么只剩 ✕ / Esc 能关）；② 还事件 —— 按坐标找出那张卡片 `dispatchEvent` 双击。
-     * 代价：预览图本身的双击放大没了（工具条里那颗「原始大小」照旧在，功能没少）。
-     *
-     * ⚠️ 这个回调会被调**两次**（实测：修前 2、修后 1，见 `docs/probes/preview-nav/`）——
-     * `mergeProps` 对**两边都有**的 `onXxx` 会合并成数组、**两个都调**，
-     * 且 `handlePreviewDblclick` 内部**又**显式调一次我们的 onDblclick ⇒ 两条路都到我们这儿。
-     * 修法用**事件同一性**（同一个 `MouseEvent` 只处理一次），而不是去猜哪条路先到 ——
-     * 两条路的先后顺序是 naive-ui 的内部实现细节，不该当成前提。
-     */
-    onDblclick: (e: MouseEvent) => {
-        if (e === lastPreviewDblclick) return;
-        lastPreviewDblclick = e;
-        document.querySelector<HTMLElement>('.n-image-preview-overlay')?.click();
-        const card = document
-            .elementsFromPoint(e.clientX, e.clientY)
-            .find(el => el instanceof HTMLElement && el.classList.contains('image-box-item'));
-        card?.dispatchEvent(new MouseEvent('dblclick', {
-            bubbles: true, cancelable: true, clientX: e.clientX, clientY: e.clientY,
-        }));
-    },
-}));
-provide(imageContextKey, { previewedImgPropsRef: previewedImgProps });
-
-/**
- * 预览工具条：**把「下载」那颗去掉**，其余原样。
- *
- * naive-ui 的工具条是写死的（旋转×2 / 原始大小 / 缩放×2 / 下载 / 关闭），**没有单独的开关**；
- * 官方留的口子就是 `render-toolbar` ⇒ 这里是"用官方入口少渲染一颗"，不是 CSS 藏节点。
- *
- * 为什么必须去掉：
- *   ① 误触 —— 它紧挨着「关闭」（✕ 的左邻），而预览图铺满视口、点图外关不掉（遮罩在图的下面），
- *      用户只能去点工具条 ⇒ 老是点到它（本次用户反馈）；
- *   ② 它真的读移动硬盘 —— 下载的就是 `/raw` 那条原图，和「少碰移动硬盘」这条第一目标直接冲突。
- * 顺带：工具条从此只做"看"，不做"取"。
- *
- * ⚠️ 2026-10-04 新增的三样（**原有 6 颗一颗没动，✕ 仍在最右** —— 上次那个误触的教训）：
- *   ① 「定位」：关预览 + 网格滚到那一格 + 闪一下（= 回车键同款动作）；
- *   ② `nodes.prev` / `nodes.next`：工具条 `nodes` 里**本来就有**这两颗（只是默认只在 `onPrev`
- *      存在时才渲染；本组件自己排 render-toolbar，所以一直拿得到）—— 用官方节点，
- *      不自己画箭头、不自己接键盘；
- *   ③ 名称 + 计数（`3 / 24`）。名称取 `item.name`，与**网格里那行字逐字相同**：
- *      两个视图里的"同一条"必须看起来就是同一条（封面条目的名字是封面图名，这里也一样）。
- *
- * ⚠️ 名称/计数的样式必须**内联**：这块 DOM 由 naive-ui 渲染并 teleport 到 body，
- * 本组件的 `<style scoped>` 够不到它（scoped 只作用于本组件模板里的元素）。
- */
-const PREVIEW_NAME_STYLE = 'margin-right: 10px; max-width: min(46vw, 720px); overflow: hidden; text-overflow: ellipsis; white-space: nowrap;';
-const PREVIEW_COUNT_STYLE = 'font-size: 13px; opacity: .55; white-space: nowrap;';
-/** 工具条里那两个分组的外壳。只用 `margin-left:auto` 分左右，不改 naive-ui 的 `justify-content`。 */
-const PREVIEW_GROUP_STYLE = 'display: flex; align-items: center;';
-const PREVIEW_GROUP_LEFT_STYLE = `${PREVIEW_GROUP_STYLE} min-width: 0;`;
-const PREVIEW_GROUP_RIGHT_STYLE = `${PREVIEW_GROUP_STYLE} margin-left: auto;`;
-
-/**
- * 工具条：**左信息（名称 + 计数） · 右操作（全部按钮）**，底板从"居中胶囊"改成**贴底通栏**
- * （业主裁定「下方的空间尽可能利用，别浪费」：内容在 2048 宽下只占 844px，
- * 两侧各空 602px —— 那是浪费掉的底板，不是留白）。
- * 顺序：定位/上一条/下一条排在按钮组**最左**（「在哪 / 看哪条」一组）与旋转缩放分隔
- *（「把这条图怎么变」另一组）；**✕ 保持最右**（见上的误触教训）。
- *
- * 底板与 wrapper 的样式走下面那个**非 scoped** 的 style 块。
- */
-const previewToolbar = ({ nodes }: { nodes: Record<string, any> }) => {
-    const total = previewEntries.value.length;
-    /** 只有一条时"上一条 / 下一条"是空动作（naive-ui 会首尾环绕 = 原地不动）⇒ 不显示，免得像坏了 */
-    const hasNav = total > 1;
-    // 定位：icon 用 ionicons5 的 LocateOutline（准星 = "我在这儿"），tooltip 交给 title
-    const locate = h(NIcon, {
-        size: 28, component: LocateOutline, title: '定位到网格（回车）',
-        style: 'padding: 0 8px; cursor: pointer;',
-        onClick: locateInGrid,
-    });
-    return [
-        // 左：这一条是谁 + 走到第几条
-        h('span', { style: PREVIEW_GROUP_LEFT_STYLE }, [
-            h('span', { style: PREVIEW_NAME_STYLE, title: previewFile.value?.name ?? '' },
-                previewFile.value?.name ?? ''),
-            ...(hasNav ? [h('span', { style: PREVIEW_COUNT_STYLE },
-                `${previewIndex.value + 1} / ${total}`)] : []),
-        ]),
-        // 右：能做什么。✕ 保持最右。
-        h('span', { style: PREVIEW_GROUP_RIGHT_STYLE }, [
-            locate,
-            ...(hasNav ? [nodes.prev, nodes.next] : []),
-            nodes.rotateCounterclockwise, nodes.rotateClockwise, nodes.resizeToOriginalSize,
-            nodes.zoomOut, nodes.zoomIn, nodes.close,
-        ]),
-    ];
-};
+// ── 预览层（上一条/下一条 + 定位 + 渐进清晰）────────────────────────────────
+// ⚠️ 调用点必须在下面 `fileList` / `picking` / `imageBox` 三个声明之后 —— 依赖没准备好就
+//    传进去，composable 拿到的是空壳。真正的声明位置见文件下方「预览域接线」处。
+// ⚠️ `previewedImgProps` 必须由本组件 provide 进 `imageContextKey` —— 预览层由
+//    `n-image-group` 渲染，父链是 `ImagePreview ← ImageGroup ← 本组件`，
+//    而 naive-ui 没给 group 留 `previewed-img-props` 这个 prop。
 
 const dir = ref('');
 const historyTable = ref<typeof HistoryTable | null>(null)
@@ -1506,6 +1240,27 @@ const onMoreSelect = (key: string) => {
 /** 是否处于"挑封面"模式 */
 const picking = ref(false);
 
+// ── 预览域接线 ───────────────────────────────────────────────────────────────
+// 整块搬进 ./usePreview.ts：它是本文件里最独立的一个域（只靠 6 个依赖进来，
+// 不反向写任何外部状态），后续给预览加花样有个自己的家。
+//
+// ⚠️ **接线必须放在这里**（`picking` 声明之后）：`fileList`(L446) / `picking` / `imageBox`(L434)
+// 三个依赖都还没准备好就传进去，composable 拿到的是空壳—— `used before declaration`
+// 这类报错就是顺序错了的信号。
+// ⚠️ 渲染落点仍在组件里：模板里那个空的 `n-image-group`，以及末尾那个**非 scoped** 的
+//    style 块（工具条与图都被 naive-ui teleport 到 body，`<style scoped>` 够不到它们）。
+// ⚠️ `previewedImgProps` 必须由本组件 provide 进 `imageContextKey` —— 预览层由
+//    `n-image-group` 渲染，父链是 `ImagePreview ← ImageGroup ← 本组件`，
+//    而 naive-ui 没给 group 留 `previewed-img-props` 这个 prop。
+const {
+    openPreview, closePreview, locateInGrid, previewKey, locatedKey,
+    previewSrcList, previewIndex, previewOpen, previewFile,
+    onPreviewShowChange, onPreviewCurrentChange,
+    previewToolbar, previewedImgProps, dispose: disposePreview,
+} = usePreview({ fileList, keyOf, displaySrcOf, previewUrlOf, picking, imageBox });
+
+provide(imageContextKey, { previewedImgPropsRef: previewedImgProps });
+
 /**
  * 已选的位置。key 与网格的 `:key` 同口径（`dir + '/' + name`）。
  *
@@ -1663,8 +1418,8 @@ onMounted(() => {
 onUnmounted(() => {
     window.removeEventListener('keyup', onKeyup);
     ipcRenderer.off('ff-disks-changed', onDisksChangedIpc);
-    // 预览层那个"停住 0.3s 才读原图"的计时器：组件没了就别再起来
-    window.clearTimeout(sharpTimer);
+    // 预览层那个"停住 0.3s 才换清晰版"的挂起计时器：组件没了就别再起来
+    disposePreview();
 });
 
 
