@@ -153,11 +153,16 @@
                 :class="{
                     pickable: picking && isPickable(item), picked: isPicked(item),
                     located: locatedKey !== '' && locatedKey === keyOf(item),
+                    opening: opening !== '' && opening === keyOf(item),
                 }"
                 :data-key="keyOf(item)"
                 @click="onItemClick(item)" @dblclick="handleOpen($event, item)"
                 @contextmenu.prevent="onContextMenu($event, item)"
                 :title="item.name + ' ' + getSize(item.size)">
+                <!-- `pointer-events:none` 保住连点两张；`v-if` 而非 `v-show`（只转零点几秒，不值得留 DOM） -->
+                <div v-if="opening !== '' && opening === keyOf(item)" class="opening-mask">
+                    <n-spin :size="20" />
+                </div>
                 <!-- 「换封面」模式下单击格子 = 选中/取消（见 onItemClick）。
                      同时**关掉图片预览** —— 否则一下点下去既弹放大图、又切换选中，两个动作打架。
                      判断"这张糊不糊"靠格子里的图本身（6 列下也有 200~320px），不靠点开大图。
@@ -468,6 +473,14 @@ const crumbFold = computed(() => foldCrumbList(crumbs.value));
 const crumbCount = computed(() => fileList.value.length || null);
 const loading = ref(false);
 /**
+ * 正在双击打开的那一条（`keyOf` 的值）。空串 = 没在开。
+ * 只在只读层置位——只有它有 API 调用；普通双击是纯 IPC，加了反而是噪声。
+ * 存 key 不存 boolean：转的是被点那张卡片，且连点两张时各自转各自的。
+ */
+const opening = ref('');
+/** 打开请求序号。只有「最新那次」有权清 `opening`（否则旧请求回来会关掉新请求的转圈）。 */
+let openSeq = 0;
+/**
  * 上一次取数失败的**分类**。空串 = 没失败。
  *
  * 为什么要分类：失败原来只有一个「打开失败」的 toast，而它会自己消失 ——
@@ -731,7 +744,14 @@ const openFile = async (item: WiredFileInfo | string) => {
     // 解析必须放服务端 —— serial → 盘符 这个映射只有它知道（渲染层刻意不解析锚点内容）。
     // 拿到实时路径之后，"交给系统打开"那一步仍然走主进程，分工一行都没变。
     if (isReadOnlyPath(target)) {
+        // 只有这条分支有 API 调用（`resolveAnchor`）⇒ 按「有 API 才加反馈」判据挂转圈。
+        // popover 分支（item 是字符串）没有卡片可转 ⇒ 不标记。
+        // ⚠️ 序号而非 key：连点两张时，第二次会覆盖 `opening`；若无条件清空，
+        // 第一次的 await 返回会把**第二张**的转圈也关掉。
+        const my = ++openSeq;
+        opening.value = typeof item === 'string' ? '' : keyOf(item);
         const real = await resolveAnchor(target);
+        if (my === openSeq) opening.value = '';
         if (!real) {
             notify('warning', '这块盘现在不在',
                 '插上盘后重新双击就能打开。列表要变成实时的，从「缓存记录」重新打开这一行。');
@@ -1753,6 +1773,25 @@ const onDisksChangedIpc = (_e: unknown, disks: { serial: string; drive: string }
     &.located {
         border-color: #2080f0;
         box-shadow: 0 0 0 2px rgba(32, 128, 240, .45);
+    }
+
+    /* 与 .located 同手法：只改颜色/外发光，不碰盒模型（网格宽度是 margin 算出来的）。 */
+    &.opening {
+        border-color: #2080f0;
+        box-shadow: 0 0 0 2px rgba(32, 128, 240, .45);
+    }
+
+    /* 遮罩与转圈分开两层：`.opening-mask` 负责铺满，`.n-spin` 留在 naive-ui 自己的定位里
+       （它的根是 `.n-spin-body`，自带 translate(-50%,-50%)；去戳它就得连 transform 一起清）。
+       绝对定位 ⇒ 尺寸跟卡片走、不参与布局（网格宽度是 margin 算出来的）。 */
+    .opening-mask {
+        position: absolute;
+        inset: 0;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        pointer-events: none;
+        background-color: rgba(0, 0, 0, .35);
     }
 
     .pick-badge {

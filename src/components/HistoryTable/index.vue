@@ -155,7 +155,7 @@
             <n-collapse class="migrate-collapse">
                 <n-collapse-item title="备份与迁移" name="migrate">
                     <div class="mi-row">
-                        <n-button size="small" @click="handleBackupToFile">备份到一个文件…</n-button>
+                        <n-button size="small" :loading="backupLoading" @click="handleBackupToFile">备份到一个文件…</n-button>
                         <span class="mi-hint">默认文件名带你今天的日期，位置自己挑 —— 不会被任何东西覆盖</span>
                     </div>
                     <div class="mi-row">
@@ -164,7 +164,7 @@
                         <span class="mi-hint warn">整份替换当前缓存</span>
                     </div>
                     <div class="mi-row">
-                        <n-button size="small" @click="handleMergeCache">合并缓存…</n-button>
+                        <n-button size="small" :loading="bulkLoading" @click="handleMergeCache">合并缓存…</n-button>
                         <span class="mi-hint">只增不删（新增 / 覆盖 / 跳过 会报给你）</span>
                     </div>
                     <!-- 「打开存放文件夹」从顶部挪到这儿（2026-10-04，用户提的）。
@@ -194,7 +194,7 @@
                 <div class="foot-row">
                     <div class="foot-left">
                         <n-button size="small" type="error" :disabled="!checkedRowKeysRef.length"
-                            @click="handleRemove">删除记录</n-button>
+                            :loading="bulkLoading" @click="handleRemove">删除记录</n-button>
                         <span class="sel-hint">
                             {{ checkedRowKeysRef.length
                                 ? `已选 ${checkedRowKeysRef.length} 项（其中 ${checkedOnOtherPages} 项不在本页）`
@@ -485,6 +485,10 @@ const model = ref<HistoryQuery>({
 const showModal = ref(false);
 const loading = ref(false);
 const diskLoading = ref(false);
+/** 备份进行中。不复用 `loading`（那个罩表格，而备份不动列表）。见模板上的对照表。 */
+const backupLoading = ref(false);
+/** 删记录 + 合并缓存共用：两者都改整库，本就不许并发。不复用 `loading`（那个翻页也会置位）。 */
+const bulkLoading = ref(false);
 /**
  * `/getDisks` 回来的原始盘列表（盘条 chips 的数据源）。
  *
@@ -890,6 +894,7 @@ const handleRemove = async () => {
 
 const onRemove = async () => {
     loading.value = true;
+    bulkLoading.value = true;
 
     try {
         const ids = toRaw(checkedRowKeysRef.value)
@@ -904,9 +909,11 @@ const onRemove = async () => {
         }, 500)
     } catch (err) {
         notify('error', '错误', `删除失败:${err}`)
+    } finally {
+        // `finally` 而非裸语句：这里原来是裸的，flag 停在 true 就再也点不动了
+        loading.value = false;
+        bulkLoading.value = false;
     }
-
-    loading.value = false;
 }
 
 // ⚠️ 这里原来还有一个「备份」按钮（`handleDriveBackup` / `onDriveBackup` → DELETE `/backup`）：
@@ -958,11 +965,15 @@ const handleBackupToFile = async () => {
     const file = await pickPath('pickCacheSavePath');
     if (!file) return;
 
+    // n-button 的 `loading` 自带禁用 ⇒ 不用另写 `:disabled`，也就不会出现「转着圈还能再点一次」
+    backupLoading.value = true;
     try {
         await postAction(API_BASE + '/backupToFile', { path: file });
         notify('success', '成功', `已备份到 ${file}`)
     } catch (err) {
         notify('error', '错误', `备份失败：${err}`)
+    } finally {
+        backupLoading.value = false;
     }
 }
 
@@ -1027,6 +1038,7 @@ const handleMergeCache = async () => {
     if (!file) return;
 
     loading.value = true;
+    bulkLoading.value = true;
     let result: { added: number; replaced: number; skipped: number } | null = null;
     try {
         result = await postAction(API_BASE + '/mergeCache', { path: file });
@@ -1034,6 +1046,7 @@ const handleMergeCache = async () => {
         notify('error', '合并失败', `${err}`)
     } finally {
         loading.value = false;
+        bulkLoading.value = false;
     }
 
     if (!result) return;
