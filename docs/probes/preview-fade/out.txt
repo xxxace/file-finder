@@ -1,0 +1,23 @@
+== 1/2 用项目自带 vite 打一个探针 bundle（要拿到 naive-ui 的 ImageGroup 真实实现）==
+
+== 2/2 真 Chromium 跑探针（mode=buggy）==
+
+PASS  网格里有 3 张卡  — 找到第 2 张
+PASS  打开后 preview 层在场且 src 非空  — {"exists":true,"src":"data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAAC0lEQVR42mP8/x8AAwMCAO+ip1sAAAAASUVORK5CYII=","display":"block"}
+FAIL  淡出期间 src 始终非空  — ✗ 有 6/6 帧 src 为空（属性不存在）
+PASS  动画结束后预览层已卸载  — DOM 已移除
+PASS  重新打开同一条仍能打开  — {"exists":true,"src":"data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAAC0lEQVR42mP8/x8AAwMCAO+ip1sAAAAASUVORK5CYII=","display":"block"}
+== 4 PASS / 1 FAIL ==
+
+== 探针汇总（buggy）：4 PASS / 1 FAIL ==
+
+== 2/2 真 Chromium 跑探针（mode=fixed）==
+
+PASS  网格里有 3 张卡  — 找到第 2 张
+PASS  打开后 preview 层在场且 src 非空  — {"exists":true,"src":"data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAAC0lEQVR42mP8/x8AAwMCAO+ip1sAAAAASUVORK5CYII=","display":"block"}
+PASS  淡出期间 src 始终非空  — 6 帧全有 src（首个 = data:image/png;base64,iV…）
+PASS  动画结束后预览层已卸载  — DOM 已移除
+PASS  重新打开同一条仍能打开  — {"exists":true,"src":"data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAAC0lEQVR42mP8/x8AAwMCAO+ip1sAAAAASUVORK5CYII=","display":"block"}
+== 5 PASS / 0 FAIL ==
+
+== 探针汇总（fixed）：5 PASS / 0 FAIL ==

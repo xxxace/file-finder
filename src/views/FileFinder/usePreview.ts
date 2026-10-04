@@ -11,11 +11,16 @@
  *
  * ## 契约：参数进、状态出，**不反向写参数**
  *
- * 入参全是 `Ref` / `ComputedRef`（只读用），返回的 `openPreview` 是唯一写入口。
- * 这一点是刻意的 —— 本项目一贯的「**唯一可写的那一个**」手法：
- * `previewKey` 是"正在看哪一条"的唯一真相，索引 / 是否打开 / 有没有升级成清晰版全部从它派生。
- * 列表一变（刷新 / 盘插拔 / 换目录 / 搜索），**不可能**留下"索引指向了别的条目"这种脱钩状态：
- * 条目没了 ⇒ 索引算出来是 -1 ⇒ 预览层自己关掉，**不需要任何同步代码**。
+ * 入参全是 `Ref` / `ComputedRef`（只读用），返回的 `openPreview` / `closePreview` /
+ * `locateInGrid` 是全部写入口。
+ *
+ * `previewKey`（"正在看哪一条"）是唯一真相，索引 / 显示哪张图 / 有没有升级成清晰版
+ * 全部从它派生。列表一变（刷新 / 盘插拔 / 换目录 / 搜索），**不可能**留下"索引指向了
+ * 别的条目"这种脱钩状态：条目没了 ⇒ 索引算出来是 -1 ⇒ 预览层自己关掉，**不需要任何同步代码**。
+ *
+ * ⚠️ **唯一的例外是"开不开"**：它不能从 `previewKey` 派生，必须是独立状态 ——
+ * 关闭时 `previewKey` 是**故意留着**的，否则淡出动画期间 naive-ui 会拿到
+ * `src=undefined`，屏幕上出现一个没有 src 的 `<img>`。见 `previewOpenState` 的完整注释。
  *
  * 同族手法：`currentPath → crumbs`、`dataSource + searchText → fileList`。
  */
@@ -49,13 +54,68 @@ export function usePreview(deps: {
 }) {
     const { fileList, keyOf, displaySrcOf, previewUrlOf, picking, imageBox } = deps;
 
-    // ── 状态：只有 previewKey 可写 ───────────────────────────────────────────
-    /** 正在看哪一条（`keyOf` 的值）。空串 = 没在看 */
+    // ── 状态 ────────────────────────────────────────────────────────────────
+    /** 正在看哪一条（`keyOf` 的值）。空串 = 没在看。**唯一真相**：索引、图、清晰版全从它派生。 */
     const previewKey = ref('');
     /** 已经升级成清晰版的那一条。空串 = 没有 */
     const sharpKey = ref('');
     /** 「定位」之后被描边闪一下的那一条。空串 = 没有 */
     const locatedKey = ref('');
+
+    /**
+     * 「停住就升级成大图」的待办计时器。
+     *
+     * ⚠️ 声明放在 `closePreview` **之前**（顺序即依赖，不靠侥幸）：关闭时要掐它，
+     * 而关闭的时机是运行时事件，理论上哪天有人在本文件里加一句"声明时就调一次
+     * closePreview"就会当场 TDZ。这个文件已经吃过一次这种亏（见 installWheelZoom）。
+     */
+    let sharpTimer: number | undefined;
+    /**
+     * 掐掉上面那个待办计时器。
+     *
+     * ⚠️ 关闭时**必须**调它：`/preview` 可能要去读移动硬盘上的原图（见 `previewUrlOf`），
+     * 而计时器是在**关闭之前**就排好的 —— 不掐掉的话"打开后马上关掉"仍会发出那个请求，
+     * 白读一次盘。这是"少读移动硬盘"（第一约束）直接相关的一条。
+     *
+     * 为什么不靠 `watch(previewKey)` 顺带清：关闭时 `previewKey` **故意不变**
+     * （见 `closePreview`），那个 watcher 根本不会触发。
+     */
+    const cancelSharpTimer = () => {
+        window.clearTimeout(sharpTimer);
+        sharpTimer = undefined;
+    };
+
+    /**
+     * 「停住 0.3 秒才去换成清晰的那张」。
+     *
+     * 先 `new Image()` 把它拉进浏览器缓存，再让 `src-list` 换地址 —— 换 src 时 Vue 会重建
+     * 那个 `<img>`（naive-ui 给它的 key 就是 src），没预载就会闪一瞬空白。
+     * 预载成功才换 ⇒ 无空白的渐进清晰；预载失败就停在缩略图上，不报错、也不留坏状态。
+     *
+     * ⚠️ 这一档换的是 `/preview` 大图，**不是 `/raw` 原图**：那条路每次都真读一遍移动硬盘，
+     * 而且它连一个缓存头都没有 ⇒ 同一张图重复打开也照读。
+     *
+     * ⚠️ 声明在 `openPreview` **之前**（顺序即依赖）：`openPreview` 要调它。
+     *
+     * 抽成函数而不是只写在 `watch` 里：关闭时 `previewKey` **故意不变**（见 `closePreview`），
+     * 所以"**重新打开同一条**"不会触发那个 watcher ⇒ 只靠 watcher 的话，重开一张图永远
+     * 停在糊图上（那个 0.3s 计时器在关闭时已被掐掉）。`openPreview` 必须自己再排一次。
+     */
+    const scheduleSharpUpgrade = () => {
+        cancelSharpTimer();
+        sharpKey.value = '';
+        const file = previewFile.value;
+        if (!file) return;
+        // 有得升级才升级：视频 / 离线 / 服务端还没生成过的那种，探测只会拿到 404
+        const big = previewUrlOf(file);
+        if (!big) return;
+        const k = previewKey.value;
+        sharpTimer = window.setTimeout(() => {
+            const im = new Image();
+            im.onload = () => { if (previewKey.value === k) sharpKey.value = k; };
+            im.src = big;
+        }, 300);
+    };
 
     /**
      * 预览层当前该显示哪张图：**停住之后能升级就升级**。
@@ -96,13 +156,42 @@ export function usePreview(deps: {
     const previewEntry = computed(() => previewEntries.value[previewIndex.value]);
     /** 正在看的那条文件本体（模板与工具条读名字/类型都走它） */
     const previewFile = computed(() => previewEntry.value?.file);
-    const previewOpen = computed(() => previewIndex.value >= 0);
+    /**
+     * 预览层开着没有。**独立状态，不是从 `previewKey` 派生的**。
+     *
+     * ⚠️ 为什么必须独立（2026-10-04 修的真缺陷，静态读不出来、只有真机看得见）：
+     * 关闭时若把 `previewKey` 清掉，`previewIndex` 就变 -1 ⇒ `:current="-1"` ⇒
+     * naive-ui `ImageGroup.mjs:78,83` 算出 `currentId=undefined` ⇒ `currentUrl=undefined`
+     * ⇒ `ImagePreview.mjs:561` 的 `src` 变 undefined ⇒ **`<img src=undefined>`**。
+     * 而淡出动画期间 `:564` 的 `vShow` 还让这个 `<img>` 留在场（naive-ui 用 `displayed`
+     * 专门留了这段窗口，见 `ImagePreview.mjs:496`）⇒ 浏览器给无 src 的 img 画那个
+     * 「图片图标 + 空白透明边框」，被用户看到。
+     *
+     * ⇒ 判据：**「关」只该改「开不开」，不该毁掉「开着时是第几条」** —— 后者在
+     * 淡出动画结束前仍是有效输入。
+     *
+     * 仍保留派生：**条目真没了（换目录/搜索/盘拔了）⇒ 索引算成 -1 ⇒ 自动关**，
+     * 不靠任何同步代码（见本文件头部契约）。所以它是「开着 **且** 看得见」。
+     */
+    const previewOpenState = ref(false);
+    const previewOpen = computed(() => previewOpenState.value && previewIndex.value >= 0);
 
-    /** 关预览层。`previewOpen` 是派生的，所以"关"就是把 key 清掉 —— 只此一处 */
-    const closePreview = () => { previewKey.value = ''; };
+    /**
+     * 关预览层。**只翻开关，不清 `previewKey`** —— 淡出动画那 0.2s 里 naive-ui 还要
+     * 照着 `previewKey` 把图算出来（见 `previewOpenState` 那段）。
+     *
+     * 上次看的那条会留在 `previewKey` 里，这是**有意的**：它是"重新打开时看第几条"
+     * 的依据；`previewOpen` 已经是 false，不会因此露出任何东西。
+     */
+    const closePreview = () => {
+        previewOpenState.value = false;
+        // 已经排好的"升级大图"要掐掉：那个请求可能要读移动硬盘上的原图，
+        // 预览都关了还去读就是白读（见 cancelSharpTimer 的注释）。
+        cancelSharpTimer();
+    };
 
     /** naive-ui 的 ✕ / Esc / 点遮罩都会发这个事件 —— 统一落回 closePreview，不各写一遍 */
-    const onPreviewShowChange = (v: boolean) => { if (!v) closePreview(); };
+    const onPreviewShowChange = (v: boolean) => { if (v) previewOpenState.value = true; else closePreview(); };
 
     /**
      * `← →` 键或工具条上那两颗箭头：naive-ui 算好新索引后发回来，这里把它**落回 key**。
@@ -117,7 +206,13 @@ export function usePreview(deps: {
     const openPreview = (item: WiredFileInfo) => {
         if (picking.value) return;
         const e = previewEntries.value.find(x => x.key === keyOf(item));
-        if (e) previewKey.value = e.key;
+        if (!e) return;
+        previewKey.value = e.key;
+        // 开关在这里翻，而不是靠"key 从空变成有值"派生 —— 关的时候 key 是**故意留着**的
+        previewOpenState.value = true;
+        // 同一条重开也要重新排升级：`watch(previewKey)` 只在 key **变化**时跑，而重开同一条
+        // key 没变（见 scheduleSharpUpgrade 的注释）
+        scheduleSharpUpgrade();
     };
 
     /**
@@ -140,33 +235,7 @@ export function usePreview(deps: {
         window.setTimeout(() => { if (locatedKey.value === k) locatedKey.value = ''; }, 1200);
     };
 
-    /**
-     * 「停住 0.3 秒才去换成清晰的那张」。
-     *
-     * 先 `new Image()` 把它拉进浏览器缓存，再让 `src-list` 换地址 —— 换 src 时 Vue 会重建
-     * 那个 `<img>`（naive-ui 给它的 key 就是 src），没预载就会闪一瞬空白。
-     * 预载成功才换 ⇒ 无空白的渐进清晰；预载失败就停在缩略图上，不报错、也不留坏状态。
-     *
-     * ⚠️ 这一档换的是 `/preview` 大图，**不是 `/raw` 原图**：那条路每次都真读一遍移动硬盘，
-     * 而且它连一个缓存头都没有 ⇒ 同一张图重复打开也照读。
-     */
-    let sharpTimer: number | undefined;
-    watch(previewKey, () => {
-        window.clearTimeout(sharpTimer);
-        sharpTimer = undefined;
-        sharpKey.value = '';
-        const file = previewFile.value;
-        if (!file) return;
-        // 有得升级才升级：视频 / 离线 / 服务端还没生成过的那种，探测只会拿到 404
-        const big = previewUrlOf(file);
-        if (!big) return;
-        const k = previewKey.value;
-        sharpTimer = window.setTimeout(() => {
-            const im = new Image();
-            im.onload = () => { if (previewKey.value === k) sharpKey.value = k; };
-            im.src = big;
-        }, 300);
-    });
+    watch(previewKey, scheduleSharpUpgrade);
 
     /** 图标条目**不铺满视口** —— 放大一个文件夹图标没有任何信息增益，只会糊成一片色块 */
     const isIconEntry = computed(() => {
@@ -313,7 +382,7 @@ export function usePreview(deps: {
      * **不返回就是"看不见的全局监听"**，组件没了还会一直拦滚轮。
      */
     const dispose = () => {
-        window.clearTimeout(sharpTimer);
+        cancelSharpTimer();
         removeWheelZoom?.();
     };
 
