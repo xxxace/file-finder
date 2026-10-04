@@ -75,7 +75,7 @@ const App = {
             return {
                 style: fitted
                     ? { width: fitted.w + 'px', height: fitted.h + 'px', objectFit: 'contain' }
-                    : { maxWidth: '100%', maxHeight: '100%', width: 'auto', height: 'auto', objectFit: 'contain' },
+                    : { maxWidth: '100%', maxHeight: '100%', width: 'auto', height: '100%', objectFit: 'contain' },
                 onDblclick: (e) => e.preventDefault(),
             };
         });
@@ -94,12 +94,14 @@ const App = {
         };
         provide(imageContextKey, { previewedImgPropsRef: previewedImgProps });
         const self = {};
-        return { show, current, srcList, previewedImgProps, watchPreviewImgLoad,
+        return { show, current, srcList, previewedImgProps, watchPreviewImgLoad, resetNatural: () => { previewImgNatural.value = null; },
                  get curKey() { return curKey.value; }, set curKey(v) { curKey.value = v; } };
     },
     mounted() { ctl = this; },
     methods: {
         syncKey() { this.curKey = this.current === 0 ? 'portrait' : 'landscape'; },
+        /** 冷启动：把尺寸状态清空（= 应用刚启动、还没量过任何图）。 */
+        resetNatural() { ctl._reset && ctl._reset(); },
     },
     render() {
         return h('div', [
@@ -149,6 +151,24 @@ const run = async () => {
     const box = imgEl.getBoundingClientRect();
     const vw = window.innerWidth, vh = window.innerHeight;
     console.log(`---视口 ${vw}×${vh} / 图 ${Math.round(box.width)}×${Math.round(box.height)} @ ${Math.round(box.left)},${Math.round(box.top)} ---`);
+
+    // ⓪ 【本次新增】首次打开、**还没量到尺寸**的那一瞬，图是否已经是撑满状态？
+    //    判据 = 在**第一次重量之前**量。做法：重新开一次并在 nextTick 内立刻量。
+    // ⚠️ **冷启动模拟**：显式清空尺寸状态（= 刚启动应用、还没打开过任何图时的状态）。
+    //    上一版探针没清 ⇒ 复用了上一次量到的值 ⇒ 测不到「先小后大」这个缺陷。
+    ctl.resetNatural && ctl.resetNatural();
+    document.querySelector('.n-image img').click();
+    await nextFrames(1);                 // 1 帧：DOM 有了，但尺寸还没量
+    const firstBox = document.querySelector('.n-image-preview')?.getBoundingClientRect();
+    console.log(`--- 首帧尺寸 ${firstBox ? Math.round(firstBox.width) + 'x' + Math.round(firstBox.height) : 'N/A'} ---`);
+    await nextFrames(3);
+    window.__watchLoad && window.__watchLoad();
+    await nextFrames(10);
+    const settled = document.querySelector('.n-image-preview').getBoundingClientRect();
+    const jumped = firstBox && (Math.abs(firstBox.width - settled.width) > 2 || Math.abs(firstBox.height - settled.height) > 2);
+    check('⓪ 首次打开无「先小后大」（首帧即已撑满）', !jumped,
+        jumped ? `✗ 首帧 ${Math.round(firstBox.width)}×${Math.round(firstBox.height)} → 稳定后 ${Math.round(settled.width)}×${Math.round(settled.height)}（变大了）`
+               : `首帧与稳定后一致（${Math.round(settled.width)}×${Math.round(settled.height)}）`);
 
     // ① 没有铺满
     const fillsH = box.height >= vh - 2, fillsW = box.width >= vw - 2;

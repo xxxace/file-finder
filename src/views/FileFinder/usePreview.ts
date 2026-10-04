@@ -360,9 +360,14 @@ export function usePreview(deps: {
         return {
             style: fitted
                 ? { width: `${fitted.w}px`, height: `${fitted.h}px`, objectFit: 'contain' as const }
-                // 量不到自然尺寸 ⇒ 交回naive-ui 的原尺寸那一档（不猜尺寸）。
-                // `max-*` 兜住超大图别超出视口。
-                : { maxWidth: '100%', maxHeight: '100%', width: 'auto', height: 'auto', objectFit: 'contain' as const },
+                // ⚠️ **回退档也必须撑满**（`height:100%` 而不是 `auto`）：冷启动时
+                // `previewImgNatural` 还是 null（应用刚启动、没打开过任何图），
+                // 若这里回 `auto` ⇒ 图按**原尺寸**显示，一帧后才撑满 ⇒ **肉眼看到
+                // 「先小后大」**（业主真机报的就是这个；第二次打开不复现，因为那时
+                // 已经有量好的尺寸、压根不走这条回退档）。
+                // `max-*` 兜住别超出可视区。`width:auto` + `height:100%` ⇒ 竖图贴满高、
+                // 横图则由 `max-width` 收着⇒ 两个方向都不超。
+                : { maxWidth: '100%', maxHeight: '100%', width: 'auto', height: '100%', objectFit: 'contain' as const },
             onDblclick: (e: MouseEvent) => {
                 // ⚠️ 这里**故意什么都不做**（2026-10-04 业主裁定「双击单击都没有行为」）。
                 //
