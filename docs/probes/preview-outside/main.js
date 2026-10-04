@@ -48,7 +48,9 @@ const App = {
         const srcList = ref([PORTRAIT, LANDSCAPE]);
         // 与 usePreview.ts 现在的写法**逐字同构**：按contain 规则算「可视区内能占的最大尺寸」
         // 并写成 width/height（naive-ui 的 transform 叠在上面，不打架）。
-        const previewImgNatural = ref(null);
+        const previewImgNatural = ref(null);   // {key,w,h} —— 与 usePreview.ts 同构
+        // 当前条目的身份（与 usePreview.ts 的 previewKey 同角色）
+        const curKey = ref('portrait');
         const readViewportBox = () => {
             const el = document.querySelector('.n-image-preview-wrapper');
             if (!el) return { w: 0, h: 0 };
@@ -67,7 +69,8 @@ const App = {
             return { w: Math.round(natW * k), h: Math.round(natH * k) };
         };
         const previewedImgProps = computed(() => {
-            const nat = previewImgNatural.value;
+            const nat = (previewImgNatural.value && previewImgNatural.value.key === curKey.value)
+                ? previewImgNatural.value : null;
             const fitted = nat ? fitToViewport(nat.w, nat.h) : null;
             return {
                 style: fitted
@@ -78,24 +81,35 @@ const App = {
         });
         const watchPreviewImgLoad = () => {
             const el = document.querySelector('.n-image-preview');
-            if (!el) { previewImgNatural.value = null; return; }
-            const feed = () => { previewImgNatural.value = el.naturalWidth ? { w: el.naturalWidth, h: el.naturalHeight } : null; };
+            if (!el) return;
+            const key = curKey.value;
+            const feed = () => {
+                if (el.naturalWidth) { previewImgNatural.value = { key, w: el.naturalWidth, h: el.naturalHeight }; return; }
+                // ⚠️ 没加载完：**同一条**才沿用（这正是修跳动的那行）
+                previewImgNatural.value = previewImgNatural.value && previewImgNatural.value.key === key
+                    ? previewImgNatural.value : null;
+            };
             feed();
             if (!el.complete) el.addEventListener('load', feed, { once: true });
         };
         provide(imageContextKey, { previewedImgPropsRef: previewedImgProps });
-        return { show, current, srcList, previewedImgProps, watchPreviewImgLoad };
+        const self = {};
+        return { show, current, srcList, previewedImgProps, watchPreviewImgLoad,
+                 get curKey() { return curKey.value; }, set curKey(v) { curKey.value = v; } };
     },
     mounted() { ctl = this; },
+    methods: {
+        syncKey() { this.curKey = this.current === 0 ? 'portrait' : 'landscape'; },
+    },
     render() {
         return h('div', [
             h(NImage, {
                 src: PORTRAIT, width: 80, previewDisabled: true,
-                imgProps: { onClick: () => { this.show = true; this.current = 0; } },
+                imgProps: { onClick: () => { this.show = true; this.current = 0; ctl.curKey = 'portrait'; } },
             }),
             h(NImage, {
                 src: LANDSCAPE, width: 80, previewDisabled: true,
-                imgProps: { onClick: () => { this.show = true; this.current = 1; } },
+                imgProps: { onClick: () => { this.show = true; this.current = 1; ctl.curKey = 'landscape'; } },
             }),
             h(NImageGroup, {
                 srcList: this.srcList, current: this.current, show: this.show,

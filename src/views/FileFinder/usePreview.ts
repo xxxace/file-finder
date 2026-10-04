@@ -280,28 +280,42 @@ export function usePreview(deps: {
     };
 
     /**
-     * 当前显示的那张 `<img>` 的**自然尺寸**（`naturalWidth/Height`）。
+     * 当前显示的那张 `<img>` 的自然尺寸，**连同它属于哪一条**。
      *
-     * 必须是响应式：尺寸只在**图加载完之后**才有值，而 computed 求值那刻通常还没加载完
-     * ⇒ 自己读 DOM 只会算一次并永远停在「量不到」那支。用 ref 由 load 事件**推**进去。
+     * 必须是响应式：尺寸只在图**加载完之后**才有值，而 computed 求值那刻通常还没加载完
+     * ⇒ 自己读 DOM 只会算一次、永远停在「量不到」那支。用 ref 由 load 事件**推**进去。
      *
-     * ⚠️ 不可缓存：`<img>` 的 `key` 就是 `src`（`ImagePreview.mjs:560`）⇒ 换条目/换清晰版
-     * 都是**全新元素**，`naturalWidth` 归零再重新加载。
+     * ⚠️ 连「哪一条」一起存，是因为它才是判断「能不能沿用旧值」的唯一可靠依据（见
+     * `watchPreviewImgLoad`）。`naturalWidth` 在没加载完时是 0 ⇒ 那一刻**比不出比例**。
      */
-    const previewImgNatural = ref<{ w: number; h: number } | null>(null);
+    const previewImgNatural = ref<{ key: string; w: number; h: number } | null>(null);
 
     /**
      * 图 load 之后把自然尺寸喂进响应式状态。
      *
      * 挂 `<img>` 的 `load`（不用 ResizeObserver/轮询）：`key=src` ⇒ 换图就是新元素、
      * 新 load 事件，挂一次只对这一张图有效。
+     *
+     * ⚠️ **没加载完那一瞬要不要沿用旧值，判据是「是不是同一条」**（2026-10-04 修跳动）：
+     * 换 src 后新 `<img>` 要一帧才`naturalWidth > 0`，那之前：
+     *   · **同一条**（缩略图 → 大图这档升级）⇒ 沿用。同一张源图 ⇒ 撑满后的目标尺寸
+     *     **本来就一样** ⇒ 沿用零副作用，而画面**不跳**。不沿用的话 `previewedImgProps`
+     *     会掉回「`max-width` + `auto`」那一档、图缩回原始尺寸，大图加载完再撑满 ⇒ 肉眼看到一次跳动。
+     *   · **换了一条**（← → 翻页）⇒ 必须清掉，否则新图会先按**上一条的尺寸**显示一瞬
+     *     （歪、比例错），比跳动更难看。
      */
     const watchPreviewImgLoad = () => {
         const el = document.querySelector<HTMLImageElement>('.n-image-preview');
-        if (!el) { previewImgNatural.value = null; return; }
+        if (!el) return;
+        const key = previewKey.value;
         const feed = () => {
-            previewImgNatural.value = el.naturalWidth
-                ? { w: el.naturalWidth, h: el.naturalHeight }
+            if (el.naturalWidth) {
+                previewImgNatural.value = { key, w: el.naturalWidth, h: el.naturalHeight };
+                return;
+            }
+            // 还没加载完 ⇒ **只有同一条**才沿用（见上）
+            previewImgNatural.value = previewImgNatural.value?.key === key
+                ? previewImgNatural.value
                 : null;
         };
         feed();
@@ -337,10 +351,12 @@ export function usePreview(deps: {
         if (isIconEntry.value) {
             return { style: { height: '128px', width: 'auto', objectFit: 'contain' as const } };
         }
-        const fitted = (() => {
-            const nat = previewImgNatural.value;
-            return nat ? fitToViewport(nat.w, nat.h) : null;
-        })();
+        // ⚠️ `key` 必须与当前条目一致才用它的尺寸 —— 换条目后那值是**上一张**的
+        // （见 watchPreviewImgLoad：不同条时会清空，这里是第二道保险）。
+        const nat = previewImgNatural.value?.key === previewKey.value
+            ? previewImgNatural.value
+            : null;
+        const fitted = nat ? fitToViewport(nat.w, nat.h) : null;
         return {
             style: fitted
                 ? { width: `${fitted.w}px`, height: `${fitted.h}px`, objectFit: 'contain' as const }
