@@ -1,0 +1,12 @@
+
+PASS  ① 图未铺满视口（四周有留白）  — 图占 99×258，视口 1602×903
+PASS  ②a 点图上命中的是图（不关闭）  — (801,428) → n-image-preview
+PASS  ②b 点图外留白命中 overlay（关闭）  — (1226,428) → n-image-preview-overlay fade-in-transiti
+PASS  ②c 点上方留白命中 overlay（关闭）  — (801,149) → n-image-preview-overlay fade-in-transiti
+PASS  ③ 底部工具条命中工具条（不误关）  — (801,879) → n-image-preview-toolbar fade-in-transiti
+PASS  ④ 缩到最小后仍有图外留白  — 缩小后 100×260
+PASS  ④b 缩小后点图外仍命中 overlay  — (1227,428) → n-image-preview-overlay
+PASS  ⑤ 点遮罩真的能关闭  — 点击前在场=true，30 帧后在场=false
+== 8 PASS / 0 FAIL ==
+
+== 探针汇总（buggy）：8 PASS / 0 FAIL ==

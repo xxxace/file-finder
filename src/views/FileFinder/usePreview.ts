@@ -244,22 +244,38 @@ export function usePreview(deps: {
     });
 
     /**
-     * 预览面板里的图按比例**填满视口** —— 打开就是大的，不用再去点工具栏的放大。
+     * 预览面板里的图：**按可视区最大化**（扣除底部工具条），图周围留白 ⇒ 点图外即关。
      *
-     * 为什么需要：预览那张 img 的脚手架样式**只有 `max-width/max-height`、没有 `width/height`**
-     * ⇒ 它按**自然尺寸**显示。图片走大图本来就比视口大，看不出问题；但视频的预览图是
-     * 480px 宽的抽帧，在 1920 的窗口里就只有一个小方块。
+     * ## 为什么不是 `width/height: 100%`（那版把「点图外关闭」弄丢了）
      *
-     * ⚠️ 它**必须由调用方 provide 进 `imageContextKey`**：预览层由 `n-image-group` 渲染，
-     * 而 naive-ui 没给 group 留 `previewed-img-props` 这个 prop（父链
-     * `ImagePreview ← ImageGroup ← 组件`）。不 provide 就会同时丢掉"铺满"和"双击穿透"。
-     * 代价与实测数据见 `docs/DESIGN-PREVIEW-BAR-2026-10-04.md` §五、`docs/probes/preview-fill/`。
+     * naive-ui 关闭预览的**唯一**入口是 overlay 的 `onClick`（`ImagePreview.mjs:510`），
+     * 而 `.n-image-preview-wrapper` 自带 `pointer-events:none`（`styles/index.cssr.mjs:45`）
+     * —— **官方正是靠这个让点击穿到 overlay**。但 `.n-image-preview`（图）是
+     * `pointer-events:all`（`:52`），所以图铺满视口时就把 overlay 完全盖死 ⇒ 点哪都关不掉。
+     *⚠️ 缩小也救不了：`object-fit:contain` 的黑边在**元素盒子内**，盒子恒为全屏；
+     * 而 naive-ui 的缩放下限是 0.5（`ImagePreview.mjs:291`），最小也有半屏大。
+     *
+     * ## 现在怎么做
+     *
+     * 回到官方那套「`max-*` + `margin:auto`」，只把**约束源**从视口换成 wrapper 的**内容盒**
+     *（`index.vue` 给 wrapper 加了 `padding:16px16px 64px`，64px 正是底部工具条那一条）。
+     * 于是：图按比例缩到**装得下且尽量大**，元素盒子精确贴合图像 ⇒ 四周留白可点 ⇒
+     * 点图外关、点图内不关、工具条那条由 z-index:1 天然在上（`styles/…:21`）不关。
+     *
+     * 为什么**必须**带 `width/height: auto`：没有它，`<img>` 会用内在尺寸，
+     * 视频抽帧那种 480px 的就只占中间一小块（那正是 2026-10-04 引入 100% 的原因，见
+     * `docs/DESIGN-PREVIEW-BAR-2026-10-04.md` §五）。`auto` 让它按比例缩放而不是按原尺寸摆。
      */
     const previewedImgProps = computed<ImgHTMLAttributes>(() => ({
         style: isIconEntry.value
-            // 图标：原尺寸居中，不放大
+            // 图标：原尺寸居中，不放大（放大图标没有信息增益，只会糊成色块）
             ? { height: '128px', width: 'auto', objectFit: 'contain' as const }
-            : { width: '100%', height: '100%', objectFit: 'contain' as const },
+            : {
+                // 约束源 = wrapper 内容盒（它已扣掉底部工具条那64px）
+                maxWidth: '100%', maxHeight: '100%',
+                width: 'auto', height: 'auto',
+                objectFit: 'contain' as const,
+            },
 
         onDblclick: (e: MouseEvent) => {
             // ⚠️ 这里**故意什么都不做**（2026-10-04 业主裁定「双击单击都没有行为」）。

@@ -1,0 +1,12 @@
+<!doctype html><html lang="zh"><head><meta charset="utf-8"><title>probe: 点图外关闭</title>
+<style>
+        html, body { margin:0; padding:0; background:#111; }
+        /* ⚠️ 与 index.vue 那个非 scoped 块**逐字同构**：wrapper 的 padding 扣掉底部工具条，
+           探针的「可视区」判据依赖它。不搬过来，量到的可视区就是错的。 */
+        body > .n-image-preview-container .n-image-preview-wrapper {
+            padding: 16px 16px 64px;
+            box-sizing: border-box;
+        }
+        body > .n-image-preview-container .n-image-preview-toolbar { left:0; right:0; bottom:0; transform:none; }
+    </style></head>
+<body><div id="app"></div><script type="module" src="./main.js"></script></body></html>
