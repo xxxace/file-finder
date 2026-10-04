@@ -7,6 +7,7 @@ import { LOCAL_TOKEN } from '../server/token';
 import { destroyTrackedWindows } from '../server/assistant/queue';
 import { watchDiskChanges } from './diskWatch'
 import config from '../config';
+import dayjs from 'dayjs';
 
 // Disable GPU Acceleration for Windows 7
 if (release().startsWith('6.1')) app.disableHardwareAcceleration()
@@ -199,9 +200,9 @@ ipcMain.handle('copyText', async function (_e, text: string) {
 /**
  * 打开缓存数据目录。
  *
- * 这就是这套缓存**全部**的「导出 / 导入」手段：数据就是 `searchCache.db` 一个文件，
- * 拷走 = 导出，覆盖回去 = 导入。所以这里只做"带你去那个文件夹"，复制/替换交给
- * 系统文件管理器 —— 它自带回收站和撤销，比在应用内做一个"覆盖全库"的按钮安全得多
+ * 这就是这套缓存**全部**的「导出 / 导入」手段：数据 = 这个目录（`searchCache.db` + `bin/`），
+ * 整个目录拷走 = 导出，覆盖回去 = 导入。所以这里只做"带你去那个文件夹"，
+ * 复制/替换交给系统文件管理器 —— 它自带回收站和撤销，比在应用内做一个"覆盖全库"的按钮安全得多
  * （理由见 docs/DESIGN-CONVERGED-2026-09-24.md §三）。
  *
  * 复用 `shell.openPath`：它对目录会开资源管理器、对文件才用默认程序 ——
@@ -214,8 +215,8 @@ ipcMain.handle('openDataDir', async function () {
 /**
  * 让用户挑一个「把缓存备份到哪」。
  *
- * 这里**只负责选路径**，复制由服务端的 `/backupToFile` 做 —— 主进程碰不到
- * nedb 那个模块的状态，硬在这里复制就等于把"库在哪 / 怎么改库"再抄一份出来。
+ * 这里**只负责选路径**，打包由服务端的 `/backupToFile` 做 —— 主进程碰不到
+ * nedb/bin 那些模块的状态，硬在这里打包就等于把"库在哪 / 图片在哪"再抄一份出来。
  * 分工跟 `openDirectory`（IPC 选目录 → HTTP 真读）完全一致：**需要系统能力的那一步
  * 才进主进程，数据本身的操作留在服务端**。
  *
@@ -231,15 +232,17 @@ ipcMain.handle('pickCacheSavePath', async function () {
 
   const { canceled, filePath } = await dialog.showSaveDialog(target, {
     title: '把缓存备份到文件',
-    defaultPath: join(config.userBasePath, 'searchCache.db'),
-    filters: [{ name: '缓存库', extensions: ['db'] }],
+    // 2026-10-04：备份不再只是那个 .db —— 图片已经搬到数据目录的 bin/ 里，
+    // 所以导出的是一个**包**（zip，资源管理器双击就能打开，里面是库 + 图片）
+    defaultPath: join(config.userBasePath, `file-finder-缓存-${dayjs().format('YYYYMMDD')}.zip`),
+    filters: [{ name: '缓存备份包 (zip)', extensions: ['zip'] }],
   });
 
   return { canceled, filePath: canceled ? '' : filePath };
 });
 
 /**
- * 让用户挑一个「要读进来的缓存文件」。还原和合并共用它 ——
+ * 让用户挑一个「要读进来的缓存备份包」。还原和合并共用它 ——
  * 两者的差别只在**读进来之后怎么办**，选文件这一步逐字相同，分成两个 handler
  * 只会多一份要同步维护的对话框配置。
  */
@@ -248,10 +251,10 @@ ipcMain.handle('pickCacheOpenPath', async function () {
   if (!target) return { canceled: true, filePath: '' };
 
   const { canceled, filePaths } = await dialog.showOpenDialog(target, {
-    title: '选择缓存文件',
+    title: '选择缓存备份包',
     defaultPath: config.userBasePath,
     properties: ['openFile'],
-    filters: [{ name: '缓存库', extensions: ['db'] }],
+    filters: [{ name: '缓存备份包 (zip)', extensions: ['zip'] }],
   });
 
   return { canceled, filePath: canceled ? '' : (filePaths[0] || '') };

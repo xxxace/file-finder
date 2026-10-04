@@ -30,3 +30,6 @@ release
 .deps-backup/
 
 release-verify/
+
+# 探针的**构建产物**（源码是 .cjs 探针脚本，所以不能用 *.cjs，只按 bundle 文件名精确挡）
+docs/probes/*/bundle*.cjs

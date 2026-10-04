@@ -260,7 +260,9 @@ function evaluateDocs(
             }
 
             // ② 没脸的子目录
-            if (e.type !== 'folder' || e.avatar) continue;
+            // ⚠️ 2026-10-04：图片已从库里的 `avatar` 字段改成内容指纹 `sig`（见 FileInfo.sig），
+            //    "这个目录有脸"的判据随之变成"有没有 sig"。语义不变。
+            if (e.type !== 'folder' || e.sig) continue;
 
             const childRel = joinRel(dir, e.name);
             const child = docs.get(childRel);
@@ -431,7 +433,10 @@ async function liveList(drive: string, rel: string): Promise<FileInfo[]> {
         for (const cover of DIR_COVER_FILES) {
             try {
                 await fsasync.access(`${coverDir}/${cover}`);
-                info.avatar = 'live';
+                // ⚠️ 这只是"有脸"的**真值标记**（'live' 不是 40 位十六进制 ⇒
+                //    `thumbNameOf` 拼出来的名字永远不在 bin 里 ⇒ 绝不会被下发）——
+                //    这份实时清单只参与判断，不落库、不给前端。
+                info.sig = 'live';
                 break;
             } catch { /* 下一个名字 */ }
         }
@@ -469,7 +474,7 @@ export async function deepScanMissingCovers(
                     // （真机实测 2026-09-25：有封面的全被报成"影片目录"）。
                     // 有脸 → 跳过（用户删了图的话，avatar 探测自然变空 → 下次就会探到）。
                     for (const e of entries) {
-                        if (e.type !== 'folder' || e.avatar) continue;
+                        if (e.type !== 'folder' || e.sig) continue;
                         const childRel = joinRel(rel, e.name);
                         // 无脸子目录一律用实时清单（哪怕缓存里有旧文档）—— 深度重扫要的就是"现在"
                         try {
@@ -632,7 +637,7 @@ export async function collectFaces(serial: string, picks: FacePick[]): Promise<S
                 continue;
             }
 
-            if (e.type === 'folder' && e.avatar) {
+            if (e.type === 'folder' && e.sig) {
                 // ⚠️ **分类目录**（里面还有子目录，典型就是"演员名目录"）不处理：
                 // 给它写 `<目录名>.jpg` **永远不会生效** —— `handleCover` 第一关
                 // "有子目录 → return null" 就挡住了（`server/index.ts:341`），

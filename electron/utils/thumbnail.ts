@@ -12,42 +12,89 @@ ffmpeg.setFfmpegPath(ffmpegPath);
 ffmpeg.setFfprobePath(ffprobePath);
 
 /**
- * 缩略图宽度。
+ * 缩略图宽度（网格用）。
  *
  * 网格是 `calc(100% / 6)` + `flexible.ts` 的 rem 方案：
  *   1200px 窗口 → 每格约 180 x 144 px
- *   1920px 窗口 → 每格约 320 x 256 px
- * 480 是 1200px 下显示宽度的 2.7 倍、1920px 下的 1.5 倍，已超过 2 倍 HiDPI 的经验值。
- * 实测原始封面中位 800x538 —— 800 缩到 480 在 180px 的格子里看不出差别。
- * 觉得不够清晰直接调大这个数，是可逆的。
+ *   2048px 窗口 → 每格约 340 x 272 px
+ *
+ * ⚠️ 2026-10-04 由 480 / q82 下调到 **384 / q78**，依据是**用真库实测**（不是估的）：
+ * `docs/probes/thumb-tier/`（Electron + 同一个 nativeImage 编码器，取样他自己库里
+ * 1236 张真缩略图里的 400 张）：
+ *   480/q82  均值 39 KB（存成 base64 就是 47~52 KB —— 主人说的"50 多 KB"）
+ *   384/q78  均值 **23 KB**  ← 采用
+ *   360/q75  均值 20 KB
+ *   320/q72  均值 15 KB
+ * 本机 dpr = 1.25（逻辑 2048×1280 / 物理 2560×1600）⇒ 网格一格约 422 设备像素，
+ * 384 档是 **1.1 倍插值**（照片缩略图上看不出差别）。要"零插值"得 440px，但那样只能省 38%
+ * 而不是 56% —— 权衡后选 384。**这个数随时可以调（改了只是重扫一层的成本）。**
  */
-export const THUMB_WIDTH = 480;
+export const THUMB_WIDTH = 384;
 
-/** JPEG 质量。82 在 480px 这个尺寸上肉眼无损，体积约为同尺寸 PNG 的 1/3（已实测） */
-export const THUMB_QUALITY = 82;
+/** JPEG 质量（网格缩略图用）。与 THUMB_WIDTH 一组，依据同上（`docs/probes/thumb-tier/`） */
+export const THUMB_QUALITY = 78;
 
-/** 按比例缩到 THUMB_WIDTH 宽，输出 JPEG。只在原图更宽时才缩 —— 避免把小图放大糊掉 */
+/**
+ * 预览大图的长边上限。
+ *
+ * 依据：预览最多铺到 `(窗口宽−32) × (窗口高−32)`，本机最大化窗口是 2048×1280 逻辑、
+ * dpr 1.25 ⇒ 设备像素约 2520 ⇒ 2048 长边最坏是 **1.23 倍插值**（照片看不出）。
+ * 再大一档（2560）只对"超过 2048 的大图"有意义，却要多花约 40% 体积 ⇒ 不值得。
+ *
+ * ⚠️ 绝大多数源图（中位 800×538）**根本不到这个上限** ⇒ 它们走"原样存"那条路
+ * （见 `verbatimPreview`），既不重编码也不损失质量。
+ */
+export const PREVIEW_LONG_EDGE = 2048;
+
+/**
+ * 预览大图的 JPEG 质量（只在"必须重编码"时才用到：源图超大、或源图是 nativeImage 解不开的格式）。
+ * 比网格缩略图的 78 高一档 —— 它是给人放大看的"好"那一份。
+ */
+export const PREVIEW_QUALITY = 82;
+
+/**
+ * "原样存"的体积上限。
+ *
+ * 源图是不超过 2048 长边的 JPEG 时，**直接存源字节**（不重编码）：
+ *   ① 质量零损失（JPEG 二次编码必掉画质）；
+ *   ② 零 CPU（扫描一张图省一次编码）；
+ *   ③ 体积与重编码同量级（实测原图均值 161 KB base64 ⇒ 约 120 KB 裸字节）。
+ * 超过这个上限就重编码 —— 那种是异常大图，压一压更划算。
+ */
+export const PREVIEW_VERBATIM_MAX = 1.5 * 1024 * 1024;
+
+/** 一次解码产出的**两个**尺寸。`thumb` 给网格，`preview` 给点开的大图。两者恒为 JPEG */
+export interface Renditions {
+    thumb: Buffer | null;
+    preview: Buffer | null;
+}
+
+/** 按比例缩到 `THUMB_WIDTH` 宽，输出 JPEG。只在原图更宽时才缩 —— 避免把小图放大糊掉 */
 export function scaleToThumb(img: NativeImage): Buffer {
     const { width } = img.getSize();
     const scaled = width > THUMB_WIDTH ? img.resize({ width: THUMB_WIDTH, quality: 'good' }) : img;
     return scaled.toJPEG(THUMB_QUALITY);
 }
 
+/** 按长边缩到 `PREVIEW_LONG_EDGE`（只缩不放），输出 JPEG */
+function scaleToPreview(img: NativeImage): Buffer {
+    const { width, height } = img.getSize();
+    if (Math.max(width, height) <= PREVIEW_LONG_EDGE) return img.toJPEG(PREVIEW_QUALITY);
+    return (width >= height
+        ? img.resize({ width: PREVIEW_LONG_EDGE, quality: 'good' })
+        : img.resize({ height: PREVIEW_LONG_EDGE, quality: 'good' })
+    ).toJPEG(PREVIEW_QUALITY);
+}
+
 /**
- * nativeImage 解码 + 缩放。解不开返回 null（不区分"文件不存在"和"格式不支持"）。
- *
- * 注意 createFromPath 是**同步**的：读文件 + 解码 + 缩放都在调用线程上。
- * 一张 800px JPEG 大约十几毫秒，所以调用方（makeThumb）每张之间会让出一次事件循环。
+ * 源字节能不能**原样**当大图用（见 `PREVIEW_VERBATIM_MAX` 的说明）。
+ * 只放行 JPEG —— PNG 照片往往比同画质 JPEG 大好几倍，存它不划算。
  */
-function decodeImage(filepath: string): Buffer | null {
-    try {
-        const img = nativeImage.createFromPath(filepath);
-        if (img.isEmpty()) return null;
-        return scaleToThumb(img);
-    } catch (e) {
-        console.error('[thumbnail] 图片缩略失败:', filepath, e);
-        return null;
-    }
+function verbatimOf(buf: Buffer, img: NativeImage): Buffer | null {
+    const isJpeg = buf.length > 3 && buf[0] === 0xff && buf[1] === 0xd8 && buf[2] === 0xff;
+    if (!isJpeg || buf.length > PREVIEW_VERBATIM_MAX) return null;
+    const { width, height } = img.getSize();
+    return Math.max(width, height) <= PREVIEW_LONG_EDGE ? buf : null;
 }
 
 async function fileExists(filepath: string): Promise<boolean> {
@@ -60,23 +107,27 @@ async function fileExists(filepath: string): Promise<boolean> {
 }
 
 /**
- * 图片缩略图：常规格式全程在内存里完成 —— 不落盘、不写临时文件、不碰移动硬盘。
+ * nativeImage 解码 + 缩放。解不开返回 null（不区分"文件不存在"和"格式不支持"）。
  *
- * **nativeImage 只认 PNG / JPEG，解不了 WebP。** 而这恰恰是一个真实的封面形态：
- * 实测 `D:/sample/videos/TST-PPV-1000001/TST-PPV-1000001.jpg` 的头部是
- * `RIFF....WEBP` —— 一个改成 `.jpg` 后缀的 WebP（750×421）。
- * 而 `server/index.ts` 选封面的正则 `/\.(jpe?g|png|bmp|gif|svg|psd|webp)$/i` 是**放行 webp/psd/svg** 的，
- * 也就是"承诺支持的格式"比"真能解的格式"多 —— 这些封面会被收敛成条目却拿到空缩略图，
- * 渲染层按 `type` 分支，于是画出一张**空白卡片**（没有任何报错，也看不出是"坏了"还是"格式不支持"）。
- *
- * 所以这里补一层兜底：nativeImage 解不开时，用**已经内置**的 ffmpeg 把图转成 PNG，
- * 再交给**同一条** `scaleToThumb` 缩放链路 —— 缩放规则（只在更宽时才缩）和输出质量
- * 都仍然只有一处定义，兜底只扩宽"能读进来的输入格式"，不改任何下游行为。
+ * ⚠️ 2026-10-04 从 `createFromPath` 改成"**先读一次字节、再 `createFromBuffer`**"：
+ * 因为"原样存大图"需要源字节，而多读一次文件就是多碰一次移动硬盘。
+ * 一次 readFile 同时喂给解码和原样存 —— **新增的读盘量是 0**。
+ * 快路径解不开时**照旧走 ffmpeg 兜底**（WebP 等），所以换了入口也不会少支持一种格式。
  */
-export async function imageThumb(filepath: string): Promise<Buffer | null> {
-    const direct = decodeImage(filepath);
-    if (direct) return direct;
+async function decodeImage(filepath: string): Promise<{ img: NativeImage; verbatim: Buffer | null } | null> {
+    let buf: Buffer;
+    try {
+        buf = await fsasync.readFile(filepath);
+    } catch {
+        return null;
+    }
 
+    const img = nativeImage.createFromBuffer(buf);
+    if (!img.isEmpty()) return { img, verbatim: verbatimOf(buf, img) };
+
+    // 兜底：nativeImage 解不开（WebP / PSD / 改了后缀的…）→ 用**已经内置**的 ffmpeg 转 PNG，
+    // 再交给**同一条**缩放链路。缩放规则与输出质量仍然只有一处定义。
+    //
     // ⚠️ 兜底前**必须先确认文件真的存在**。nativeImage 对"文件不存在"同样返回空图，
     // 而 makeDirCover 是逐个名字盲试的（先 avatar.jpg 再 cover.jpg），
     // 不挡掉这一档，每个没有 avatar.jpg 的目录都会白起一个 ffmpeg 子进程。
@@ -89,34 +140,46 @@ export async function imageThumb(filepath: string): Promise<Buffer | null> {
 
     try {
         if (!(await transcodeImage(filepath, out))) return null;
-        return decodeImage(out);
+        // 转出来的 PNG 不原样用（全尺寸 PNG 常常比 JPEG 大一个数量级），交给 scaleToPreview
+        const png = nativeImage.createFromBuffer(await fsasync.readFile(out));
+        return png.isEmpty() ? null : { img: png, verbatim: null };
     } finally {
         // 中转文件写在**系统盘**临时目录（不是移动硬盘），且无论成败立刻删掉
         fsasync.unlink(out).catch(() => { });
     }
 }
 
+/** 图片条目：一次解码 → 网格缩略图 + 预览大图 */
+export async function imageRenditions(filepath: string): Promise<Renditions> {
+    const decoded = await decodeImage(filepath);
+    if (!decoded) return { thumb: null, preview: null };
+    return {
+        thumb: scaleToThumb(decoded.img),
+        preview: decoded.verbatim ?? scaleToPreview(decoded.img),
+    };
+}
+
 /**
- * 视频缩略图：抽第 1% 帧到**系统盘临时目录**（不是移动硬盘），
- * 再用 nativeImage 按比例缩放成 JPEG，最后删掉临时帧。
+ * 视频条目：抽第 1% 帧到**系统盘临时目录**（不是移动硬盘），再用同一条链路出两个尺寸，
+ * 最后删掉临时帧。
  *
- * 为什么不让 ffmpeg 直接出 480px：
- *   fluent-ffmpeg 的 screenshots({size}) 只接受 `WxH` 字面量，
+ * 为什么不让 ffmpeg 直接出目标尺寸：
+ *   fluent-ffmpeg 的 `screenshots({size})` 只接受 `WxH` 字面量，
  *   实测 `size: '480x-1'` 会抛 `Invalid size parameter`；
- *   写死 `480x270` 又会把非 16:9 的视频拉伸变形。
+ *   写死固定尺寸又会把非 16:9 的视频拉伸变形。
  *   而 `-ss 1%` 只在 screenshots 内部有效，手写 outputOptions 用百分比定位会直接失败。
  * 所以：ffmpeg 负责"取到一帧"，nativeImage 负责"按比例缩放"，各做各的。
  */
-export async function videoThumb(filepath: string): Promise<Buffer | null> {
+export async function videoRenditions(filepath: string): Promise<Renditions> {
     const name = `ff-frame-${process.pid}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}.jpg`;
     const frame = path.join(os.tmpdir(), name);
 
     try {
         const ok = await extractFrame(filepath, frame);
-        if (!ok) return null;
-        // ⚠️ 必须 await：imageThumb 现在是异步的（内部可能走 ffmpeg 兜底），
+        if (!ok) return { thumb: null, preview: null };
+        // ⚠️ 必须 await：imageRenditions 是异步的（内部可能走 ffmpeg 兜底），
         // 不 await 的话 finally 会**先**删掉临时帧，解码读的是一张已经不存在的文件
-        return await imageThumb(frame);
+        return await imageRenditions(frame);
     } finally {
         // 无论成功失败都清掉临时帧，不留垃圾在盘上
         fsasync.unlink(frame).catch(() => { });

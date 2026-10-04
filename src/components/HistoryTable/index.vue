@@ -155,7 +155,7 @@
             <n-collapse class="migrate-collapse">
                 <n-collapse-item title="备份与迁移" name="migrate">
                     <div class="mi-row">
-                        <n-button size="small" @click="handleBackupToFile">备份到文件…</n-button>
+                        <n-button size="small" @click="handleBackupToFile">备份到一个文件…</n-button>
                         <span class="mi-hint">默认文件名带你今天的日期，位置自己挑 —— 不会被任何东西覆盖</span>
                     </div>
                     <div class="mi-row">
@@ -172,14 +172,14 @@
                          这个折叠区本来就不是纯危险区（备份是安全的、合并只增不删），
                          真正危险的只有「从文件还原」，而它是靠**自己那身红色**标出来的，不是靠分组。
                          而且它和上面三项本就是同一件事的两面：那三项是**自动**搬运整库，
-                         这一项是**手动**搬运的入口（缓存库和备份都躺在那个文件夹里）。
+                         这一项是**手动**搬运的入口（缓存库、图片、备份都躺在那个文件夹里）。
                          顺带解决一个更实在的：它原来压在盘条右侧，占掉约 110px ——
                          而盘条正是"盘越多越需要横向空间"的那一行。
                          ⚠️ 代价与补偿：位置原本承担着"这是安全出口"的信号，现在这信号改由 hint 明说。
                          见 docs/DESIGN-DISK-FILTER-2026-10-04.md §11。 -->
                     <div class="mi-row">
                         <n-button size="small" @click="openDataDir">打开存放文件夹</n-button>
-                        <span class="mi-hint">只打开文件夹、不动任何数据（缓存库和备份都在这儿）</span>
+                        <span class="mi-hint">只打开文件夹、不动任何数据（缓存库、图片和备份都在这儿）</span>
                     </div>
                 </n-collapse-item>
             </n-collapse>
@@ -269,6 +269,12 @@ type DiskStats = {
     bytes: number;
     /** 库文件大小（本地文件）。拿不到就是 undefined，那种情况不显示这一项 */
     dbBytes?: number;
+    /**
+     * 图片（bin/）的张数与占用。2026-10-04 起**图片才是缓存的大头**（库瘦了 200 倍），
+     * 只报库的大小会让人严重低估实际占用 ⇒ 必须和「库 X」并列显示。
+     */
+    binCount?: number;
+    binBytes?: number;
     lastScanAt: string;
 };
 
@@ -444,6 +450,11 @@ const overview = computed(() => {
         `已读到 ${formatBytes(s.bytes)}`,
     ];
     if (typeof s.dbBytes === 'number') parts.push(`库 ${formatBytes(s.dbBytes)}`);
+    // 图片单列而不是并进「库」那一句：两者是完全不同的两样东西（一个可再生、一个是耗时扫出来的），
+    // 混成一句会让人以为"把库文件拷走就等于拷走了缓存"（那就错了，图片在 bin/ 里）。
+    if (typeof s.binCount === 'number') {
+        parts.push(`图片 ${s.binCount} 张 · ${formatBytes(s.binBytes ?? 0)}`);
+    }
     if (s.lastScanAt) parts.push(`最近扫描 ${fmtScanTime(s.lastScanAt)}`);
     return parts.join(' · ');
 });
@@ -936,7 +947,8 @@ const pickPath = async (channel: 'pickCacheSavePath' | 'pickCacheOpenPath') => {
 }
 
 /**
- * 「备份到文件…」—— 复制在服务端做，这里只挑路径 + 报结果。
+ * 「备份到一个文件…」—— 打包在服务端做，这里只挑路径 + 报结果。
+ * 2026-10-04 起导出的是**一个 zip 包**（库 + 图片），资源管理器双击就能打开看里面有什么。
  *
  * 为什么复制不放这里：主进程碰不到 nedb 那个模块的状态，硬在这儿复制
  * 等于把"库在哪"再抄一份出来。分工与 `openDirectory` 一致：**需要系统能力的
@@ -967,9 +979,10 @@ const handleBackupToFile = async () => {
  */
 const handleRestoreFromFile = () => {
     dialog.warning({
-        title: '从文件还原',
+        title: '从文件还原（选那个 .zip 备份包）',
         content: '会用你选中的文件整体替换当前缓存。替换后，本机独有的记录要重新读一遍移动硬盘才能回来。'
-            + '还原前会自动留一份快照（数据目录的 searchCache-before-restore.db），还原后立即生效，不用重启。',
+            + '还原前会自动留一份快照（数据目录里的 searchCache-before-restore.db），还原后立即生效、不用重启。'
+            + '备份包里的图片会**只增不删**地并进来（本地已有的不动）。',
         positiveText: '选择文件并还原',
         negativeText: '取消',
         maskClosable: false,

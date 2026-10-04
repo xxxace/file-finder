@@ -1,0 +1,132 @@
+
+{
+  "1_打开与铺满": {
+    "open": true,
+    "natural": [
+      1600,
+      900
+    ],
+    "box": [
+      1370,
+      871
+    ],
+    "inlineStyle": "width: 100%; height: 100%; object-fit: contain;",
+    "objectFit": "contain",
+    "srcMatched": true,
+    "imgCount": 1
+  },
+  "2_右下一条": {
+    "index": 1,
+    "open": true,
+    "natural": [
+      1200,
+      1500
+    ],
+    "box": [
+      1370,
+      871
+    ],
+    "inlineStyle": "width: 100%; height: 100%; object-fit: contain;",
+    "objectFit": "contain",
+    "srcMatched": true
+  },
+  "3_左上一条": {
+    "index": 0,
+    "open": true,
+    "natural": [
+      1600,
+      900
+    ],
+    "box": [
+      1370,
+      871
+    ],
+    "inlineStyle": "width: 100%; height: 100%; object-fit: contain;",
+    "objectFit": "contain",
+    "srcMatched": true
+  },
+  "3b_首条再往左_应环绕": {
+    "index": 2,
+    "total": 3
+  },
+  "4_工具条": {
+    "icons": 8,
+    "text": "名称-01 / 3"
+  },
+  "4b_点next": {
+    "index": 1,
+    "open": true,
+    "natural": [
+      1200,
+      1500
+    ],
+    "box": [
+      1370,
+      871
+    ],
+    "inlineStyle": "width: 100%; height: 100%; object-fit: contain;",
+    "objectFit": "contain",
+    "srcMatched": true,
+    "toolbarText": "名称-12 / 3"
+  },
+  "10_关闭后按右键": {
+    "indexBefore": 1,
+    "indexAfter": 1,
+    "stillClosed": true
+  },
+  "6a_双击_不加守卫": {
+    "hits": 2
+  },
+  "6b_双击_加守卫": {
+    "hits": 1
+  },
+  "6c_下一次双击_应仍然生效": {
+    "hits": 1
+  },
+  "7_缩略图换原图": {
+    "index": 1,
+    "beforeNatural": [
+      1200,
+      1500
+    ],
+    "afterNatural": [
+      2400,
+      1350
+    ],
+    "srcMatched": true,
+    "naturalGrew": true
+  },
+  "8_图标条目": {
+    "open": true,
+    "natural": [
+      76,
+      64
+    ],
+    "box": [
+      152,
+      128
+    ],
+    "inlineStyle": "height: 128px; width: auto; object-fit: contain;",
+    "objectFit": "contain",
+    "srcMatched": true
+  },
+  "9_关闭后": {
+    "img": false,
+    "overlay": false
+  },
+  "9b_再打开": {
+    "img": true,
+    "open": true,
+    "natural": [
+      1600,
+      900
+    ],
+    "box": [
+      1370,
+      871
+    ],
+    "inlineStyle": "width: 100%; height: 100%; object-fit: contain;",
+    "objectFit": "contain",
+    "srcMatched": true
+  }
+}

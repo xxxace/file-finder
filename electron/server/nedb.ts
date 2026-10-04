@@ -4,6 +4,7 @@ import crypto from 'node:crypto';
 import os from 'node:os';
 import config from '../config';
 import path from 'node:path';
+import { initBinStore, putBin } from '../utils/binStore';
 import dayjs from 'dayjs';
 import type { FileInfo } from './index';
 
@@ -27,7 +28,15 @@ export type OpenMode = 'cover' | 'folder';
  * v1：拿完整路径当键、没有 serial，每条内嵌整个 fs.Stats + 原图 base64
  * v2：键改成 (serial, relPath, mode)，条目只留渲染层会用到的字段，缩略图 480px
  */
-export const CACHE_VERSION = 2;
+/**
+ * 缓存格式版本。
+ *
+ * v2 → v3（2026-10-04）：图片从库里的 base64 字段（`thumbData` / `avatarThumbData`）搬到了
+ * 数据目录下的 `bin/`（独立加密文件），库里的记录改成只带一个内容指纹 `sig`。
+ * 理由见 `docs/DESIGN-PREVIEW-CACHE-2026-10-04.md`（base64 白交 33% + 库是整库载入/整库重写的）。
+ * 旧记录**不丢弃**：启动时会被 `migrateLegacyThumbs()` 就地搬过去，不用重扫盘。
+ */
+export const CACHE_VERSION = 3;
 
 /**
  * 一条目录的扫描缓存。
@@ -226,7 +235,14 @@ function onLoaded(err: Error | null): void {
  * 从 2026-09-24 起，回调里除了记日志还**设置 `loadError`** ——
  * 因为库里加了加密，而密钥/文件对不上时恰好就是"加载失败 + 之后永久挂起"这个形态。
  */
-nedb.loadDatabase(onLoaded);
+/** bin 仓就绪的 Promise —— 迁移要往里写文件，必须等它先把目录建好、key 集合读进来 */
+const binReady = initBinStore();
+
+nedb.loadDatabase((err) => {
+    onLoaded(err);
+    // 库载入成功才谈得上迁移；失败时什么都不做（闸门会把后续请求挡成响亮报错）
+    if (!err) void binReady.then(() => migrateLegacyThumbs());
+});
 // 每次 openFolder 都要按盘取缓存，这是热路径
 nedb.ensureIndex({ fieldName: 'serial' }, (err) => {
     if (err) console.error('[nedb] serial 索引创建失败:', err);
@@ -253,6 +269,100 @@ export function reloadFromDisk(): Promise<void> {
             err ? reject(err) : resolve();
         });
     });
+}
+
+/**
+ * 一次性迁移：把旧记录（v2）里那些 base64 缩略图搬进 `bin/`，记录上只留内容指纹。
+ *
+ * **纯本地操作，一个字节都不碰移动硬盘** —— 这正是留着它、而不是"删库重扫"的理由：
+ * 库里那 1300 多张缩略图的原始数据就在这里，重扫等于把 5 块盘再读一遍。
+ *
+ * 三条设计约束：
+ *   ① 指纹取**缩略图字节**的 sha1 —— 旧库里只有缩略图、没有大图，所以指纹只能锚在它身上。
+ *      下次扫描时这条记录的复用闸门若判"没变"，会沿用同一个指纹（图不重出、指纹不变）；
+ *      判"变了"就重出两张图、换成新指纹。两种走法都自洽。
+ *   ② **不写 `srcMtime` / `srcBytes`**（旧库里只有 52/1353 条有 mtime、0 条有字节数 ——
+ *      增量对账是 2026-10-03 才上的）。留空的**后果要知情**：复用闸门比的是"源路径 +
+ *      mtime + 字节数"，字段为空就永远比不中 ⇒ **下次重扫这一层时会把封面重出一次**
+ *      （读一次盘，一次性；重完之后这两个字段就齐了，以后不再重出）。
+ *      为什么**不**改成"字段为空就信它"：那会让"扫过之后又被换掉的封面"**永久定格**在旧图
+ *      —— 正是 R6 探针修过的那一类 bug，不能为了省一次读盘把它请回来。
+ *      注意：只有**他主动重扫/刷新**那一层才会发生，平时开缓存不扫盘 ⇒ 不会被偷偷读。
+ *   ③ 每条失败只跳过它自己（`try/catch`），**绝不因为一条坏记录让整个库起不来**。
+ *
+ * 跑完调一次 `reloadFromDisk()`：nedb 只会往文件尾部追加，不重写一次的话
+ * 那个已经瘦下来的库要等到下次启动才真正变小（实测二次 load 安全，见 reloadFromDisk 注释）。
+ */
+export async function migrateLegacyThumbs(): Promise<void> {
+    let docs: SearchCache[];
+    try {
+        docs = await new Promise<SearchCache[]>((resolve, reject) => {
+            nedb.find({}, (err: Error | null, found: SearchCache[]) => (err ? reject(err) : resolve(found)));
+        });
+    } catch (e) {
+        console.error('[nedb] 迁移前置读取失败（跳过迁移）:', e);
+        return;
+    }
+
+    let movedDocs = 0, movedImgs = 0;
+    for (const doc of docs) {
+        if (!doc?._id || !Array.isArray(doc.data)) continue;
+        if (doc.v === CACHE_VERSION) continue;
+
+        let changed = false;
+        for (const item of doc.data as unknown as Array<Record<string, unknown>>) {
+            const legacy = (item.thumbData || item.avatarThumbData) as string | undefined;
+            // 字段清干净（不管有没有图），这些字段在 v3 里已经不存在了
+            const hadLegacy = 'thumb' in item || 'thumbData' in item || 'avatar' in item
+                || 'avatarThumbData' in item || 'avatarSrc' in item;
+            if (!legacy && !hadLegacy) continue;
+
+            try {
+                if (typeof legacy === 'string' && legacy.includes(',')) {
+                    const bytes = Buffer.from(legacy.slice(legacy.indexOf(',') + 1), 'base64');
+                    if (bytes.length) {
+                        const sig = crypto.createHash('sha1').update(bytes).digest('hex');
+                        await putBin(`t-${sig}.enc`, bytes);
+                        item.sig = sig;
+                        movedImgs++;
+                    }
+                }
+            } catch (e) {
+                console.error('[nedb] 迁移单张图片失败（跳过这一条）:', e);
+            }
+
+            delete item.thumb;
+            delete item.thumbData;
+            delete item.avatar;
+            delete item.avatarThumbData;
+            delete item.avatarSrc;
+            changed = true;
+        }
+
+        if (!changed && doc.v === CACHE_VERSION - 1) {
+            // 没有图片、版本还旧：单独把版号升上去
+            changed = true;
+        }
+        if (!changed) continue;
+
+        try {
+            await new Promise<void>((resolve, reject) => {
+                nedb.update({ _id: doc._id }, { $set: { data: doc.data, v: CACHE_VERSION } }, {},
+                    (err: Error | null) => (err ? reject(err) : resolve()));
+            });
+            movedDocs++;
+        } catch (e) {
+            console.error('[nedb] 迁移单条记录失败（跳过）:', doc.serial, doc.relPath, e);
+        }
+    }
+
+    if (!movedDocs) return;
+    console.log(`[nedb] 图片出库迁移完成：${movedDocs} 条记录 / ${movedImgs} 张图片（不碰移动硬盘）`);
+    try {
+        await reloadFromDisk();
+    } catch (e) {
+        console.error('[nedb] 迁移后重载失败（数据已写好，重启后自愈）:', e);
+    }
 }
 
 /** 见 `restoring`。由「从文件还原」的入口开启/关闭，成功失败都要关。 */

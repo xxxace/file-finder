@@ -38,7 +38,9 @@
 - **各期产出（细节自阅）**：`DESIGN-UIUX/-PM-2026-09-24.md`｜助手 `PRD-manager-assistant-2026-09-25.md`（权威）｜面板 `DESIGN-/PLAN-CACHE-PANEL-2026-09-30.md`｜头部导航 `DESIGN-HEADER/-NAV-2026-09-30.md` + `PLAN-nav-header-2026-10-01.md`（**待真机目视**）｜10-02 `CHANGES-2026-10-02.md`（§五 网格贴边／§六 文件夹 size／§七 图标／§八 预览抢点击）+ `ANALYSIS-folder-size/-cover-blur-2026-10-02.md`
 - 探针 `docs/probes/`（40+，详情自阅目录）；⚠️ `@media (max-width)` 看 **viewport** ⇒ 改 `#stage.style.width` 不触发断点，测响应式须 `win.setSize()`
 - **没有测试框架**（只有 dev/typecheck/build）⇒ 验证三件套：`typecheck` 0 error + `docs/probes/` 只读探针 + 真机目视。**别写 TDD 式假测试**。探针证据**必须 `.txt`**（`.gitignore` 挡 `*.log`）。
-- ⚠️ **探针入库判据（防膨胀）**：**结论进文档；脚本默认一次性**。只有 ① 会被**反复重跑**的断言 或 ② **重建成本高**的工具（无头 Electron / 真编译 CSS / PE·JPEG 二进制解析）才留。`docs/probes/` 现 **23 目录 / 146 文件**，估 **≈1/5 有留价值**。
+- ⚠️ **探针入库判据（防膨胀）**：**结论进文档；脚本默认一次性**。只有 ① 会被**反复重跑**的断言 或 ② **重建成本高**的工具（无头 Electron / 真编译 CSS / PE·JPEG 二进制解析）才留。`docs/probes/` 现 **30 目录 / 180 文件 / 1.7MB**，估 **≈1/5 有留价值**（清理是独立一件事，尚未做）。
+  ⚠️ **构建产物必须精确挡**（2026-10-04 补）：`.gitignore` 加 `docs/probes/*/bundle*.cjs` —— ⚠️ **绝不能用 `*.cjs`**（探针源码本身就是 `.cjs`）；vite 的 `dist` 已被通用规则挡。探针的**中转产物**（如 zip 路径文件）要写进 `os.tmpdir()`，别落探针目录 —— 靠 ignore 兜底不如根本别落进去。
+  ⚠️ **CJS bundle 是全量求值的**：`--external:electron` 只把 `require('electron')` 留成外部调用，纯 node 跑到它照样抛 `Cannot find module 'electron'` ⇒ 含 `nativeImage` 的模块要**独立 entry**（合并过一次，`read` 段直接挂）。
   ⚠️ `run.sh` 里的 `env -u ELECTRON_RUN_AS_NODE` 是**真知识不是胶水**（漏了就退化成纯 Node、不跑窗口；**重复 8 份，应收成 1 个共享 runner**）。
 
 ## 五、当前状态（2026-10-03 · 详情见 `VERDICT-2026-10-03.md`）
@@ -54,7 +56,7 @@
 - **该删 7 项**（曾 8，撤回 `parseSize`）；4 项有连带（`printTree`→`interface file`/`getSpace()`/`level_stack`；注释块→`index.vue:65-67`；`getFileTree`→`index.ts:419-427`）。❌ **`flexible.ts` 绝不能删**。
 - 根目录 `searchCache.db` = **主人主动备份**（09-24·78.6MB，已过期）⇒ 保留；真库在 `%USERPROFILE%\.file-finder\`（10-02·92MB）。基线 `5 盘 · 218 记录(216 cover) · 1471 条目`。
 - 视频扩展名单一真相源 `electron/server/videoExt.ts`；改它要同步 `index.vue` 的 `VIDEO_EXT_RE` 并重启 dev。
-- **已落地**：面板 A/B/C · P0+P1+P2 · 加密备份还原 · 离线只读浏览(待目视) · 头部+导航(待目视) · 助手 Phase1+2A+5(未全验) · **缓存面板盘筛选 下拉→盘条 chips**(2026-10-04，见 `docs/DESIGN-DISK-FILTER-2026-10-04.md`；只显示有缓存的盘 + `stats.disks` 同改 + 「打开存放文件夹」移入「备份与迁移」；`n-tooltip` 真机观感待目视)。**待重启 dev 后目视**：文件夹 size · 预览抢点击 · 四条（窗口/右键去后缀/角标/标题）· 盘条 chip 悬浮提示。
+- **已落地**：面板 A/B/C · P0+P1+P2 · 加密备份还原 · 离线只读浏览(待目视) · 头部+导航(待目视) · 助手 Phase1+2A+5(未全验) · **缓存面板盘筛选 下拉→盘条 chips**(2026-10-04，见 `docs/DESIGN-DISK-FILTER-2026-10-04.md`；只显示有缓存的盘 + `stats.disks` 同改 + 「打开存放文件夹」移入「备份与迁移」；`n-tooltip` 真机观感待目视) · **预览层 上一条/下一条 + 定位到网格**(2026-10-04，见 `docs/DESIGN-PREVIEW-NAV-2026-10-04.md`；`n-image-group` srcList 模式 + `provide(imageContextKey)`；探针 `docs/probes/preview-nav/` 9 断言全过；顺手修掉"预览图双击被处理两次"的既有缺陷)。**待重启 dev 后目视**：文件夹 size · 预览抢点击 · 四条（窗口/右键去后缀/角标/标题）· 盘条 chip 悬浮提示 · 预览层定位与名称排版 · 网格 384 观感/停住换清晰的手感/离线看大图/zip 备份还原。**2026-10-04 已落地**：**缓存大图 + 缩略图出库**（`docs/DESIGN-PREVIEW-CACHE-2026-10-04.md`；探针 `probes/thumb-tier`、`probes/bin-migrate`）。
 - n-space 重复 key 已修；`.toolbar{flex-wrap:nowrap}` + `.header-bar .n-input{width:200px}` **两条不许删**。
 
 ## 六、待他动作
@@ -73,6 +75,7 @@
 - 站点：`freejavbt`/`javwine`/`javbus`/`javdock`/`onejav` + `javtext.net`，均无账号
 
 ## 九、实测事实（错了会误导）· 全文 → `docs/MEMORY-APPENDIX-2026-10-03.md` §九
+**图片现状（2026-10-04 起）**：缩略图 **384px / q78**（实测定的，替代原 480/q82）；预览大图长边 2048/q82（源是够小的 JPEG 就**原样存**）。⚠️ **`sig` 锚在缩略图字节**（一条记录一个 sig 却要命名两个尺寸 ⇒ 必须锚在两者都有的那个，否则 `t-<sig>` 名字不含自己的内容；实测证据：锚大图时 1277 个 t 里 72 个不符）。所以 `t-<sig>`/`p-<sig>` = **同一源的两个尺寸**，且 `/preview` **按请求名存**（懒生成幂等 ⇒ 点一次之后 0 读盘）。逐文件加密（随机 IV）于 `~/.file-finder/bin/`。库瘦了 200 倍（85MB→428KB）、图片合计 −41%；**离线/视频的大图 = 那条记录的 `p-*` 有没有**（老记录第一次看时由 `/preview` 现场生成并落盘）。`/thumb`、`/preview` 都带 `immutable`（名字=内容指纹 ⇒ 换了图必换 URL，不会显示旧图）。
 控制组先验（FC2）· unmatched 46% 是目录（别再提拆桶）· 读库跳过 `$$indexCreated`（压缩库瘦身=伪需求）· `DriveInfo.label` 从没被赋值 · 收敛条目 size=子树和(双算=0,0.07ms) · `parseSize` TB 截断已被 `formatBytes` 取代 · HistoryTable 换页数不重置页码 · 主屏=逻辑 2048×1280 · minWidth 1024 非脑补 · **网格一行 6 个**(`100%/6−10px`+`.image-box` 负 margin；别换 gap/nth-child) · **Windows 目录 size 恒 0** ⇒ 唯一不读盘路=缓存子树求和(已落 `wire()`) · 本机无 SVG 光栅化器 ⇒ 无头 Electron（`force-device-scale-factor=1`、别提前 `win.destroy()`）
 
 ## 十、五条硬约束（他原话）

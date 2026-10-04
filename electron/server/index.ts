@@ -1,11 +1,16 @@
 import url from 'node:url';
 import http from 'node:http';
+import path from 'node:path';
 import events from 'node:events';
 import * as fs from 'node:fs';
 import * as fsasync from 'node:fs/promises';
 import dayjs from 'dayjs';
-import { imageThumb, videoThumb } from '../utils/thumbnail';
-import { newThumbKey, putThumb, getThumb } from '../utils/thumbStore';
+import crypto from 'node:crypto';
+import { imageRenditions, videoRenditions } from '../utils/thumbnail';
+import {
+    BIN_DIR, hasBin, getBin, putBin, putBinEncrypted, listBinNames, binStoreFailed, whenBinReady, binStats,
+} from '../utils/binStore';
+import { writeZip, listZip, readZipEntry } from '../utils/zip';
 import {
     findDriveByLetter, findDuplicatedSerials, getDrives, offlineSerials,
     readRegistry, serialOfDrive, splitPath, syncRegistry, toFullPath,
@@ -13,8 +18,8 @@ import {
 import type { DriveInfo } from '../utils/driveIdentity';
 import {
     BEFORE_RESTORE_PATH, CACHE_DB_PATH, CACHE_VERSION, beginRestore, cacheBackup, endRestore,
-    findCache, insertCache, loadMeta, loadSubtreeBytes, readExternalCache, reloadFromDisk,
-    removeCache,
+    findCache, insertCache, loadMeta, loadSubtreeBytes, migrateLegacyThumbs, readExternalCache,
+    reloadFromDisk, removeCache,
 } from './nedb';
 import type { CacheMeta, OpenMode, SearchCache } from './nedb';
 import { LOCAL_TOKEN } from './token';
@@ -37,6 +42,13 @@ const excludedFiles = ['System Volume Information', '$RECYCLE.BIN', 'Config.Msi'
  * 名字固定还有个好处：探测不需要列目录，直接按名字试就行。
  */
 const DIR_COVER_FILES = ['avatar.jpg', 'cover.jpg'];
+
+/**
+ * /preview 现场生成大图时的**源文件上限**（8 MB）。
+ * 超过就不另存（那种是异常大图，压一压不划算），但仍然当场给它一份能看的，
+ * 只是**不带长缓存**（见 previewController 的注释）。
+ */
+const PREVIEW_SOURCE_MAX = 8 * 1024 * 1024;
 const event = new events.EventEmitter();
 
 /** /raw 返回原图时要带的 Content-Type。只列会出现在这个程序里的类型 */
@@ -88,26 +100,27 @@ export interface FileInfo {
     type: FileKind;
     /** 字节数。封面条目是目录内所有文件之和 */
     size: number;
-    /** 缩略图 key。渲染层拿它请求 /thumb?k= */
-    thumb?: string;
-    /** 缩略图的 data URI。只存不发，下发前被 `wire()` 的白名单重建丢掉 */
-    thumbData?: string;
-    /** 目录封面（目录下的 avatar.jpg）的缩略图 key */
-    avatar?: string;
-    /** 目录封面缩略图的 data URI。只存不发 */
-    avatarThumbData?: string;
     /**
-     * 这张目录的脸**取自哪个文件名**（`avatar.jpg` / `cover.jpg`，见 `DIR_COVER_FILES`）。
+     * **这张源图的标识**（十六进制 sha1，取自**缩略图**字节；⚠️ 不是大图的指纹 ——
+     * 一条记录只有这一个字段却要命名两个尺寸，理由与实测证据见 makeRenditions）。
      *
-     * 只存不发（`pickFileInfo` 是白名单、不含它）。
-     *
-     * 存在的理由只有一个：**增量对账要判断这张脸能不能复用**。
-     * 目录条目的 `dir` / `name` 指向的是那个**目录**、不是那张图 —— 光看它俩无法确认
-     * "上次的脸和这次的脸来自同一个源文件"。上次命中 `avatar.jpg`、这次命中 `cover.jpg`，
-     * 复用就会把旧封面贴到新源上。
-     * 旧记录没有这个字段 ⇒ 判为"不确定" ⇒ 重抽一次并写入（**不需要升 `CACHE_VERSION`**）。
+     * 2026-10-04 用这一个字段取代了原来的 `thumb` / `avatar` / `avatarThumbData` / `avatarSrc`
+     * （图片已经搬出库、落进 `bin/`，见 docs/DESIGN-PREVIEW-CACHE-2026-10-04.md）。它一次回答三件事：
+     *   ① **有没有图** —— 有 sig 就说明这一条出过图；
+     *   ② **图在哪** —— `t-<sig>.enc`（网格缩略图）/ `p-<sig>.enc`（预览大图）；
+     *   ③ **内容变没变** —— 指纹取自**缩略图本身**：换了同名的封面 ⇒ 缩略图变 ⇒ sig 变 ⇒
+     *      **两个 URL 都变** ⇒ 浏览器的 `immutable` 缓存不会拿旧图挡着（主人明确要求的那一条）。
+     * 顺带：内容完全相同的两张图共用一个文件（天然去重）。
      */
-    avatarSrc?: string;
+    sig?: string;
+    /**
+     * 这张图的**来源文件**自己的字节数。
+     *
+     * 为什么不能用 `size` 代替：收敛条目的 `size` 是"整组之和"，不是封面图的大小。
+     * 复用闸门要判"源变没变"，拿整组之和去比永远不等 ⇒ 每次扫描都白重抽一遍。
+     * 迁移来的旧记录**没有这个字段** ⇒ 判为"不知道"，闸门退回只看 mtime（今天的判据）。
+     */
+    srcBytes?: number;
     /**
      * 这张缩略图的**来源文件**的修改时间（`stat.mtimeMs`）。
      *
@@ -171,39 +184,95 @@ function joinRel(parent: string, name: string): string {
     return parent ? `${parent}/${name}` : name;
 }
 
-function registerThumb(key?: string, data?: string) {
-    if (key && data) putThumb(key, data);
-}
+/**
+ * 图片在 bin 里的文件名。**唯一构造点** —— 写的时候和下发的时候必须拼出同一个名字，
+ * 所以前缀与后缀只写在这里一处。
+ * `t-` = 网格缩略图、`p-` = 预览大图；两者恒为 JPEG（详见 thumbnail.ts）。
+ */
+const thumbNameOf = (sig?: string) => (sig ? `t-${sig}.enc` : undefined);
+const previewNameOf = (sig?: string) => (sig ? `p-${sig}.enc` : undefined);
 
 /**
- * 统一封面出口：图片和视频都在这里变成一张 480px 的 JPEG。
+ * 统一封面出口：图片和视频都在这里变成**两张**图 —— 网格要的缩略图、点开要的预览大图。
  *
- * 为什么不直接存原图：网格里一格只有约 180×144 px，而库里存下来的封面中位是
- * 800×538、base64 均值 161 KB。缩到 480px 后约 20 KB —— 体积小 8 倍，
- * 浏览器要解码进内存的位图也从 1.7 MB/张 降到 0.6 MB/张。
+ * 为什么一次出两张：这两张图来自**同一次解码**（视频则是同一帧）。
+ * 分开做等于把同一个源解码两遍、视频还要多抽一次帧 —— 那是白读一遍移动硬盘。
  *
- * 为什么缩略图还是存 base64 而不是落成文件：落成文件意味着**每次浏览都要去
- * 移动硬盘上读一遍**，而这个项目的第一目标就是少碰移动硬盘。存进 DB 之后
- * 首次生成完就再也不用碰它了。
+ * 为什么图片落成文件而不是留在库里的 base64（2026-10-04 改）：
+ *   ① base64 白交 +33%（实测 39 KB 的 JPEG 存成 base64 就是 52 KB；gzip 只能把这一层捞回来，
+ *      对 JPEG 本身 0 收益）—— 搬出 JSON 比 gzip 更彻底；
+ *   ② 库是**整库载入内存 + 每次启动整库重写**，图片留在库里等于每次启动搬运几十 MB；
+ *   ③ 落成**本地**文件不等于"每次浏览都去移动硬盘读"（老注释担心的那件事）——
+ *      图片文件在系统盘的数据目录里，与移动硬盘无关。
  *
  * nativeImage 解码是**同步**的，会按住主进程事件循环十几毫秒，
  * 所以每张之间让出一次，保证窗口不"假死"。
+ *
+ * 返回 `sig` = 这张源图的标识（取自**缩略图**字节的 sha1，两个尺寸共用 —— 见上面那段注释）。
+ * **没有它就说明这一条没有图**（解不开 / 抽帧失败），
+ * 下发时不会给前端任何 key，界面画成空白卡片 —— 与今天的行为一致。
  */
-async function makeThumb(filepath: string, ext: string): Promise<string> {
-    let buf: Buffer | null = null;
+/**
+ * 扫盘时**把写盘从"等它写完"改成"把 promise 交出去"**，让写盘与下一个条目的解码重叠。
+ *
+ * 实测依据（`docs/probes/perf-tick/`，72 张真素材外推到一屏 216 个条目）：
+ *   · 解码 + 缩放 + 两次 JPEG 编码（CPU）：**1.49 秒**
+ *   · 写 bin（216 条目 × 2 个文件 = 432 次 write+rename）：**1.39 秒**
+ *   两者**量级相当** ⇒ 写盘不是"可以忽略的小开销"，它占整层扫盘 CPU 成本的一半。
+ * 而写盘是纯 IO 等待（libuv 线程池），**解码是 CPU** ⇒ 两者天然可以重叠。
+ *
+ * ⚠️ 不变式仍要成立：**"返回 sig 时这两个文件已经写完"**（`FileInfo.sig` 的注释依赖它）——
+ *   所以这里只是"不自己等"，而是把 promise 交给调用方，调用方在**扫描循环结束后统一
+ *   `await`**。不放松这个保证。
+ *
+ * @param pending 调用方准备的收集袋（通常就是本次扫描的 in-flight 写盘列表）
+ * @returns 这一条的内容标识（`''` = 没出图）
+ */
+async function makeRenditions(filepath: string, ext: string, pending: Promise<unknown>[]): Promise<string> {
+    let r: { thumb: Buffer | null; preview: Buffer | null } = { thumb: null, preview: null };
 
     if (isVideo(ext)) {
         // 抽帧写的是系统临时目录，不是移动硬盘
-        buf = await videoThumb(filepath);
+        r = await videoRenditions(filepath);
     } else if (isImage(ext)) {
         // 全程内存：不落盘、不写临时文件。nativeImage 解不了的格式（webp 等）
-        // 这里会自己走 ffmpeg 兜底，详见 thumbnail.ts 的 imageThumb
-        buf = await imageThumb(filepath);
+        // 这里会自己走 ffmpeg 兜底，详见 thumbnail.ts 的 imageRenditions
+        r = await imageRenditions(filepath);
     }
 
+    // 指纹 = **这一张源图的标识**，取自**缩略图字节**的 sha1。
+    //
+    // ⚠️ 这里为什么不用"大图的指纹"（曾一度用它，是错的，实测证据见下）：
+    //   一条记录只有**一个** sig 字段，而它要同时命名**两个**尺寸的文件
+    //   （`t-<sig>` 缩略图 / `p-<sig>` 大图）⇒ sig 必须锚在**两个都存在的那一个**上。
+    //   锚在大图上时，缩略图存成了 `t-<大图指纹>` —— **名字里不含它自己的内容**
+    //   （实测：1277 个 t 文件里有 72 个名字与内容不符；p 全部相符）。
+    //   后果不是"取错图"（取图只认名字），而是两条真代价：
+    //     ① **同一条命名规律有两套**（出库迁移那批锚缩略图、之后新扫的锚大图）
+    //        ⇒ 同一张图在两条路径下得到两个不同文件名的 t，天然去重失效、磁盘多一份；
+    //     ② 任何"按名字校验内容"的逻辑（将来的完整性检查、跨机比对）都会误判。
+    //   锚回缩略图则与 2026-10-04 的出库迁移**完全一致** ⇒ 那 1205 个文件继续有效、零重出。
+    //
+    // 这样定义之后，`t-` 与 `p-` 是**同一源的两个尺寸**（对称、可解释）：
+    // 换了同名封面 ⇒ 缩略图内容变 ⇒ sig 变 ⇒ **两个 URL 都变** ⇒ 浏览器不会拿旧图挡着
+    // （主人明确要求的那一条，靠的就是这个因果链）。
+    const anchor = r.thumb ?? r.preview;
+    if (!anchor) return '';
+
+    const sig = crypto.createHash('sha1').update(anchor).digest('hex');
+    // 只登记、不等待（理由见函数头）。`putBin` 内部自己 try/catch 只记日志，
+    // 所以这些 promise 永远不会 reject ⇒ 交给调用方统一 await 是安全的。
+    if (r.thumb) pending.push(putBin(thumbNameOf(sig)!, r.thumb));
+    // 大图是**同一个源标识的另一个尺寸**（不是另一个内容）⇒ 与 t 共用 sig。
+    // 迁移来的记录没有大图 ⇒ 这行不会执行 ⇒ 下次扫到时闸门会补（闸门问的是"大图在不在"）。
+    if (r.preview) pending.push(putBin(previewNameOf(sig)!, r.preview));
+
+    // 每张之间让出一次事件循环：nativeImage 的解码是**同步**的，不让出的话主进程会连续
+    // 卡住十几毫秒 × 条目数（实测 2.44ms 中位、p95 6.5ms）⇒ 窗口会明显发僵。
+    // 让出同时也让 libuv 线程池有机会把上面登记的写盘真正跑起来（重叠就是这么来的）。
     await new Promise(r => setImmediate(r));
 
-    return buf ? `data:image/jpeg;base64,${buf.toString('base64')}` : '';
+    return sig;
 }
 
 /**
@@ -226,26 +295,30 @@ async function makeDirCover(
     serial: string,
     /** 这个目录的**盘内相对路径**。它同时是增量对账里"这张脸取自哪个源"的查找键 */
     dirRel: string,
-    prev?: Map<string, FileInfo>,
-): Promise<{ key: string; data: string; src: string; mtime: number } | null> {
+    prev: Map<string, FileInfo> | undefined,
+    /** 见 makeRenditions 的 @param pending：只登记不等待，由调用方在扫描结束后统一 await */
+    pending: Promise<unknown>[],
+): Promise<{ sig: string; mtime: number; bytes: number } | null> {
     for (const name of DIR_COVER_FILES) {
         const filepath = `${dirPath}/${name}`;
-        let mtime: number;
+        let stat: fs.Stats;
         try {
-            // `stat` 而不是 `access` —— 原先只为探存在性，现在顺带取 mtime。
-            // 两者在系统调用层是同一件事（读同一个 inode / MFT 记录）⇒ **不多读一次盘**。
-            mtime = (await fsasync.stat(filepath)).mtimeMs;
+            // `stat` 而不是 `access` —— 原先只为探存在性，现在顺带取 mtime 与字节数。
+            // 它们在系统调用层是同一件事（读同一个 inode / MFT 记录）⇒ **不多读一次盘**。
+            stat = await fsasync.stat(filepath);
         } catch {
             continue;
         }
-        // ★ 复用闸门：上次这张脸取自这同一个文件、**并且那个文件此后没被改过** ⇒ 不重抽。
-        //   光比名字不够 —— 同名替换会永久定格在旧图（见 `FileInfo.srcMtime`）。
+        // ★ 复用闸门：上次这张脸**取自同一个源、且那个源此后没被改过** ⇒ 不重抽。
+        //   ⚠️ 判据里必须有 mtime **和** 字节数：只比 mtime 会漏掉"等长替换 + mtime 被保留"
+        //   （同步工具会干这事）。命中就沿用旧指纹 —— 图没重出，指纹当然也不该变。
         const hit = prev?.get(dirRel);
-        if (hit?.avatar && hit.avatarThumbData && hit.avatarSrc === name && hit.srcMtime === mtime) {
-            return { key: hit.avatar, data: hit.avatarThumbData, src: name, mtime };
+        if (hit?.sig && hit.srcMtime === stat.mtimeMs && hit.srcBytes === stat.size
+            && hasBin(previewNameOf(hit.sig))) {
+            return { sig: hit.sig, mtime: stat.mtimeMs, bytes: stat.size };
         }
-        const data = await makeThumb(filepath, 'jpg');
-        if (data) return { key: newThumbKey(serial), data, src: name, mtime };
+        const sig = await makeRenditions(filepath, 'jpg', pending);
+        if (sig) return { sig, mtime: stat.mtimeMs, bytes: stat.size };
     }
     return null;
 }
@@ -266,10 +339,19 @@ async function readFolder(
     /** 上一次这一层的条目。给了就**对账**（没变的缩略图不重抽），不给就是全量 */
     prev?: FileInfo[],
 ): Promise<FileInfo[]> {
+    /**
+     * 本次扫描过程中"已登记但还没等完"的写盘（见 makeRenditions 的 @param pending）。
+     * 收敛封面（handleCover）共用这一个袋子 ⇒ 一屏之内所有条目的写盘都能与解码重叠。
+     * 唯一出口是函数末尾的 `flushRenditions` —— 它在**返回之前**等完，
+     * 所以"调用方拿到 sig 时那两个文件一定已经在盘上"这条不变式没有被放松。
+     */
+    const pending: Promise<unknown>[] = [];
+
     let files: string[];
     try {
         files = await fsasync.readdir(diskDir);
     } catch (e) {
+
         console.error('[readFolder] 读取目录失败:', diskDir, e);
         // ⚠️ **「读不到」不等于「空目录」—— 必须抛出去，绝不能 `return []`。**
         // 返回 [] 会一路走到 scanAndCache，被当成"这一层就是空的"写进缓存，
@@ -316,7 +398,7 @@ async function readFolder(
 
             if (mode === 'cover' && stat.isDirectory()) {
                 // null = 这个子目录既没封面图也没视频，不该收敛 → 落到下面当普通目录
-                const converged = await handleCover(filepath, serial, joinRel(storeDir, file), prevAt);
+                const converged = await handleCover(filepath, serial, joinRel(storeDir, file), prevAt, pending);
                 if (converged) {
                     folder.push(...converged);
                     continue;
@@ -347,12 +429,11 @@ async function readFolder(
             if (info.type === 'folder') {
                 // 目录自己的脸（avatar.jpg / cover.jpg）→ 这个目录条目带一张缩略图。
                 // `dirRel` 传的是**这一层里这个目录的盘内路径**，与 `prevAt` 的键同构
-                const avatar = await makeDirCover(filepath, serial, joinRel(storeDir, file), prevAt);
+                const avatar = await makeDirCover(filepath, serial, joinRel(storeDir, file), prevAt, pending);
                 if (avatar) {
-                    info.avatar = avatar.key;
-                    info.avatarThumbData = avatar.data;
-                    info.avatarSrc = avatar.src;
+                    info.sig = avatar.sig;
                     info.srcMtime = avatar.mtime;
+                    info.srcBytes = avatar.bytes;
                 }
             } else if (info.type === 'image' || info.type === 'video') {
                 // ★ 复用闸门（第 2 条抽帧路径）：同名**且同大小**才算"这个文件没变"
@@ -363,22 +444,27 @@ async function readFolder(
                 // ★ 判据是"**来源文件没变**"：大小 **和** mtime 都要对得上。
                 //   只比 size 会漏掉"等长替换"（探针 R6 用空文件把这条路径暴露得最清楚：
                 //   改了内容、size 还是 0 ⇒ 光比 size 判成"没变" ⇒ 旧图永久定格）。
+                // ★ 判据与目录的脸同一套：**源路径 + mtime + 字节数**。
+                //   （`hit.size` 对收敛条目是"整组之和"，不是源文件的大小 ⇒ 一律用 `srcBytes`）
+                // ★ 复用闸门多问一句：**大图还在不在**。
+                //   2026-10-04 出库迁移只搬得走缩略图（库里只有那个），
+                //   于是迁移来的记录"缩略图在、大图不在" —— 只比源签名会把它判成"没变"而
+                //   直接复用，于是**这一层永远补不上大图**（离线看还是糊的）。
+                //   把"大图在不在"算进闸门，任何一次真扫都会顺手把它补齐；补过之后就再也不重出。
                 const reused =
-                    hit?.thumb && hit.thumbData && hit.size === stat.size && hit.srcMtime === stat.mtimeMs
+                    hit?.sig && hit.size === stat.size && hit.srcMtime === stat.mtimeMs
+                        && hasBin(previewNameOf(hit.sig))
                         ? hit
                         : null;
                 if (reused) {
-                    info.thumb = reused.thumb;
-                    info.thumbData = reused.thumbData;
+                    info.sig = reused.sig;
                 } else {
-                    const thumb = await makeThumb(filepath, ext);
-                    if (thumb) {
-                        info.thumb = newThumbKey(serial);
-                        info.thumbData = thumb;
-                    }
+                    const sig = await makeRenditions(filepath, ext, pending);
+                    if (sig) info.sig = sig;
                 }
                 // 两个分支都要记来源 —— 少了它，下一次就判不出"变没变"
                 info.srcMtime = stat.mtimeMs;
+                info.srcBytes = stat.size;
             }
 
             folder.push(info);
@@ -386,6 +472,10 @@ async function readFolder(
             console.log('[readFolder] 跳过无法读取的项:', filepath, e);
         }
     }
+
+    // ⚠️ 必须在 return 之前等完：整个函数**只有这一个出口**（上面循环里的 continue/try-catch
+    //   都不提前返回）⇒ 不存在"带着没写完的 sig 返回"的路径。
+    await flushRenditions(pending);
 
     return folder;
 }
@@ -408,7 +498,10 @@ async function handleCover(
     diskDir: string,
     serial: string,
     storeDir: string,
-    prev?: Map<string, FileInfo>,
+    prev: Map<string, FileInfo> | undefined,
+    /** 与调用方（readFolder）**共用同一个**收集袋：收敛封面也是这一屏的一个条目，
+     *  用同一个袋才能让它的写盘跟别的条目的解码重叠（见 makeRenditions 的 @param pending） */
+    pending: Promise<unknown>[],
 ): Promise<FileInfo[] | null> {
     let filenames: string[];
     try {
@@ -507,19 +600,20 @@ async function handleCover(
     //   ⚠️ 这里**不能比 size** —— `info.size` 是整组之和（下面那个 `size + stat.size`），
     //   不等于封面图的大小，拿它比会永远不等、白白重抽。所以只认"源路径 + mtime"。
     const hit = prev?.get(joinRel(storeDir, file));
-    const reused = hit?.thumb && hit.thumbData && hit.srcMtime === stat.mtimeMs ? hit : null;
+    // ⚠️ 这里**不能比 `info.size`** —— 它是整组之和，比它永远不等、白重抽。
+    //   源文件自己的大小记在 `srcBytes` 里，比的也是它。
+    // 同样要把"大图在不在"算进去（理由见 readFolder 里那处闸门的注释）
+    const reused = hit?.sig && hit.srcMtime === stat.mtimeMs && hit.srcBytes === stat.size
+        && hasBin(previewNameOf(hit.sig)) ? hit : null;
     if (reused) {
-        info.thumb = reused.thumb;
-        info.thumbData = reused.thumbData;
+        info.sig = reused.sig;
     } else {
-        const thumb = await makeThumb(filepath, ext);
-        if (thumb) {
-            info.thumb = newThumbKey(serial);
-            info.thumbData = thumb;
-        }
+        const sig = await makeRenditions(filepath, ext, pending);
+        if (sig) info.sig = sig;
     }
     // 同样两个分支都要记 —— 否则下次判不出这张封面变没变
     info.srcMtime = stat.mtimeMs;
+    info.srcBytes = stat.size;
 
     return [info];
 }
@@ -574,29 +668,35 @@ async function getFileTree(req: Req, res: http.ServerResponse) {
  * （调用方会以为那两坨 base64 还在）。原来的 `stripThumbData` 就是用
  * `Omit<...>` 表达这件事的，白名单重建把这层含义接管了过来。
  */
-export type WiredFileInfo = Omit<FileInfo, 'thumbData' | 'avatarThumbData'>;
+/**
+ * 下发态 = 存储态 + 图片的**名字**（`thumb` / `avatar` / `preview`）。
+ *
+ * 存储态里只有内容指纹 `sig`（+ 来源签名），前端要的是能直接请求的名字，
+ * 所以在唯一出口 `wire()` 里现拼（顺便做一次"这个文件在不在"的内存判断）。
+ */
+export type WiredFileInfo = WiredBase & {
+    /** 网格图片名（`t-<sig>.enc`）。为空 = 这一条没有图，界面画空白卡片 */
+    thumb?: string;
+    /** 目录的脸：与 thumb 同一个文件，只是渲染层用不同尺寸显示（70%） */
+    avatar?: string;
+    /** 预览大图名（`p-<sig>.enc`）。**可能还没有** —— 老条目会在第一次看时才补 */
+    preview?: string;
+    /** 预览大图**此刻**是否已存在于本地（缺了就得靠 `p` 参数现场生成，见 /preview） */
+    previewReady?: boolean;
+};
+
+type WiredBase = Omit<FileInfo, 'sig' | 'srcMtime' | 'srcBytes' | 'thumb' | 'avatar' | 'preview' | 'previewReady'>;
 
 /**
- * 条目 → 下发态：**按白名单重建**，只放行 `FileInfo` 里"会下发"的那 9 个字段。
+ * 存储态 → 下发态：**只保留渲染层真正用得到的字段**（白名单）。
  *
- * 为什么必须是白名单，而不是"把已知的内部字段解构掉"（原来这里是 `stripThumbData`）：
- * 黑名单是"我知道哪些要剥掉" —— 将来 `FileInfo` 少一个字段、或者库里的旧记录多一个字段，
- * 剥离表就漏，而漏的方式是**静默下发**。白名单是"我只认识这些"，之后字段怎么变都漏不出去。
+ * 为什么是白名单：条目可能来自上一版写进库里的记录，黑名单对"我不认识的多余字段"一律放行
+ * （实测：旧记录会把 17 个 `fs.Stats` 字段、含扫描当刻的卷序列号 `dev`，原样发给渲染层）。
  *
- * 这不是假想的问题。旧记录里每条都把整个 `fs.Stats` 序列化进去过，实测能漏出 17 个
- * 渲染层一个字都不看的字段（`dev` / `ino` / `nlink` / `atime*` / `mtime*` / …），
- * 其中 **`dev` 是扫描那一刻的卷序列号** —— 正是"盘符不是身份、序列号才是"这条设计
- * 明令不许进数据的东西。
- *
- * `files[]` 也必须重建：v1 里 `FileInfoFiles = fs.Stats & { name }`，
- * 每一项同样带着整包 stat。只清顶层等于只修一半。
- *
- * ⚠️ **别把 `thumbData` / `avatarThumbData` 也放进来** —— 它们是 `FileInfo` 的字段，
- * 但属于"只存不发"：base64 由 `wire()` 登记进内存索引、渲染层只拿 `thumb` 这个 key
- * 去 `/thumb` 取。放进来就等于把这个机制撤销了，payload 又回到几百 KB
- * （第一版白名单就踩了这个：实测下发 JSON 里真的出现了 base64）。
+ * ⚠️ `sig` / `srcMtime` / `srcBytes` 都**不下发**：它们只在服务端用来拼文件名与判"变没变"，
+ * 前端一个都不需要（多给一个字段 = 多一处会被误用的状态）。
  */
-export function pickFileInfo(raw: FileInfo): WiredFileInfo {
+export function pickFileInfo(raw: FileInfo): WiredBase {
     return {
         dir: raw.dir,
         name: raw.name,
@@ -605,20 +705,16 @@ export function pickFileInfo(raw: FileInfo): WiredFileInfo {
         files: raw.files?.map(f => ({ name: f.name, size: f.size })),
         type: raw.type,
         size: raw.size,
-        thumb: raw.thumb,
-        avatar: raw.avatar,
     };
 }
 
 /**
- * 登记缩略图 + 按白名单重建条目。
+ * 下发的唯一出口：按白名单重建条目 + 拼出图片名（`thumb` / `avatar` / `preview`）。
  *
  * **所有**下发路径都必须过这里，且只留这一处。上一版只有"缓存命中"那条路走 `toWire`，
  * 非盘符路径（UNC、网络位置）直接 `sendJson(readFolder(...))` 就出去了 ——
- * 缩略图压根没登记，前端拿到的 key 请求 /thumb 全是 404，整个网格是白框。
- *
- * 所以白名单也放在这里、而不是只放在"取缓存"那一支：**出口只有一个**，
- * 谁都不需要记得自己清一遍。fresh 扫出来的条目本来就是干净的，过一遍只是幂等。
+ * 图片名压根没拼，前端请求 /thumb 全是 404，整个网格是白框。
+ * fresh 扫出来的条目过一遍也是幂等的。
  */
 /**
  * 条目在**磁盘上的真名**。
@@ -649,7 +745,19 @@ async function safeSubtreeBytes(serial: string, relPath: string): Promise<Map<st
     }
 }
 
-async function wire(items: FileInfo[], serial = '', relPath = ''): Promise<WiredFileInfo[]> {
+/**
+ * @param live 这一屏是不是**真在盘上**（`toWire`）—— 只读锚点那条路传 false。
+ *   它只影响一件事：**要不要下发 `preview` 这个名字**（见下面）。
+ */
+/** 把某次扫描过程中登记的所有写盘等完（见 makeRenditions 的 @param pending）。 */
+async function flushRenditions(pending: Promise<unknown>[]): Promise<void> {
+    if (!pending.length) return;
+    // 一次性 take 走：万一将来有别处也 await 同一个袋，不必重复等。
+    const all = pending.splice(0, pending.length);
+    await Promise.all(all);
+}
+
+async function wire(items: FileInfo[], serial = '', relPath = '', live = true): Promise<WiredFileInfo[]> {
     // ── 目录条目的 size 在这里补（**唯一下发出口**，见上面那段注释）──────────────
     // Windows 上目录的 `stat.size` 恒为 0，而"目录多大"没有任何系统调用能直接给出；
     // 又不能在上游的 `readFolder` 补 —— 那个返回值会被 `scanAndCache` 写进缓存，
@@ -670,9 +778,28 @@ async function wire(items: FileInfo[], serial = '', relPath = ''): Promise<Wired
         : items;
 
     return sized.map(item => {
-        registerThumb(item.thumb, item.thumbData);
-        registerThumb(item.avatar, item.avatarThumbData);
-        return pickFileInfo(item);
+        const base = pickFileInfo(item);
+        // 图片名在这里**现拼**（唯一出口）。两种角色共用同一个文件：
+        // 图片/视频条目 → thumb；目录条目 → avatar（渲染层按 item.avatar 决定画多大）。
+        const name = thumbNameOf(item.sig);
+        // 「在不在」只看内存集合。不在就不下发 —— 免得网格里一排 404 白框
+        // （bin 仓整个没就绪时 `hasBin` 恒假，正好等于"这一版没有图"，界面不会炸）。
+        const exists = hasBin(name);
+        const isFolder = item.type === 'folder';
+        const previewName = previewNameOf(item.sig);
+        return {
+            ...base,
+            thumb: exists && !isFolder ? name : undefined,
+            avatar: exists && isFolder ? name : undefined,
+            // 预览名**只在这两种情况下发**：
+            //   ① 本地已经有这张大图；
+            //   ② 这一屏是真盘、而且这一条是**图片** —— 那才可能现场生成（读一次源、存下来）。
+            // 离线层、或视频条目，都**不发**：那种请求注定 404（离线没有源可读；视频的图
+            // 在扫描抽帧那一刻就有了，缺了就是抽帧失败，再问一次也不会有）。
+            // ⇒ 界面上不会再出现"一个必然失败的请求"，缩略图就是当前的最终答案。
+            preview: (hasBin(previewName) || (live && item.type === 'image')) ? previewName : undefined,
+            previewReady: hasBin(previewName),
+        };
     });
 }
 
@@ -745,7 +872,9 @@ function toAnchorPath(serial: string, relPath: string): string {
  * 逐字符一致（大小写也一样）—— `findCache` 是精确匹配，差一个字母就是未命中。
  */
 async function toAnchor(items: FileInfo[], serial: string, relPath: string): Promise<WiredFileInfo[]> {
-    return (await wire(items, serial, relPath)).map(item => ({ ...item, dir: toAnchorPath(serial, item.dir) }));
+    // 只读锚点：这一屏**没有源可读** ⇒ 不下发"待生成"的预览名（见 wire 的 live 参数）
+    return (await wire(items, serial, relPath, false))
+        .map(item => ({ ...item, dir: toAnchorPath(serial, item.dir) }));
 }
 
 /**
@@ -898,33 +1027,116 @@ async function openFolderController(req: Req, res: http.ServerResponse) {
  * 缩略图出口。前端只拿到 key，真正的 base64 一直待在主进程内存里，
  * 这样 /openFolder 的响应体可以小到几十 KB。
  */
-function thumbController(req: Req, res: http.ServerResponse) {
-    const dataUri = getThumb(req.params?.get('k') || '');
-    if (!dataUri) {
+async function thumbController(req: Req, res: http.ServerResponse) {
+    const name = req.params?.get('k') || '';
+    // ⚠️ 名字必须**按形状校验**：它是拼进文件路径的，`../` 之类绝不能过
+    if (!/^t-[0-9a-f]{40}\.enc$/.test(name)) {
+        res.writeHead(400, { 'Content-Type': 'text/plain' });
+        return res.end('bad key');
+    }
+    const buf = getBin(name);
+    if (!buf) {
         res.writeHead(404, { 'Content-Type': 'text/plain' });
         return res.end('thumb not found');
     }
 
-    const comma = dataUri.indexOf(',');
-    const buf = Buffer.from(comma === -1 ? dataUri : dataUri.slice(comma + 1), 'base64');
-
     res.writeHead(200, {
         'Content-Type': 'image/jpeg',
         'Content-Length': buf.length,
-        // key 是一次性的，内容永不变 —— 让 Chromium 长期缓存住，
-        // 来回切目录不会重复请求同一张图
+        // 名字里带**内容指纹** ⇒ 同名必同内容 ⇒ 可以永久缓存。
+        // 图换了就有新指纹、新 URL，**不会**出现"改了文件还显示旧图"。
         'Cache-Control': 'private, max-age=31536000, immutable',
     });
     res.end(buf);
 }
 
 /**
- * 原图出口 —— 只服务"点开放大"这一种场景。
+ * 预览大图出口 —— 点开看的那一张。
  *
- * 网格里必须用缩略图（那是这次重构的核心：103 MB → 12 MB），但放大预览时 480px
- * 会明显糊。所以预览单开一条路读原图：一次只读用户点开的那一张，不是整个目录，
- * 而且流式返回，对移动硬盘的额外负担可以忽略。
+ * 三种情形（这是它能同时做到"少读盘"和"离线也清晰"的原因）：
+ *   ① 本地已有 → 直接给（**0 读盘**，且带 immutable ⇒ 重复打开连请求都不发）；
+ *   ② 本地没有、但给了 `p`（源文件的完整路径，只有在线时前端才给）→ **读一次原图、
+ *      生成大图、落盘**，然后给。**只此一次**，之后走 ①。老缓存就是这样一条条自我升级的；
+ *   ③ 都没有 → 404。前端收到 404 就继续显示缩略图（静默降级，不报错）。
+ *
+ * ⚠️ **视频永远不会走 ②**：前端对视频不给 `p`（那些片子 5–7GB，绝不能因为"想看大图"
+ * 就去读它）；视频的大图在扫描抽帧那一刻就已经生成好了。
  */
+async function previewController(req: Req, res: http.ServerResponse) {
+    const name = req.params?.get('k') || '';
+    if (!/^p-[0-9a-f]{40}\.enc$/.test(name)) {
+        res.writeHead(400, { 'Content-Type': 'text/plain' });
+        return res.end('bad key');
+    }
+
+    const cached = getBin(name);
+    if (cached) {
+        res.writeHead(200, {
+            'Content-Type': 'image/jpeg',
+            'Content-Length': cached.length,
+            'Cache-Control': 'private, max-age=31536000, immutable',
+        });
+        return res.end(cached);
+    }
+
+    const filepath = req.params?.get('p') || '';
+    // 与 /raw 同一道闸：只服务"盘符:盘内路径"、且挡住 `..`
+    if (!filepath || !splitPath(filepath) || filepath.includes('..')) {
+        res.writeHead(404, { 'Content-Type': 'text/plain' });
+        return res.end('preview not ready');
+    }
+
+    let stat: fs.Stats;
+    try {
+        stat = await fsasync.stat(filepath);
+    } catch {
+        res.writeHead(404, { 'Content-Type': 'text/plain' });
+        return res.end('source missing');
+    }
+    if (!stat.isFile() || !isImage(getExt(filepath))) {
+        res.writeHead(400, { 'Content-Type': 'text/plain' });
+        return res.end('not a cached image');
+    }
+    // 异常大的图不另存（那种是异常文件）；但仍然给它一份能看的（不留 404）
+    const tooBig = stat.size > PREVIEW_SOURCE_MAX;
+
+    const buf = (await imageRenditions(filepath)).preview;
+    if (!buf) {
+        res.writeHead(404, { 'Content-Type': 'text/plain' });
+        return res.end('cannot build preview');
+    }
+
+    // 按**请求的那个名字**存下来 —— 不要在这里改写成"内容指纹"的名字。
+    //
+    // 为什么（这里曾出过两个错，都是我自己写的）：
+    //   ① 早期版本要求"内容指纹 == 请求名字"才落盘 ⇒ 对不上就只给一次、不存
+    //      ⇒ **每次点开都重读一遍源**（2026-10-04 主人实测撞上：离线看完还是糊）。
+    //   ② 改成"另存成内容指纹的名字 + 302 重定向" ⇒ 记录里那个名字**永远不会被填上**
+    //      ⇒ 前端下一屏还是请求它、还是 404、还是再读一遍源。**302 解决不了这个问题**，
+    //      因为发起请求的名字来自库、不会因为一次重定向而改变。
+    //
+    // 现在的语义是「**缓存槽位**」：`p-<sig>` = "记录 sig 所指那张源图的大图版本"。
+    // 与 t 一样，`sig` 取自**缩略图内容**，所以这两个名字是**同一源的两个尺寸**、
+    // 完全对称（见 makeRenditions 的注释）。由此：
+    //   · **懒生成是幂等的** —— 存完之后 `hasBin` 命中 ⇒ 这一张此后 0 读盘；
+    //   · 源文件在扫描之后被换掉时，存进去的是新内容、名字仍是旧标识 ——
+    //     这与"缩略图也还是旧的"是一致的（**没重扫就没发现变化**，本该如此）；
+    //     等哪次真扫到这一层，闸门按 mtime/字节数判出"变了" ⇒ 重出 ⇒ 新 sig ⇒ 新 URL。
+    //   · 已知的边界（可接受、极罕见）：两张不同的封面若缩略图字节**恰好完全相同**，
+    //     会共用同一个 `p-` 文件 ⇒ 看到同一张大图。384px JPEG 撞到全等的概率极低，
+    //     而用"两个字段分别锚两个尺寸"去彻底消除它，要为一个几乎不会发生的情况
+    //     多付一个持久化字段 + 一处迁移 —— 不划算（这一条是知情取舍，不是没看见）。
+    if (!tooBig) await putBin(name, buf);
+
+    res.writeHead(200, {
+        'Content-Type': 'image/jpeg',
+        'Content-Length': buf.length,
+        // 落了盘才敢长缓存；没落盘（源变了/图太大）就只用这一次，别让浏览器把它钉住
+        'Cache-Control': tooBig ? 'no-store' : 'private, max-age=31536000, immutable',
+    });
+    res.end(buf);
+}
+
 async function rawController(req: Req, res: http.ServerResponse) {
     const filepath = req.params?.get('p') || '';
 
@@ -1023,6 +1235,8 @@ async function listDisksController(req: Req, res: http.ServerResponse) {
         dbBytes = undefined;
     }
 
+    const bin = await binStats();
+
     sendJson(res, {
         disks: [
             ...drives.map(d => ({ ...d, online: true, ...(stats.get(d.serial) || empty) })),
@@ -1068,6 +1282,19 @@ async function listDisksController(req: Req, res: http.ServerResponse) {
             entries: metas.reduce((n, m) => n + (m.count || 0), 0),
             bytes: metas.reduce((n, m) => n + (m.bytes || 0), 0),
             dbBytes,
+            /**
+             * 图片（`bin/`）的张数与占用。
+             *
+             * 为什么必须单独报、不能只报 `dbBytes`：2026-10-04 之后**库瘦了 200 倍**
+             * （85 MB → 428 KB）而图片搬进了 `bin/`（几十 MB）—— 只报库的大小会让人
+             * 以为"缓存只有几百 KB"，那是**严重低估**（实测真库：库 428 KB / 图片 55 MB）。
+             *
+             * 代价：`binStats` 对每个图片文件做一次 `stat`。只在本接口里算一次
+             * （打开面板 / 点刷新），实测千级条目十几毫秒，且**只 stat 系统盘上的本地文件**，
+             * 不碰移动硬盘 —— 与"只汇总已有缓存、不读盘"那条硬约束一致。
+             */
+            binCount: bin.count,
+            binBytes: bin.bytes,
             lastScanAt: metas.reduce((a, m) => (m.create_at > a ? m.create_at : a), ''),
         },
     });
@@ -1203,18 +1430,56 @@ function bodyPath(req: Req): string {
 }
 
 /**
- * 「备份到文件…」—— 把主库整个复制到用户挑的位置。
+ * 「备份到文件…」—— 把**整份数据**打成一个 zip 交到用户挑的位置。
  *
- * 为什么不是"生成一份导出格式"：**主库文件本身就是这份数据的完整、自描述形态**
- * （键是 `(serial, relPath, mode)`，盘符不落数据 —— 见 nedb.ts 的 `SearchCache`）。
- * 再包一层导出格式只会多一种"格式不对就废掉"的文件，而没有一个字节的新信息。
+ * 2026-10-04 改：数据不再只是 `searchCache.db` 一个文件（图片搬到 `bin/` 了），
+ * 所以"拷走那一个文件"不再等于"拷走这份数据"。主人要求"导出尽可能只有一个文件、
+ * 用户才没有心理负担" ⇒ 打进一个 `.zip`：**Windows 资源管理器双击就能打开**，
+ * 里面有什么一目了然，而不是一个只有本程序认识的容器。
  *
- * 所以这里就是 `copyFile`，一个操作、没有中间态、失败也不留半个文件。
+ * 为什么 store-only（不压缩）：里面的东西已经压不动了 —— 库是逐行 AES 密文、
+ * 图片是加密后的 JPEG（实测 `gzip(JPEG)` ≈ 原大小）。压缩只会白烧 CPU。
+ *
+ * 包里的结构就是数据目录本身的样子：`searchCache.db` + `bin/<名字>.enc`。
  */
 async function backupToFile(req: Req, res: http.ServerResponse) {
     const target = bodyPath(req);
-    await fsasync.copyFile(CACHE_DB_PATH, target);
-    sendJson(res, { code: 200, message: 'ok' });
+    // ⚠️ 图片仓没就绪时**必须拒绝打包**：否则 `listBinNames()` 是空的，
+    //   打出来的 zip 只有库、没有一张图，而接口还会回"ok" ——
+    //   用户以为备份完整，真到需要时才发现封面全没了（静默丢数据，最坏的一种）。
+    if (binStoreFailed()) {
+        throw new Error('图片仓（bin 目录）读不出来，拒绝打包：否则会导出一个不含任何图片的备份。先重启应用再试。');
+    }
+    const entries = [
+        { name: 'searchCache.db', file: CACHE_DB_PATH },
+        ...listBinNames().map(n => ({ name: `bin/${n}`, file: path.join(BIN_DIR, n) })),
+    ];
+    const bytes = await writeZip(target, entries);
+    sendJson(res, { code: 200, message: 'ok', entries: entries.length, bytes });
+}
+
+/** 包里的图片条目（`bin/xxx.enc`）。名字要按形状校验：它会变成磁盘上的文件名 */
+function binEntriesOf(entries: { name: string }[]): string[] {
+    return entries
+        .map(e => e.name)
+        .filter(n => /^bin\/[tp]-[0-9a-f]{40}\.enc$/.test(n))
+        .map(n => n.slice(4));
+}
+
+/** 把包里的图片**只增不删**地并进本机 bin 仓（已有的跳过，绝不覆盖） */
+async function importBins(zipPath: string, names: string[]): Promise<number> {
+    if (!names.length) return 0;
+    const entries = await listZip(zipPath);
+    const byName = new Map(entries.map(e => [e.name, e]));
+    let added = 0;
+    for (const name of names) {
+        if (hasBin(name)) continue;                       // 已有就不动它：本地那份可能更新
+        const e = byName.get(`bin/${name}`);
+        if (!e) continue;
+        await putBinEncrypted(name, await readZipEntry(zipPath, e));
+        added++;
+    }
+    return added;
 }
 
 /**
@@ -1238,6 +1503,21 @@ async function backupToFile(req: Req, res: http.ServerResponse) {
 async function restoreFromFile(req: Req, res: http.ServerResponse) {
     const source = bodyPath(req);
 
+    // 先从包里把库抽出来（包里那份是**密文原样**，不需要解密——
+    // 库的每一行本来就是加密的，这里只做搬运）
+    let dbTmp: string;
+    let binNames: string[] = [];
+    try {
+        const entries = await listZip(source);
+        const dbEntry = entries.find(e => e.name === 'searchCache.db');
+        if (!dbEntry) throw new Error('包里没有 searchCache.db');
+        binNames = binEntriesOf(entries);
+        dbTmp = `${CACHE_DB_PATH}.restoring-${process.pid}-${Date.now().toString(36)}`;
+        await fsasync.writeFile(dbTmp, await readZipEntry(source, dbEntry));
+    } catch (e) {
+        throw new Error(`不是一份可用的备份包：${e}`);
+    }
+
     beginRestore();
     // 覆盖是否已经开始过 —— 只有它才决定"要不要回滚"。
     // 快照那一步失败时主库还没被动过，回滚反而是拿一份旧快照去盖好的库。
@@ -1246,7 +1526,7 @@ async function restoreFromFile(req: Req, res: http.ServerResponse) {
     try {
         await fsasync.copyFile(CACHE_DB_PATH, BEFORE_RESTORE_PATH);
         overwritten = true;
-        await fsasync.copyFile(source, CACHE_DB_PATH);
+        await fsasync.copyFile(dbTmp, CACHE_DB_PATH);
         await reloadFromDisk();
     } catch (e) {
         if (!overwritten) throw new Error(`还原失败：${e}`);
@@ -1262,9 +1542,15 @@ async function restoreFromFile(req: Req, res: http.ServerResponse) {
         throw new Error(`还原失败，选中的文件不是一份可用的缓存库。${note}`);
     } finally {
         endRestore();
+        fsasync.unlink(dbTmp).catch(() => { });
     }
 
-    sendJson(res, { code: 200, message: 'ok' });
+    // 库换完了再搬图片（**只增不删**：本地多出来的那份，可能正是包里缺的那几张）
+    const added = await importBins(source, binNames);
+    // 旧版备份（v2 库）里图片还是 base64：这里跑一次就地迁移，免得"还原完格子全白"
+    await migrateLegacyThumbs();
+
+    sendJson(res, { code: 200, message: 'ok', images: added });
 }
 
 /**
@@ -1286,7 +1572,28 @@ async function restoreFromFile(req: Req, res: http.ServerResponse) {
  */
 async function mergeCache(req: Req, res: http.ServerResponse) {
     const source = bodyPath(req);
-    const incoming = await readExternalCache(source);
+
+    // 2026-10-04：来源从"一个 .db 文件"变成"一个备份包（zip）" ——
+    // 里面那份库要抽成临时文件才能交给 `readExternalCache`（它按普通文件读、逐行解密）。
+    let dbTmp: string;
+    let binNames: string[] = [];
+    try {
+        const entries = await listZip(source);
+        const dbEntry = entries.find(e => e.name === 'searchCache.db');
+        if (!dbEntry) throw new Error('包里没有 searchCache.db');
+        binNames = binEntriesOf(entries);
+        dbTmp = `${CACHE_DB_PATH}.merging-${process.pid}-${Date.now().toString(36)}`;
+        await fsasync.writeFile(dbTmp, await readZipEntry(source, dbEntry));
+    } catch (e) {
+        throw new Error(`不是一份可用的备份包：${e}`);
+    }
+
+    let incoming: SearchCache[];
+    try {
+        incoming = await readExternalCache(dbTmp);
+    } finally {
+        fsasync.unlink(dbTmp).catch(() => { });
+    }
 
     let added = 0, replaced = 0, skipped = 0;
 
@@ -1318,7 +1625,12 @@ async function mergeCache(req: Req, res: http.ServerResponse) {
         current ? (replaced += 1) : (added += 1);
     }
 
-    sendJson(res, { code: 200, added, replaced, skipped, total: incoming.length });
+    // 并进来的可能是旧版（v2）记录 —— 跑一次就地迁移，把它们的 base64 图片搬进 bin
+    await migrateLegacyThumbs();
+    // 记录并完了再搬图片（只增不删；跨机器迁移时那些清晰的封面就是从这里过来的）
+    const images = await importBins(source, binNames);
+
+    sendJson(res, { code: 200, added, replaced, skipped, total: incoming.length, images });
 }
 
 /**
@@ -1406,6 +1718,7 @@ function route(path: string, handler: (req: Req, res: http.ServerResponse) => un
 route('/getHistory', getHistory);
 route('/openFolder', openFolderController);
 route('/thumb', thumbController);
+route('/preview', previewController);
 route('/raw', rawController);
 route('/getDisks', listDisksController);
 route('/getFileTree', getFileTree);
@@ -1520,10 +1833,14 @@ const app = http.createServer((req: Req, res) => {
  * 必须显式绑 127.0.0.1。
  * `app.listen(3060)` 不写 host 会绑到所有网卡上 —— 同一个 Wi-Fi 下别人直接就能
  * 访问这个服务，而它能读你任何路径的目录列表。
+ *
+ * ⚠️ 还要等**图片仓就绪**再 listen（2026-10-04 补）：`initBinStore()` 是模块加载时
+ * 发起的异步动作（mkdir + readdir），而本文件是 **import 即 listen**（渲染层 bundle
+ * 一加载就起服务）。原先直接 listen 的后果：端口可能先就绪、`names` 还是空集 ⇒
+ * 那零点几秒内进来的请求，`wire()` 会判定"这一层没有图" ⇒ **首屏一排白格子**（刷新才恢复）。
+ * 窗口很窄（readdir 千级条目几毫秒），但它是**启动必现的竞态**，而修法只有一行 await。
  */
-app.listen(3060, '127.0.0.1', function () {
-    console.log('Local Server: http://127.0.0.1:3060/');
-}).on('error', function (err: NodeJS.ErrnoException) {
+app.on('error', function (err: NodeJS.ErrnoException) {
     // 没有 error 监听时，端口被占会让整个 Electron 主进程直接崩掉
     if (err.code === 'EADDRINUSE') {
         console.error('[server] 端口 3060 已被占用。请先结束残留的 file-finder 进程再启动。');
@@ -1531,6 +1848,9 @@ app.listen(3060, '127.0.0.1', function () {
         console.error('[server] 本地服务启动失败:', err);
     }
 });
+whenBinReady().then(() => app.listen(3060, '127.0.0.1', function () {
+    console.log('Local Server: http://127.0.0.1:3060/');
+}));
 
 // 这里原来有一句「启动时清理旧格式缓存」（dropLegacyRecords）—— 已删除。
 // 它的判据是 `{ v: { $ne: 2 } }`，而 nedb 的 `$ne` 连"字段不存在"也匹配，
