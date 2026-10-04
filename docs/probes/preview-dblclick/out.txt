@@ -1,0 +1,34 @@
+
+{
+  "dblclick_new": {
+    "cardDblclick": 0,
+    "wheel": 0
+  },
+  "previewStillOpen_1": true,
+  "dblclick_old": {
+    "cardDblclick": 2,
+    "previewClosed": true,
+    "dblclickFired": 2,
+    "cardFound": true,
+    "stackLen": 5
+  },
+  "beforeWheel_scale": null,
+  "afterZoomIn_scale": 2.25,
+  "zoomIn_works": true,
+  "wheelHandled": 2,
+  "afterZoomOut_scale": 1.5,
+  "zoomOut_works": true,
+  "closed": true,
+  "listenerAfterClose": false,
+  "wheelAfterClose": 0,
+  "noGhostListener": true
+}
+
+---- 判定 ----
+PASS  ① 双击不触发卡片（原 BUG）
+PASS  ① 双击后预览仍开着
+PASS  ② A/B 对照：旧实现确实会穿透
+PASS  ③ 滚轮放大生效（scale 变大）
+PASS  ④ 滚轮缩小生效（scale 变小）
+PASS  ⑤ 关窗后无残留滚轮监听
+\n6/6 PASS

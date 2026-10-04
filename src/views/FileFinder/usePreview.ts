@@ -174,9 +174,6 @@ export function usePreview(deps: {
         return !!f && f.type === 'folder' && !f.avatar;
     });
 
-    /** 上一次已处理的预览图双击事件（同一个事件只处理一次，见下面 onDblclick） */
-    let lastPreviewDblclick: MouseEvent | null = null;
-
     /**
      * 预览面板里的图按比例**填满视口** —— 打开就是大的，不用再去点工具栏的放大。
      *
@@ -195,36 +192,74 @@ export function usePreview(deps: {
             ? { height: '128px', width: 'auto', objectFit: 'contain' as const }
             : { width: '100%', height: '100%', objectFit: 'contain' as const },
 
-        /**
-         * 双击**预览图** = 「关掉预览 + 把这一下双击还给下面那张卡片」。
-         *
-         * 为什么必须有：卡片是**双击**打开（打开那部视频 / 弹出多部组成的文件列表），
-         * 而上面那行 `width/height: 100%` 把预览图撑成**铺满视口**且 `pointer-events: all`
-         * ⇒ 预览一开，**双击的第二下就落在预览图上**，卡片的 `dblclick` 再也收不到。
-         * 后果：多部组成的封面**弹不出文件列表**；而卡片那条路打开的是第一 个视频文件
-         * ⇒ **永远第一部片子**。
-         *
-         * 走 naive-ui 给的正规入口（它会先把事件转给我们，不新增机制），两件事都走**已有的路**：
-         * ① 关预览 —— 点它自己的遮罩（遮罩在图的**下面**，鼠标够不到，这也是为什么只剩 ✕ / Esc 能关）；
-         * ② 还事件 —— 按坐标找出那张卡片 `dispatchEvent` 双击，走卡片自己的 `handleOpen`。
-         *
-         * ⚠️ 这个回调会被调**两次**（实测：修前 2、修后 1，见 `docs/probes/preview-nav/`）——
-         * `mergeProps` 对**两边都有**的 `onXxx` 会合并成数组、**两个都调**，且它内部
-         * **又**显式调一次我们的 onDblclick ⇒ 两条路都到我们这儿。修法用**事件同一性**
-         * （同一个 `MouseEvent` 只处理一次），不去猜哪条路先到—— 那是内部实现细节，不该当前提。
-         */
         onDblclick: (e: MouseEvent) => {
-            if (e === lastPreviewDblclick) return;
-            lastPreviewDblclick = e;
-            document.querySelector<HTMLElement>('.n-image-preview-overlay')?.click();
-            const card = document
-                .elementsFromPoint(e.clientX, e.clientY)
-                .find(el => el instanceof HTMLElement && el.classList.contains('image-box-item'));
-            card?.dispatchEvent(new MouseEvent('dblclick', {
-                bubbles: true, cancelable: true, clientX: e.clientX, clientY: e.clientY,
-            }));
+            // ⚠️ 这里**故意什么都不做**（2026-10-04 业主裁定「双击单击都没有行为」）。
+            //
+            // 它曾经是「关预览 + 把双击还给下面那张卡片」，为修「多部组成的封面弹不出文件列表」。
+            // 但那个设计抢走了双击这个动作：双击预览图会**直接开视频 / 进文件夹**，
+            // 而双击图片看细节是所有看图器的既有肌肉记忆（naive-ui 本来就实现了）——
+            // **一个动作被两种意图抢，输的那个是用户**。
+            //
+            // 缩放改走两条不需要抢占的路径（见下面 `previewedImgProps` 外的 `installWheelZoom`）：
+            // 工具条的放大/缩小按钮，以及**滚轮**。关预览走 Esc / ✕ / 点图外。
+            e.preventDefault();
         },
     }));
+
+    /**
+     * 滚轮缩放。**复用 naive-ui 已有的机制，不新增任何缩放实现。**
+     *
+     * 为什么需要：业主裁定「双击、单击都没有行为」之后，缩放只剩工具条那两颗按钮 ——
+     * 而看图时"随手滚一下放大细节"是极强的手势习惯，逼用户去够工具条是倒退。
+     *
+     * 为什么派发 `ArrowUp` / `ArrowDown` 键而不是自己改 scale：
+     *   - 它的 `handleKeydown` 绑在 **document** 上（实测 `ImagePreview.mjs:112`），
+     *     且 `ArrowUp→zoomIn` / `ArrowDown→zoomOut`（`:91` / `:95`）**已经接好了**；
+     *   - 自己改 scale 就得重写它的 clamp（`0.5 ~ maxScale`）与 offset 回弹逻辑
+     *     （`:279-297`）—— 那是它的内部实现细节，不该被复制。
+     * ⇒ 派发键事件 =走**它自己的路**，缩放上限、下限、手势一致性全部天然一致。
+     *
+     * ⚠️ 撤的时候**必须真的摘掉监听**：不撤就是"看不见的全局监听"，
+     *    组件没了（或预览关了）还会一直拦滚轮。
+     */
+    /** 撤销函数；`undefined` = 当前没挂（比一个布尔 flag 少一个能写错的组合） */
+    let removeWheelZoom: (() => void) | undefined;
+    const installWheelZoom = () => {
+        if (removeWheelZoom) return;   // 幂等：重复挂会双倍缩放
+        const onWheel = (e: WheelEvent) => {
+            // naive-ui 只拦不缩；这里也只在**预览开着**时拦，否则会冻住整个页面的滚动
+            if (!previewOpen.value) return;
+            e.preventDefault();
+            document.dispatchEvent(new KeyboardEvent('keydown', {
+                key: e.deltaY < 0 ? 'ArrowUp' : 'ArrowDown',
+                bubbles: true,
+                cancelable: true,
+            }));
+        };
+        document.addEventListener('wheel', onWheel, { passive: false });
+        removeWheelZoom = () => {
+            document.removeEventListener('wheel', onWheel);
+            removeWheelZoom = undefined;
+        };
+    };
+
+    /**
+     * 滚轮缩放的挂/撤跟着 `previewOpen` 走 —— **一处管两头，不漏任何开关路径**。
+     *
+     * 为什么不用 `onPreviewShowChange`：那个回调只在**关闭**时被调（`v === false`），
+     * 打开时不经过它 ⇒ 只在关的地方挂会漏掉"开"。
+     * 为什么不在 `openPreview` 里挂：关有三条路（✕ / Esc / 点遮罩），挂在那儿撤不干净。
+     * `watch` 的是**派生状态**，所以"条目没了、索引算成 -1 自动关闭"那条路也一并覆盖。
+     *
+     * ⚠️ 放在 `installWheelZoom` **定义之后**（TDZ）：`watch` 默认不立即执行，
+     * 所以当前顺序即便反过来也"侥幸不炸" —— 但那份侥幸依赖"`installWheelZoom`
+     * 在声明时已存在"这个隐含前提，哪天有人加 `immediate: true` 就当场 TDZ。
+     * **顺序写成"先定义后使用"，不靠侥幸。**
+     */
+    watch(previewOpen, open => {
+        if (open) installWheelZoom();
+        else removeWheelZoom?.();
+    });
 
     // ── 工具条 ────────────────────────────────────────────────────────────────
     // ⚠️ 这里的样式必须**内联**：这块 DOM 由 naive-ui 渲染并 teleport 到 body，
@@ -272,6 +307,16 @@ export function usePreview(deps: {
         ];
     };
 
+    /**
+     * 卸载时收干净：挂起的清晰版计时器 + 滚轮监听。
+     * `installWheelZoom` 返回它自己的撤销函数（对称于 `addEventListener`）——
+     * **不返回就是"看不见的全局监听"**，组件没了还会一直拦滚轮。
+     */
+    const dispose = () => {
+        window.clearTimeout(sharpTimer);
+        removeWheelZoom?.();
+    };
+
     return {
         // 写入口
         openPreview, closePreview, locateInGrid,
@@ -284,7 +329,8 @@ export function usePreview(deps: {
         previewToolbar,
         // 要 provide 进 imageContextKey 的那个
         previewedImgProps,
-        /** 卸载时清掉"停住 0.3s"的挂起计时器（组件没了就别再起来） */
-        dispose: () => window.clearTimeout(sharpTimer),
+        /** 挂滚轮缩放。**必须在预览开着时调**，否则滚轮会拦住整个页面 */
+        installWheelZoom,
+        dispose,
     };
 }
