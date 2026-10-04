@@ -288,15 +288,10 @@ import type { OpenMode } from 'electron/server/nedb';
 /**
  * ⚠️ naive-ui 内部路径（深导入）。为什么非要用它：预览层由 `n-image-group` 渲染，
  * 而 `previewedImgProps`（"铺满视口" + "双击穿透给下面那张卡片"）**只从 `imageContext` 取**，
- * naive-ui **没有给 group 留这个 prop**（`ImagePreview.mjs:390-428`、`:550-564`）。
- * 组渲染出的 ImagePreview 的父链是 `ImagePreview ← ImageGroup ← 本组件`，
- * 所以在本组件 `provide` 一次就能喂到它。
- * 合法性：naive-ui 的 `package.json` **没有 `exports` 字段**（实测）⇒ 深路径可导入。
- * 风险知情：naive-ui 升级可能改路径。当前 pin 2.45.3。
- * ⚠️ 路径**必须带 `.mjs`**：本项目 `vite.config.ts` 把 `resolve.extensions` 收成了
- * `['.ts', '.vue', '.js']`（没有 `.mjs`）⇒ 不带扩展名连 dev 都解析不了（构建实测报
- * "Rollup failed to resolve"）。类型由 `src/naive-image-internal.d.ts` 声明补上
- * （TS 的 node 解析对 `.mjs` 找的是 `.d.mts`，而包里只有 `interface.d.ts`）。
+ * 而 naive-ui **没有给 group 留这个 prop** ⇒ 在本组件 `provide` 一次就能喂到它
+ * （父链 `ImagePreview ← ImageGroup ← 本组件`）。合法性：naive-ui `package.json`
+ * **没有 `exports` 字段**（实测）⇒ 深路径可导入；风险：升版本可能改路径，当前 pin 2.45.3。
+ * ⚠️ 路径**必须带 `.mjs`**：本项目 `resolve.extensions` 没有 `.mjs` ⇒ 不带连 dev 都解析不了。
  */
 import { imageContextKey } from 'naive-ui/es/image/src/interface.mjs';
 
@@ -543,40 +538,18 @@ let lastPreviewDblclick: MouseEvent | null = null;
 /**
  * 预览面板里的图按比例**填满视口** —— 打开就是大的，不用再去点工具栏的放大。
  *
- * 为什么需要它：预览那张 img 的脚手架样式只有
- * `max-width: calc(100vw - 32px)` / `max-height: calc(100vh - 32px)`，**没有 width/height**
- * （naive-ui `es/image/src/styles/index.cssr.mjs` 的 `.n-image-preview`），
- * 所以它是按**自然尺寸**显示的 —— 图片走 /raw 原图，本来就比视口大，看不出问题；
+ * 为什么需要：预览那张 img 的脚手架样式**只有 `max-width/max-height`、没有 `width/height`**
+ * （`.n-image-preview`）⇒ 它按**自然尺寸**显示。图片走 /raw 原图本来就比视口大，看不出问题；
  * 但视频的预览图是 480px 宽的抽帧，在 1920 的窗口里就只有一个小方块。
- * ⚠️ 这里原来还写着"放大按钮对 480px 的图是死的（`maxScale = max(1, naturalWidth/(innerWidth-40))`
- * 恒为 1）"——**那句是错的**（2026-10-04 核对）：那个公式在 naive-ui 2.45.3 里**不存在**
- * （全仓 grep 0 命中），真实的是 `getMaxScale()` = `Math.max(3, 高×2, 宽×2)`
- * （`ImagePreview.mjs:252-264`），下限 3 ⇒ 那颗按钮点得动。
- * 结论不变：铺满仍是更好的默认 —— 打开就是大的，不必先点两下；而且点它放大出来的
- * 还是同一张 480px，一样糊（放大不增加信息）。
- *
  * 这里用 naive-ui 给预览图留的正规入口 `previewed-img-props` 补上 100% × 100% + contain：
- * contain 保证不变形；脚手架自带的 max-* 会把二者钳到 (100vw-32) × (100vh-32)，
- * 所以那圈边距和底部工具条的位置**原样保留**（不是我们另设的魔法数字）。
+ * contain 保证不变形，脚手架自带的 max-* 会把二者钳到 (100vw-32) × (100vh-32)
+ * ⇒ **那圈边距不是我们另设的魔法数字**。
  *
- * 实测（`docs/probes/preview-fill/`，真 Electron offscreen 跑真实 Chromium 布局，视口 1903×1063）：
- *   480×270 抽帧（视频） → 显示 **480×270 → 1833×1031**（撑满，≈3.8 倍插值 —— 收益全在这一档）
- *   3000×2000 原图（图片） → 显示 **1546.5×1031 → 1546.5×1031**（**视觉零变化**）
- * 也就是说：图片走 /raw 原图那一档本来就已被 max-* 钳到贴边，**这个改动只对"比视口小的图"起作用**。
+ * ⚠️ 它现在必须**由本组件 provide 进 `imageContextKey`**：预览层改由 `n-image-group` 渲染后，
+ * 父链是 `ImagePreview ← ImageGroup ← 本组件`，而 naive-ui 没给 group 留这个 prop。
+ * 不 provide 就会同时丢掉"铺满"和下面那个"双击穿透"两件已实测的特性。
  *
- * 代价（知情选择，同一次实测）：
- * - 480px 的抽帧填满视口 ≈ 3.8 倍插值，会糊 —— 要真清晰得让抽帧存更大的图，
- *   那要重算缓存、重读一遍移动硬盘，**不做**（第一目标是少碰盘）。
- * - 预览图的**元素盒**从"贴合图"变成"铺满 (100vw-32) × (100vh-32)"，
- *   于是"点图外空白关闭预览"的可点区缩小：抽帧那种只剩最外圈 16px
- *   （实测命中点：x=8 命中 overlay、x=40 命中 img），大图左右两侧的 contain 留白也归了 img。
- *   关闭照旧有三条路：工具条的 ✕（常显）、最外圈空白、Esc（`ImagePreview.mjs:97`）。
- *
- * ⚠️ 2026-10-04：它现在必须**由本组件 provide 进 `imageContextKey`** —— 预览层改由
- * `n-image-group` 渲染之后，组渲染出的 ImagePreview 的父链是
- * `ImagePreview ← ImageGroup ← 本组件`，而 naive-ui **没给 group 留 previewed-img-props 这个
- * prop**（只有 `<n-image>` 子节点用它自己的 context 喂）。不 provide 就会同时丢掉
- * "铺满"和下面那个"双击穿透"两件已实测的特性。
+ * 代价与实测数据见 `docs/DESIGN-PREVIEW-BAR-2026-10-04.md` §五、`docs/probes/preview-fill/`。
  */
 const previewedImgProps = computed<ImgHTMLAttributes>(() => ({
     style: isIconEntry.value
@@ -589,30 +562,19 @@ const previewedImgProps = computed<ImgHTMLAttributes>(() => ({
      *
      * 为什么必须有：卡片是**双击**打开（打开那部视频 / 弹出多部组成的文件列表），
      * 而上面那行 `width/height: 100%` 把预览图撑成**铺满视口**且 `pointer-events: all`
-     * （naive-ui 的 `.n-image-preview` 是 `pointer-events: all`，外包一层是 `none`）⇒
-     * 预览一开，**双击的第二下就落在预览图上**，卡片的 `dblclick` 再也收不到。
-     * 实测（`docs/probes/popover-pick/`，真 Chromium）：双击卡片后 `dblclick` 的 target = `.n-image-preview`。
-     * 后果正是用户反馈的那条：多部组成的封面**弹不出文件列表**；本该落在列表上的点击漏到下层卡片上，
+     * （`.n-image-preview` 是 `all`，外包一层是 `none`）⇒ 预览一开，**双击的第二下就落在预览图上**，
+     * 卡片的 `dblclick` 再也收不到。后果：多部组成的封面**弹不出文件列表**；
      * 而卡片那条路打开的是 `files.find(VIDEO_EXT_RE)` ⇒ **永远第一部片子**。
      *
-     * 这里用的是 naive-ui 给预览图留的正规入口 —— `ImagePreview` 的 `handlePreviewDblclick`
-     * 会先把事件转给 `previewedImgProps.onDblclick`（naive-ui `ImagePreview.mjs`），不新增机制。
-     * 两件事都走**已有的路**：
-     *   ① 关预览 —— 点它自己的遮罩（遮罩的 `onClick` 就是 `close()`）。遮罩在图的**下面**，
-     *      鼠标够不到它，这也是为什么现在只剩 ✕ / Esc 能关；
-     *   ② 还事件 —— 按坐标找出那张卡片，`dispatchEvent` 一下双击，走卡片自己的 `handleOpen`。
+     * 走naive-ui 给的正规入口（`handlePreviewDblclick` 会先把事件转给我们，不新增机制），
+     * 两件事都走**已有的路**：① 关预览 —— 点它自己的遮罩（遮罩在图的**下面**，鼠标够不到，
+     * 这也是为什么只剩 ✕ / Esc 能关）；② 还事件 —— 按坐标找出那张卡片 `dispatchEvent` 双击。
      * 代价：预览图本身的双击放大没了（工具条里那颗「原始大小」照旧在，功能没少）。
      *
-     * ⚠️ 2026-10-04 修一个**由此暴露出来的既有缺陷**：这个回调会被调**两次**。
-     * 原因（naive-ui 的 mergeProps 语义，不是我们写错）：`previewedImgProps` 整个对象被
-     * `mergeProps(previewedImgProps, { onDblclick: handlePreviewDblclick, … })` 铺到那张 img 上
-     * （`ImagePreview.mjs:555-564`），而 `mergeProps` 对**两边都有**的 `onXxx` 会合并成数组、
-     * **两个都调**；同时 `handlePreviewDblclick` 内部**又**显式调了一次我们的 onDblclick
-     * （`:218-223`）⇒ 两条路都到我们这儿。
-     * 后果（实测，见下）：卡片被 `dispatchEvent` 了**两次** dblclick —— 双击预览图进子目录会
-     * 压两条一样的历史（返回要按两次）、双击视频会**交给系统播放器两次**。
-     * 实测证据：`docs/probes/preview-nav/`（真 Chromium，`dblclickHits` 修前 = 2、修后 = 1）。
-     * 修法用**事件同一性**（同一个 `MouseEvent` 对象只处理一次），而不是去猜哪条路先到 ——
+     * ⚠️ 这个回调会被调**两次**（实测：修前 2、修后 1，见 `docs/probes/preview-nav/`）——
+     * `mergeProps` 对**两边都有**的 `onXxx` 会合并成数组、**两个都调**，
+     * 且 `handlePreviewDblclick` 内部**又**显式调一次我们的 onDblclick ⇒ 两条路都到我们这儿。
+     * 修法用**事件同一性**（同一个 `MouseEvent` 只处理一次），而不是去猜哪条路先到 ——
      * 两条路的先后顺序是 naive-ui 的内部实现细节，不该当成前提。
      */
     onDblclick: (e: MouseEvent) => {
@@ -633,21 +595,19 @@ provide(imageContextKey, { previewedImgPropsRef: previewedImgProps });
  * 预览工具条：**把「下载」那颗去掉**，其余原样。
  *
  * naive-ui 的工具条是写死的（旋转×2 / 原始大小 / 缩放×2 / 下载 / 关闭），**没有单独的开关**；
- * 官方留的口子就是 `render-toolbar`（`n-image` 会把它透传给预览层，见 naive-ui `Image.mjs` 的
- * `renderToolbar: this.renderToolbar`）。所以这里是"用官方入口少渲染一颗"，不是 CSS 藏节点。
+ * 官方留的口子就是 `render-toolbar` ⇒ 这里是"用官方入口少渲染一颗"，不是 CSS 藏节点。
  *
  * 为什么必须去掉：
- *   ① 误触 —— 它就紧挨着「关闭」（✕ 的左邻），而预览图现在铺满视口、点图外关不掉
- *      （遮罩在图的下面），用户只能去点工具条 ⇒ 老是点到它（本次用户反馈）；
- *   ② 它真的读移动硬盘 —— 下载的就是 `/raw` 那条原图（封面一张几 MB），
- *      和「少碰移动硬盘」这条第一目标直接冲突。
+ *   ① 误触 —— 它紧挨着「关闭」（✕ 的左邻），而预览图铺满视口、点图外关不掉（遮罩在图的下面），
+ *      用户只能去点工具条 ⇒ 老是点到它（本次用户反馈）；
+ *   ② 它真的读移动硬盘 —— 下载的就是 `/raw` 那条原图，和「少碰移动硬盘」这条第一目标直接冲突。
  * 顺带：工具条从此只做"看"，不做"取"。
  *
  * ⚠️ 2026-10-04 新增的三样（**原有 6 颗一颗没动，✕ 仍在最右** —— 上次那个误触的教训）：
- *   ① 「定位」（最左）：关预览 + 网格滚到那一格 + 闪一下（= 回车键同款动作）；
- *   ② `nodes.prev` / `nodes.next`：naive-ui 的工具条 `nodes` 里**本来就有**这两颗
- *      （`ImagePreview.mjs:521-539` 只是默认只在 `onPrev` 存在时才渲染它们；本组件自己排
- *      render-toolbar，所以一直拿得到）—— 用官方节点，不自己画箭头、不自己接键盘；
+ *   ① 「定位」：关预览 + 网格滚到那一格 + 闪一下（= 回车键同款动作）；
+ *   ② `nodes.prev` / `nodes.next`：工具条 `nodes` 里**本来就有**这两颗（只是默认只在 `onPrev`
+ *      存在时才渲染；本组件自己排 render-toolbar，所以一直拿得到）—— 用官方节点，
+ *      不自己画箭头、不自己接键盘；
  *   ③ 名称 + 计数（`3 / 24`）。名称取 `item.name`，与**网格里那行字逐字相同**：
  *      两个视图里的"同一条"必须看起来就是同一条（封面条目的名字是封面图名，这里也一样）。
  *
@@ -662,26 +622,12 @@ const PREVIEW_GROUP_LEFT_STYLE = `${PREVIEW_GROUP_STYLE} min-width: 0;`;
 const PREVIEW_GROUP_RIGHT_STYLE = `${PREVIEW_GROUP_STYLE} margin-left: auto;`;
 
 /**
- * 工具条：**左信息（名称 + 计数） · 右操作（全部按钮）**，底板从"居中胶囊"改成**贴底通栏**。
+ * 工具条：**左信息（名称 + 计数） · 右操作（全部按钮）**，底板从"居中胶囊"改成**贴底通栏**
+ * （业主裁定「下方的空间尽可能利用，别浪费」：内容在 2048 宽下只占 844px，
+ * 两侧各空 602px —— 那是浪费掉的底板，不是留白）。
+ * 顺序：定位/上一条/下一条排在按钮组**最左**（「在哪 / 看哪条」一组）与旋转缩放分隔
+ *（「把这条图怎么变」另一组）；**✕ 保持最右**（见上的误触教训）。
  *
- * ⚠️ 为什么底板必须通栏（2026-10-04，主人裁定「下方的空间尽可能利用，别浪费」）：
- *   改之前是 `left:50% + translateX(-50%)` 的居中胶囊，而我们的内容（10 颗按钮 + 名称 + 计数）
- *   在 2048 宽下只有约 844px —— 两侧各空 602px，**那是浪费掉的底板，不是留白**。
- *   通栏之后那 1200px 变成"信息与操作之间的呼吸"，左侧信息右边操作在2048 宽下各归其位。
- *   代价（知情选择，实测 `docs/probes/preview-bar/`）：图盒从 `100vh-32` 缩到 `100vh-80`
- *   （少 48px），但换掉了原先被工具条压住的 88px ⇒ **可见图高净增 40px**（不是变小）。
- *
- * 为什么左右分组而不是一颗居中的：
- *   名称/计数是「我在看哪一条」（信息），按钮是「我能做什么」（操作）。
- *   2048 宽下居中一坨会让两者挤在中间、左右对称留白，读起来像"漂浮的孤岛"；
- *   左信息右操作是资源管理器 / Photos / Figma 的通用骨架，视线有固定的落点。
- *
- * 顺序：**原有 6 颗一颗没动、✕ 仍在最右**（上次「下载紧邻 ✕ 造成误触」的教训，见上）。
- * 新的三样（定位/ 上一条 / 下一条）排在按钮组**最左**，和旋转缩放分隔开 ——
- * 「在哪 / 看哪条」是一组，「把这条图怎么变」是另一组。
- *
- * ⚠️ 名称/计数/分组外壳的样式必须**内联**：这块 DOM 由 naive-ui 渲染并 teleport 到 body，
- * 本组件的 `<style scoped>` 够不到它（scoped 只作用于本组件模板里的元素）。
  * 底板与 wrapper 的样式走下面那个**非 scoped** 的 style 块。
  */
 const previewToolbar = ({ nodes }: { nodes: Record<string, any> }) => {
@@ -1117,15 +1063,12 @@ const copyNameStem = async () => {
 
 /**
  * 只做一件事：把服务端给的完整列表取回来放进 dataSource。
+ * 原来还会顺手清空搜索框 —— 取数的函数不该同时改别的状态，清空/恢复交给导航动作自己负责。
  *
- * 这里**不再**顺手清空搜索框（原来会清）—— 取数的函数不该同时改别的状态。
- * 清空/恢复交给导航动作自己负责，于是 onRefresh 那套"先存 query 再还原"的仪式也不需要了。
- *
- * 渲染层**没有**缓存了。原来那个 `fetchCache` 按 `path+mode` 存整份列表，而盘符会被复用：
- * A 盘挂 H:/x 缓存住 → 拔 A 插 B → 返回时命中缓存，压根不请求服务端 ——
- * 用户看到的是 A 的清单，双击打开的却是 B 盘上的路径。服务端那侧每次 stat 都复核
- * "这个盘符现在的主人是谁"，渲染层这份缓存正好把那次复核整个绕过。
- * 服务端热读实测 1–2 ms、响应体 1.6 KB，这份缓存换来的那点时间量不出来。
+ * 渲染层**没有**缓存：原来那个 `fetchCache` 按 `path+mode` 存整份列表，而盘符会被复用 ——
+ * A 盘挂 H:/x 缓存住 → 拔 A 插 B → 返回时命中缓存、压根不请求服务端，用户看到的是A 的清单、
+ * 双击打开的却是 B 盘上的路径。服务端那侧每次 stat 都复核"这个盘符现在的主人是谁"，
+ * 渲染层这份缓存正好把那次复核整个绕过，而它换来的那点时间量不出来。
  */
 /**
  * 请求序号。只有「最新一次」请求的响应才有资格写进 `dataSource`。
@@ -1138,9 +1081,7 @@ const copyNameStem = async () => {
  * 为什么不去给那 4 个入口各补一道 `if (loading.value) return`：那是补丁 ——
  * 防错的责任落在调用方，以后新增第 6 个入口忘了加，同样的错乱立刻复活；
  * 而且 `loading` 是全局粗粒度锁，慢目录加载期间会把整个导航一起冻住。
- * 把判断收到**唯一的写入点**之后，「过期响应写入」在结构上不可能发生 ——
- * 这和上面 `fileList` 从 ref 改成 computed 是同一个思路，
- * 那边的注释写的也是「让这类时序 bug 在结构上就不可能存在」。
+ * 把判断收到**唯一的写入点**之后，「过期响应写入」在结构上不可能发生。
  */
 let fetchSeq = 0;
 
@@ -1750,22 +1691,18 @@ const getAnchor = async (path: string): Promise<string> => {
  * 主进程报「盘列表变了」。**插拔是对称的两件事，这里都管**：
  *
  *   【插】正停在只读层、而那块盘回来了 ⇒ **自动切到实时**。
- *        用户插盘这个动作本身就说明了他要看真的，再让他点一下是多余的一步。
- *
  *   【拔】正停在实时层、而那个盘符没了 ⇒ **自动降级成只读锚点**，继续用缓存看。
- *        不这么做的话：列表靠内存还撑着、看着一切正常，可**一刷新就报 offline、
- *        双击也打不开** —— 用户根本不知道发生了什么。降级之后目录和缩略图都还在，
- *        服务端走 `findCache`，**零读盘**（比拔盘前每次 readdir + stat 还轻）。
+ *
+ * 【拔】那条不这么做的话：列表靠内存还撑着、看着一切正常，可**一刷新就报 offline、
+ * 双击也打不开** —— 用户根本不知道发生了什么。降级之后目录和缩略图都还在，
+ * 服务端走 `findCache`，**零读盘**。
  *
  * 另外每次都让「缓存记录」面板重取一次数据 —— 否则它每行的「在线 / 离线」
  * 会一直停在插拔前的状态（面板打开时刻意不重探盘符，见那边的注释）。
  *
- * ⚠️ 两条路都**不解析锚点内容**（那是服务端的活，只有它才有 serial → 盘符 映射）：
+ * ⚠️ 两条路都**不解析锚点内容**（那是服务端的活，只有它才有 serial →盘符 映射）：
  * 靠 `/resolveAnchor`（锚点→路径）与 `/anchorOf`（路径→锚点）两个方向相反的接口，
  * 把转换整个交给服务端。渲染层对锚点的认知仍然只有"前缀是不是 `#`"。
- *
- * 不用管 `loading`：切换那次请求会被 `fetchSeq` 判为最新、正在飞的那次自动作废 ——
- * 这正是序号法存在的意义，不需要再加一道守卫。
  */
 const onDisksChanged = async (disks: { serial: string; drive: string }[]) => {
     historyTable.value?.refreshIfOpen();
