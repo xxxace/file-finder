@@ -1,0 +1,27 @@
+
+[A] zip deflate/store 混合读写
+  PASS  3 个条目全部解出 — 实际 3
+  PASS  库条目用 deflate
+  PASS  库条目 inflate 后逐字一致
+  PASS  库条目 CRC 与原始内容一致
+  PASS  图片条目用 store
+  PASS  图片字节逐字一致
+  PASS  manifest 用 deflate
+
+[B] 明文 → encryptLine → 磁盘 → decryptLine 往返
+  PASS  密文不含换行
+  PASS  往返逐字一致
+
+[C] 新旧包兼容判定（encryptPlainDb 逻辑）
+  PASS  新格式包：被加密（首行不再以 { 开头）
+  PASS  新格式包：解密后逐行还原
+  PASS  旧格式包：原样返回（不双重加密）
+  PASS  旧格式包：仍能解密出原文
+
+[D] 真实库的体积收益
+  现状（密文 store）: 441.5 KB
+  新方案（明文 deflate）: 80.7 KB
+  明文原大小: 311.4 KB
+  PASS  新方案体积 <= 现状 60% — 省 81.7%
+
+===== 14 PASS / 0 FAIL =====

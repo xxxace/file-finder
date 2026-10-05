@@ -130,6 +130,11 @@
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+  /* ⚠️ 不能少：n-tag 的 `line-height:1` 会继承进来 ⇒ 上面的 `overflow:hidden`
+               （省略号的前置条件）裁剪盒只有 1em=14px，比字体内容区（实测 16~20px）还矮，
+               字形顶/底被切 —— 实测换主字体即复现"顶行被裁"（docs/probes/crumb-clip/）。
+               取 tag 自己的内高 ⇒ 盒 28px、墨迹余量 7.5px；tag 高是定值、行盒居中 ⇒ 零布局影响。 */
+  line-height: var(--n-height, 1.4);
 }
 .nav-zone .crumb[data-v-probe]:not(.crumb-root)::before {
   content: '›';

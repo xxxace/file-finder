@@ -380,6 +380,56 @@ export async function cacheBackup() {
 }
 
 /**
+ * 把**当前内存态**导出成明文（每行一条 JSON，结尾含一行索引），返回整串。
+ *
+ * 这是 `exportCompactSnapshot`（写文件）与 `backupToFile`（进备份包）**共用的唯一来源**：
+ * 两处都要"内存态 → 紧凑明文"，抄两份迟早出现"备份里和快照里格式不一样"。
+ *
+ * ⚠️ 为什么不能用 `copyFile(CACHE_DB_PATH, …)` 当快照（**这是 2026-10-05 修的 P1 缺陷**）：
+ *
+ *   nedb 的写路径是 **append-only**（`persistence.js` 的 `persistNewStateAsync` →
+ *   `appendFileAsync`）：删除记录也只是**追加**一条 `$$deleted` 标记，旧行**物理上仍在**。
+ *   整库压缩（`persistCachedDatabaseAsync`）**只在 `loadDatabase` / `compactDatafile` 时发生**。
+ *
+ *   于是磁盘文件**不等于**内存态：只要本次进程启动后发生过增删改，
+ *   磁盘上就躺着已被逻辑删除的"历史追加行"。
+ *   ⇒ `copyFile` 那份快照，回滚时那些**已删记录会复活**；
+ *   ⇒ 更糟的是，若拷贝那一刻主库正在被后台扫描追加写，还可能**截到半行**——
+ *      回滚出一份**半损坏的库**（nedb 会把它算作 corrupt，超 10% 直接拒绝启动）。
+ *
+ *   而**内存态才是真相源**。所以必须从内存**重新序列化**，而非拷磁盘文件。
+ *   判据（会不会复发）：任何增删改都不再影响快照正确性 —— 这是修复，不是补丁。
+ *
+ * 输出天然**紧凑**：只有活记录 + 一行索引，没有任何历史残留。
+ */
+export async function exportSnapshotPlain(): Promise<string> {
+    assertUsable();
+    const docs = await new Promise<SearchCache[]>((resolve, reject) => {
+        nedb.find({}).exec((err, found) => (err ? reject(err) : resolve(found as SearchCache[])));
+    });
+
+    const lines = docs.map(doc => JSON.stringify(doc));
+    // 索引行：与 nedb 自己写出的一致（persistCachedDatabaseAsync 会补，这里主动写，保持形态相同）
+    lines.push(JSON.stringify({ $$indexCreated: { fieldName: 'serial', unique: false, sparse: false } }));
+    return lines.join('\n') + '\n';
+}
+
+/**
+ * 把内存态写成一份**加密的**、与 nedb 磁盘文件逐字等价的库文件（写到 `dest`）。
+ *
+ * 用于「还原前快照」—— 输出格式与主库文件一致，所以回滚时能直接 `copyFile` 回去。
+ */
+export async function exportCompactSnapshot(dest: string): Promise<void> {
+    const plain = await exportSnapshotPlain();
+    const encrypted = plain
+        .split('\n')
+        .filter(l => l.trim())
+        .map(line => encryptLine(line))
+        .join('\n') + '\n';
+    await fsasync.writeFile(dest, encrypted, 'utf8');
+}
+
+/**
  * 读一份**外部**缓存库（用户选中的备份文件），给「合并」用。
  *
  * 三件事必须是这个样子：

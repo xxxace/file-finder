@@ -1,0 +1,171 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+
+<head>
+    <meta charset="utf-8">
+    <title>面包屑 .crumb-text 顶部裁切 —— 真 scoped CSS + 裁剪盒对照</title>
+
+    <!-- ⚠️ 这是**真实编译产物**（src/views/FileFinder/index.vue 的 <style scoped>，less + scoped 转换），
+         由 docs/probes/header-width/build-css.mjs 生成、run.sh 会先重建。
+         用它而不是手抄：手抄只能证明"这套写法在普通 CSS 下成立"，
+         证明不了 scoped 之后的选择器（`.nav-zone .crumb .crumb-text[data-v-probe]` 这种）还成立。 -->
+    <link rel="stylesheet" href="../header-width/css-real.generated.css">
+
+    <style>
+        html, body { margin: 0; background: #fff; }
+        /* 与真实应用同一字体链：App.vue `#app { font-family: Avenir, Helvetica, Arial, sans-serif }` */
+        body { font-family: Avenir, Helvetica, Arial, sans-serif; }
+        #stage { padding: 16px; }
+        .row { padding: 6px 0; }
+        .lbl { height: 14px; line-height: 14px; font: 11px/14px Consolas, monospace; color: #666; white-space: nowrap; overflow: hidden; }
+        .pair { display: flex; gap: 16px; }
+
+        /* ⚠️ 探针自己的覆盖一律带 [data-v-probe] 并写到真实 CSS 之后 ——
+           真实 scoped CSS 编译出来是 `.nav-zone .crumb .crumb-text[data-v-probe]`（0,4,0），
+           不带属性压不过它（本文件是测试台，不是被测对象，改它是允许的）。 */
+        /* 固定列宽为整数，保证四个 tag 的 left 都是整数 ⇒ 逐列截图才能像素对齐 */
+        .nav-zone[data-v-probe] { width: 180px; flex: 0 0 auto; max-width: none; overflow: visible; }
+
+        /* 旋钮① 模拟"修复前"：把 n-tag 继承下来的 line-height:1 显式写回 */
+        .nav-zone.k-before[data-v-probe] .crumb[data-v-probe] .crumb-text[data-v-probe] { line-height: 1; }
+
+        /* 旋钮② "同位置、更大裁剪盒"的真相对照（零布局影响）：
+           padding 撑开 padding-box（= overflow 的裁剪边界），负 margin 抵回外边距。 */
+        .nav-zone.k-big[data-v-probe] .crumb[data-v-probe] .n-tag__content { overflow: visible; }
+        .nav-zone.k-big[data-v-probe] .crumb[data-v-probe] .crumb-text[data-v-probe] { padding-block: 8px; margin-block: -8px; }
+
+        /* 旋钮③ 换**主字体**看行盒度量怎么变。
+           关键：中文/日文字形来自**回退字体**，但行盒的 half-leading 由**链首主字体**的
+           ascent/descent 决定 ⇒ 主字体内容区越大，CJK 墨迹被顶出 1em 行盒越多。
+           这些属性没有竞争对手，简写即可。 */
+        .nav-zone.k-f-yahei .crumb-text { font-family: "Microsoft YaHei"; }
+        .nav-zone.k-f-simsun .crumb-text { font-family: SimSun; }
+        .nav-zone.k-f-jhenghei .crumb-text { font-family: "Microsoft JhengHei"; }
+        .nav-zone.k-f-gothic .crumb-text { font-family: "MS Gothic"; }
+        .nav-zone.k-f-meiryo .crumb-text { font-family: Meiryo; }
+        .nav-zone.k-f-segoe .crumb-text { font-family: "Segoe UI"; }
+        .nav-zone.k-f-verdana .crumb-text { font-family: Verdana; }
+        .nav-zone.k-f-tahoma .crumb-text { font-family: Tahoma; }
+        .nav-zone.k-f-georgia .crumb-text { font-family: Georgia; }
+        .nav-zone.k-f-courier .crumb-text { font-family: "Courier New"; }
+        .nav-zone.k-f-mssans .crumb-text { font-family: "Microsoft Sans Serif"; }
+
+        /* 旋钮④ 灵敏度实验：把裁剪盒压到 0.9em（12.6px）—— 若墨迹真的有 14px 高，
+           这一格必然被切。它把"盒子比墨迹矮"这个**机制**变成可见结果。 */
+        .nav-zone.k-lh09[data-v-probe] .crumb[data-v-probe] .crumb-text[data-v-probe] { line-height: 0.9; }
+    </style>
+</head>
+
+<body>
+    <div id="stage"></div>
+
+    <script src="../../../node_modules/vue/dist/vue.global.prod.js"></script>
+    <script src="../../../node_modules/naive-ui/dist/index.js"></script>
+    <script>
+        const { createApp, h } = Vue;
+        const N = naive;
+        const SV = { 'data-v-probe': '' };   // 与 build-css.mjs 的 SCOPE_ID 一致
+
+        /** 四列：①② 修复前（line-height:1）· ③④ 当前 scoped CSS。
+            每对的第 2 个把裁剪盒撑大 ⇒ 两列像素差 = 被裁掉的东西。 */
+        const KINDS = [
+            { key: 'before', cls: 'k-before', note: '① 修复前 line-height:1' },
+            { key: 'beforeBig', cls: 'k-before k-big', note: '② 修复前 · 裁剪盒撑大(真相)' },
+            { key: 'cur', cls: '', note: '③ 当前 scoped CSS' },
+            { key: 'curBig', cls: 'k-big', note: '④ 当前 · 裁剪盒撑大(真相)' },
+        ];
+
+        const FONTS = [
+            ['chain', '', '应用字体链(Avenir/Helvetica/Arial)'],
+            ['segoe', 'k-f-segoe', 'Segoe UI'],
+            ['verdana', 'k-f-verdana', 'Verdana'],
+            ['tahoma', 'k-f-tahoma', 'Tahoma'],
+            ['mssans', 'k-f-mssans', 'Microsoft Sans Serif'],
+            ['georgia', 'k-f-georgia', 'Georgia'],
+            ['courier', 'k-f-courier', 'Courier New'],
+            ['yahei', 'k-f-yahei', '微软雅黑'],
+            ['gothic', 'k-f-gothic', 'MS Gothic'],
+        ];
+        const TEXTS = ['新建文件夹', 'あいうえお'];
+
+        const ROWS = FONTS.flatMap(([fid, fcls, fname]) =>
+            TEXTS.map((t) => ({ id: `${fid}|${t}`, text: t, fcls, fname })));
+
+        /** 灵敏度行：把裁剪盒压到 0.9em ⇒ 若墨迹真有 14px，必然被切（证明机制） */
+        for (const [fid, fcls, fname, t] of [
+            ['chain', '', '应用字体链', '新建文件夹'],
+            ['chain', '', '应用字体链', 'あいうえお'],
+        ]) {
+            ROWS.push({ id: `lh09-${fid}|${t}`, text: t, fcls: `${fcls} k-lh09`, fname: `${fname} · 裁剪盒压到0.9em` });
+        }
+
+        /** ⚠️ `.nav-zone` 也必须带 `data-v-probe`：真实 scoped CSS 的 `.nav-zone[data-v-probe]`
+            与探针自己的覆盖（`.nav-zone.k-*[data-v-probe] ...`）都要求它，漏了就只有 tag 上的规则生效。 */
+        const tag = (text, cls) => h('div', { class: ['nav-zone', cls].filter(Boolean).join(' '), ...SV }, [
+            h(N.NTag, { class: 'crumb crumb-current', title: text, ...SV }, {
+                default: () => h('span', { class: 'crumb-text', ...SV }, text),
+            }),
+        ]);
+
+        createApp({
+            render: () => h('div', null, ROWS.map((r) => h('div', { class: 'row', 'data-id': r.id }, [
+                h('div', { class: 'lbl' }, `${r.id}  ·  ${r.fname}   |   ${KINDS.map((k) => k.note).join('   |   ')}`),
+                h('div', { class: 'pair' }, KINDS.map((k) => tag(r.text, `${r.fcls} ${k.cls}`.trim()))),
+            ]))),
+        }).mount('#stage');
+
+        const one = (row, el, kind) => {
+            const txt = el.querySelector('.crumb-text');
+            const box = el.querySelector('.n-tag__content');
+            const cs = getComputedStyle(txt);
+            const boxCs = getComputedStyle(box);
+            const r = (n) => { const b = n.getBoundingClientRect(); return { t: +b.top.toFixed(3), h: +b.height.toFixed(2) }; };
+            return {
+                id: `${row.dataset.id}|${kind}`,
+                行高: cs.lineHeight,
+                tagClass: el.className,
+                textClass: txt.className,
+                文本盒: r(txt),
+                内容盒: r(box),
+                tag: r(el),
+                tag宽: +el.getBoundingClientRect().width.toFixed(2),
+                dpr: window.devicePixelRatio,
+                横向被截: txt.scrollWidth > txt.clientWidth,
+                文本盒overflow: cs.overflowY,
+                内容盒overflow: boxCs.overflowY,
+            };
+        };
+
+        window.__probe = () => [...document.querySelectorAll('.row')].flatMap((row) =>
+            [...row.querySelectorAll('.nav-zone')].map((el, i) => one(row, el, KINDS[i].key)));
+
+        /** 截图框 = tag 顶上方 3px 起、高 34px（含 tag 上下边框）。 */
+        window.__rects = () => [...document.querySelectorAll('.row')].flatMap((row) =>
+            [...row.querySelectorAll('.crumb')].map((el, i) => {
+                const r = el.getBoundingClientRect();
+                return { id: `${row.dataset.id}|${KINDS[i].key}`, x: Math.floor(r.left) - 6, y: Math.floor(r.top) - 3, width: 200, height: 34 };
+            }));
+
+        /** canvas 墨迹度量：解释"为什么会被裁"——行盒只有 1em，而字体自己的内容区更大 */
+        window.__fontMetrics = () => {
+            const g = document.createElement('canvas').getContext('2d');
+            const rows = [];
+            for (const [, , fname] of FONTS) {
+                for (const t of TEXTS) {
+                    g.font = `bold 14px ${fname.startsWith('应用字体链') ? 'Avenir, Helvetica, Arial, sans-serif' : '"' + fname + '"'}`;
+                    const m = g.measureText(t);
+                    rows.push({
+                        字体: fname, 文字: t,
+                        '字体内容区高(=ascent+descent)': +(m.fontBoundingBoxAscent + m.fontBoundingBoxDescent).toFixed(2),
+                        墨迹上升: +m.actualBoundingBoxAscent.toFixed(2),
+                        墨迹下降: +m.actualBoundingBoxDescent.toFixed(2),
+                        墨迹高: +(m.actualBoundingBoxAscent + m.actualBoundingBoxDescent).toFixed(2),
+                    });
+                }
+            }
+            return rows;
+        };
+    </script>
+</body>
+
+</html>

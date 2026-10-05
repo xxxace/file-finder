@@ -1,0 +1,10 @@
+  PASS  writeZip 返回写入字节数 — 8312 bytes
+  PASS  listZip 列出 3 个条目 — 实际 3
+  PASS  库条目 method=8 (deflate)
+  PASS  库内容往返逐字一致
+  PASS  图片条目 method=0 (store)
+  PASS  图片字节往返一致
+  PASS  manifest 解析正确
+  (整包 8.4 KB，含 8KB 高熵图片)
+
+===== 7 PASS / 0 FAIL =====

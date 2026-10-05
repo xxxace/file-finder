@@ -1,6 +1,7 @@
 import url from 'node:url';
 import http from 'node:http';
 import path from 'node:path';
+import os from 'node:os';
 import events from 'node:events';
 import * as fs from 'node:fs';
 import * as fsasync from 'node:fs/promises';
@@ -13,15 +14,16 @@ import {
 import { writeZip, listZip, readZipEntry } from '../utils/zip';
 import {
     findDriveByLetter, findDuplicatedSerials, getDrives, offlineSerials,
-    readRegistry, serialOfDrive, splitPath, syncRegistry, toFullPath,
+    readRegistry, serialOfDrive, splitPath, syncRegistry, toFullPath, writeRegistry,
 } from '../utils/driveIdentity';
-import type { DriveInfo } from '../utils/driveIdentity';
+import type { DiskRegistry, DriveInfo } from '../utils/driveIdentity';
 import {
     BEFORE_RESTORE_PATH, CACHE_DB_PATH, CACHE_VERSION, beginRestore, cacheBackup, endRestore,
-    findCache, insertCache, loadMeta, loadSubtreeBytes, migrateLegacyThumbs, readExternalCache,
-    reloadFromDisk, removeCache,
+    exportCompactSnapshot, exportSnapshotPlain, findCache, insertCache, loadMeta, loadSubtreeBytes,
+    migrateLegacyThumbs, readExternalCache, reloadFromDisk, removeCache,
 } from './nedb';
 import type { CacheMeta, OpenMode, SearchCache } from './nedb';
+import { encryptLine } from '../utils/cacheCrypto';
 import { LOCAL_TOKEN } from './token';
 import config from '../config';
 import { createAssistantRoutes } from './assistant';
@@ -1430,6 +1432,18 @@ function bodyPath(req: Req): string {
 }
 
 /**
+ * 备份包内的**清单文件**名。带版本号，将来格式演进时靠它分流。
+ *
+ * 为什么要有它（而不是"能解压就行"）：
+ *   ① 包格式今后可能变（比如图片换编码）⇒ 有个显式 `format` 字段，新版本能认旧包、
+ *      旧版本遇到新包能**明确报错**，而不是半懂不懂地读出一份残缺数据；
+ *   ② 记下 `app` / `createdAt` / 各项计数，还原前能**先校验**（用户拿错文件立刻知道）；
+ *   ③ 它是**纯文本 JSON**，用户在资源管理器里双击 zip 就能看见自己备份了什么。
+ */
+const MANIFEST_NAME = 'manifest.json';
+const BACKUP_FORMAT = 1;
+
+/**
  * 「备份到文件…」—— 把**整份数据**打成一个 zip 交到用户挑的位置。
  *
  * 2026-10-04 改：数据不再只是 `searchCache.db` 一个文件（图片搬到 `bin/` 了），
@@ -1437,10 +1451,22 @@ function bodyPath(req: Req): string {
  * 用户才没有心理负担" ⇒ 打进一个 `.zip`：**Windows 资源管理器双击就能打开**，
  * 里面有什么一目了然，而不是一个只有本程序认识的容器。
  *
- * 为什么 store-only（不压缩）：里面的东西已经压不动了 —— 库是逐行 AES 密文、
- * 图片是加密后的 JPEG（实测 `gzip(JPEG)` ≈ 原大小）。压缩只会白烧 CPU。
+ * 2026-10-05 改（体积 + 完整性）：
+ *   - **库有损地压不得、但"解密后"能压 74%**：实测密文库 gzip 只 −26%（base64 是伪随机串），
+ *     而把它**解成明文 JSON 再 raw-deflate** 是 442 KB → 81 KB。所以入包前把库解密成明文、
+ *     以 `deflate` 方式存；还原时 inflate 回来再加密写回。**内容与主库逐字等价**（只是先压后解）。
+ *   - **图片保持 store**：加密后的 JPEG 熵≈8bit/byte，实测 50 样本 gzip 后反而大 0.05%。
+ *   - 加入 `manifest.json`（校验 + 版本）与 `disks.json`（盘注册表，见 §完整性）。
  *
- * 包里的结构就是数据目录本身的样子：`searchCache.db` + `bin/<名字>.enc`。
+ * 包里的结构：
+ *   manifest.json           清单（格式版本 / 计数 / 生成时间）
+ *   searchCache.db          条目信息（**明文 JSON，deflate**）
+ *   disks.json              盘注册表（明文 JSON，deflate；没有则为空对象）
+ *   bin/<名字>.enc          图片（密文，store）
+ *
+ * ⚠️ 库在包里是**明文**（压缩前）。这是有意的：包的定位是"用户自己的完整备份"，
+ *    不是"防窥探的容器"——而且它本来就放在用户自己选的路径上。
+ *    主库在磁盘上**仍然逐行加密**（防随手打开），只是**包内**为了压缩而解成明文。
  */
 async function backupToFile(req: Req, res: http.ServerResponse) {
     const target = bodyPath(req);
@@ -1450,12 +1476,50 @@ async function backupToFile(req: Req, res: http.ServerResponse) {
     if (binStoreFailed()) {
         throw new Error('图片仓（bin 目录）读不出来，拒绝打包：否则会导出一个不含任何图片的备份。先重启应用再试。');
     }
-    const entries = [
-        { name: 'searchCache.db', file: CACHE_DB_PATH },
-        ...listBinNames().map(n => ({ name: `bin/${n}`, file: path.join(BIN_DIR, n) })),
-    ];
-    const bytes = await writeZip(target, entries);
-    sendJson(res, { code: 200, message: 'ok', entries: entries.length, bytes });
+
+    // 把两份 JSON 落到系统临时目录（不落数据目录：那里是"随时可清"的语义，
+    // 且中转产物不该污染 ~/.file-finder —— 靠 .gitignore 兜底不如根本别落进去）
+    const stage = await fsasync.mkdtemp(path.join(os.tmpdir(), 'ff-backup-'));
+    const dbPlain = path.join(stage, 'searchCache.json');
+    const disksPlain = path.join(stage, 'disks.json');
+    const manifestPlain = path.join(stage, MANIFEST_NAME);
+
+    try {
+        // ① 库：从**内存态**导出明文（顺便天然紧凑 —— 只有活记录，无历史追加残留，见 exportCompactSnapshot）
+        const plain = await exportSnapshotPlain();
+        await fsasync.writeFile(dbPlain, plain, 'utf8');
+
+        // ② 盘注册表：读不到就给个空对象（不该因为它让整个备份失败）
+        let registry: unknown = {};
+        try {
+            registry = await readRegistry();
+        } catch { /* 保持空对象 */ }
+        await fsasync.writeFile(disksPlain, JSON.stringify(registry), 'utf8');
+
+        const binNames = listBinNames();
+
+        // ③ 清单
+        const manifest = {
+            format: BACKUP_FORMAT,
+            app: 'file-finder',
+            createdAt: dayjs().format('YYYY-MM-DD HH:mm:ss'),
+            cacheVersion: CACHE_VERSION,
+            dbEntries: plain ? plain.split('\n').filter(l => l.trim()).length - 1 : 0,
+            images: binNames.length,
+        };
+        await fsasync.writeFile(manifestPlain, JSON.stringify(manifest, null, 2), 'utf8');
+
+        const entries = [
+            { name: MANIFEST_NAME, file: manifestPlain, compress: 'deflate' as const },
+            { name: 'searchCache.db', file: dbPlain, compress: 'deflate' as const },
+            { name: 'disks.json', file: disksPlain, compress: 'deflate' as const },
+            ...binNames.map(n => ({ name: `bin/${n}`, file: path.join(BIN_DIR, n) })),
+        ];
+        const bytes = await writeZip(target, entries);
+        sendJson(res, { code: 200, message: 'ok', entries: entries.length, bytes, manifest });
+    } finally {
+        await fsasync.rm(stage, { recursive: true, force: true }).catch(() => undefined);
+    }
 }
 
 /** 包里的图片条目（`bin/xxx.enc`）。名字要按形状校验：它会变成磁盘上的文件名 */
@@ -1503,19 +1567,60 @@ async function importBins(zipPath: string, names: string[]): Promise<number> {
 async function restoreFromFile(req: Req, res: http.ServerResponse) {
     const source = bodyPath(req);
 
-    // 先从包里把库抽出来（包里那份是**密文原样**，不需要解密——
-    // 库的每一行本来就是加密的，这里只做搬运）
+    // 从包里抽库 + 清单 + 盘注册表。库在包里是**明文 JSON（deflate 压过）**
+    // ⇒ 抽出来后要**重新加密**才能写回主库（主库在磁盘上仍逐行密文）。
     let dbTmp: string;
     let binNames: string[] = [];
+    let registry: DiskRegistry | null = null;
     try {
         const entries = await listZip(source);
         const dbEntry = entries.find(e => e.name === 'searchCache.db');
         if (!dbEntry) throw new Error('包里没有 searchCache.db');
         binNames = binEntriesOf(entries);
+
+        // 清单：校验"这是不是一份本程序能认的备份"
+        const mfEntry = entries.find(e => e.name === MANIFEST_NAME);
+        if (mfEntry) {
+            const mf = JSON.parse((await readZipEntry(source, mfEntry)).toString('utf8')) as { format?: number };
+            if (typeof mf.format === 'number' && mf.format > BACKUP_FORMAT) {
+                throw new Error(`这份备份是更新版本（format ${mf.format}）生成的，当前版本读不了`);
+            }
+        }
+
+        // 库：inflate 出明文 → 逐行加密 → 落到临时文件（与主库格式逐字一致）
+        const plain = (await readZipEntry(source, dbEntry)).toString('utf8');
         dbTmp = `${CACHE_DB_PATH}.restoring-${process.pid}-${Date.now().toString(36)}`;
-        await fsasync.writeFile(dbTmp, await readZipEntry(source, dbEntry));
+        await fsasync.writeFile(dbTmp, encryptPlainDb(plain), 'utf8');
+
+        // 盘注册表：有就解出来待用（**无损**：不覆盖本地已有的、只补缺的，见下方落地）
+        const dkEntry = entries.find(e => e.name === 'disks.json');
+        if (dkEntry) {
+            try {
+                const parsed = JSON.parse((await readZipEntry(source, dkEntry)).toString('utf8'));
+                if (parsed && typeof parsed === 'object') registry = parsed as DiskRegistry;
+            } catch { /* 注册表坏了不该挡住库的还原 */ }
+        }
     } catch (e) {
         throw new Error(`不是一份可用的备份包：${e}`);
+    }
+
+    // ⚠️ **快照必须在 `beginRestore()` 之前做**。
+    //
+    // `beginRestore()` 把 `restoring` 打开 ⇒ 之后任何 `assertUsable()` 都会抛
+    // "缓存库正在还原"。而 `exportCompactSnapshot` 要读库（内存态），它过那道闸 ——
+    // 顺序反了就是"还原第一步必然失败"。
+    // 这正是闸门机制想要的语义：`restoring` 是**覆盖主库那段**的保护，
+    // 快照还只是"读内存"，不在保护范围内。
+    //
+    // 快照必须是**内存态序列化**，不能 `copyFile(CACHE_DB_PATH, …)`：
+    // nedb 是 append-only，删除也只追加 `$$deleted`，磁盘文件里躺着"已删记录的历史行"
+    // —— 拷它会**让已删记录在回滚后复活**；若拷贝那一刻恰逢后台扫描在追加写，
+    // 还可能截到半行、回滚出一份损坏库。内存态才是真相源。
+    try {
+        await exportCompactSnapshot(BEFORE_RESTORE_PATH);
+    } catch (e) {
+        // 快照失败就**不开始还原** —— 主库一个字节都没动，无需回滚。
+        throw new Error(`还原未开始：快照失败（${e}）。主库未被改动。`);
     }
 
     beginRestore();
@@ -1524,9 +1629,8 @@ async function restoreFromFile(req: Req, res: http.ServerResponse) {
     let overwritten = false;
 
     try {
-        await fsasync.copyFile(CACHE_DB_PATH, BEFORE_RESTORE_PATH);
-        overwritten = true;
         await fsasync.copyFile(dbTmp, CACHE_DB_PATH);
+        overwritten = true;
         await reloadFromDisk();
     } catch (e) {
         if (!overwritten) throw new Error(`还原失败：${e}`);
@@ -1549,8 +1653,50 @@ async function restoreFromFile(req: Req, res: http.ServerResponse) {
     const added = await importBins(source, binNames);
     // 旧版备份（v2 库）里图片还是 base64：这里跑一次就地迁移，免得"还原完格子全白"
     await migrateLegacyThumbs();
+    // 盘注册表：**只补缺、不覆盖**（本地那份记录着真实的 firstSeenAt，比包里的更可信）
+    if (registry) await mergeRegistryMissing(registry);
 
     sendJson(res, { code: 200, message: 'ok', images: added });
+}
+
+/**
+ * 包里的库是**明文 JSON**（为了压缩，见 backupToFile）。写回主库要重新逐行加密。
+ *
+ * ⚠️ **兼容旧包（2026-10-04 那版）**：那时库在包里是**密文原样**。
+ * 判据用 `decryptLine` 自己的规则：明文行以 `{` 开头，base64 密文行不以 `{` 开头。
+ * 所以：
+ *   - 第一行以 `{` 开头 ⇒ 新格式（明文）⇒ 逐行加密；
+ *   - 否则 ⇒ 旧格式（已是密文）⇒ **原样写回**，绝不能再套一层（套了就解不开）。
+ * 这样新旧包都能还原 —— 版本判断落在**内容形态**上，不靠 manifest（旧的压根没有 manifest）。
+ */
+function encryptPlainDb(plain: string): string {
+    const lines = plain.split('\n').filter(l => l.trim());
+    if (!lines.length) return '';
+    // 首行是索引行 `{"$$indexCreated"...}`（明文）或一串 base64（旧密文）
+    const alreadyEncrypted = !lines[0].startsWith('{');
+    if (alreadyEncrypted) return plain;
+    return lines.map(l => encryptLine(l)).join('\n') + '\n';
+}
+
+/**
+ * 把包里的盘注册表**只补缺地**并进本地 `disks.json`。
+ *
+ * 为什么不整份覆盖：本地那份的 `firstSeenAt` / `lastSeenAt` 是这台机器**真实见过**的时间，
+ * 比备份包里的更可信；包里的价值是"补齐本地没有的盘"（跨机器迁移场景）。
+ */
+async function mergeRegistryMissing(fromPkg: DiskRegistry): Promise<void> {
+    try {
+        const local = await readRegistry();
+        let changed = false;
+        for (const [serial, rec] of Object.entries(fromPkg)) {
+            if (local[serial]) continue;
+            local[serial] = rec;
+            changed = true;
+        }
+        if (changed) await writeRegistry(local);
+    } catch (e) {
+        console.error('[restore] 盘注册表并入失败（不影响库）:', e);
+    }
 }
 
 /**
@@ -1573,17 +1719,27 @@ async function restoreFromFile(req: Req, res: http.ServerResponse) {
 async function mergeCache(req: Req, res: http.ServerResponse) {
     const source = bodyPath(req);
 
-    // 2026-10-04：来源从"一个 .db 文件"变成"一个备份包（zip）" ——
-    // 里面那份库要抽成临时文件才能交给 `readExternalCache`（它按普通文件读、逐行解密）。
+    // 来源是"备份包（zip）"：里面那份库要抽成临时**密文**文件才能交给
+    // `readExternalCache`（它按普通文件读、逐行解密）。
+    // 包里是明文（deflate 过）⇒ 这里要**重新加密**（见 encryptPlainDb 的兼容说明）。
     let dbTmp: string;
     let binNames: string[] = [];
+    let registry: DiskRegistry | null = null;
     try {
         const entries = await listZip(source);
         const dbEntry = entries.find(e => e.name === 'searchCache.db');
         if (!dbEntry) throw new Error('包里没有 searchCache.db');
         binNames = binEntriesOf(entries);
         dbTmp = `${CACHE_DB_PATH}.merging-${process.pid}-${Date.now().toString(36)}`;
-        await fsasync.writeFile(dbTmp, await readZipEntry(source, dbEntry));
+        const plain = (await readZipEntry(source, dbEntry)).toString('utf8');
+        await fsasync.writeFile(dbTmp, encryptPlainDb(plain), 'utf8');
+        const dkEntry = entries.find(e => e.name === 'disks.json');
+        if (dkEntry) {
+            try {
+                const parsed = JSON.parse((await readZipEntry(source, dkEntry)).toString('utf8'));
+                if (parsed && typeof parsed === 'object') registry = parsed as DiskRegistry;
+            } catch { /* 注册表坏了不该挡住合并 */ }
+        }
     } catch (e) {
         throw new Error(`不是一份可用的备份包：${e}`);
     }
@@ -1629,6 +1785,8 @@ async function mergeCache(req: Req, res: http.ServerResponse) {
     await migrateLegacyThumbs();
     // 记录并完了再搬图片（只增不删；跨机器迁移时那些清晰的封面就是从这里过来的）
     const images = await importBins(source, binNames);
+    // 盘注册表只补缺（同还原：合并一个跨机器包时，把本地没有的盘补进来）
+    if (registry) await mergeRegistryMissing(registry);
 
     sendJson(res, { code: 200, added, replaced, skipped, total: incoming.length, images });
 }

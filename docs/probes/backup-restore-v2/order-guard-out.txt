@@ -1,0 +1,5 @@
+  PASS  restoring=false 时 exportSnapshotPlain 成功 — 2 行
+  PASS  restoring=true 时 exportSnapshotPlain 抛错（顺序不能反） — 缓存库正在还原，请稍后再试
+  PASS  endRestore 后恢复可用
+
+===== 3 PASS / 0 FAIL =====
