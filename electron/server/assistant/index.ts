@@ -12,7 +12,11 @@
  *   GET    /assistant/rules     列出规则
  *   POST   /assistant/rules     新增/更新一条规则（body = SiteRule）
  *   DELETE /assistant/rules?id= 删除一条规则
- *   POST   /assistant/dryrun    单站试跑：{ siteId, query } → 抽出字段（不写盘）
+ *   POST   /assistant/dryrun    单站试跑：{ siteId | rule, query, show? } → 抽出字段（不写盘）
+ *   POST   /assistant/openPage  打开目标页给用户自己看（可见窗，不自动关）→ { id }
+ *   POST   /assistant/windowUrl 读那个窗当前地址 + 反推入口模板
+ *   POST   /assistant/pick      点选一张图 → 生成选择器（长请求，用户操作）
+ *   POST   /assistant/record    录制用户的输入/点击 → 动作序列（长请求）
  *   POST   /assistant/scan      找缺封面：{ serial, relPath } → 待补目标（**零读盘**）
  *   POST   /assistant/faces     换封面：{ serial, picks } → 待换目标（**零读盘**；scan 的补集）
  *   POST   /assistant/jobs      起长任务：{ kind, … } → { jobId }
@@ -24,9 +28,13 @@
  * 它只读内存里的 nedb，快，且结果要立刻给用户看。
  */
 import type http from 'node:http';
-import { applyQueryTransform, buildExtractScript, deleteRule, loadRules, saveRule } from './rules';
+import { applyQueryTransform, buildExtractScript, buildStepScript, deleteRule, loadRules, saveRule } from './rules';
 import type { ExtractedFields, SiteRule } from './rules';
 import { passChallenge, runExtract } from './siteFetch';
+import { openVisiblePage, runSteps, visiblePageUrl } from './siteActions';
+import { pickImageOnPage, recordOnPage } from './siteRecord';
+import { deriveTemplate, expandUrl } from './urlTemplate';
+import type { StepOutcome } from './siteActions';
 import { runGrab } from './grab';
 import type { GrabRow } from './grab';
 import { bumpProgress, cancelJob, createJob, finishJob, getJob, listJobs, snapshotJob } from './jobs';
@@ -62,6 +70,18 @@ export function createAssistantRoutes(deps: AssistantDeps): AssistantRoute[] {
             sendJson(res, { code: 400, error: '缺少 rule.id / rule.detailUrl' });
             return;
         }
+        // 软校验：只挡明显写不通的规则（硬闸门「试跑通过才允许保存」在 UI 上，
+        // 后端不强制 —— 否则脚本化调用与探针也会被挡住）。
+        if (!/^https?:\/\//i.test(rule.detailUrl)) {
+            sendJson(res, { code: 400, error: 'detailUrl 必须是 http(s) 地址' });
+            return;
+        }
+        for (const s of rule.steps ?? []) {
+            if (s.act !== 'wait' && !s.selector) {
+                sendJson(res, { code: 400, error: '动作步骤缺少 selector' });
+                return;
+            }
+        }
         sendJson(res, { code: 200, rules: await saveRule(dataDir, rule) });
     }
 
@@ -75,20 +95,47 @@ export function createAssistantRoutes(deps: AssistantDeps): AssistantRoute[] {
     }
 
     async function dryRun(req: ReqLike, res: http.ServerResponse) {
-        const body = (req.body || {}) as { siteId?: string; query?: string };
-        const { siteId, query } = body;
-        if (!siteId || !query) {
-            sendJson(res, { code: 400, error: '缺少 siteId / query' });
+        // 两种入参都支持（向后兼容 PRD §15 里那条自测命令）：
+        //   { siteId, query }  试跑**已保存**的规则
+        //   { rule,   query }  试跑**编辑器里的草稿**（尚未保存 ⇒ 不写盘）
+        const body = (req.body || {}) as { siteId?: string; query?: string; rule?: SiteRule; show?: boolean };
+        const { query } = body;
+        /** 「显示窗口」：试跑时把抓取窗露出来，让用户看到访问过程（结束仍会自动关闭） */
+        const show = !!body.show;
+        if (!query || (!body.siteId && !body.rule)) {
+            sendJson(res, { code: 400, error: '缺少 query，以及 siteId / rule 之一' });
             return;
         }
-        const rule = (await loadRules(dataDir)).find(r => r.id === siteId);
+        const rule = body.rule ?? (await loadRules(dataDir)).find(r => r.id === body.siteId);
         if (!rule) {
-            sendJson(res, { code: 404, error: `未知站点：${siteId}` });
+            sendJson(res, { code: 404, error: `未知站点：${body.siteId}` });
             return;
         }
         const q = applyQueryTransform(query, rule.queryTransform);
-        const url = rule.detailUrl.replace('{q}', encodeURIComponent(q));
-        const result = await runExtract<ExtractedFields>(url, buildExtractScript(rule.fields));
+        const url = expandUrl(rule.detailUrl, query, rule.queryTransform);
+        const extract = buildExtractScript(rule.fields);
+
+        // ⚠️ 有动作就必须走**动作通道**（每步只执行一次）；没有动作才走原来的幂等抽取通道。
+        // 两条通道不能混：把 click 塞进 runExtract 的轮询循环会反复点击。
+        const steps = rule.steps ?? [];
+        if (steps.length) {
+            const planned = steps.map(s => ({ act: s.act, script: buildStepScript(s, q) }));
+            const r = await runSteps(url, planned, extract, { show });
+            sendJson(res, {
+                code: 200,
+                url,
+                ok: r.ok,
+                cf: r.cf,
+                err: r.err ?? null,
+                fields: r.data ?? null,
+                steps: r.steps,
+                httpStatus: r.httpStatus ?? 0,
+                pageTitle: r.pageTitle ?? '',
+            });
+            return;
+        }
+
+        const result = await runExtract<ExtractedFields>(url, extract, { show });
         sendJson(res, {
             code: 200,
             url,
@@ -96,7 +143,95 @@ export function createAssistantRoutes(deps: AssistantDeps): AssistantRoute[] {
             cf: result.cf,
             err: result.err ?? null,
             fields: result.data ?? null,
+            steps: [] as StepOutcome[],
+            httpStatus: 0,
+            pageTitle: '',
         });
+    }
+
+    /**
+     * 打开目标页给用户**自己研究**（可见窗，不自动关闭，用户看完自己关）。
+     * 用户反馈「必须打开自己的浏览器去研究目标网站」⇒ 这件事由我们代劳，
+     * 顺带两个好处：同一个 partition ⇒ 在这里过掉的验证后续抓取直接复用；
+     * 用户看到的页面 = 抓取时看到的页面（不会出现"我浏览器能看、它抓不到"）。
+     */
+    async function openPage(req: ReqLike, res: http.ServerResponse) {
+        const body = (req.body || {}) as { url?: string; rule?: SiteRule; query?: string };
+        if (!body.url && !body.rule) {
+            sendJson(res, { code: 400, error: '缺少 url 或 rule' });
+            return;
+        }
+        // 传 rule 时由**后端**展开模板 —— 保证「打开看看」和真正的抓取用的是同一套拼法
+        const target = body.url
+            || expandUrl(body.rule!.detailUrl, body.query || '', body.rule!.queryTransform);
+        const r = await openVisiblePage(target);
+        sendJson(res, r.ok ? { code: 200, id: r.id } : { code: 500, error: r.err || '打不开这个地址' });
+    }
+
+    /**
+     * 读某个浏览窗当前地址，并**反推入口模板**（把番号那一段换成占位符）。
+     * 这就是「用户不知道 {q} 该写在地址哪里」的解法：让他先把作品页打开，我们从地址里认出来。
+     */
+    async function windowUrl(req: ReqLike, res: http.ServerResponse) {
+        const body = (req.body || {}) as { id?: string; query?: string };
+        if (!body.id) {
+            sendJson(res, { code: 400, error: '缺少 id' });
+            return;
+        }
+        const url = visiblePageUrl(body.id);
+        if (!url) {
+            sendJson(res, { code: 404, error: '那个窗口已经关掉了' });
+            return;
+        }
+        const d = deriveTemplate(url, body.query || '');
+        sendJson(res, { code: 200, url, ok: d.ok, template: d.template, hit: d.hit });
+    }
+
+    /** 目标地址：直接用 url，或由 rule+query 展开（前后端拼法永远一致） */
+    function targetOf(body: { url?: string; rule?: SiteRule; query?: string }): string | null {
+        if (body.url) return body.url;
+        if (!body.rule) return null;
+        return expandUrl(body.rule.detailUrl, body.query || '', body.rule.queryTransform);
+    }
+
+    /**
+     * 长请求的取消信号：前端关弹窗 / 刷新页面 ⇒ 连接断开 ⇒ 立刻中止。
+     * 否则那个可见窗与轮询循环会一直活到 10 分钟上限（用户已经不管了，窗口还杵在屏幕上）。
+     * ⚠️ `close` 在**正常响应结束**时也会触发，所以要排除"已经写完"的情况。
+     */
+    function abortOnClose(res: http.ServerResponse): AbortSignal {
+        const ac = new AbortController();
+        res.on('close', () => {
+            if (!res.writableEnded) ac.abort();
+        });
+        return ac.signal;
+    }
+
+    /**
+     * 点选图片：开可见窗让用户点一下要抓的图，回传生成的选择器。
+     * ⚠️ 这两个接口都是**长请求**（用户在窗里操作，最长 10 分钟）—— 不要给它加超时。
+     */
+    async function pickImage(req: ReqLike, res: http.ServerResponse) {
+        const body = (req.body || {}) as { url?: string; rule?: SiteRule; query?: string };
+        const target = targetOf(body);
+        if (!target) {
+            sendJson(res, { code: 400, error: '缺少 url 或 rule' });
+            return;
+        }
+        const r = await pickImageOnPage(target, abortOnClose(res));
+        if (!res.writableEnded) sendJson(res, { code: 200, ...r });
+    }
+
+    /** 录制动作：用户在可见窗里自己搜一次，我们把他做的「输入 / 点击」记成动作序列 */
+    async function recordActions(req: ReqLike, res: http.ServerResponse) {
+        const body = (req.body || {}) as { url?: string; rule?: SiteRule; query?: string };
+        const target = targetOf(body);
+        if (!target) {
+            sendJson(res, { code: 400, error: '缺少 url 或 rule' });
+            return;
+        }
+        const r = await recordOnPage(target, body.query || '', abortOnClose(res));
+        if (!res.writableEnded) sendJson(res, { code: 200, ...r });
     }
 
     /** 找缺封面：只读缓存，不碰盘，所以直接同步返回结果（不走 job） */
@@ -305,7 +440,7 @@ export function createAssistantRoutes(deps: AssistantDeps): AssistantRoute[] {
             }
             // cf_clearance 是**按主机**发的，所以拿站点根地址去挑战就够了
             try {
-                url = `${new URL(rule.detailUrl.replace('{q}', '')).origin}/`;
+                url = `${new URL(expandUrl(rule.detailUrl, '')).origin}/`;
             } catch {
                 url = '';
             }
@@ -442,6 +577,26 @@ export function createAssistantRoutes(deps: AssistantDeps): AssistantRoute[] {
         ['/assistant/scan', (req, res) => {
             const method = req.method?.toUpperCase();
             if (method === 'POST') return scan(req, res);
+            return sendJson(res, { code: 405, error: 'method not allowed' }, 405);
+        }],
+        ['/assistant/openPage', (req, res) => {
+            const method = req.method?.toUpperCase();
+            if (method === 'POST') return openPage(req, res);
+            return sendJson(res, { code: 405, error: 'method not allowed' }, 405);
+        }],
+        ['/assistant/windowUrl', (req, res) => {
+            const method = req.method?.toUpperCase();
+            if (method === 'POST') return windowUrl(req, res);
+            return sendJson(res, { code: 405, error: 'method not allowed' }, 405);
+        }],
+        ['/assistant/pick', (req, res) => {
+            const method = req.method?.toUpperCase();
+            if (method === 'POST') return pickImage(req, res);
+            return sendJson(res, { code: 405, error: 'method not allowed' }, 405);
+        }],
+        ['/assistant/record', (req, res) => {
+            const method = req.method?.toUpperCase();
+            if (method === 'POST') return recordActions(req, res);
             return sendJson(res, { code: 405, error: 'method not allowed' }, 405);
         }],
         ['/assistant/faces', (req, res) => {

@@ -19,7 +19,11 @@
  */
 import { CancelledError, enqueueWithRetry, hostOf } from './queue';
 import { runExtract } from './siteFetch';
-import { applyQueryTransform, buildExtractScript } from './rules';
+import type { FetchResult } from './siteFetch';
+import { runSteps } from './siteActions';
+import type { StepsResult } from './siteActions';
+import { buildExtractScript, buildStepScript } from './rules';
+import { expandUrl } from './urlTemplate';
 import type { ExtractedFields, SiteRule } from './rules';
 import { parseTitle } from './match';
 import { loadHits, appendHit } from './hits';
@@ -142,16 +146,22 @@ export async function runGrab(
             if (job.cancelled) return { match, blocked, blockedSite, why };
 
             bumpProgress(job, { current: `${id} → ${rule.id}` });
-            const q = applyQueryTransform(id, rule.queryTransform);
-            const url = rule.detailUrl.replace('{q}', encodeURIComponent(q));
+            // ⚠️ 与试跑走**同一个**模板引擎 —— 两边拼法必须永远一致（否则"试跑通了、抓取反而错"）
+            const url = expandUrl(rule.detailUrl, id, rule.queryTransform);
+            const extract = buildExtractScript(rule.fields);
+            const steps = rule.steps ?? [];
+            const planned = steps.map((s) => ({ act: s.act, script: buildStepScript(s, id) }));
 
-            let res: Awaited<ReturnType<typeof runExtract<ExtractedFields>>>;
+            let res: FetchResult<ExtractedFields> | StepsResult;
             try {
-                res = await enqueueWithRetry(
+                res = await enqueueWithRetry<FetchResult<ExtractedFields> | StepsResult>(
                     hostOf(url),
-                    () => runExtract<ExtractedFields>(url, buildExtractScript(rule.fields), { signal: job.controller.signal }),
-                    // 只有超时值得再试；被 CF 拦是状态问题，重试再快也没用
-                    r => !r.ok && r.err === 'timeout',
+                    () => (steps.length
+                        ? runSteps(url, planned, extract, { signal: job.controller.signal })
+                        : runExtract<ExtractedFields>(url, extract, { signal: job.controller.signal })),
+                    // ⚠️ 有动作的规则**一律不重试**：动作有副作用，重试 = 重复输入 / 重复点击。
+                    // "只有超时值得再试"那条判据只对幂等的纯抽取成立。
+                    r => !steps.length && !r.ok && r.err === 'timeout',
                     job.controller.signal,
                 );
             } catch (e) {
@@ -173,7 +183,7 @@ export async function runGrab(
                 continue;
             }
 
-            const f = res.data;
+            const f = res.data as ExtractedFields | undefined;
             if (f && f.cover) {
                 match = {
                     hitSite: rule.id,

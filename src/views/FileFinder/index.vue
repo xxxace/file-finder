@@ -265,6 +265,7 @@
             @update:current="onPreviewCurrentChange" />
         <HistoryTable ref="historyTable" @openDir="openHistory" />
         <AssistantCoverModal ref="assistantModal" @refresh="refreshAfterApply" />
+        <AssistantRulesModal ref="rulesModal" />
     </div>
 </template>
 
@@ -283,6 +284,7 @@ import { NButton, NInput, NIcon, NImage, NImageGroup, NTag, NPopover, NSpin, NAl
 import FolderSelector from '@/components/FolderSelector/index.vue';
 import HistoryTable from '@/components/HistoryTable/index.vue';
 import AssistantCoverModal from './AssistantCoverModal.vue';
+import AssistantRulesModal from './AssistantRulesModal.vue';
 import { ipcRenderer } from 'electron';
 import { computed, nextTick, onMounted, onUnmounted, provide, ref, watch } from 'vue';
 import type { FileInfoFiles, WiredFileInfo } from '../../../electron/server/index';
@@ -418,6 +420,7 @@ const displaySrcOf = (item: WiredFileInfo) => {
 const dir = ref('');
 const historyTable = ref<typeof HistoryTable | null>(null)
 const assistantModal = ref<typeof AssistantCoverModal | null>(null)
+const rulesModal = ref<typeof AssistantRulesModal | null>(null)
 // const dirRoot = ref('');
 const popover = ref<{
     visible: boolean;
@@ -1751,6 +1754,9 @@ const moreOptions = computed(() => [
     { label: '补全这一片', key: 'fill', disabled: scanning.value || picking.value || !history.value.length || readOnlyLevel.value },
     { label: '重读这一片', key: 'rescan', disabled: scanning.value || picking.value || !history.value.length || readOnlyLevel.value },
     { label: '补封面', key: 'cover', disabled: scanning.value },
+    // 「站点规则」= 抓取规则的编辑器（入口 / 动作 / 抽取三段）。它是**系统盘上的配置**，
+    // 与移动硬盘无关 ⇒ 离线只读层里也允许打开（不禁用）。
+    { label: '站点规则', key: 'rules' },
     // 「换封面」= 补封面的**反面**：补封面是让程序找出"没有封面的"，
     // 换封面是让用户自己挑"有封面但要换的"。两者最终复用同一个弹窗、同一条抓取写入链路。
     { label: picking.value ? '退出换封面' : '换封面', key: 'faces', disabled: scanning.value || readOnlyLevel.value },
@@ -1777,6 +1783,8 @@ const onMoreSelect = (key: string) => {
         });
     } else if (key === 'cover') {
         assistantModal.value?.setShowModal(true);
+    } else if (key === 'rules') {
+        rulesModal.value?.setShowModal(true);
     } else if (key === 'faces') {
         // 再点一次 = 退出（下拉项的文案会跟着变成「退出换封面」）
         if (picking.value) exitPick();
@@ -2272,6 +2280,11 @@ const onDisksChangedIpc = (_e: unknown, disks: { serial: string; drive: string }
             overflow: hidden;
             text-overflow: ellipsis;
             white-space: nowrap;
+            /* ⚠️ 不能少：n-tag 的 `line-height:1` 会继承进来 ⇒ 上面的 `overflow:hidden`
+               （省略号的前置条件）裁剪盒只有 1em=14px，比字体内容区（实测 16~20px）还矮，
+               字形顶/底被切 —— 实测换主字体即复现"顶行被裁"（docs/probes/crumb-clip/）。
+               取 tag 自己的内高 ⇒ 盒 28px、墨迹余量 7.5px；tag 高是定值、行盒居中 ⇒ 零布局影响。 */
+            line-height: var(--n-height, 1.4);
         }
     }
 

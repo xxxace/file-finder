@@ -23,19 +23,19 @@
 import { BrowserWindow } from 'electron';
 import { sleep, trackWindow, untrackWindow } from './queue';
 
-const PARTITION = 'persist:assistant';
-const CHROME_UA =
+export const PARTITION = 'persist:assistant';
+export const CHROME_UA =
     'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 ' +
     '(KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36';
 
-const NAV_TIMEOUT = 25_000;
-const POLL_INTERVAL = 500;
-const POLL_TIMEOUT = 20_000;
+export const NAV_TIMEOUT = 25_000;
+export const POLL_INTERVAL = 500;
+export const POLL_TIMEOUT = 20_000;
 /** 人工过验证最多等多久。CF 的交互式挑战由用户自己掌控节奏，给足 5 分钟 */
 const CHALLENGE_TIMEOUT = 300_000;
 
 /** 页面内判断是否卡在 Cloudflare / Turnstile 挑战 */
-const CF_DETECT = `(function(){
+export const CF_DETECT = `(function(){
   var t=(document.title||'').toLowerCase();
   var cf = /just a moment|checking your browser|verify you are (a )?human|attention required/i.test(t)
     || !!document.querySelector('#cf-challenge-running, .cf-challenge, #challenge-form, form[action*="__cf_chl"]')
@@ -43,6 +43,29 @@ const CF_DETECT = `(function(){
     || /cf-chl-|challenge-platform|turnstile/i.test(document.body ? document.body.innerHTML : '');
   return { cf: cf, url: location.href, title: document.title };
 })()`;
+
+/**
+ * `_blank` 接管：**只**把**同源**的弹窗导航进当前窗，异源一律拦掉。
+ *
+ * ⚠️ 为什么不能无条件接管：站点广告/统计脚本经常自己调 `window.open` —— 无条件 `loadURL`
+ * 会把当前窗导航到广告页，后续动作与抽取全落错页面。同源判断挡掉绝大多数外部弹窗，
+ * 而「点搜索结果开新窗」（本来就要接管的场景）基本都是同站。
+ * ⚠️ 为什么必须设：不设 handler 时 `window.open` 会创建**未登记**的新窗口 ⇒
+ * `window-all-closed` 永不触发、应用退不掉。
+ */
+export function adoptSameOriginPopups(win: BrowserWindow): void {
+    win.webContents.setWindowOpenHandler(({ url: target }) => {
+        try {
+            const cur = win.webContents.getURL();
+            if (/^https?:/i.test(target) && cur && new URL(target).origin === new URL(cur).origin) {
+                void win.loadURL(target);
+            }
+        } catch {
+            /* ignore */
+        }
+        return { action: 'deny' };
+    });
+}
 
 export interface FetchResult<T> {
     ok: boolean;
@@ -61,6 +84,12 @@ export interface RunExtractOptions {
     timeoutMs?: number;
     /** 取消信号；abort 会立刻销毁窗口 */
     signal?: AbortSignal;
+    /**
+     * 把抓取窗**显示出来**（默认隐藏）。
+     * 用户反馈「看不到页面访问的过程」⇒ 试跑时可以打开它，让流程看得见；
+     * 窗口仍会在结束时自动销毁（不是给用户浏览用的那个，那个是 `openVisiblePage`）。
+     */
+    show?: boolean;
 }
 
 /**
@@ -75,7 +104,11 @@ export async function runExtract<T>(
     const { timeoutMs = POLL_TIMEOUT, signal } = opts;
 
     const win = new BrowserWindow({
-        show: false,
+        show: !!opts.show,
+        width: 1_000,
+        height: 720,
+        autoHideMenuBar: true,
+        title: opts.show ? '正在抓取（结束会自动关闭）' : undefined,
         webPreferences: {
             partition: PARTITION,
             nodeIntegration: false,
@@ -104,6 +137,8 @@ export async function runExtract<T>(
         // webPreferences.userAgent —— 后者不在 Electron 44 的 WebPreferences 类型里；
         // setUserAgent 还能跨后续导航保持。
         win.webContents.setUserAgent(CHROME_UA);
+        // 抓取窗也不跟随弹窗（同源才导航）—— 否则站点脚本的 window.open 会漏出未登记窗口
+        adoptSameOriginPopups(win);
         // loadURL 没有 timeout 选项（S1 spike 里那个 {timeout} 其实是空转），用竞速自己兜底；
         // 超时也可能只是 CF 挑战慢，继续进入轮询。
         await Promise.race([
@@ -205,6 +240,8 @@ export async function passChallenge(url: string, signal?: AbortSignal): Promise<
 
     try {
         win.webContents.setUserAgent(CHROME_UA);
+        // 验证窗同样要设：不设的话 window.open 会开出未登记窗口，应用关不掉
+        adoptSameOriginPopups(win);
         await Promise.race([win.loadURL(url).catch(() => undefined), sleep(NAV_TIMEOUT)]);
 
         const deadline = Date.now() + CHALLENGE_TIMEOUT;
@@ -235,3 +272,4 @@ export async function passChallenge(url: string, signal?: AbortSignal): Promise<
         untrackWindow(win);
     }
 }
+

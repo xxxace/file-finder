@@ -1,0 +1,66 @@
+PASS  type：{q} 替换为真实查询词
+PASS  type：不再残留 {q} 占位
+PASS  type：双引号被转义
+PASS  type：换行被转义成字面量 \n
+PASS  type：使用 prototype 的 value setter
+PASS  click：调用 el.click() 且带选择器
+PASS  wait(selector)：轮询 + 超时
+PASS  wait(ms)：无选择器时纯等待
+PASS  五个动作脚本语法均可解析
+PASS  type：认 {q|noDash}（不当字面量）
+PASS  type：认 {q|lower}
+PASS  type：固定值原样保留
+PASS  {q} 套用站点变换（strip-dash）　["https://s/ABP123"]
+PASS  {q} 默认做 URL 编码　["https://s/a%20b"]
+PASS  {q|noDash} 不叠加站点变换　["https://s/ABP123"]
+PASS  {q|lower} 转小写　["https://s/abp-123"]
+PASS  {q|upper} 转大写　["https://s/ABP-1"]
+PASS  {q|num} 只留数字　["https://s/1234567"]
+PASS  {q|noDash|lower} 可链式　["https://s/abp123"]
+PASS  {q|raw} 不做编码　["https://s/a b"]
+PASS  同模板多占位符各自展开　["https://s/abp-1/x/ABP-1"]
+PASS  无占位符的模板原样不动　["https://s/fixed"]
+PASS  encode=false：填输入框不做 URL 编码　["https://s/a b"]
+PASS  encode=false 也认管道　["ABP123"]
+PASS  反推：原样命中 → {q}
+PASS  反推：小写命中 → {q|lower}
+PASS  反推：去横杠命中 → {q|noDash}
+PASS  反推：纯数字命中 → {q|num}
+PASS  反推：找不到就不硬猜（ok:false）
+PASS  反推：只换第一处，其余原样
+PASS  有 id 时优先用 #id　["#cover"]
+PASS  meta 用 property 定位　["meta[property=\"og:image\"]"]
+PASS  data-* 属性可用　["img[data-src=\"a.jpg\"]"]
+PASS  class 组合　["img.movie.photo"]
+PASS  构建产物类名被排除（css-1a2b3c）
+PASS  状态类被排除（is-active）
+PASS  哈希 id 被降级
+PASS  nth-of-type 只在最后兜底
+PASS  元素多到超阈值时不给 nth-of-type
+PASS  没有 tag 时返回空列表
+PASS  录制值等于测试番号 → {q}　["{q}"]
+PASS  只差横杠 → {q|noDash}　["{q|noDash}"]
+PASS  只差大小写 → {q|lower}　["{q|lower}"]
+PASS  无关的值原样保留　["搜索"]
+PASS  同时差横杠与大小写 → {q|noDash|lower}　["{q|noDash|lower}"]
+PASS  反推：不在域名里乱认（只找 path+search）
+
+合计 46/46 PASS
+
+样例（type，含特殊字符输入）:
+(function(){
+          var el = document.querySelector("#kw");
+          if(!el) return { ok:false, why:'not-found' };
+          try { el.focus(); } catch(e){}
+          try {
+            var d = Object.getOwnPropertyDescriptor(Object.getPrototypeOf(el), 'value');
+            if (d && d.set) d.set.call(el, "\"quoted\"\n</script>\\back"); else el.value = "\"quoted\"\n</script>\\back";
+          } catch(e){ el.value = "\"quoted\"\n</script>\\back"; }
+          try {
+            el.dispatchEvent(new Event('input', { bubbles:true }));
+            el.dispatchEvent(new Event('change', { bubbles:true }));
+          } catch(e){}
+          return { ok:true };
+        })()
+样例（expandUrl）: https://s/abp123
+样例（deriveTemplate）: https://s/v/{q|noDash}

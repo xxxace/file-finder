@@ -13,6 +13,12 @@
 import * as fsp from 'node:fs/promises';
 import * as fs from 'node:fs';
 import path from 'node:path';
+import { applyQueryTransform, expandUrl, type QueryTransform } from './urlTemplate';
+
+// 查询词的变换方式原本定义在本文件；为了让 `buildStepScript` 复用模板引擎（且不成环），
+// 已搬到 `urlTemplate.ts` —— 这里转出去，既有调用方（`index.ts` 等）的 import 路径不用改。
+export { applyQueryTransform };
+export type { QueryTransform };
 
 export type CandidateKind = 'css' | 'meta' | 'regex';
 
@@ -38,8 +44,15 @@ export interface SiteFields {
     actressLink?: FieldRule;
 }
 
-/** 查询词的变换方式（各站查询方式不同，S1 已暴露） */
-export type QueryTransform = 'none' | 'strip-dash' | 'lower';
+/**
+ * 动作序列的一步（P3.1）。
+ * ⚠️ **有副作用：每步只允许执行一次** —— 与幂等、可反复重试的抽取脚本不同，
+ * 绝不能塞进 `runExtract` 的轮询循环（click 返回 undefined ⇒ 循环不退出 ⇒ 反复点击）。
+ */
+export type ActionStep =
+    | { act: 'type'; selector: string; value: string }   // value 支持 {q}
+    | { act: 'click'; selector: string }
+    | { act: 'wait'; selector?: string; ms?: number };
 
 export interface SiteRule {
     id: string;
@@ -51,6 +64,8 @@ export interface SiteRule {
     transport: 'browser';
     needsCookie?: boolean;
     queryTransform?: QueryTransform;
+    /** 动作序列（可空）。缺省 = 行为与现在完全一致（纯 URL 型的站零改动） */
+    steps?: ActionStep[];
     fields: SiteFields;
 }
 
@@ -137,10 +152,59 @@ export function buildExtractScript(fields: SiteFields): string {
     })()`;
 }
 
-export function applyQueryTransform(q: string, t?: QueryTransform): string {
-    if (t === 'strip-dash') return q.replace(/-/g, '');
-    if (t === 'lower') return q.toLowerCase();
-    return q;
+/**
+ * 生成**单步**动作脚本（页面内执行，返回 Promise/对象）。
+ *
+ * 为什么是单步而不是整串：点击常触发整页导航 ⇒ 脚本上下文被销毁 ⇒ 整串脚本的
+ * Promise 永不 resolve。所以调用方（`runSteps`）**每步单独 executeJavaScript 一次**，
+ * 并把"导航打断"当作该步已成功。
+ *
+ * `type` 用 prototype 上的 `value` setter 写值再派发 input/change —— 受控输入
+ * （React/Vue）只有这样才会更新内部状态；直接赋 `el.value` 会被框架覆盖。
+ */
+export function buildStepScript(step: ActionStep, query = ''): string {
+    if (step.act === 'type') {
+        const sel = JSON.stringify(step.selector);
+        // ⚠️ 与 URL 用**同一个**引擎（`encode=false`：填进输入框的不该做 URL 编码）——
+        // 录出来的 `{q|noDash}` 这类写法在这里也必须被认出来，否则会被当字面量填进搜索框，
+        // 动作永远搜不到东西（"试跑通了、抓取反而错"的另一半）。
+        const val = JSON.stringify(expandUrl(step.value || '', query, undefined, false));
+        return `(function(){
+          var el = document.querySelector(${sel});
+          if(!el) return { ok:false, why:'not-found' };
+          try { el.focus(); } catch(e){}
+          try {
+            var d = Object.getOwnPropertyDescriptor(Object.getPrototypeOf(el), 'value');
+            if (d && d.set) d.set.call(el, ${val}); else el.value = ${val};
+          } catch(e){ el.value = ${val}; }
+          try {
+            el.dispatchEvent(new Event('input', { bubbles:true }));
+            el.dispatchEvent(new Event('change', { bubbles:true }));
+          } catch(e){}
+          return { ok:true };
+        })()`;
+    }
+    if (step.act === 'click') {
+        const sel = JSON.stringify(step.selector);
+        return `(function(){
+          var el = document.querySelector(${sel});
+          if(!el) return { ok:false, why:'not-found' };
+          try { el.click(); } catch(e){}
+          return { ok:true };
+        })()`;
+    }
+    const sel = step.selector ? JSON.stringify(step.selector) : 'null';
+    const ms = Number(step.ms) > 0 ? Number(step.ms) : 8000;
+    return `(async function(){
+      var SEL = ${sel}, MS = ${ms};
+      if(!SEL){ await new Promise(function(r){ setTimeout(r, MS); }); return { ok:true }; }
+      var t0 = Date.now();
+      while (Date.now() - t0 < MS) {
+        if (document.querySelector(SEL)) return { ok:true };
+        await new Promise(function(r){ setTimeout(r, 200); });
+      }
+      return { ok:false, why:'timeout' };
+    })()`;
 }
 
 /**
