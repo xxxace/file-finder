@@ -81,6 +81,26 @@
 - 撤掉两个**没有消费者**的东西：`SiteFields.images`（多图组——拾取器只做单张，多图没有使用场景）、
   `isFragileSelector`（未使用）。判据是"零引用 ⇒ 先看有没有场景；没有就不留着当死代码"。
 
+## 5.1 代码审查（独立只读审查 + 逐条自查）后修掉的
+
+派了一个**只读**子 agent 做独立审查，然后**逐条自己核实位置**才动手（子 agent 的结论不采信，只采信它指出的位置）。
+
+| 级别 | 位置 | 问题 | 修法 |
+|---|---|---|---|
+| **P0** | `rules.ts` `buildStepScript` | `type` 的值只替换 `{q}`，而**录制侧会产出** `{q\|noDash}` / `{q\|lower}` ⇒ 这些占位符被当**字面量**填进搜索框，动作永远搜不到 | 改用 `expandUrl(value, query, undefined, false)`（同一引擎、不做 URL 编码）；为此把 `QueryTransform`/`applyQueryTransform` 搬到 `urlTemplate.ts`，**打破循环依赖** |
+| **P0** | `grab.ts` | **生产抓取忽略 `rule.steps`**：试跑走了动作、真抓只打开入口 ⇒ 静默不命中。而保存闸门又是"试跑通过"，于是这种规则**能通过闸门** | 有 `steps` 就走 `runSteps`；并**取消超时重试**（动作有副作用，重试 = 重放点击） |
+| P1 | `siteFetch.ts` | `runExtract` / `passChallenge` 未设 `setWindowOpenHandler` ⇒ 页面里任何 `window.open` 会开出**未登记**窗口，主窗关闭时应用退不掉 | 两处都设 |
+| P1 | `siteActions.ts` | `openVisiblePage` 加载失败时**不销毁** ⇒ 留一个空白窗 + `PAGES` 里一个孤儿 id；且未与 `NAV_TIMEOUT` 竞速 ⇒ 请求会永久挂住 | 竞速 + 失败收窗 |
+| P1 | 三处 `_blank` 接管 | 原为**无条件**同窗导航 ⇒ 站点广告/统计脚本的 `window.open` 会把当前窗导航走，动作与抽取全落错页 | 抽成 `adoptSameOriginPopups()`：**只接管同源**弹窗 |
+| P1 | `index.ts` `pick`/`record` | 长请求未接取消 ⇒ 用户关弹窗后，那个可见窗与轮询循环仍会活满 10 分钟 | `abortOnClose(res)` → `AbortSignal` |
+| P2 | `urlTemplate.ts` | `replaceQueryInValue` 缺 `{q\|noDash\|lower}` 变体；`deriveTemplate` 会在 **origin** 里误命中（短查询词，如纯数字）⇒ 反推出 `https://{q}.example.com/x` | 补变体；**只在 path+search 里找** |
+| P2 | 死代码 | `pipesOf`/`usesQuery` 全项目无引用；`ElDesc.parent` 只构造不读取（页面内每次 hover 白递归 3 层） | 删 |
+
+修完复验：`typecheck` 0、探针 **46/46**（新增 6 条，专门钉住上面两条 P0 的回归）。
+
+> **教训（已进 MEMORY）**："同一件事有多条路径"是这类 bug 的温床 —— 拼 URL 有三处、抓取有两条通道
+> （试跑/正式）。**先找唯一出口**，找不到就抽成共用函数，别让同一份逻辑在三个地方各写一遍。
+
 ---
 
 ## 6. 待真机验收（探针够不到）
