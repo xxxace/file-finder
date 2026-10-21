@@ -154,7 +154,7 @@
                     <div class="mi-row">
                         <!-- 唯一着色的一条：这一组里只有它是"整份替换"（合并只增不删）。 -->
                         <n-button size="small" type="error" @click="handleRestoreFromFile">从文件还原…</n-button>
-                        <span class="mi-hint warn">整份替换当前缓存</span>
+                        <span class="mi-hint warn">缓存整份替换；收藏夹只增不删</span>
                     </div>
                     <div class="mi-row">
                         <n-button size="small" :loading="bulkLoading" @click="handleMergeCache">合并缓存…</n-button>
@@ -212,6 +212,7 @@
 import { computed, h, nextTick, onActivated, onDeactivated, onMounted, onUnmounted, ref, toRaw, watch } from 'vue';
 import { useRouter } from 'vue-router';
 import { openInFiles } from '@/views/FileFinder/target';
+import { refreshIndex } from '@/views/FileFinder/playlist';
 import { ipcRenderer } from 'electron';
 import useNotify from '@/hooks/useNotify';
 import { Search } from '@vicons/ionicons5';
@@ -994,8 +995,12 @@ const onRestoreFromFile = async () => {
 
     loading.value = true;
     let ok = false;
+    let merged = '';
     try {
-        await postAction(API_BASE + '/restoreFromFile', { path: file });
+        const r = await postAction(API_BASE + '/restoreFromFile', { path: file }) as {
+            playlists?: number; playlistItems?: number;
+        };
+        merged = r?.playlists || r?.playlistItems ? `；并入 ${r.playlists ?? 0} 个收藏夹 / ${r.playlistItems ?? 0} 个条目` : '';
         ok = true;
     } catch (err) {
         // 服务端在还原失败时已经尽力回滚过了，错误文案里会写明"已回滚"还是"回滚也失败"
@@ -1005,10 +1010,12 @@ const onRestoreFromFile = async () => {
     }
 
     if (!ok) return;
-    notify('success', '成功', '已还原')
+    notify('success', '已还原', `缓存已整份替换${merged}`)
     // 放在 loading 复位之后：取数里有 `loading` 相关的时序，提前调用界面会像"还原了但列表没变"。
     // 还原换的是库内容，没换"插着哪些盘" ⇒ 不重探盘符。
     reloadAfterDataChange();
+    // 收藏夹也可能被并进来了 ⇒ 重取索引（星标 / 货架的数字都读它）
+    void refreshIndex().catch(() => undefined);
 }
 
 /**

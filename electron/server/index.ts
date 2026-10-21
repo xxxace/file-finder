@@ -29,6 +29,7 @@ import { LOCAL_TOKEN } from './token';
 import config from '../config';
 import { createAssistantRoutes } from './assistant';
 import { createPlaylistRoutes } from './playlist';
+import { mergePlaylists } from './playlistStore';
 import { isVideo, VIDEO_MIME } from './videoExt';
 
 const IMAGE_EXT = ['jpg', 'jpeg', 'png', 'bmp', 'gif', 'svg', 'psd', 'webp'];
@@ -1492,7 +1493,24 @@ async function backupToFile(req: Req, res: http.ServerResponse) {
 
         const binNames = listBinNames();
 
-        // ③ 清单
+        // ③ 收藏夹（用户配置，明文 JSON）。**单独一条、可选**：
+        //   旧版备份没有它；新版应用读旧包也不受影响（见 restoreFromFile）。
+        //   读不到/不是数组就当作"没有收藏"—— 不该因为一份配置让整包备份失败。
+        let playlistsPlain: string | null = null;
+        let playlistCount = 0;
+        try {
+            const raw = await fsasync.readFile(path.join(config.userBasePath, 'playlists.json'), 'utf8');
+            const parsed = JSON.parse(raw);
+            if (Array.isArray(parsed)) {
+                playlistCount = parsed.length;
+                if (playlistCount) {
+                    playlistsPlain = path.join(stage, 'playlists.json');
+                    await fsasync.writeFile(playlistsPlain, raw, 'utf8');
+                }
+            }
+        } catch { /* 没有收藏夹文件 = 不放这一条 */ }
+
+        // ④ 清单
         const manifest = {
             format: BACKUP_FORMAT,
             app: 'file-finder',
@@ -1500,6 +1518,7 @@ async function backupToFile(req: Req, res: http.ServerResponse) {
             cacheVersion: CACHE_VERSION,
             dbEntries: plain ? plain.split('\n').filter(l => l.trim()).length - 1 : 0,
             images: binNames.length,
+            playlists: playlistCount,
         };
         await fsasync.writeFile(manifestPlain, JSON.stringify(manifest, null, 2), 'utf8');
 
@@ -1508,6 +1527,7 @@ async function backupToFile(req: Req, res: http.ServerResponse) {
             { name: 'searchCache.db', file: dbPlain, compress: 'deflate' as const },
             { name: 'disks.json', file: disksPlain, compress: 'deflate' as const },
             ...binNames.map(n => ({ name: `bin/${n}`, file: path.join(BIN_DIR, n) })),
+            ...(playlistsPlain ? [{ name: 'playlists.json', file: playlistsPlain, compress: 'deflate' as const }] : []),
         ];
         const bytes = await writeZip(target, entries);
         sendJson(res, { code: 200, message: 'ok', entries: entries.length, bytes, manifest });
@@ -1566,6 +1586,7 @@ async function restoreFromFile(req: Req, res: http.ServerResponse) {
     let dbTmp: string;
     let binNames: string[] = [];
     let registry: DiskRegistry | null = null;
+    let playlistsInPkg: unknown = null;
     try {
         const entries = await listZip(source);
         const dbEntry = entries.find(e => e.name === 'searchCache.db');
@@ -1593,6 +1614,15 @@ async function restoreFromFile(req: Req, res: http.ServerResponse) {
                 const parsed = JSON.parse((await readZipEntry(source, dkEntry)).toString('utf8'));
                 if (parsed && typeof parsed === 'object') registry = parsed as DiskRegistry;
             } catch { /* 注册表坏了不该挡住库的还原 */ }
+        }
+
+        // 收藏夹：**可选**（旧版备份没有）。坏了就跳过，绝不因此挡住缓存库的还原。
+        const plEntry = entries.find(e => e.name === 'playlists.json');
+        if (plEntry) {
+            try {
+                const parsed = JSON.parse((await readZipEntry(source, plEntry)).toString('utf8'));
+                if (Array.isArray(parsed)) playlistsInPkg = parsed;
+            } catch { /* 同上 */ }
         }
     } catch (e) {
         throw new Error(`不是一份可用的备份包：${e}`);
@@ -1650,7 +1680,21 @@ async function restoreFromFile(req: Req, res: http.ServerResponse) {
     // 盘注册表：**只补缺、不覆盖**（本地那份记录着真实的 firstSeenAt，比包里的更可信）
     if (registry) await mergeRegistryMissing(registry);
 
-    sendJson(res, { code: 200, message: 'ok', images: added });
+    // 收藏夹：**只增不删**地并入（备份通常比现在旧，替换会把之后新建的夹子抹掉）。
+    // 失败不该让"库已还原成功"变成一次失败 —— 报告里给 0 即可。
+    let playlistMerge = { playlists: 0, items: 0 };
+    if (Array.isArray(playlistsInPkg)) {
+        try {
+            playlistMerge = await mergePlaylists(config.userBasePath, playlistsInPkg as Parameters<typeof mergePlaylists>[1]);
+        } catch (e) {
+            console.error('[restore] 收藏夹并入失败（缓存库已还原）:', e);
+        }
+    }
+
+    sendJson(res, {
+        code: 200, message: 'ok', images: added,
+        playlists: playlistMerge.playlists, playlistItems: playlistMerge.items,
+    });
 }
 
 /**
@@ -1719,6 +1763,7 @@ async function mergeCache(req: Req, res: http.ServerResponse) {
     let dbTmp: string;
     let binNames: string[] = [];
     let registry: DiskRegistry | null = null;
+    let playlistsInPkg: unknown = null;
     try {
         const entries = await listZip(source);
         const dbEntry = entries.find(e => e.name === 'searchCache.db');

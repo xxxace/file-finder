@@ -171,6 +171,62 @@ export async function addItems(dataDir: string, id: string, items: PlaylistItem[
     return pl;
 }
 
+/**
+ * 把一份 `playlists.json`（来自备份包）**并入**本地 —— 只增不删。
+ *
+ * 为什么是"并入"而不是"整份替换"：备份多半比当前旧，替换会把备份之后新建的收藏夹
+ * 一起抹掉。语义对齐「合并缓存…」：两边都留。
+ *
+ * 合并规则：
+ * - **默认收藏夹按角色匹配**（`system`），不按 id —— 两台机器的默认夹 id 是各自随机生成的，
+ *   按 id 匹配会并出两个「收藏」。包里的默认夹条目并入本地那个。
+ * - 其余按 **id** 匹配：id 已存在 ⇒ 只补它缺的条目；不存在 ⇒ 整夹追加。
+ * - 条目按身份（serial|relPath|name|ext）去重，与 `addItems` 同一个判据。
+ *
+ * @returns 实际新增的数量（给"还原完成"的文案用）
+ */
+export async function mergePlaylists(dataDir: string, incoming: Playlist[]): Promise<{ playlists: number; items: number }> {
+    const list = await loadPlaylists(dataDir);
+    const byId = new Map(list.map(p => [p.id, p]));
+    const system = list.find(p => p.system);
+    let addedPlaylists = 0;
+    let addedItems = 0;
+
+    for (const raw of incoming) {
+        if (!raw || !Array.isArray(raw.items)) continue;
+        const target = raw.system ? system : byId.get(raw.id);
+        let pl: Playlist;
+
+        if (target) {
+            pl = target;
+        } else {
+            const id = typeof raw.id === 'string' && raw.id && !byId.has(raw.id) ? raw.id : newId('pl');
+            pl = {
+                id,
+                name: typeof raw.name === 'string' && raw.name.trim() ? raw.name.trim() : '未命名收藏夹',
+                createdAt: typeof raw.createdAt === 'number' ? raw.createdAt : Date.now(),
+                items: [],
+            };
+            list.push(pl);
+            byId.set(id, pl);
+            addedPlaylists += 1;
+        }
+
+        const seen = new Set(pl.items.map(itemKeyOf));
+        for (const it of raw.items) {
+            if (!it || !it.serial || !it.relPath || !it.name) continue;
+            const k = itemKeyOf(it);
+            if (seen.has(k)) continue;
+            seen.add(k);
+            pl.items.push({ ...it, id: typeof it.id === 'string' && it.id ? it.id : newId('it') });
+            addedItems += 1;
+        }
+    }
+
+    if (addedPlaylists || addedItems) await persist(dataDir, list);
+    return { playlists: addedPlaylists, items: addedItems };
+}
+
 /** 按条目 id 移除（路由层负责把"当前形态的 key"翻成 id —— 那需要盘表知识，不属于存储） */
 export async function removeItemById(dataDir: string, id: string, itemId: string): Promise<boolean> {
     const list = await loadPlaylists(dataDir);
