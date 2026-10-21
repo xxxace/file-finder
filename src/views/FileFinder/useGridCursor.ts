@@ -9,9 +9,10 @@
  * ## 为什么状态只有`cursorKey` 一个
  *
  * 因为**坐标是布局的函数，而布局不是我们能存住的**：
- * 网格列数随窗口宽度变（6/5/3/2/1 列，见 `index.vue` 的 `--item-width` 断点），
- * 同一个 key 在 6 列下是 `(1,1)`、在 3 列下是 `(2,1)`（探针 R7 断言了这件事）。
- * 存坐标就必须跟着窗口宽度同步 —— 那是会漏的同步代码。
+ * 网格现在是恒定 6 列，但**坐标仍然不存**：位置是布局的函数 ——
+ * 搜索过滤后的残行、窗口尺寸变化都会让同一个 key 落在不同行列
+ *（旧版 6/5/3/2/1 断点下更明显：同一个 key 在 6 列是 `(1,1)`、3 列是 `(2,1)`，探针 R7 断言过）。
+ * 存坐标就得跟着这些同步 —— 那是会漏的同步代码。
  *
  * ⇒ 只存 key，行列结构每次现算（`gridGeometry.ts` 的纯函数 + 一次 DOM 探测）。
  * 同一个手法在`usePreview` 里已经用过一遍（`previewKey` 是唯一真相、索引从它派生）。
@@ -77,6 +78,12 @@ export function useGridCursor(deps: {
      */
     isPreviewOpen: () => boolean;
     /**
+     * 本页是否在前台。**可选**，但路由化之后必须传：组件被 `KeepAlive` 缓存后
+     * `window` 上的 keydown 监听不会摘 ⇒ 在别的页按方向键/回车会操作**看不见的网格**
+     * （甚至打开文件）。与 `isPreviewOpen` 同一条"函数而非 Ref"的理由。
+     */
+    isActive?: () => boolean;
+    /**
      * 回车干什么。**语义由调用方决定**，本模块不认识"打开 / 选中"这些词。
      *
      * 为什么要传进来而不是在这里 `if (picking)`：打开的规则（图片走内置、视频走系统、
@@ -85,7 +92,7 @@ export function useGridCursor(deps: {
      */
     onConfirm: (item: WiredFileInfo) => void;
 }) {
-    const { fileList, keyOf, imageBox, isPreviewOpen, onConfirm } = deps;
+    const { fileList, keyOf, imageBox, isPreviewOpen, isActive, onConfirm } = deps;
 
     // ── 状态：只有一个真相 ────────────────────────────────────────────────
     /**
@@ -229,7 +236,8 @@ export function useGridCursor(deps: {
     };
 
     /**
-     * 窗口变宽变窄 ⇒ 列数变了（6/5/3/2/1）⇒ 缓存作废。
+     * 窗口变宽变窄 ⇒ 格子尺寸与换行位置都会变 ⇒ 缓存的布局作废。
+     * （列数恒定 6 也一样：行高变了，`rowTops` 就不是那批值了。）
      *
      * 必须挂，也**必须摘**（`dispose`）—— 本项目已经因为全局监听没摘被坑过两次
      * （见 `usePreview` 的 `installWheelZoom` 与 `onViewportResize`）。
@@ -410,6 +418,8 @@ export function useGridCursor(deps: {
      * `index.vue` 的定位回车（keyup 侧）同样要挡，否则长按回车会反复"定位"。
      */
     const onGridKeydown = (e: KeyboardEvent) => {
+        // 本页在后台（被 KeepAlive 缓存）⇒ 一个键都不接
+        if (isActive && !isActive()) return;
         if (e.key === 'Enter') {
             if (isPreviewOpen()) return;              // ← 见上：预览层接管回车
             // ⚠️⚠️ **守卫必须在这里也调一次**（2026-10-04 code review 抓出，阻断级）。

@@ -1,6 +1,11 @@
 <template>
-    <n-modal :show="visible" preset="card" title="站点规则" style="width: 100vw; height: 100vh"
-        :bordered="false" :mask-closable="false" @update:show="onUpdateShow">
+    <!-- 设置页（2026-10-21 从全屏弹窗改路由页）：站点规则是**长期配置**，
+         不是"当前这一屏的动作"—— 关掉后不需要回到刚才那一屏。 -->
+    <div class="page">
+        <header class="page-head">
+            <h1>设置 · 站点规则</h1>
+            <span class="page-sub">入口 / 动作 / 抽取三段式；保存后即时生效</span>
+        </header>
         <div class="rules-wrap">
             <RuleSiteList :rules="rules" :active-id="draft.id" @select="editRule" @create="newRule"
                 @toggle="toggleRule" />
@@ -60,28 +65,27 @@
                 </div>
             </section>
         </div>
-    </n-modal>
+    </div>
 </template>
 
 <script setup lang="ts">
-import { computed, ref } from 'vue';
-import { NModal, NButton, NInput, NSelect, NCheckbox } from 'naive-ui';
+import { computed, onMounted, ref } from 'vue';
+import { NButton, NInput, NSelect, NCheckbox } from 'naive-ui';
 import { getAction, postAction } from '@/utils/request';
 import useNotify from '@/hooks/useNotify';
-import RuleSiteList from './rules/RuleSiteList.vue';
-import RuleStepList from './rules/RuleStepList.vue';
-import RuleCoverList from './rules/RuleCoverList.vue';
-import RuleTestResult from './rules/RuleTestResult.vue';
+import RuleSiteList from '@/views/FileFinder/rules/RuleSiteList.vue';
+import RuleStepList from '@/views/FileFinder/rules/RuleStepList.vue';
+import RuleCoverList from '@/views/FileFinder/rules/RuleCoverList.vue';
+import RuleTestResult from '@/views/FileFinder/rules/RuleTestResult.vue';
 import {
     blankRule, canSave, cloneRule, toPayload, TRANSFORM_OPTIONS,
     type SiteRuleDraft, type TestRun,
-} from './rules/ruleDraft';
+} from '@/views/FileFinder/rules/ruleDraft';
 
 // 统一写 127.0.0.1（同 FileFinder：localhost 可能解析到 ::1，服务端只绑 IPv4）
 const API_BASE = 'http://127.0.0.1:3060';
 
 const notify = useNotify();
-const visible = ref(false);
 const rules = ref<SiteRuleDraft[]>([]);
 const draft = ref<SiteRuleDraft>(blankRule());
 const isNew = ref(true);
@@ -274,14 +278,8 @@ async function save() {
     }
 }
 
-/** ⚠️ `n-modal` 的 `@update:show` 回声：只处理关闭（同 AssistantCoverModal 的既有约定） */
-function onUpdateShow(v: boolean) {
-    if (!v) visible.value = false;
-}
-
-async function setShowModal(show: boolean) {
-    visible.value = show;
-    if (!show) return;
+/** 进页面即加载（原来是"打开弹窗时"加载） */
+async function init() {
     last.value = null;
     await loadRules();
     const first = rules.value[0];
@@ -289,13 +287,44 @@ async function setShowModal(show: boolean) {
     else newRule();
 }
 
-defineExpose({ setShowModal });
+onMounted(init);
 </script>
 
 <style lang="less" scoped>
+/* 页容器（原来这里是 100vw×100vh 的弹窗） */
+.page {
+    flex: 1 1 auto;
+    min-height: 0;
+    display: flex;
+    flex-direction: column;
+    padding: 20px 24px 0;
+    box-sizing: border-box;
+}
+
+.page-head {
+    display: flex;
+    align-items: baseline;
+    gap: 10px;
+    margin-bottom: 12px;
+
+    h1 {
+        margin: 0;
+        font-size: 16px;
+        font-weight: 500;
+        color: var(--ff-text-1);
+    }
+
+    .page-sub {
+        font-size: 12px;
+        color: var(--ff-text-3);
+    }
+}
+
 .rules-wrap {
     display: flex;
-    height: calc(100vh - 120px);
+    flex: 1 1 auto;
+    min-height: 0;
+    padding-bottom: 16px;
     gap: 16px;
 }
 

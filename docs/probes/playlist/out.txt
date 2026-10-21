@@ -1,0 +1,42 @@
+PASS  ① thumbNameOf(sig)
+PASS  ① thumbNameOf(空)
+PASS  ① sigOfThumbName 往返
+PASS  ① sigOfThumbName(空)
+PASS  ① sigOfThumbName 拒垃圾
+PASS  ① sigOfThumbName 拒 p-（只要缩略图名）
+PASS  ② 锚点 → 身份
+PASS  ② 锚点（盘根）
+PASS  ② 空序列号拒收
+PASS  ② UNC 拒收
+PASS  ② 盘符分支（探针盘表空 ⇒ null，符合设计）
+PASS  ③ 在线 dir
+PASS  ③ 离线 dir
+PASS  ③ 在线 key
+PASS  ③ 离线 key
+PASS  ③ key 与下发态同形
+PASS  ③ 无 ext 不变形
+PASS  ③ 离线 key round-trip 回身份
+PASS  ④ 在线图片带可生成 preview
+PASS  ④ 在线图片 thumb 不下发（bin 仓没有 ⇒ 免 404）
+PASS  ④ 离线图片**不带** preview（否则白读一次盘）
+PASS  ④ 无 sig 全空（没有图可显示）
+PASS  ④ 目录条目 isDirectory + files 快照带下去
+PASS  ⑤ 假 sig ⇒ 恒空（bin 仓没有就不下发）
+PASS  ⑤ 无 sig 条目不占位
+PASS  ⑥ 首次加载 seeding「收藏」
+PASS  ⑥ seeding 已落盘
+PASS  ⑥ 新建落盘（2 条）
+PASS  ⑥ 新建返回带 id
+PASS  ⑥ 重命名成功
+PASS  ⑥ 重命名落盘
+PASS  ⑥ 默认清单不可改名
+PASS  ⑥ 默认清单不可删
+PASS  ⑥ 加入落盘（快照全字段）
+PASS  ⑥ 按 id 移除
+PASS  ⑥ 移除落盘
+PASS  ⑥ 移除不存在的条目返回 false
+PASS  ⑥ 删除自定义清单
+PASS  ⑥ 删除落盘
+PASS  ⑥ 损坏回落（空 + seeding 收藏）
+─────────────────────────────
+40 PASS / 0 FAIL

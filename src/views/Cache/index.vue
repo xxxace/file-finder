@@ -1,24 +1,17 @@
 <template>
-    <n-modal v-model:show="showModal" :on-after-leave="onHide">
-        <!-- 卡片：装得下 + 关得掉。
-             原来的 `width:900px; margin-top:10px` 配一个没有 max-height 的表格，
-             每页选 100 条时 100 行 ≈ 3200px 会**直接顶出屏幕**（分页条都够不着）。
-             现在卡片自己撑成"头 + 可滚动主体 + 底"的纵向 flex：
-             `content-style` 把溢出收进卡片内部，分页条永远在视野里。
-             `closable` 补上那个一直缺的 ✕ —— 桌面应用里只能点遮罩/Esc 关是明确的不良设计。 -->
-        <n-card class="cache-panel" title="缓存记录" closable :bordered="false" size="huge" role="dialog"
-            aria-modal="true"
-            :content-style="{ display: 'flex', flexDirection: 'column', overflow: 'hidden', flex: '1 1 auto', minHeight: '0' }"
-            style="width: min(1040px, 92vw); height: 86vh; display: flex; flex-direction: column"
-            @close="setShowModal(false)">
+    <div class="page cache-page">
+        <!-- ⚠️ `.cache-panel` 包住整页（含页头）：样式块里几百行都以 `.cache-panel X` 打头，
+             换一层祖先就得全改。它是"这一页的容器"，不再是一张卡。 -->
+        <div class="cache-panel">
+        <header class="page-head">
+            <h1>缓存记录</h1>
             <!-- G1「找」= 搜索 + 刷新。
                  用户原话是「方便查看，搜索」—— 搜索是第一诉求，所以它占满一行，不再挤在 170px 里。
                  主界面早就是"输入即过滤"（index.vue 的 fileList computed），这里对齐，去掉「查询」按钮。
                  容器用**裸 flex** 而不是 n-space：naive-ui 2.45.3 给每个子项写死同一个 key，
                  子元素个数一变就会重复 key / 错位复用节点（先例 docs/FIX-2026-09-24-nspace-duplicate-keys.md）。
                  本面板下面几组的子元素个数确实会变（盘选项、批量区），统一用裸容器。 -->
-            <template #header-extra>
-                <div class="g1-row">
+            <div class="g1-row">
                     <!-- ⚠️ 搜索框外面**必须**套这一层普通 div，用来接输入法的 composition 事件。
                          理由（已核过 node_modules，不是猜的）：naive-ui 的 NInput 在**它自己的 render 里**
                          把 `onCompositionstart/onCompositionend` 显式绑到内部 input 上（Input.mjs:928-929），
@@ -35,7 +28,7 @@
                     </div>
                     <n-button size="small" :loading="diskLoading || loading" @click="onRefresh">刷新</n-button>
                 </div>
-            </template>
+        </header>
             <!-- ⚠️ 只有**表格那一块**滚动，不是整个弹窗 body 滚动。
                  上一版把 overflow 放在卡片内容上，结果滚动条出现在整个面板右侧 ——
                  搜索框、总览、盘筛选会跟着一起滚走，表格自己的表头也不吸顶。
@@ -184,14 +177,13 @@
                 </n-collapse-item>
             </n-collapse>
 
-            <template #footer>
-                <!-- 批量区固定在底部、**高度恒定**：没选中时按钮置灰而不是消失 ——
-                     用 v-if 的话它一出现就把整行推走（原来正是这样）。
-                     勾选是**受控**的（`:checked-row-keys`）—— 这既让"清空选择"和关闭面板复位真的生效，
-                     也让跨页勾选后"要删哪些"不再是黑箱：几项不在本页直接写在提示里。
-                     （原先我担心"受控要自己管清理时机"就没做受控，结果"清空选择"点了没反应 ——
-                     见表格上那条注释。） -->
-                <div class="foot-row">
+            <!-- 批量区固定在底部、**高度恒定**：没选中时按钮置灰而不是消失 ——
+                 用 v-if 的话它一出现就把整行推走（原来正是这样）。
+                 勾选是**受控**的（`:checked-row-keys`）—— 这既让"清空选择"和关闭面板复位真的生效，
+                 也让跨页勾选后"要删哪些"不再是黑箱：几项不在本页直接写在提示里。
+                 （原先我担心"受控要自己管清理时机"就没做受控，结果"清空选择"点了没反应 ——
+                 见表格上那条注释。） -->
+            <div class="foot-row">
                     <div class="foot-left">
                         <n-button size="small" type="error" :disabled="!checkedRowKeysRef.length"
                             :loading="bulkLoading" @click="handleRemove">删除记录</n-button>
@@ -212,27 +204,29 @@
                         </template>
                     </n-pagination>
                 </div>
-            </template>
-        </n-card>
-    </n-modal>
+        </div>
+    </div>
 </template>
 
 <script lang="ts" setup>
-import { computed, h, nextTick, ref, toRaw, watch } from 'vue';
+import { computed, h, nextTick, onActivated, onDeactivated, onMounted, onUnmounted, ref, toRaw, watch } from 'vue';
+import { useRouter } from 'vue-router';
+import { openInFiles } from '@/views/FileFinder/target';
 import { ipcRenderer } from 'electron';
 import useNotify from '@/hooks/useNotify';
 import { Search } from '@vicons/ionicons5';
 import {
-    NInput, NButton, NCard, NModal, NPagination, NDataTable, NSpin, NTooltip, NAlert, NTag, NIcon,
+    NInput, NButton, NPagination, NDataTable, NSpin, NTooltip, NAlert, NTag, NIcon,
     NCollapse, NCollapseItem, useDialog,
 } from 'naive-ui'
 import type { DataTableColumns, DataTableRowKey, DataTableSortState, InputInst } from 'naive-ui'
 import { formatBytes, serialTail } from '@/utils';
-import type { BrowseHistoryWithPagination, OpenMode } from 'electron/server/nedb';
+import type { BrowseHistoryWithPagination } from 'electron/server/nedb';
 import { getAction, postAction } from '@/utils/request';
 
 // 统一写 127.0.0.1 而不是 localhost，避免个别机器把 localhost 解析到 ::1（服务端只绑 IPv4）
 const API_BASE = 'http://127.0.0.1:3060';
+const router = useRouter();
 
 type HistoryQuery = {
     serial: string;
@@ -460,9 +454,6 @@ const overview = computed(() => {
 });
 
 const tableData = ref<RowData[]>([])
-const emits = defineEmits<{
-    (e: 'openDir', path: string, mode: OpenMode): void
-}>();
 const notify = useNotify();
 const dialog = useDialog();
 const model = ref<HistoryQuery>({
@@ -482,7 +473,6 @@ const model = ref<HistoryQuery>({
     sort: 'path',
     dir: 'asc'
 })
-const showModal = ref(false);
 const loading = ref(false);
 const diskLoading = ref(false);
 /** 备份进行中。不复用 `loading`（那个罩表格，而备份不动列表）。见模板上的对照表。 */
@@ -503,9 +493,6 @@ const searchRef = ref<InputInst | null>(null);
 /** 顶部「总览」的数据源（/getDisks 的 stats）。没拿到前不显示那一行 */
 const stats = ref<DiskStats | null>(null);
 
-const setShowModal = function (val: boolean) {
-    showModal.value = val;
-}
 
 function toQueryStr(val: Record<string, any>) {
     if (!val || typeof val !== 'object') return `?_t=${+new Date()}`
@@ -767,11 +754,6 @@ const reloadAfterDataChange = () => {
  *
  * 关着就不打扰 —— 顺带省掉一次没人看的请求。
  */
-const refreshIfOpen = () => {
-    if (!showModal.value) return;
-    reloadAfterDataChange();
-}
-
 const emptyText = computed(() => {
     if (loading.value || tableData.value.length) return '';
     if (model.value.path) return `没有匹配「${model.value.path}」的目录`;
@@ -795,10 +777,9 @@ const openDir = (item: RowData) => {
         notify('warning', '打开失败', `这条记录（序列号 ${item.serial}）没有可用的地址。`)
         return;
     }
-    setShowModal(false);
-    setTimeout(() => {
-        emits('openDir', target, item.mode || 'cover');
-    }, 300)
+    // 跨页不是父子关系：把"要打开哪个目录"写进模块级意图，再跳文件页
+    openInFiles({ kind: 'path', path: target });
+    void router.push('/');
 }
 
 // 同 handleSerialChange：`:on-update:page` / `:on-update:page-size` 与 `v-model:page` / `v-model:page-size`
@@ -925,7 +906,8 @@ const onRemove = async () => {
 // `/backup` 接口**保留不删**（零成本，将来做"退出时自动快照"可以直接复用）。
 // 见 docs/DESIGN-BACKUP-2026-09-24.md §7.8 —— 那里本来就挂着"是否收掉，等你一句话"。
 
-const onHide = () => {
+/** 离开这一页时清掉勾选：勾选是"这一次操作的选择"，不是页面的长期状态 */
+const onDeactivatedHook = () => {
     checkedRowKeysRef.value = []
 }
 
@@ -1055,28 +1037,38 @@ const handleMergeCache = async () => {
     reloadAfterDataChange();
 }
 
-// 每次打开都刷新。原来是"只在第一次打开时查一次"（isFirstRender 守卫），
-// 结果第二次打开看到的是上一次的旧列表。
-// 顺带把 watch 从 onMounted 里挪出来 —— 写在 onMounted 内部注册的 watcher，
-// 组件卸载时不会被回收。
-//
-// ⚠️ 这里故意**不重探盘符**（`loadDisks()` 不带 refresh）：那会让"每次打开"都 stat 一遍 C–Z。
-// 想看"现在插着什么"就点「刷新」。
-watch(showModal, (val) => {
-    if (val) {
-        loadDisks();
-        getHistrotyList();
-        // 键盘路径的第一落点：打开就把光标放进搜索框，直接打字就能筛。
-        // 放在 nextTick 之后 —— n-modal 的内容是这一轮才挂上去的，早于它拿不到实例。
-        nextTick(() => searchRef.value?.focus());
-    }
+/**
+ * 进这一页就重新取一次（每页条数/盘筛选是页内状态，KeepAlive 会留着）。
+ * ⚠️ 故意**不重探盘符**（`loadDisks()` 不带 refresh）：那会让每次进入都 stat 一遍 C–Z。
+ * 想看"现在插着什么"就点「刷新」。
+ */
+const pageActive = ref(true);
+
+const enterPage = () => {
+    pageActive.value = true;
+    loadDisks();
+    getHistrotyList();
+    // 键盘路径的第一落点：进来就把光标放进搜索框，直接打字就能筛
+    nextTick(() => searchRef.value?.focus());
+};
+onMounted(enterPage);
+onActivated(enterPage);
+onDeactivated(() => {
+    pageActive.value = false;
+    onDeactivatedHook();
 });
 
-defineExpose({
-    setShowModal,
-    /** 盘插拔后由主界面调用（那条 IPC 见 `electron/main/diskWatch.ts`）—— 只重取数据，不重探盘符 */
-    refreshIfOpen
-})
+/**
+ * 插拔盘：**本页在前台才重取**。
+ * 后台的页为一次看不见的刷新花一次请求没有意义；而"开着这一页时插盘"必须能刷出来
+ * —— 原来靠文件页的 onDisksChanged 转发（页面拆开之后那条线没了）。
+ */
+const onDisksChangedIpc = () => {
+    if (pageActive.value) reloadAfterDataChange();
+};
+onMounted(() => ipcRenderer.on('ff-disks-changed', onDisksChangedIpc));
+onUnmounted(() => ipcRenderer.off('ff-disks-changed', onDisksChangedIpc));
+
 </script>
 
 <style>
@@ -1085,6 +1077,50 @@ defineExpose({
    那些节点拿到的是 DataTable 的 scope id，用 `scoped` 选择器**匹配不到它们**
    （`.dir-cell` / `.dir-name` / `.dir-note` 正好全都长在 render 里）。
    靠外层类名前缀做隔离，比 scoped 在这里更可靠、也不会漏到别处。 */
+
+/* 页容器：整页 = 页头 + 主体；只有表格那块滚。
+   ⚠️ 本样式块是**全局**的（表格 render 节点拿不到 scoped 属性），所以页级类名必须带
+   `cache-` 前缀：`.page` / `.page-head` 这种通名会串到收藏页、设置页去
+   （2026-10-21 实测：收藏页的页头被这里的 `space-between` 顶到了两边）。 */
+.cache-page {
+    flex: 1 1 auto;
+    min-height: 0;
+    display: flex;
+    flex-direction: column;
+    padding: 20px 24px 16px;
+    box-sizing: border-box;
+}
+
+.cache-panel {
+    flex: 1 1 auto;
+    min-height: 0;
+    display: flex;
+    flex-direction: column;
+}
+
+.cache-page .page-head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 16px;
+    margin-bottom: 10px;
+}
+
+.cache-page .page-head h1 {
+    margin: 0;
+    font-size: 16px;
+    font-weight: 500;
+    color: var(--ff-text-1);
+}
+
+/* n-spin 的根要撑满，否则里面的表格拿不到确定高度、`flex-height` 失效 */
+.cache-panel > .n-spin {
+    flex: 1 1 auto;
+    min-height: 0;
+    display: flex;
+    flex-direction: column;
+}
+
 .cache-panel .g1-row {
     display: flex;
     align-items: center;
@@ -1392,6 +1428,8 @@ defineExpose({
 /* 底部：批量区**高度恒定**（没选中时按钮置灰、位置不动，不用 v-if 让它顶掉布局） */
 .cache-panel .foot-row {
     display: flex;
+    /* 和表格拉开一点：紧贴着最后一行会读成"表格的一部分" */
+    padding-top: 10px;
     align-items: center;
     justify-content: space-between;
     /* 小窗口下"批量区 + 分页器"一行装不下 —— 允许整块换行，

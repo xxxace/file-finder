@@ -1,0 +1,107 @@
+/**
+ * Design token —— 深浅两套，只在这里改颜色/圆角/间距。
+ *
+ * 为什么前缀是 `--ff-`：本项目里 naive-ui 只提供 `--n-*`，
+ * 自定义的 `--color-*` 从来就不存在（2026-10-21 曾因此让 hover/虚线边框整条静默失效）。
+ * 自建 token 必须自带命名空间，才不会被误当成"naive 应该给的那个变量"。
+ *
+ * 圆角是 token（`--ff-radius-card`）：换回直角只改这一个值，不动任何组件。
+ */
+
+:root {
+  color-scheme: light;
+
+  /* 面 */
+  --ff-bg: #f1f2f3;
+  --ff-surface: #ffffff;
+  --ff-fill: #f6f7f8;
+  --ff-fill-strong: #eceef1;
+  --ff-line: #e3e5e7;
+
+  /* 字 */
+  --ff-text-1: #18191c;
+  --ff-text-2: #61666d;
+  --ff-text-3: #9499a0;
+
+  /* 品牌 */
+  --ff-pink: #fb7299;
+  --ff-pink-deep: #e85b83;
+  --ff-pink-weak: rgba(251, 114, 153, 0.12);
+  --ff-blue: #00aeec;
+  --ff-blue-deep: #0095cc;
+  --ff-blue-weak: rgba(0, 174, 236, 0.12);
+
+  /* 结构 */
+  --ff-scroll: #c9cdd4;
+  --ff-mask: rgba(0, 0, 0, 0.45);
+  --ff-shadow-1: 0 2px 10px rgba(0, 0, 0, 0.08);
+
+  --ff-radius-card: 6px;
+  --ff-radius-ctl: 8px;
+  --ff-radius-pill: 4px;
+
+  --ff-grid-gap: 16px;
+  --ff-rail-w: 64px;
+  /* 封面比例：实测本库缩略图多在 1.6 左右；先 16:10，主人看过觉得还能再高 ⇒ 3:2。
+     改这一个值就能整体换比例（16/10、4/3 都行）。 */
+  --ff-cover-ratio: 3 / 2;
+}
+
+[data-theme='dark'] {
+  color-scheme: dark;
+
+  --ff-bg: #18191c;
+  --ff-surface: #1f2022;
+  --ff-fill: #242527;
+  --ff-fill-strong: #2f3134;
+  --ff-line: #2f3134;
+
+  --ff-text-1: #e3e5e7;
+  --ff-text-2: #9499a0;
+  --ff-text-3: #61666d;
+
+  --ff-pink-weak: rgba(251, 114, 153, 0.16);
+  --ff-blue-weak: rgba(0, 174, 236, 0.16);
+
+  --ff-scroll: #4a4b4d;
+  --ff-mask: rgba(0, 0, 0, 0.55);
+  --ff-shadow-1: 0 2px 10px rgba(0, 0, 0, 0.4);
+}
+
+/* 根节点：原来 body 带着 UA 的 8px margin，与 `100vh` 的页面叠在一起会溢出 */
+html,
+body {
+  margin: 0;
+  height: 100%;
+}
+
+body {
+  background: var(--ff-bg);
+}
+
+#app {
+  height: 100%;
+}
+
+/* 滚动条（B 站是 6px 细条；这里留 8px，鼠标更好抓） */
+::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+::-webkit-scrollbar-thumb {
+  background: var(--ff-scroll);
+  border-radius: 4px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: var(--ff-text-3);
+}
+
+::-webkit-scrollbar-corner {
+  background: transparent;
+}

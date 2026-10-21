@@ -92,21 +92,9 @@
                         更多
                     </n-button>
                 </n-dropdown>
-                <!-- 缓存记录入口。⚠️ 原来它是一个**只有脚印图标、没有文字、也没有 tooltip** 的按钮 ——
-                     面板做得再好，找不到入口等于零。这里补一句说明（一行成本）。 -->
-                <n-tooltip>
-                    <template #trigger>
-                        <n-button size="small" @click="showHistory">
-                            <template #icon>
-                                <FootstepsOutline />
-                            </template>
-                        </n-button>
-                    </template>
-                    缓存记录（读过的目录）
-                </n-tooltip>
-                <!-- 角标原来站在这里。用户 2026-10-02 裁决：挪到面包屑的**当前段**上。
-                     它量的是"这一层有多少条目"，紧挨着「缓存记录」按钮时读起来像那个按钮的角标
-                     —— 挂到它真正描述的那一段上，位置本身就是说明，不需要再补 tooltip。 -->
+                <!-- 缓存记录 / 清单这两个入口（2026-10-21 迁走）：
+                     它们现在住在左导航轨（页级），不再占工具条的位置。
+                     ⚠️ 别再加回来 —— 这里只放**跟当前这一层数据绑定**的动作。 -->
                 <n-input ref="searchInput" v-model:value="searchText" placeholder="搜索" size="small" clearable>
                     <template #prefix>
                         <n-icon :component="Search" />
@@ -122,7 +110,7 @@
                      只读层（盘不在）也禁掉：只读视图的源就是缓存，没有"重读"这回事。 -->
                 <n-tooltip>
                     <template #trigger>
-                        <n-button size="small" :disabled="scanning || readOnlyLevel" @click="onRefresh">
+                        <n-button size="small" :disabled="scanning || readOnlyLevel || playlistLevel" @click="onRefresh">
                             <template #icon>
                                 <n-icon>
                                     <Refresh />
@@ -134,6 +122,9 @@
                 </n-tooltip>
             </div>
         </div>
+        <!-- 2026-10-21 主人裁决：次栏整条去掉。
+             盘条：没有场景 —— 换盘用左上角的选择器就够，多一排是重复入口；
+             换封面：不是高频动作，回到「更多」里（低频动作不该占常驻位置）。 -->
         <!-- 失败横幅：和"空目录"那行浅灰小字是**两件事**，绝不能混成一件事。
              空 = 这里本来就没有东西；横幅 = 这里应该有东西、但现在读不到。
              不做 closable：它的寿命由取数结果管（下一次成功就自动消失）——
@@ -175,23 +166,41 @@
                      "点图才开"的语义靠 `img-props.onClick` 原样保留：n-image 的
                      `onImgClick` 会先 showPreview()（被 preview-disabled 挡住），再转给 imgProps.onClick
                      （naive-ui `Image.mjs:99-102`）⇒ 不会双开、也不是 CSS 藏节点。 -->
-                <n-image v-if="item.type === 'image' || item.type === 'video'" class="can-preview"
-                    :src="thumbUrl(item.thumb)" :img-props="{ onClick: () => openPreview(item) }" :alt="item.dir"
-                    :lazy="true" objectFit="contain" preview-disabled />
-                <!-- 目录的脸：只在 70% 显示、且本来就不给点开。挑封面时要看得清，所以模式下放到 100% -->
-                <n-image v-else-if="!!item.avatar" :src="thumbUrl(item.avatar)" :alt="item.dir || ''" :lazy="true"
-                    objectFit="contain" :style="picking ? 'width:100%;height:100%' : 'width:70%;height:70%'"
-                    preview-disabled />
-                <img v-else-if="item.type === 'folder'" :src="folderIcon" :alt="item.dir || ''" :style="`width:70%`">
-                <div v-else :title="item.dir" :class="`file-cover fiv-cla fiv-icon-${item.ext}`"
-                    :style="`width:70%;font-size: .6rem`"></div>
-                <span>{{ item.name }}</span>
+                <!-- 封面块：16:9 定比例、圆角走 `--ff-radius-card`（换回直角只改 token）。
+                     比例定死 ⇒ 同一行所有格子等高 —— 这是 `gridGeometry` 分行算法的前提，
+                     ⚠️ 绝不能换成"由内容撑高"。 -->
+                <div class="card-cover" :style="coverBackdrop(item)">
+                    <n-image v-if="item.type === 'image' || item.type === 'video'" class="can-preview"
+                        :src="thumbUrl(item.thumb)" :img-props="{ onClick: () => openPreview(item) }" :alt="item.dir"
+                        :lazy="true" objectFit="contain" preview-disabled />
+                    <!-- 目录的脸：只在 70% 显示、且本来就不给点开。挑封面时要看得清，所以模式下放到 100% -->
+                    <n-image v-else-if="!!item.avatar" :src="thumbUrl(item.avatar)" :alt="item.dir || ''" :lazy="true"
+                        objectFit="contain" :style="picking ? 'width:100%;height:100%' : 'width:70%;height:70%'"
+                        preview-disabled />
+                    <img v-else-if="item.type === 'folder'" :src="folderIcon" :alt="item.dir || ''" class="folder-face">
+                    <div v-else :title="item.dir" :class="`file-cover fiv-cla fiv-icon-${item.ext}`" class="file-face"></div>
+                    <!-- 角标（B 站封面下沿那一排）：数量在左、大小在右。
+                         `pointer-events:none` —— 它盖在封面上，但点它应该等于点封面。 -->
+                    <div v-if="(item.files && item.files.length) || (item.size || 0) > 0" class="card-badges">
+                        <span v-if="item.files && item.files.length" class="badge">{{ item.files.length }} 个文件</span>
+                        <span v-if="(item.size || 0) > 0" class="badge">{{ getSize(item.size) }}</span>
+                    </div>
+                </div>
+                <!-- 标题：**永远占两行的高度**（单行也留白）。
+                     理由同上 —— 行高成了内容的函数，一行两行的格子就会矮一截，
+                     `groupRows` 会把它单独判成一行，方向键从此横着跳。 -->
+                <div class="card-title" :title="item.name">{{ item.name }}</div>
                 <!-- 选中角标。⚠️ 用 `<i>` 而**不是** `<span>` —— `.image-box-item span` 那条
                      （1681 行）里有 `width:100%` + `height:38px !important`，会把角标拉成长条、
                      圆直接变形。换个元素最省事，也不用跟 `!important` 打架。
                      ⚠️ 绝对定位、**不参与布局** —— 网格 6 列的宽度是"margin 撑间距 +
                      `width:100%/6−10px` 补偿"算出来的，任何参与布局的新元素都会带偏它 -->
                 <i v-if="isPicked(item)" class="pick-badge" aria-hidden="true"></i>
+                <!-- 收录星标（2026-10-21 清单）：这张卡已进某个清单。
+                     ⚠️ 绝对定位、**不参与布局** —— 网格 6 列的宽度是"margin 撑间距 +
+                     `width:100%/6−10px` 补偿"算出来的，任何参与布局的新元素都会带偏它。
+                     放左上角：pick-badge 在右上，两者不打架。 -->
+                <i v-if="plMember.has(keyOf(item))" class="pl-badge" aria-hidden="true"></i>
             </div>
             <!-- 空状态：只有一行浅灰小字。不加边框、不加图标、不加按钮 —— 保持极简观感 -->
             <div v-if="emptyTip" class="empty-tip">{{ emptyTip }}</div>
@@ -258,14 +267,27 @@
             <div class="hstack" tabindex="-1" @keydown.stop="onCtxMenuKeydown">
                 <n-button size="small" @click="copyName">复制文件名</n-button>
                 <n-button size="small" @click="copyNameStem">复制文件名（去后缀）</n-button>
+                <!-- 同一个菜单位置，两种模式：清单屏里 = 收录动作（移除）；目录屏里 = 收录动作（加入）。
+                     模式判据读 playlistLevel（NavEntry.pl 派生），不读 path 前缀。 -->
+                <n-button v-if="playlistLevel" size="small" @click="removeFromCurrentPlaylist">从收藏夹移除</n-button>
+                <template v-else>
+                    <n-button size="small" @click="addToFavorite">加入收藏</n-button>
+                    <n-button size="small" @click="openPlPicker">加入收藏夹…</n-button>
+                </template>
             </div>
+        </n-popover>
+        <!-- 「加入收藏夹…」选单：右键菜单的第二级，原地展开在同一坐标（同 submenu 手势） -->
+        <n-popover :show="plPicker.visible" :x="plPicker.x" :y="plPicker.y" trigger="manual" placement="bottom-start"
+            @clickoutside="plPicker.visible = false">
+            <PlaylistPicker v-if="plPicker.card" :card="plPicker.card" :item-key="plPicker.key"
+                @added="onPickerAdded" @failed="onPickerFailed" />
         </n-popover>
         <n-image-group :src-list="previewSrcList" :current="previewIndex" :show="previewOpen"
             :render-toolbar="previewToolbar" @update:show="onPreviewShowChange"
             @update:current="onPreviewCurrentChange" />
-        <HistoryTable ref="historyTable" @openDir="openHistory" />
+        <!-- 清单 / 缓存 / 站点规则 2026-10-21 起是**独立页**（左轨切换），不再挂在这里。
+             ⚠️ 别再往这个文件里塞页级弹窗 —— 判据见 docs/DESIGN-BILIBILI-2026-10-21.md： -->
         <AssistantCoverModal ref="assistantModal" @refresh="refreshAfterApply" />
-        <AssistantRulesModal ref="rulesModal" />
     </div>
 </template>
 
@@ -273,20 +295,27 @@
 import { formatBytes, ancestorsOf, foldCrumbList, isGridKeyBlocked, ANCHOR_PREFIX } from '@/utils';
 import type { PathCrumb } from '@/utils';
 import { apiUrl, getAction, ApiError } from '@/utils/request';
+import {
+    addToPlaylist, buildMemberMap, defaultPlaylist, getPlaylistItems, playlistIndex,
+    refreshIndex, removeFromPlaylist,
+} from './playlist';
+import type { PlaylistDetail } from './playlist';
+import type { CardSnapshot } from '../../../electron/server/playlist';
 import folderIcon from '@/assets/fileTypeIcon/folder.png';
 import usePinYin from '@/hooks/usePinYin';
 import useNotify from '@/hooks/useNotify';
 import { usePreview } from './usePreview';
 import { useGridCursor } from './useGridCursor';
 import { decideOpen, isMultiFileCard } from './openDecision';
-import { Search, Refresh, FootstepsOutline, ChevronDownOutline } from '@vicons/ionicons5';
+import { Search, Refresh, ChevronDownOutline } from '@vicons/ionicons5';
 import { NButton, NInput, NIcon, NImage, NImageGroup, NTag, NPopover, NSpin, NAlert, NTooltip, NDropdown, useLoadingBar, useDialog } from 'naive-ui';
 import FolderSelector from '@/components/FolderSelector/index.vue';
-import HistoryTable from '@/components/HistoryTable/index.vue';
 import AssistantCoverModal from './AssistantCoverModal.vue';
-import AssistantRulesModal from './AssistantRulesModal.vue';
+import PlaylistPicker from './PlaylistPicker.vue';
+import { consumeTarget } from './target';
+import { useRouter } from 'vue-router';
 import { ipcRenderer } from 'electron';
-import { computed, nextTick, onMounted, onUnmounted, provide, ref, watch } from 'vue';
+import { computed, nextTick, onActivated, onDeactivated, onMounted, onUnmounted, provide, ref } from 'vue';
 import type { FileInfoFiles, WiredFileInfo } from '../../../electron/server/index';
 import type { OpenMode } from 'electron/server/nedb';
 /**
@@ -343,11 +372,26 @@ export interface NavEntry {
      * 下一��方向键自动重新激活 —— 这条派生链已经在了（`useGridCursor` 文件头）。
      */
     cursorKey: string;
+    /**
+     * 清单屏标识（2026-10-21 收藏分类）。非空 = 这一屏是某个清单的详情。
+     *
+     * 为什么不复用 `mode`：`OpenMode` 是**服务端缓存模式**的枚举（'cover' | 'folder'），
+     * 清单不是一种缓存模式，混进去会污染那个类型、也会让 `fetchFolder` 的签名说谎。
+     * path 同时写成 `@pl:<id>` —— 两者**同进同退**：取数按 `pl` 分派，
+     * 面包屑/返回只认 path（nav 栈里流动的只有 path 一个字符串的既有纪律不变）。
+     */
+    pl?: { id: string; name: string };
 }
 
 // 与 electron/server/videoExt.ts 的 VIDEO_EXT 保持一致（渲染层不能 import server，保留正则副本）。
 // 改了 videoExt.ts 这里要同步改。
 const VIDEO_EXT_RE = /\.(mp4|mkv|avi|wmv|flv|mpeg|m4v|mov|mpg|ts|m2ts|mts|webm|ogv|3gp)$/i;
+
+/**
+ * 清单详情屏的路径前缀（2026-10-21 收藏分类）。与 `#`（只读锚点）同族：
+ * 都不是磁盘上的真实路径。身份信息在 `NavEntry.pl` 上，path 只作寻址与面包屑显示。
+ */
+const PL_PREFIX = '@pl:';
 
 // 统一写 127.0.0.1 而不是 localhost：个别机器会把 localhost 解析到 ::1，
 // 而服务端只绑了 IPv4，那样每个请求都要先失败一次再回落
@@ -387,7 +431,11 @@ const fullPathOf = (item: WiredFileInfo) => `${item.dir}/${fileNameOf(item)}`;
 const previewUrlOf = (item: WiredFileInfo) => {
     if (!item.preview) return '';
     const q = `k=${encodeURIComponent(item.preview)}`;
-    const canBuild = !item.previewReady && item.type === 'image' && !readOnlyLevel.value;
+    // ⚠️ 2026-10-21（清单功能）从屏幕级 `readOnlyLevel` 改成**条目级** `isReadOnlyPath(item.dir)`：
+    // 清单详情屏是在线/离线**混合屏**（每条目的盘在不在各自独立），屏幕级判据会把
+    // 在线条目的图也当成"生成不了"。
+    // 在原有两类屏幕上两者等价（在线屏所有 dir 都是实时路径、只读屏全是锚点）⇒ 行为不变。
+    const canBuild = !item.previewReady && item.type === 'image' && !isReadOnlyPath(item.dir);
     return apiUrl(`${API_BASE}/preview?${q}${canBuild ? `&p=${encodeURIComponent(fullPathOf(item))}` : ''}`);
 };
 
@@ -418,9 +466,10 @@ const displaySrcOf = (item: WiredFileInfo) => {
 //    而 naive-ui 没给 group 留 `previewed-img-props` 这个 prop。
 
 const dir = ref('');
-const historyTable = ref<typeof HistoryTable | null>(null)
+/** 本页是不是在前台（KeepAlive 缓存后仍挂着 window 监听，键盘必须靠它收口） */
+const pageActive = ref(true);
+const router = useRouter();
 const assistantModal = ref<typeof AssistantCoverModal | null>(null)
-const rulesModal = ref<typeof AssistantRulesModal | null>(null)
 // const dirRoot = ref('');
 const popover = ref<{
     visible: boolean;
@@ -466,12 +515,15 @@ const ctxMenu = ref<{
     y: number;
     name: string;
     stem: string;
+    /** 2026-10-21 清单功能：右击的那张卡。「加入收藏/加入清单」要的快照来源 */
+    item: WiredFileInfo | null;
 }>({
     visible: false,
     x: 0,
     y: 0,
     name: '',
-    stem: ''
+    stem: '',
+    item: null,
 });
 const searchText = ref('');
 const imageBox = ref<HTMLDivElement | null>(null)
@@ -499,7 +551,18 @@ const history = ref<NavEntry[]>([]);
  */
 const currentPath = computed(() => history.value[history.value.length - 1]?.path ?? '');
 /** 面包屑：从起点到当前的完整链。**纯推导** ⇒ 跳转后自动正确，不需要任何同步代码。 */
-const crumbs = computed(() => ancestorsOf(currentPath.value));
+const crumbs = computed(() => {
+    // 清单屏：面包屑是「清单 / 名称」两段，不是磁盘路径 —— ancestorsOf 会把
+    // `@pl:` 当 UNC 拆成物理上不存在的层级。根段不可点（点它开货架，见 onCrumbClick）。
+    const top = history.value[history.value.length - 1];
+    if (top?.pl) {
+        return [
+            { name: '收藏', path: '', kind: 'root' as const },
+            { name: top.pl.name, path: top.path, kind: 'dir' as const },
+        ];
+    }
+    return ancestorsOf(currentPath.value);
+});
 /** 折叠决策（保首尾）。`null` = 全显。规则在 `@/utils` 的 `foldCrumbList` 里，可单独验证。 */
 const crumbFold = computed(() => foldCrumbList(crumbs.value));
 /**
@@ -565,6 +628,9 @@ const emptyTip = computed(() => {
      * 落在纯空白页上会像是把程序点坏了 ⇒ 给"下一步做什么"。
      */
     if (!history.value.length) return '还没选文件夹 —— 点左上角那个图标选一个';
+    // 清单屏的空态说的是另一件事：不是"目录里没东西"，是"还没收录过"，
+    // 且要告诉用户下一步做什么（照 emptyTip 的既有原则：空态给动作，不给空白）
+    if (playlistLevel.value) return '这个收藏夹还是空的 —— 在网格里右键卡片「加入收藏」即可收录';
     return '这个目录是空的';
 });
 
@@ -581,6 +647,23 @@ const isReadOnlyPath = (path: string) => path.startsWith(ANCHOR_PREFIX);
 
 /** 只看栈顶那一层：用户眼下看到的这屏是不是只读的 */
 const readOnlyLevel = computed(() => isReadOnlyPath(currentPath.value));
+
+/**
+ * 当前这一屏是不是**清单详情屏**（2026-10-21 收藏分类）。
+ *
+ * 与 `readOnlyLevel` 并列的另一种"静态屏"：没有盘可重读、没有缓存可重取
+ * ⇒ 刷新/重读/补封面那一族动作全部禁用（同只读层的处理）。
+ * 判据看 `NavEntry.pl`（导航栈里的显式标记）而不是解析 path 前缀 ——
+ * 栈里流动的只有 path 一个字符串，清单屏的身份跟着 entry 走，两边不会不一致。
+ */
+const playlistLevel = computed(() => !!history.value[history.value.length - 1]?.pl);
+
+/**
+ * 已收录进**任意**清单的卡片 key 集合 —— 网格左上角星标用。
+ * 由收录索引（playlist.ts 的模块级单一状态源）派生：插拔盘时索引随
+ * `ff-disks-changed` 刷新，星标自动跟着翻，不需要任何同步代码。
+ */
+const plMember = computed(() => buildMemberMap(playlistIndex().playlists));
 
 /**
  * 失败横幅的内容。`text` 为空 = 不显示。
@@ -629,6 +712,21 @@ const dialog = useDialog();
 const getSize = (size: number | undefined) => formatBytes(size);
 
 /**
+ * 封面底色：把同一张图放大、模糊、压暗铺在下面。
+ *
+ * 解决的是"`contain` 必然留白"：封面框固定 16:9，而缩略图比例五花八门，
+ * 不裁切就一定有边（原来那些边露出的是 `--ff-fill` 的深灰，看着像卡里有个空洞）。
+ * 用图片自己的放大模糊版填底 ⇒ **不裁切、也没有空隙**（B 站/YouTube 竖版封面同一手法）。
+ *
+ * 走 CSS 变量 + `::before`（见样式块）：不新增 DOM 节点，同一张图命中浏览器缓存、**不额外请求**。
+ * 没有图的目录不设这个变量 ⇒ 保持原来的底色 + 文件夹图标。
+ */
+const coverBackdrop = (item: WiredFileInfo) => {
+    const key = item.thumb || item.avatar;
+    return key ? `--cover-src: url("${thumbUrl(key)}")` : undefined;
+};
+
+/**
  * 扩展名（小写、不带点）。只有多文件弹层用它选 `fiv-icon-*` 的类型图标 ——
  * 服务端下发的 `files[]` 只带 `name` + `size`（`FileInfoFiles`），没有 ext 字段，
  * 而名字里本来就有。取不到就返回空串 ⇒ `fiv-icon-` 不匹配 ⇒ 兜底 `blank.svg`。
@@ -636,9 +734,97 @@ const getSize = (size: number | undefined) => formatBytes(size);
 const extOf = (name: string) => (name.includes('.') ? name.split('.').pop()!.toLowerCase() : '');
 
 
-const showHistory = () => {
-    historyTable.value!.setShowModal(true);
-}
+// ── 清单（收藏分类）· 界面接线 ──────────────────────────────────────────────
+// 状态与 API 在 ./playlist.ts（模块级单一状态源，清单页 / 选单 / 星标共读）。
+// 清单页本身在 `views/Playlists/index.vue`；这里只负责"点它 → 跳到那一页"。
+
+/**
+ * 清单屏的入口（页内）。左轨的「清单」进的是**清单总览页**（另一个路由），
+ * 而这个函数进的是**某个清单的详情**（主网格里的一种屏）。
+ */
+const goPlaylists = () => { void router.push('/playlists'); };
+
+/**
+ * 网格条目 → 加入清单用的卡片快照。
+ * thumb 取 `thumb || avatar`（同一文件的两个名字，目录卡只有 avatar）——
+ * 服务端按自己的命名格式逆运算出指纹：`sig` 不在下发白名单里，前端不碰它。
+ */
+const snapshotOf = (item: WiredFileInfo): CardSnapshot => ({
+    dir: item.dir,
+    name: item.name,
+    ext: item.ext,
+    type: item.type,
+    size: item.size,
+    thumb: item.thumb || item.avatar,
+    files: item.files,
+});
+
+/** 右键 → 「加入收藏」：一键入默认清单。高频路径，不为它多弹一层 */
+const addToFavorite = async () => {
+    const item = ctxMenu.value.item;
+    closeCtxMenu();
+    if (!item) return;
+    const pl = defaultPlaylist(playlistIndex().playlists);
+    if (!pl) {
+        notify('warning', '默认收藏夹还没就绪', '稍等一下再试');
+        return;
+    }
+    // 已经在里面就别再发请求（服务端也会去重，这里只是省一次往返 + 给准确的话）
+    if (pl.keys.includes(keyOf(item))) {
+        notify('info', `已经在「${pl.name}」里了`, item.name);
+        return;
+    }
+    try {
+        await addToPlaylist(pl.id, snapshotOf(item));
+        notify('success', `已加入「${pl.name}」`, item.name);
+    } catch (e) {
+        notify('error', '加入失败', String(e));
+    }
+};
+
+/** 「加入收藏夹…」选单（右键菜单的第二级，原地展开在同一坐标） */
+const plPicker = ref<{ visible: boolean; x: number; y: number; card: CardSnapshot | null; key: string }>(
+    { visible: false, x: 0, y: 0, card: null, key: '' },
+);
+
+const openPlPicker = () => {
+    const item = ctxMenu.value.item;
+    if (!item) return;
+    plPicker.value = {
+        visible: true,
+        x: ctxMenu.value.x,
+        y: ctxMenu.value.y,
+        card: snapshotOf(item),
+        key: keyOf(item),
+    };
+    closeCtxMenu();
+};
+
+const onPickerAdded = (name: string) => {
+    plPicker.value.visible = false;
+    notify('success', `已加入「${name}」`);
+};
+
+const onPickerFailed = (msg: string) => {
+    plPicker.value.visible = false;
+    notify('error', '加入失败', msg);
+};
+
+/** 清单屏右键 → 「从收藏夹移除」。只动清单（系统盘 JSON），不碰盘、不碰文件 */
+const removeFromCurrentPlaylist = async () => {
+    const item = ctxMenu.value.item;
+    const top = history.value[history.value.length - 1];
+    closeCtxMenu();
+    if (!item || !top?.pl) return;
+    try {
+        await removeFromPlaylist(top.pl.id, keyOf(item));
+        // 重取这一屏 —— 走 loadScreen 唯一出口，不本地摘条目：
+        // dataSource 的写入口保持只有一个（fetch 那条路），不新开第二种写语义
+        loadScreen(top);
+    } catch (e) {
+        notify('error', '移除失败', String(e));
+    }
+};
 
 /**
  * 「补封面」写盘完成后的刷新。与 onRefresh 的区别：**不带 noCache** ——
@@ -648,7 +834,8 @@ const showHistory = () => {
  */
 const refreshAfterApply = () => {
     const cur = history.value[history.value.length - 1];
-    if (cur && !readOnlyLevel.value) fetchFolder(cur.path, cur.mode);
+    // loadScreen 分派：目录屏重取（apply 只可能发生在目录屏），清单屏原样重取（幂等）
+    if (cur && !readOnlyLevel.value) loadScreen(cur);
 }
 
 /**
@@ -836,10 +1023,11 @@ const rememberCurrentScreen = () => {
  * ⚠️ 归零要**在取数之前**：新屏内容还没渲染时 `scrollTo` 会被 clamp（内容太短）
  * 或作用在旧内容上。等 `nextTick` 之后那一屏的格子已经在 DOM 里，才归得干净。
  */
-const enterScreen = (path: string, mode: OpenMode = 'cover') => {
+const enterScreen = (path: string, mode: OpenMode = 'cover', pl?: NavEntry['pl']) => {
     rememberCurrentScreen();
     // 新的一屏**从零开始**：选择器不继承上一屏的（它属于那一屏，不属于这一屏）
-    history.value.push({ path, mode, searchText: '', scrollY: 0, cursorKey: '' });
+    // pl = 清单屏标记（2026-10-21）：与 path 上的 `@pl:<id>` 前缀同进同退
+    history.value.push({ path, mode, pl, searchText: '', scrollY: 0, cursorKey: '' });
     // 进新的一屏不带上一屏的搜索词（原有行为，不动）
     searchText.value = '';
     /**
@@ -868,7 +1056,8 @@ const enterScreen = (path: string, mode: OpenMode = 'cover') => {
     imageBox.value?.scrollTo(0, 0);
 
     // 取数（内部会 `++fetchSeq`）⇒ **之后**才读序号，读到的才是"我这次"的号
-    const done = fetchFolder(path, mode);
+    // 经 loadScreen 分派：目录屏 /openFolder，清单屏 /playlistItems（唯一出口，见那边注释）
+    const done = loadScreen(history.value[history.value.length - 1]);
     const myFetchSeq = fetchSeq;
 
     /**
@@ -897,6 +1086,14 @@ const openFolderInCover = (path: string) => {
 }
 
 /**
+ * 进清单详情屏。复用 enterScreen 这一个入口（多传一个 pl 标记）——
+ * 视口归零 / 历史 / 焦点意图 / 取数序号全部走同一套，不另起一套导航。
+ */
+const enterPlaylist = (id: string, name: string) => {
+    enterScreen(`${PL_PREFIX}${id}`, 'cover', { id, name });
+}
+
+/**
  * 到某个目录去，但**保留历史** —— 所以「返回」能回到刚才那一屏（"跳转"因此是可撤销的动作）。
  *
  * 与 `setRoot` 只差一个字：那个是"重新开始"（清空历史），这个是"去别处看看"。
@@ -915,7 +1112,12 @@ const jumpTo = (path: string) => {
  * （现状是 `slice()` 截断：点完就回不到刚才那一层，这是同一个病的第二处症状。）
  */
 const onCrumbClick = (c: PathCrumb) => {
-    if (c.kind === 'root') return;              // 首段不可点，见模板注释
+    if (c.kind === 'root') {
+        // 磁盘屏的首段依旧不可点（点它会打开盘根，而盘根通常没被缓存过 ⇒ 真读一次盘）。
+        // 清单屏的「清单」根段例外：点它开货架 —— 那是回总览的捷径，零读盘。
+        if (playlistLevel.value) goPlaylists();
+        return;
+    }
     if (c.path === currentPath.value) return;   // 当前段是纯文本，点了也不动
     jumpTo(c.path);
 }
@@ -1072,6 +1274,8 @@ const onContextMenu = (e: MouseEvent, item: WiredFileInfo) => {
     ctxMenu.value.y = e.clientY;
     ctxMenu.value.name = fileNameOf(item);
     ctxMenu.value.stem = item.name;
+    // 2026-10-21 清单功能：连带记住这张卡 —— 「加入收藏 / 加入收藏夹…」的快照来源
+    ctxMenu.value.item = item;
 };
 
 /**
@@ -1164,6 +1368,49 @@ const fetchFolder = (path: string, mode: OpenMode, noCache?: boolean) => {
     });
 }
 
+/**
+ * 清单屏取数（2026-10-21 收藏分类）。
+ *
+ * 与 `fetchFolder` **共用 `fetchSeq`**（模块级序号）⇒「目录 → 清单 → 目录」
+ * 连点切换时，过期响应写不进来 —— 防的是"面包屑已切到清单、网格里还是目录"。
+ * 数据来自系统盘的 playlists.json（服务端逐条判盘在不在，在线给实时路径、
+ * 离线给锚点）⇒ **零读盘**。错误形状与 fetchFolder 逐字同构（failKind + 同一条 toast）。
+ */
+const fetchPlaylistItems = (id: string) => {
+    const seq = ++fetchSeq;
+    loading.value = true;
+    failKind.value = '';
+    loadingBar.start();
+
+    return getPlaylistItems(id).then((data: PlaylistDetail) => {
+        if (seq !== fetchSeq) return;
+        dataSource.value = data.items ?? [];
+        loadingBar.finish();
+    }).catch(err => {
+        if (seq !== fetchSeq) return;
+        console.error('[playlistItems] 请求失败:', err);
+        failKind.value = 'other';
+        loadingBar.error();
+        notify('error', '打开失败', String(err));
+    }).finally(() => {
+        if (seq === fetchSeq) loading.value = false;
+    });
+};
+
+/**
+ * 加载某一屏的**唯一出口**：目录屏走 `fetchFolder`，清单屏走 `fetchPlaylistItems`。
+ *
+ * 为什么必须收成一个口：取数调用点原有 6 个（进入 / 返回 / 刷新 / apply 后 /
+ * 扫描收尾 / 换盘降级），逐点加 `if (entry.pl)` 就是 6 处分支 —— 漏一处的症状是
+ * "面包屑显示清单、网格里还是目录内容"，而那正是项目明令禁止的**补丁形态**。
+ * 责任收在唯一出口之后，第 7 个入口也忘不掉。
+ * （onRefresh 有 playlistLevel 守卫、永不到清单屏；onDisksChanged 自己已按屏型分派。）
+ */
+const loadScreen = (entry: NavEntry) => {
+    if (entry.pl) return fetchPlaylistItems(entry.pl.id);
+    return fetchFolder(entry.path, entry.mode);
+};
+
 // const handleDirRootChange = (value: string) => {
 //     if (!value) return
 //     const url = `http://localhost:3060/getFileTree?path=${value}`;
@@ -1215,7 +1462,7 @@ const onBack = async () => {
      * `fetchFolder` 自己用 `seq !== fetchSeq` 挡住了过期响应写 `dataSource`，
      * 但它**不把序号告诉调用方** ⇒ 这里自己取一次比（同 `enterScreen` 的理由）。
      */
-    const done = fetchFolder(to.path, to.mode);
+    const done = loadScreen(to);
     const myFetchSeq = fetchSeq;
     await done;
     /**
@@ -1359,7 +1606,8 @@ const waitForGridOf = async (path: string, maxFrames = 20) => {
 const onRefresh = () => {
     // 只读层没有"重读"这回事：它的源就是缓存，盘不在，F5 也读不出新东西。
     // 拦住而不是让服务端静默回一份缓存 —— 静默最坏（用户以为他重读过了）。
-    if (loading.value || !history.value.length || readOnlyLevel.value) return;
+    // 清单屏同理：它的源是系统盘上的收录快照，没有"重读硬盘"这个动作。
+    if (loading.value || !history.value.length || readOnlyLevel.value || playlistLevel.value) return;
     const cur = history.value[history.value.length - 1];
     // F5 = 重新扫盘，要带 noCache 让服务端把这条缓存删掉真去读盘，
     // 不然"刷新"只是把同一份缓存又发了一遍。
@@ -1671,7 +1919,9 @@ const startScan = async (rescan: boolean) => {
         // 「为了补大图而真扫过」也算内容变了 —— 当前屏不刷一下就看不到新的大图
         if (rescan || retouched) {
             const cur = history.value[history.value.length - 1];
-            if (cur) fetchFolder(cur.path, cur.mode);
+            // loadScreen 分派：正在看清单屏时也原样重取一次（扫描动的是目录缓存，
+            // 清单条目是快照不受影响，但保持同一出口，不新开一条 if 分支）
+            if (cur) loadScreen(cur);
         }
     }
 };
@@ -1759,6 +2009,8 @@ const moreOptions = computed(() => [
     { label: '站点规则', key: 'rules' },
     // 「换封面」= 补封面的**反面**：补封面是让程序找出"没有封面的"，
     // 换封面是让用户自己挑"有封面但要换的"。两者最终复用同一个弹窗、同一条抓取写入链路。
+    // 「换封面」= 补封面的反面（用户自己挑"有封面但要换的"）。
+    // 2026-10-21：主人裁定它不是高频动作 ⇒ 从次栏搬回这里，不占常驻位置。
     { label: picking.value ? '退出换封面' : '换封面', key: 'faces', disabled: scanning.value || readOnlyLevel.value },
 ]);
 
@@ -1784,7 +2036,8 @@ const onMoreSelect = (key: string) => {
     } else if (key === 'cover') {
         assistantModal.value?.setShowModal(true);
     } else if (key === 'rules') {
-        rulesModal.value?.setShowModal(true);
+        // 站点规则是**长期配置**，从 2026-10-21 起是设置页的一部分（不再全屏弹窗）
+        void router.push('/settings');
     } else if (key === 'faces') {
         // 再点一次 = 退出（下拉项的文案会跟着变成「退出换封面」）
         if (picking.value) exitPick();
@@ -1821,6 +2074,7 @@ const {
 } = useGridCursor({
     fileList, keyOf, imageBox,
     isPreviewOpen: () => previewOpen.value,
+    isActive: () => pageActive.value,
     onConfirm: onCursorConfirm,
 });
 
@@ -1836,8 +2090,8 @@ const {
 //    `n-image-group` 渲染，父链是 `ImagePreview ← ImageGroup ← 本组件`，
 //    而 naive-ui 没给 group 留 `previewed-img-props` 这个 prop。
 const {
-    openPreview, closePreview, locateInGrid, previewKey,
-    previewSrcList, previewIndex, previewOpen, previewFile,
+    openPreview, locateInGrid,
+    previewSrcList, previewIndex, previewOpen,
     onPreviewShowChange, onPreviewCurrentChange,
     previewToolbar, previewedImgProps, dispose: disposePreview,
 } = usePreview({
@@ -1980,6 +2234,10 @@ function filterByName(list: WiredFileInfo[], value: string) {
 }
 
 const onKeyup = (e: KeyboardEvent) => {
+    // ⚠️ 本页被 KeepAlive 缓存、退到后台时，window 上的监听仍然挂着。
+    // 少了这一行，在清单页按 S / F5 / D 会去改**文件页**的搜索词、甚至重读盘。
+    if (!pageActive.value) return;
+
     // ⚠️ 用共用的 `isGridKeyBlocked` 而不是原来那句 `e.target !== document.body`：
     // 它是后者的**超集**（多一条 `contenteditable`）。方向键那边也用同一个函数，
     // 于是"什么键归网格"这件事**只有一处定义**（见 `utils/index.ts` 的完整注释：
@@ -2070,6 +2328,9 @@ const onKeyup = (e: KeyboardEvent) => {
 
 onMounted(() => {
     window.addEventListener('keyup', onKeyup);
+    // 收录索引（2026-10-21 清单）：网格星标与「加入清单」选单 ✓ 的数据源。
+    // 失败不打扰启动 —— 星标只是不显示，清单功能要等用户点进去才用得上。
+    void refreshIndex().catch(() => undefined);
     // 主进程的移动硬盘插拔通知（事件驱动，零轮询 —— 见 electron/main/diskWatch.ts）
     ipcRenderer.on('ff-disks-changed', onDisksChangedIpc);
 });
@@ -2085,6 +2346,25 @@ onUnmounted(() => {
     // 网格选择器：摘掉它的 keydown（方向键/回车）与 resize 监听。
     // ⚠️ **必须摘**：留着就是"看不见的全局监听" —— 组件没了还在拦方向键。
     disposeGridCursor();
+});
+
+/**
+ * 路由切回本页时：恢复键盘 + 消费"跨页跳转"的意图。
+ *
+ * ⚠️ 为什么不用 props 传：现在两侧是**两条路由**，没有父子关系；
+ * 一份模块级的 `pendingTarget` 比"把状态提到 router 的 meta 里"更直白，
+ * 也不会在刷新后留下一条过期意图（取一次就清空）。
+ */
+onActivated(() => {
+    pageActive.value = true;
+    const t = consumeTarget();
+    if (!t) return;
+    if (t.kind === 'path') openHistory(t.path);
+    else enterPlaylist(t.id, t.name);
+});
+
+onDeactivated(() => {
+    pageActive.value = false;
 });
 
 
@@ -2125,7 +2405,15 @@ const getAnchor = async (path: string): Promise<string> => {
  * 把转换整个交给服务端。渲染层对锚点的认知仍然只有"前缀是不是 `#`"。
  */
 const onDisksChanged = async (disks: { serial: string; drive: string }[]) => {
-    historyTable.value?.refreshIfOpen();
+    // 2026-10-21 清单屏：插拔盘只影响"条目在线/离线"与星标 key 的当前形态
+    // ⇒ 重取清单 + 刷新收录索引。静默 —— 徽标翻转本身即反馈（不像目录屏那样弹通知，
+    // 那一侧是因为"列表内容降级"需要解释，这里没有内容丢失）。
+    const topPl = history.value[history.value.length - 1]?.pl;
+    if (topPl) {
+        try { await refreshIndex(); } catch { /* 索引刷新失败不挡着重取清单 */ }
+        await fetchPlaylistItems(topPl.id);
+        return;
+    }
 
     const top = history.value[history.value.length - 1];
     if (!top) return;
@@ -2166,20 +2454,23 @@ const onDisksChangedIpc = (_e: unknown, disks: { serial: string; drive: string }
 .file-finder {
     display: flex;
     flex-flow: column;
-    padding: 10px 10px 0 10px;
-    height: 100vh;
+    /* 外壳已经把左轨让出来了，这里只留内容内边距（B 站是左 31 / 右 30，取 24 对齐） */
+    padding: 8px 12px 0;
+    height: 100%;
+    flex: 1 1 auto;
+    min-height: 0;
     box-sizing: border-box;
 
     .header-bar {
         display: flex;
-        /* ⚠️ 「头部永远只有一行」的第一道保险。
-           不加它，两个子区（导航区 / 动作区）会退化成"谁装不下谁换行"，
-           头部高度就成了**用户数据（路径长度、层级数）的函数**。 */
+        /* ⚠️ 头部定高 44，两个子区谁装不下都不能换行 ——
+           换行就等于"头部高度成了路径长度/层级数的函数"（2026-09-24 事故的形态）。 */
         flex-wrap: nowrap;
-        padding: 4px;
-        margin-bottom: 4px;
-        border-radius: 4px;
-        box-shadow: 1px 0 6px rgba(113, 147, 192, 0.25);
+        align-items: center;
+        flex: 0 0 44px;
+        gap: 12px;
+        padding: 0;
+        margin: 0;
         justify-content: space-between;
 
         .n-input {
@@ -2188,8 +2479,8 @@ const onDisksChangedIpc = (_e: unknown, disks: { serial: string; drive: string }
                挤到下一行，工具条从一行涨到三行（实测 1805px 窗口下头部高 ~150px）。
                原来 n-space 会给每个子项包一层 div，恰好把这个 100% 关在盒子里；
                换成裸容器之后就露出来了（见 docs/FIX-2026-09-24-nspace-duplicate-keys.md）。
-               搜索框本来就该是固定宽度 —— 资源管理器里它也是固定的一小段。 */
-            width: 200px;
+               260 是"1024 最小窗下仍装得下"的上限（导航区 50% + 这一条 + 两个图标）。 */
+            width: 260px;
 
             &:deep(.n-input-wrapper) {
                 padding-top: 1px;
@@ -2202,16 +2493,15 @@ const onDisksChangedIpc = (_e: unknown, disks: { serial: string; drive: string }
                         padding: 7px;
                         height: 22px;
                         line-height: 8px;
-                        border: 1px solid #dbdbdb;
+                        border: 1px solid var(--ff-line);
                         border-radius: 4px;
-                        color: #a1a1a1;
+                        color: var(--ff-text-3);
                     }
                 }
             }
         }
-
-        /* 批量扫描的进度文字。颜色沿用搜索框后缀图标那个灰 */
     }
+
 }
 
 /**
@@ -2382,90 +2672,48 @@ const onDisksChangedIpc = (_e: unknown, disks: { serial: string; drive: string }
 
     .scan-progress {
         font-size: 12px;
-        color: #a1a1a1;
+        color: var(--ff-text-3);
     }
 
     .scan-hint {
         font-size: 12px;
-        color: #a1a1a1;
+        color: var(--ff-text-3);
     }
 }
 
 /*
- * 「换封面」模式：可选 / 已选 / 角标。
+ * 卡片状态：可选 / 已选 / 焦点。
  *
- * ⚠️ 三条硬约束：
- *   ① 选中态**复用已有的 `border`**（那条 `1px solid transparent` 本来就在）只改颜色 ——
- *      绝不能新增参与布局的属性。网格 6 列的宽度是"margin 撑间距 + `width:100%/6−10px`
- *      补偿回来"算出来的（见 `.image-box-item` 的注释），任何新增的盒模型属性都会带偏它。
- *   ② 角标**绝对定位**（配 `position: relative`，它不脱流、不影响几何）。
- *   ③ 颜色取 naive-ui 默认主色 —— 本项目没有自定义主题（`App.vue` 无 `themeOverrides`）。
+ * ⚠️ 约束没变：**状态一律不许新增参与布局的属性**（宽度是 `calc(100%/6 − gap)` + margin 算出来的）。
+ * 所以只用 `outline` / `box-shadow` / `transform` —— 三者都不占位置。
+ *
+ * 圆角：2026-10-21 主人裁定改用 B 站那套 6px，值在 `--ff-radius-card`（想改回直角只改 token）。
  */
 .image-box-item {
     position: relative;
-
-    /**
-     * ⚠️ **这里刻意不加 `border-radius`**（业主 2026-10-04 明确要求）。
-     *
-     * 2026-10-04 我按 PS5 那套观感加过 8px 圆角（PS5 官方 UI 用圆角表达"可进入"，
-     * 直角留给"这是内容"），业主看过后说**不要**。⇒ 网格卡片维持直角。
-     *
-     * 留这条注释是为了**防止将来又被加回来**：它不是"还没做"，是"做过并被否掉"。
-     * 顺带记下那条仍然有效的约束 ——
-     * ⛔ 将来若有人想加圆角，**绝不能顺手加 `overflow: hidden`**：
-     * 它会**裁掉外扩的焦点环**（`box-shadow` 画在盒子外侧），两者互斥。
-     * 只加 `border-radius` 不裁图是可行的（`box-shadow` 会自动跟随），
-     * 但既然直角是主人定的，就别动。
-     */
-    border-radius: 0;
 
     &.pickable {
         cursor: pointer;
     }
 
-    &.picked {
-        border-color: #18a058;
+    /* 已选（换封面时点中的格子）：绿圈画在封面**内侧**，与焦点的外圈各占一层，不打架 */
+    &.picked .card-cover {
+        box-shadow: inset 0 0 0 2px #18a058;
     }
 
     &.cursor {
-        // 边框是唯一的"识别特征"：从 hover 的灰蓝换成主色蓝
-        border-color: #2080f0;
-        /**
-         * 淡底**比 hover 更淡**（hover 是 .16，这里 .10）—— 焦点要"认得出"但不能"跳出来"。
-         * ⚠️ 它是**唯一**给焦点铺底色的规则：静止态与 `picked` 都不铺底
-         *（网格这么密，每格都铺色会糊成一块色板 —— 那是"AI 味"的主要来源）。
-         */
-        background-color: rgba(110, 123, 173, .10);
-        /**
-         * ⚠️ 原来是 `1px 0 10px` —— **只向右发光**的不对称阴影，典型的"AI 味"装饰。
-         * ⇒ 去掉：焦点已经由「主色边框 + 淡底」两样表达了，第三样是冗余。
-         * （`scale(1.012)` 的抬起**保留**：它是"这一格被拿起来了"的重量感，主人认可过，
-         *   且它有别的功能——见 `docs/probes/cursor-scale-row/`：抬起会污染
-         *   `getBoundingClientRect().top`，行结构探测必须用 `offsetTop` 才不受影响。）
-         */
-        // 极轻抬升：1.012 而不是 v2 的 1.02 —— 后者在 10px 间距里很显眼，显眼=吵
+        /* 极轻抬升：1.012 而不是 1.02 —— 后者在密网格里很显眼，显眼=吵。
+           ⚠️ `transform` 会污染 `getBoundingClientRect`，`gridGeometry` 分行必须用 `offsetTop`。 */
         transform: scale(1.012);
-        /* 抬起来的那一格要压住相邻格（`z-index` 只在定位元素上生效，故 position: relative 已在） */
         z-index: 1;
+
+        .card-cover {
+            outline: 2px solid var(--ff-blue);
+            outline-offset: 1px;
+        }
     }
 
-    /*
-     * 焦点 + 鼠标同时在那一格上。
-     *
-     * ⚠️ 必须显式写这一条：`:hover` 的选择器权重与 `.cursor` **相同**
-     * （都是 0,1,0 —— 前者是伪类、后者是类），而 `:hover` 写在样式表**更靠后**
-     * ⇒ 鼠标停在焦点格上时，hover 的灰边框会**盖掉**焦点的主色蓝，
-     * 焦点环整个消失（业主鼠标操作时正是最需要看见焦点的时候）。
-     * 这里把焦点态**提一级权重**，让"焦点 + hover"里焦点赢。
-     */
-    &.cursor:hover {
-        // ⚠️ 底色/边框/抬起必须与 `.cursor` **逐条相同** ——
-        //   唯一目的是「焦点 + 悬停时焦点不被 hover 盖掉」（权重同、写在后面）。
-        //   阴影同样去掉，与 `.cursor` / `:hover` 一致（单侧发光是装饰，不是语言）。
-        border-color: #2080f0;
-        background-color: rgba(110, 123, 173, .10);
-        transform: scale(1.012);
-    }
+    /* 焦点 + hover 不需要专门的权重守卫了：hover 只改标题色与图片缩放，碰不到焦点环 */
 
     /*
      * 「正在双击打开」—— 只读层解析锚点那一瞬。
@@ -2473,12 +2721,11 @@ const onDisksChangedIpc = (_e: unknown, disks: { serial: string; drive: string }
      *   而 `opening` 那一格盖着深色遮罩 + 转圈，识别靠的是遮罩不是边框。
      * 只改颜色/外发光，不碰盒模型（网格宽度是 margin 算出来的）。
      */
-    &.opening {
-        border-color: #525e72;
-        // ⚠️ 原来这里也是主色蓝 + 单层发光，与新的 `.cursor` 焦点环**撞色**。
-        // 降级成中性深灰：这一态只出现在"只读层点开文件、等盘回来"的那一瞬，
-        // 而那一格盖着深色遮罩 + 转圈（识别靠的是遮罩，不是边框）⇒ 不需要抢颜色的注意力。
-        box-shadow: 0 0 0 2px rgba(82, 94, 114, .35);
+    &.opening .card-cover {
+        // 中性灰：这一态只出现在"只读层点开文件、等盘回来"的那一瞬，
+        // 那一格已盖着深色遮罩 + 转圈（识别靠遮罩）⇒ 不需要抢颜色。
+        outline: 2px solid var(--ff-text-3);
+        outline-offset: 1px;
     }
 
     /* 遮罩与转圈分开两层：`.opening-mask` 负责铺满，`.n-spin` 留在 naive-ui 自己的定位里
@@ -2520,6 +2767,32 @@ const onDisksChangedIpc = (_e: unknown, disks: { serial: string; drive: string }
             transform: rotate(-45deg);
         }
     }
+
+    /* 收录星标（2026-10-21 清单）：这张卡已进某个清单。
+       纪律同 pick-badge：**绝对定位、不参与布局**（6 列网格的宽度是算出来的），
+       换到左上角与 pick-badge（右上）错开。★ 用 CSS 生成，不插 DOM 子节点。 */
+    .pl-badge {
+        position: absolute;
+        top: 2px;
+        left: 2px;
+        display: block;
+        width: 16px;
+        height: 16px;
+        flex-shrink: 0;
+        box-sizing: border-box;
+        font-style: normal;
+        font-size: 11px;
+        line-height: 16px;
+        text-align: center;
+        border-radius: 50%;
+        color: #fff;
+        background-color: #d8a00f;
+        box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.3);
+
+        &::before {
+            content: '★';
+        }
+    }
 }
 
 .image-box {
@@ -2531,34 +2804,39 @@ const onDisksChangedIpc = (_e: unknown, disks: { serial: string; drive: string }
     align-content: flex-start;
     /* ── 让网格左右贴边：首格 margin-left / 每行末格 margin-right 归零 ──────────────
        `.image-box-item` 是"**用 margin 撑间距、宽度再把它补偿回来**"的算法：
-       每格 `calc(100%/6 − 10px)` 宽 + 左右各 5px margin = **恰好占 100%/6** ⇒ 一行正好 6 个。
-       代价是**容器左右边缘也各被吃掉 5px**（首格的 margin-left、每行末格的 margin-right），
-       于是整片网格比头部内缩 5px（`.header-bar` 与它同在 `.file-finder` 的 10px padding 里）
-       —— 左右不齐，这就是"第一个/最后一个还留着 margin"的来源。
+       每格 `calc(100%/6 − 16px)` 宽 + 左右各 8px margin = **恰好占 100%/6** ⇒ 一行正好 6 个。
+       代价是**容器左右边缘也各被吃掉 8px**（首格的 margin-left、每行末格的 margin-right），
+       于是整片网格比头部内缩 8px —— 左右不齐，这就是"第一个/最后一个还留着 margin"的来源。
 
-       解法：把容器左右各外扩 5px（= margin 的一半），边缘那 5px 就正好落回容器外。
+       解法：把容器左右各外扩 8px（= margin 的一半），边缘那 8px 就正好落回容器外。
        首格贴左、末格贴右，与头部对齐。
 
        ⚠️ 为什么**不用** `:nth-child(6n+1)` / `:nth-child(6n)` 去掉首尾 margin：
-       ① 那是补丁（列数一变就失效）；② **在这里还会算错** —— 格子宽度是按"margin 会被
-       补偿"设计的，只去掉首尾 margin 而宽度不变 ⇒ 每行右端空出 5px，左右不对称，比现在更糟；
-       ③ 下面的断点里列数是**会变的**（6 / 5 / 3 / 2 / 1），任何写死 `6n` 的式子都会在窄窗失效。
+       ① 那是补丁 —— 列数一变就失效（本项目刚刚从 6/5/3/2/1 断点改成**恒定 6 列**，
+          正好说明"把列数写死进选择器"迟早要再改一次）；
+       ② **在这里还会算错** —— 格子宽度是按"margin 会被补偿"设计的，只去掉首尾 margin
+          而宽度不变 ⇒ 每行右端空出半个间隙，左右不对称，比现在更糟。
 
-       ⚠️ 为什么**不用** `gap`：`gap` 方向是对的（边缘天然为 0），但换过去必须**同步重算**
-       `--item-width` 在 5 个断点里的每一个值 —— 因为 `gap` 不占格子宽度、而 `margin` 占，
-       等于把"改一个百分比就能改列数"变成"每个断点要改两个数字"。
-       这里只加两行，**断点和 item 的算法一个字都不动**。 */
-    margin-left: -5px;
-    margin-right: -5px;
+       ⚠️ 为什么**不换成** `gap`：方向是对的（边缘天然为 0），但换过去必须同步重算
+       `--item-width`（gap 不占格子宽度、margin 占）。列数恒定的现在，换 gap 在数学上可行、
+       **但没有收益**：这套 margin 算法已在 `probes/grid-cursor/` 与真机验过几何，
+       动它就得把列宽/贴边/方向键全部重验一遍。 */
+    margin-left: calc(var(--ff-grid-gap) / -2);
+    margin-right: calc(var(--ff-grid-gap) / -2);
 }
 
-/* 空状态：占满一整行、居中一行小字。颜色沿用搜索框后缀图标那个灰 */
+/* 空状态：一行小字，落在网格区的**视觉中间**。
+   ⚠️ 不用 `margin:auto`：`.image-box` 是 `flex-wrap` + `align-content:flex-start`，
+   行始终贴顶，纵向 auto margin 吸不到余量（实测会停在顶部）。
+   给这一行自己一个视口比例的高度 + flex 居中，就不依赖父容器的对齐规则。 */
 .empty-tip {
     width: 100%;
-    padding-top: 48px;
-    text-align: center;
+    min-height: 52vh;
+    display: flex;
+    align-items: center;
+    justify-content: center;
     font-size: 14px;
-    color: #a1a1a1;
+    color: var(--ff-text-3);
 }
 
 /**
@@ -2569,33 +2847,21 @@ const onDisksChangedIpc = (_e: unknown, disks: { serial: string; drive: string }
  * 弹层的 `.file-cover` 被压成 0 高（等于从来没画出来）、文件名被压成单行 + 尾部省略
  *（业主 2026-10-05：「多个文件弹出层好丑」，4 个文件显示成一模一样的 `[TST-59…`）。
  * ⇒ 按"谁的属性谁持有"拆开：网格那半在下面 `.image-box-item`，弹层那半在 `.file-item`。
- * 拆开之后"网格的规则漏到弹层"在**结构上**不再可能，弹层那边也因此一个 `!important` 都不需要。
+ *
+ * ⚠️ 2026-10-21 再拆一次：网格卡片现在是"封面 + 标题 + 角标"，**没有边框也没有悬停底色**
+ *（B 站那套）。所以这条只留给弹层 —— 之前忘了拆，网格 hover 时冒出一圈灰边框，
+ * 正是主人截图里"悬浮难看"的那一条。
  */
-.image-box-item,
 .file-item {
     display: flex;
     flex-direction: column;
     align-items: center;
     box-sizing: border-box;
     border: 1px solid transparent;
-    /**
-     * ⚠️ 原来是 `all .1s`。focus 现在会**放大 1.02**，`.1s` 对"抬起"这个动作太快
-     * （像抽搐）。⇒ 拆开写：颜色/阴影仍 .1s（跟手），transform 给 .18s + 缓出
-     *（PS5 那种"亮一下再稳"的手感）。`all` 也一并去掉 —— 它会让`transform`
-     * 与未来任何新属性共用同一条时长，调试时看不出是谁在动。
-     */
     transition: border-color .1s ease-in-out, box-shadow .1s ease-in-out,
         background-color .1s ease-in-out, transform .18s cubic-bezier(.2, .9, .3, 1.1);
     user-select: none;
 
-    /**
-     * 悬停：**只**换边框色 + 一层极淡底。
-     *
-     * ⚠️ 原来还有 `box-shadow: 1px 0 10px`（**只向右发光**的不对称阴影）——
-     * 那是"AI 味"的典型装饰：单侧发光没有功能作用，纯粹是"让它看起来有设计过"。
-     * ⇒ 去掉。悬停的反馈由「边框变主色 + 淡底」承担，足够了。
-     * （与 `.cursor` 同步去掉 —— 焦点那层也去掉，两处保持同一套语言。）
-     */
     &:hover {
         border-color: #7a8da9;
         background-color: rgba(110, 123, 173, .12);
@@ -2608,33 +2874,156 @@ const onDisksChangedIpc = (_e: unknown, disks: { serial: string; drive: string }
 }
 
 /**
- * 网格卡片：6 列算法 + 图 + 名字。**这一段只属于网格**（弹层条目见下面 `.file-item`）。
+ * 网格卡片（B 站视频卡的骨架）。
  *
- * ⚠️ 这里的 `min-height / height / max-height` 那三条 `!important` 是**网格的生命线**
- *（`--item-height` 由 `utils/flexible.ts` 的 `1rem = clientWidth/10` 推出；
- * 去掉它们 192px 的格子会塌成 24px）。所以它们必须留在**只有网格会命中**的选择器上。
+ * 高度**只由宽度决定**：封面 16:9 + 标题两行定高。
+ * ⚠️ 这是 `gridGeometry.groupRows()` 的前提 —— 同行必须等高（它按 `offsetTop` 分行，
+ *    一行里混进一个矮格子就会被劈成两行，方向键从此横着跳）。所以标题区写死 44px。
+ *
+ * ⚠️ 列数**恒定 6**（2026-10-21 主人裁定「无论放大缩小都 6 个」）：
+ *    原来 5/3/2/1 的四档断点已删，`--item-width` 只剩这一个值。
  */
 .image-box-item {
-    --item-gap: 10px;
+    --item-gap: var(--ff-grid-gap);
     --item-width: calc(100% / 6);
-    --item-height: 1.5rem;
-    flex-grow: 0;
-    flex-shrink: 0;
+    flex: 0 0 auto;
     width: calc(var(--item-width) - var(--item-gap));
-    min-height: 80px !important;
-    height: var(--item-height) !important;
-    max-height: var(--item-height) !important;
-    padding: 0 2px 10px;
-    margin: 10px 5px 0px;
-    justify-content: flex-end;
-    font-size: 16px;
+    margin: 6px calc(var(--item-gap) / 2) 0;
+    padding: 0 0 6px;
+    display: flex;
+    flex-direction: column;
+    align-items: stretch;
+    box-sizing: border-box;
+    border: 0;
+    user-select: none;
+    transition: transform .18s cubic-bezier(.2, .9, .3, 1.1);
 
-    .n-image {
-        height: calc(100% - 16px - 20px);
-        margin: 10px 0;
+    /* 封面：16:9 定比例 + 圆角 token。裁切交给这一层，图片自己只负责填满。
+       `overflow:hidden` 在这里是**必须**的（圆角要裁图）；焦点环画在 `outline` 上，
+       不会被自己的 overflow 裁掉 —— 这也是不用 box-shadow 画环的原因。 */
+    .card-cover {
+        position: relative;
+        width: 100%;
+        /* 比例是 token：实测本库缩略图多在 1.6 左右（16:10），16:9 会左右留边。
+           想再调只改 `--ff-cover-ratio` 一个值。 */
+        aspect-ratio: var(--ff-cover-ratio);
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        overflow: hidden;
+        border-radius: var(--ff-radius-card);
+        background: var(--ff-fill);
 
-        &:deep(img) {
+        /* 模糊底（见 `coverBackdrop()` 的注释）：把同一张图放大、模糊、压暗铺满整框。
+           `inset:0` + `scale(1.15)`：blur 会吃掉边缘像素，放大一点才不会有透明边。
+           ⚠️ 没有图（`--cover-src` 未设）时背景是 `none`，这一层等于不存在。 */
+        &::before {
+            content: '';
+            position: absolute;
+            inset: 0;
+            background-image: var(--cover-src, none);
+            background-size: cover;
+            background-position: center;
+            filter: blur(18px);
+            transform: scale(1.15);
+            opacity: 0.5;
+            pointer-events: none;
+        }
+
+        /* ⚠️ 必须 `:deep()`：`<img>` 是 naive-ui 的 `n-image` 内部节点，**拿不到本组件的
+           scoped 属性** ⇒ 写成 `.card-cover img` 会编译成 `img[data-v-x]`，一条都命中不了，
+           图片就按原始尺寸贴在左上角（主人 2026-10-21 截图报的"图片没居中"就是这个）。
+           旧代码用的是 `&:deep(img)`，我重写时丢了这层。 */
+        :deep(.n-image) {
+            position: relative;
+            z-index: 1;
             width: 100%;
+            height: 100%;
+        }
+
+        /* 宽高都撑满 + `contain` + `object-position:center`：
+           比例不一致时**上下或左右留白，但图始终居中**（留白由封面底色兜住）。 */
+        :deep(.n-image img) {
+            display: block;
+            width: 100%;
+            height: 100%;
+            object-fit: contain;
+            object-position: center;
+            transition: transform .25s ease;
+        }
+
+        /* 目录/未知类型：图标按封面的比例缩，不撑满（70% 在密网格里太抢眼）
+           `position/z-index` 是为了压在模糊底之上（绝对定位的 `::before` 会盖住静态子元素） */
+        .folder-face {
+            position: relative;
+            z-index: 1;
+            width: 56%;
+            height: auto;
+            object-fit: contain;
+        }
+
+        .file-face {
+            position: relative;
+            z-index: 1;
+            width: 56%;
+            font-size: 40px;
+        }
+    }
+
+    /* 角标（B 站封面下沿那一排）：数量在左、大小在右。
+       `pointer-events:none` —— 它盖在封面上，点它应该等于点封面。 */
+    .card-badges {
+        position: absolute;
+        left: 6px;
+        right: 6px;
+        bottom: 6px;
+        /* ⚠️ 必须压过图片：图片那层为了盖住模糊底设了 `z-index:1`，
+           不写这一行角标会被图片**盖住**（2026-10-21 主人截图报的"大小被遮挡"）。 */
+        z-index: 2;
+        display: flex;
+        justify-content: space-between;
+        pointer-events: none;
+
+        .badge {
+            max-width: 62%;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+            padding: 0 6px;
+            height: 18px;
+            line-height: 18px;
+            border-radius: var(--ff-radius-pill);
+            background: var(--ff-mask);
+            color: #fff;
+            font-size: 12px;
+        }
+    }
+
+    /* 标题：永远两行高度（单行也留白）—— 见块头那条"同行等高"的约束。
+       ⚠️ 字号不跟着卡片宽度走（恒 6 列后卡片会随窗口变窄）：14px 是"1024 最窄窗下
+       仍放得下 8 个汉字"的那一档，再大长名字会只剩省略号。 */
+    .card-title {
+        margin-top: 6px;
+        height: 40px;
+        display: -webkit-box;
+        -webkit-box-orient: vertical;
+        -webkit-line-clamp: 2;
+        overflow: hidden;
+        word-break: break-all;
+        font-size: 14px;
+        line-height: 20px;
+        color: var(--ff-text-1);
+        transition: color .15s ease;
+    }
+
+    /* hover：B 站那套 —— 图轻微放大 + 标题变蓝，**不加边框不加底色** */
+    &:hover {
+        :deep(.n-image img) {
+            transform: scale(1.03);
+        }
+
+        .card-title {
+            color: var(--ff-blue);
         }
     }
 
@@ -2650,85 +3039,9 @@ const onDisksChangedIpc = (_e: unknown, disks: { serial: string; drive: string }
         cursor: pointer;
     }
 
-    img {
-        display: block;
-        margin: 10px 0;
-        object-fit: contain;
-        overflow: hidden;
-    }
-
-    /**
-     * 文件名。**2026-10-05 重做**（业主：「整体很不协调」「反 slop」）。
-     *
-     * ## 改了什么、为什么
-     *
-     * | 项 | 原 | 现 | 依据 |
-     * |---|---|---|---|
-     * | 字号 | `1em`(16px) | **13px** | 列表项的**文件名是内容**，不是标题。Fluent 的 `body-1`=14 / `caption-1`=12；资源管理器缩略图视图 ≈12–13px |
-     * | 字重 | `bold`(700) | **400常规** | M3 `body`=400；`label`=500 是给"功能性文字"（按钮/标签）的。文件名是**内容**，用 body 那一档 |
-     * | 颜色 | `#000` 纯黑 | **次级灰** | 纯黑 + 粗体 = 标题待遇。文件名是**辅助信息**，不该抢图片的戏|
-     * | 静止底色 | 每格铺淡蓝灰 | **透明** | 底色是给 `hover` / `cursor` / `picked` 用的。**静止的卡片就该是内容本身** —— 铺满底色会让整片网格糊成一块色板（"AI 味"的主要来源） |
-     *
-     * ## ⚠️ 取值依据的效力（必须诚实标注）
-     *
-     * ✅ **可信**：资源管理器/相册类产品的**实际观感**（这是 PC 文件管理器，主人要的就是"专业"）
-     * ✅ **可信**：两个独立来源（Fluent / M3）**收敛到同一条** —— "列表项正文用 body 档 12–14px、常规字重"
-     * ⚠️ **未回官方原文核实**：`m3.material.io` 是 JS 渲染、抓不到正文；`learn.microsoft.com` 那页确认了
-     *    Fluent 有 type ramp 且 base 是 body，但**没给出 caption 的具体数值**。
-     *    ⇒ 上表的 13px 是"两个第三方转述 + 资源管理器观感"的**交集**，不是从官方原文抄来的。
-     *
-     * ## 为什么"居中"保留
-     *
-     * 资源管理器的缩略图视图文件名也是**居中**（图在上、名在下、居中对齐）⇒ 居中是对的，
-     * 不协调的是**字号与字重**，不是对齐方式。
-     *
-     * ## ⚠️ 连带影响：面包屑的字重**不再**与这里一致
-     *
-     * `.crumb-current` 当初加粗的理由是"与网格条目名字重一致"（那条注释仍在面包屑那边）。
-     * 现在网格是常规字重 ⇒ 面包屑的加粗**失去了一致性依据**。
-     * ⇒ 但**不动它**：面包屑要表达"我在哪"，靠 `n-tag` 自己的边框表达位置，
-     * 加粗在这里是**功能性的**（它不是内容列表的一项）。要改应作为**独立一件事**评估，
-     * 不该搭这次排版调整的便车。
-     */
-    span {
-        display: inline-block;
-        width: 100%;
-        height: 38px !important;
-        line-height: 1em;
-        // ⚠️ 14px（Fluent `body-1` 的标准值），不是 13px ——
-        //   **13px 是我第一次改过头了**：这一格宽 326px（主屏 6 列），
-        //   13px 的字在这么大的卡片上**明显偏小**，与图片不成比例（业主当场质疑）。
-        //   ⇒ 取值要跟**容器尺寸**挂钩：小列表项才用 12–13px。
-        font-size: 14px;
-        // 中性深灰（比纯黑柔、比次级灰实）—— 文件名是**这个格子的唯一文字**，
-        // 太淡了就"看不清是什么"（业主报的"合理吗"就是指这个）
-        color: #374151;
-        font-weight: 400;                    // 常规；加粗是给"当前层/选中"这类功能性位置用的
-        overflow: hidden;
-        text-overflow: ellipsis;
-        white-space: nowrap;
-        text-align: center;
-    }
-
-    @media screen and (max-width:1100px) {
-        font-size: 12px;
-    }
-
-    @media screen and (max-width:600px) {
-        --item-width: 20%;
-    }
-
-    @media screen and (max-width:400px) {
-        --item-width: 33.33%;
-    }
-
-    @media screen and (max-width:300px) {
-        --item-width: 50%;
-    }
-
-    @media screen and (max-width:200px) {
-        --item-width: 100%;
-    }
+    /* ⚠️ 旧的「文件名」规则（`height:38px !important` + 单行省略）整段删了：
+       它对 `span` 全局生效，会把角标里的 `span` 一起拉成 38px 高。
+       名字现在由 `.card-title` 管（两行定高），角标由 `.card-badges` 管。 */
 }
 
 /**

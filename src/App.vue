@@ -1,10 +1,11 @@
 <template>
-  <n-config-provider :locale="locale" :date-locale="dateLocale">
+  <n-config-provider :locale="locale" :date-locale="dateLocale" :theme="isDark ? darkTheme : undefined"
+    :theme-overrides="isDark ? darkOverrides : lightOverrides">
     <n-dialog-provider>
       <n-notification-provider>
         <n-message-provider>
           <n-loading-bar-provider>
-            <FileFinder />
+            <AppShell />
           </n-loading-bar-provider>
         </n-message-provider>
       </n-notification-provider>
@@ -13,22 +14,28 @@
 </template>
 
 <script setup lang="ts">
-// This starter template is using Vue 3 <script setup> SFCs
-// Check out https://vuejs.org/api/sfc-script-setup.html#script-setup
 import { ref } from 'vue';
-import FileFinder from './views/FileFinder/index.vue';
-import { NConfigProvider, NLoadingBarProvider, NMessageProvider, NNotificationProvider, NDialogProvider, zhCN, dateZhCN } from 'naive-ui';
+import AppShell from './views/Shell/index.vue';
+import {
+  NConfigProvider, NLoadingBarProvider, NMessageProvider, NNotificationProvider, NDialogProvider,
+  zhCN, dateZhCN, darkTheme,
+} from 'naive-ui';
 import type { NLocale, NDateLocale } from 'naive-ui';
+import { useTheme } from './hooks/useTheme';
+import { darkOverrides, lightOverrides } from './styles/naive-theme';
 
 const locale = ref<NLocale | null>(zhCN);
 const dateLocale = ref<NDateLocale | null>(dateZhCN);
+
+const { isDark } = useTheme();
 </script>
 
 <style>
 #app {
-  font-family: Avenir, Helvetica, Arial, sans-serif;
+  font-family: -apple-system, 'Segoe UI', 'Microsoft YaHei', 'PingFang SC', system-ui, sans-serif;
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
-  color: #2c3e50;
+  color: var(--ff-text-1);
+  background: var(--ff-bg);
 }
 </style>

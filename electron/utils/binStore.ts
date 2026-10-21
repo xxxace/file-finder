@@ -68,6 +68,29 @@ export function hasBin(name?: string): boolean {
     return !!name && names.has(name);
 }
 
+/**
+ * 图片在 bin 里的文件名。**唯一构造点** —— 写的时候和下发的时候必须拼出同一个名字，
+ * 所以前缀与后缀只写在这里一处（2026-10-21 从 server/index.ts 搬来：
+ * 清单功能也要拼这两个名字，搬去公用模块才不会是"各拼一份、迟早对不上"）。
+ * `t-` = 网格缩略图、`p-` = 预览大图；两者恒为 JPEG（详见 thumbnail.ts）。
+ */
+export const thumbNameOf = (sig?: string): string | undefined => (sig ? `t-${sig}.enc` : undefined);
+
+export const previewNameOf = (sig?: string): string | undefined => (sig ? `p-${sig}.enc` : undefined);
+
+/**
+ * `t-<sig>.enc` 的**逆运算**：图片名 → sig。
+ *
+ * 为什么需要：加入清单时前端手上只有卡片下发的 `thumb`/`avatar` **图片名**，
+ * 没有指纹（`sig` 只在服务端流转，不下发 —— 下发态白名单故意不含它）。
+ * 服务端认自己的命名格式，所以逆运算放这里（唯一真相源），
+ * 而不是让前端把名字拆了传上来——那是把服务端的格式知识泄露给调用方。
+ */
+export function sigOfThumbName(name?: string): string | undefined {
+    const m = /^t-([0-9a-f]+)\.enc$/i.exec(name || '');
+    return m ? m[1] : undefined;
+}
+
 export function getBin(name: string): Buffer | null {
     if (!names.has(name)) return null;
     try {

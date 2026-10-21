@@ -10,13 +10,14 @@ import crypto from 'node:crypto';
 import { imageRenditions, videoRenditions } from '../utils/thumbnail';
 import {
     BIN_DIR, hasBin, getBin, putBin, putBinEncrypted, listBinNames, binStoreFailed, whenBinReady, binStats,
+    thumbNameOf, previewNameOf,
 } from '../utils/binStore';
 import { writeZip, listZip, readZipEntry } from '../utils/zip';
 import {
     findDriveByLetter, findDuplicatedSerials, getDrives, offlineSerials,
     readRegistry, serialOfDrive, splitPath, syncRegistry, toFullPath, writeRegistry,
 } from '../utils/driveIdentity';
-import type { DiskRegistry, DriveInfo } from '../utils/driveIdentity';
+import type { DiskRegistry } from '../utils/driveIdentity';
 import {
     BEFORE_RESTORE_PATH, CACHE_DB_PATH, CACHE_VERSION, beginRestore, cacheBackup, endRestore,
     exportCompactSnapshot, exportSnapshotPlain, findCache, insertCache, loadMeta, loadSubtreeBytes,
@@ -27,6 +28,7 @@ import { encryptLine } from '../utils/cacheCrypto';
 import { LOCAL_TOKEN } from './token';
 import config from '../config';
 import { createAssistantRoutes } from './assistant';
+import { createPlaylistRoutes } from './playlist';
 import { isVideo, VIDEO_MIME } from './videoExt';
 
 const IMAGE_EXT = ['jpg', 'jpeg', 'png', 'bmp', 'gif', 'svg', 'psd', 'webp'];
@@ -185,14 +187,6 @@ function getFileType(ext = ''): FileKind {
 function joinRel(parent: string, name: string): string {
     return parent ? `${parent}/${name}` : name;
 }
-
-/**
- * 图片在 bin 里的文件名。**唯一构造点** —— 写的时候和下发的时候必须拼出同一个名字，
- * 所以前缀与后缀只写在这里一处。
- * `t-` = 网格缩略图、`p-` = 预览大图；两者恒为 JPEG（详见 thumbnail.ts）。
- */
-const thumbNameOf = (sig?: string) => (sig ? `t-${sig}.enc` : undefined);
-const previewNameOf = (sig?: string) => (sig ? `p-${sig}.enc` : undefined);
 
 /**
  * 统一封面出口：图片和视频都在这里变成**两张**图 —— 网格要的缩略图、点开要的预览大图。
@@ -1897,6 +1891,12 @@ route('/anchorOf', anchorOfController);
 // 不需要从这儿注入 scanAndCache —— 缓存的写入入口保持唯一。
 for (const [assistantPath, assistantHandler] of createAssistantRoutes({ sendJson, dataDir: config.userBasePath })) {
     route(assistantPath, assistantHandler);
+}
+
+// 清单（收藏分类）。与助手同一模式：经 route() 咽喉点注册（自动受 token 校验与统一兜底），
+// sendJson/dataDir 依赖注入（不 import 本文件，避免循环引用）。所有路由零读盘。
+for (const [playlistPath, playlistHandler] of createPlaylistRoutes({ sendJson, dataDir: config.userBasePath })) {
+    route(playlistPath, playlistHandler);
 }
 
 route('/', function (_req, res) {
