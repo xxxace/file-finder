@@ -34,15 +34,89 @@ export const POLL_TIMEOUT = 20_000;
 /** 人工过验证最多等多久。CF 的交互式挑战由用户自己掌控节奏，给足 5 分钟 */
 const CHALLENGE_TIMEOUT = 300_000;
 
+/**
+ * 懒加载触发：把页面滚到底，下一次再滚回顶。
+ *
+ * **为什么必须有**：抓取窗是 1000×720 的隐藏窗，**从不滚动** ⇒ 首屏之外的图永远不进视口 ⇒
+ * 懒加载脚本不执行 ⇒ `lazyloaded` 这类"加载完成"的类名一直不加、`src` 一直停在占位图、
+ * 真地址还躺在 `data-src` 里。用户在 F12 里能看到，是因为他自己滚过（2026-10-22 现场）。
+ *
+ * **为什么分两拍**：一次跳到底再立刻跳回，IntersectionObserver 的回调还没跑就离开了。
+ * 借 `runExtract` / `runSteps` 的轮询天然分成两次执行，中间隔 `POLL_INTERVAL`。
+ * 只在**抽不到时**才调用 —— 正常站点第一轮就命中，一上来就滚会平白改变页面状态。
+ */
+export const LAZY_SCROLL_SCRIPT = `(function(){
+  try {
+    var st = window.__ffLazyStage || 0;
+    var H = Math.max(document.body.scrollHeight, document.documentElement.scrollHeight) || 0;
+    if (st === 0) { window.__ffLazyStage = 1; window.scrollTo(0, H); return 'down'; }
+    if (st === 1) { window.__ffLazyStage = 2; window.scrollTo(0, 0); return 'up'; }
+    return 'idle';
+  } catch (e) { return 'err'; }
+})()`;
+
+/** 第几轮开始补滚：给正常页面 3 轮（约 1.5s）先自己命中 */
+const LAZY_NUDGE_AT = 3;
+
+/**
+ * 抽不到时的补救：滚到底 → 滚回顶，各一次。`tries` 从 1 开始数。
+ * 失败（页面正在跳转 / 窗口已销毁）直接咽掉 —— 它只是补救，不是必经步骤。
+ */
+export async function lazyNudge(win: BrowserWindow, tries: number): Promise<void> {
+    if (tries !== LAZY_NUDGE_AT && tries !== LAZY_NUDGE_AT + 1) return;
+    try {
+        await win.webContents.executeJavaScript(LAZY_SCROLL_SCRIPT);
+    } catch {
+        /* ignore */
+    }
+}
+
 /** 页面内判断是否卡在 Cloudflare / Turnstile 挑战 */
 export const CF_DETECT = `(function(){
   var t=(document.title||'').toLowerCase();
+  // 只认**挑战页专有**的三个强信号。
+  // ⚠️ 曾经还有一条「整页 innerHTML 里出现 turnstile / challenge-platform 就算被拦」——
+  // 那是误判源：正常站点的登录/评论组件也会用 Turnstile，页面里带个 turnstile 字样就被判成
+  // 挑战页，于是抽取脚本**一次都不执行**，界面永远显示"被拦 + 0 张图"，而人用浏览器看一切正常
+  // （用户 2026-10-22 现场）。判据宁可漏判也不能误判 —— 漏判由"抽不到"兜底。
   var cf = /just a moment|checking your browser|verify you are (a )?human|attention required/i.test(t)
     || !!document.querySelector('#cf-challenge-running, .cf-challenge, #challenge-form, form[action*="__cf_chl"]')
-    || !!window._cf_chl_opt
-    || /cf-chl-|challenge-platform|turnstile/i.test(document.body ? document.body.innerHTML : '');
+    || !!window._cf_chl_opt;
   return { cf: cf, url: location.href, title: document.title };
 })()`;
+
+/**
+ * 把当前页面拍下来（URL / 标题 / HTML），**只在抓不到时**用。
+ * 界面上一句"被拦住了"没法判断真假，得让用户能看见页面到底是什么 ——
+ * 挑战页有挑战页的样子，正常页面有正常页面的样子，一眼就能分开。
+ */
+export const SNAPSHOT_SCRIPT = `(function(){
+  try {
+    return {
+      url: location.href,
+      title: document.title || '',
+      html: ((document.documentElement ? document.documentElement.outerHTML : '') || '').slice(0, 800000)
+    };
+  } catch (e) { return null; }
+})()`;
+
+export interface PageSnapshot {
+    url: string;
+    title: string;
+    html: string;
+}
+
+/** 拍快照。窗口已销毁 / 页面正在跳转 → null（调用方按"没有证据"处理，不报错） */
+export async function snapshotOf(win: BrowserWindow): Promise<PageSnapshot | null> {
+    try {
+        if (win.isDestroyed()) return null;
+        const r = (await win.webContents.executeJavaScript(SNAPSHOT_SCRIPT)) as PageSnapshot | null;
+        if (!r || typeof r.html !== 'string') return null;
+        return { url: String(r.url || ''), title: String(r.title || ''), html: r.html };
+    } catch {
+        return null;
+    }
+}
 
 /**
  * `_blank` 接管：**只**把**同源**的弹窗导航进当前窗，异源一律拦掉。
@@ -77,6 +151,8 @@ export interface FetchResult<T> {
      * 'aborted'    = 用户取消了（**控制流**，不是失败原因）
      */
     err?: 'cloudflare' | 'timeout' | 'aborted';
+    /** 失败时的现场快照 —— 让用户能看见"被拦"是真是假，而不是只信一句文案 */
+    snapshot?: PageSnapshot;
 }
 
 export interface RunExtractOptions {
@@ -148,6 +224,7 @@ export async function runExtract<T>(
 
         const deadline = Date.now() + timeoutMs;
         let lastCf = false;
+        let tries = 0;
         while (Date.now() < deadline) {
             if (signal?.aborted || win.isDestroyed()) return aborted;
 
@@ -159,11 +236,9 @@ export async function runExtract<T>(
                 continue;
             }
             lastCf = !!cfInfo?.cf;
-            if (lastCf) {
-                await sleep(POLL_INTERVAL, signal);
-                continue;
-            }
 
+            // ⚠️ 即使判定为挑战页也**先抽一次**：CF 判定可能误伤正常页面，而"抽得到"
+            // 才是页面正常的最硬证据。抽不到，再按 cf 解释原因（它是解释，不是否决权）。
             let data: unknown;
             try {
                 data = await win.webContents.executeJavaScript(script);
@@ -172,9 +247,15 @@ export async function runExtract<T>(
                 continue;
             }
             if (data) return { ok: true, cf: false, data: data as T };
+            // 抽不到：滚一下看看是不是懒加载还没触发。挑战页滚了也没用，跳过
+            if (!lastCf) await lazyNudge(win, ++tries);
             await sleep(POLL_INTERVAL, signal);
         }
-        return { ok: false, cf: lastCf, err: lastCf ? 'cloudflare' : 'timeout' };
+        const snap = await snapshotOf(win);
+        return {
+            ok: false, cf: lastCf, err: lastCf ? 'cloudflare' : 'timeout',
+            snapshot: snap ?? undefined,
+        };
     } catch {
         // 窗口被销毁 / sleep 被 abort 都落这里
         return signal?.aborted ? aborted : { ok: false, cf: false, err: 'timeout' };

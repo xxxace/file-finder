@@ -47,9 +47,10 @@
                 <h4>④ 试跑</h4>
                 <div class="row">
                     <n-input v-model:value="testQuery" placeholder="测试用番号，如 TST-123" style="width: 200px" />
-                    <n-button type="primary" :loading="running" :disabled="!testQuery" @click="runTest">
-                        试跑
-                    </n-button>
+                    <!-- 试跑中同一个位置变成「取消试跑」：一次试跑最长要等 45 秒，
+                         以前只能干等（用户 2026-10-22 反馈"一旦开始就无法中断"） -->
+                    <n-button v-if="running" type="warning" @click="cancelTest">取消试跑</n-button>
+                    <n-button v-else type="primary" :disabled="!testQuery" @click="runTest">试跑</n-button>
                     <n-button :disabled="!draft.detailUrl" @click="openTarget">打开页面看看</n-button>
                     <n-button :disabled="!pageId" @click="useAsTemplate">用它做模板</n-button>
                     <n-checkbox v-model:checked="showWindow">显示窗口</n-checkbox>
@@ -146,6 +147,7 @@ function fail(message: string) {
     last.value = {
         kind: 'error', message, ok: false, cf: false,
         httpStatus: 0, pageTitle: '', cover: '', title: '', steps: [],
+        imgCount: 0, sampleSrcs: [],
     };
 }
 
@@ -235,9 +237,17 @@ async function recordSteps() {
     }
 }
 
+/**
+ * 试跑的取消信号。abort ⇒ 连接断开 ⇒ 服务端 `abortOnClose` 立刻销毁抓取窗
+ * （不 abort 的话，最长会白等到超时，窗口还杵在屏幕上）。
+ */
+let testAbort: AbortController | null = null;
+
 async function runTest() {
     const p = toPayload(draft.value);
     if (!p.detailUrl) { notify('warning', '站点规则', '先填入口地址'); return; }
+    const ac = new AbortController();
+    testAbort = ac;
     running.value = true;
     last.value = null;
     try {
@@ -245,9 +255,11 @@ async function runTest() {
             rule: p,
             query: testQuery.value,
             show: showWindow.value,
-        });
+        }, { signal: ac.signal });
         if (res?.code && res.code !== 200) { fail(res.error || `试跑失败（${res.code}）`); return; }
-        const f = (res?.fields ?? {}) as { cover?: string; title?: string };
+        const f = (res?.fields ?? {}) as {
+            cover?: string; title?: string; imgCount?: number; sampleSrcs?: string[];
+        };
         last.value = {
             kind: 'ok',
             ok: !!res?.ok,
@@ -257,13 +269,24 @@ async function runTest() {
             cover: String(f.cover ?? ''),
             title: String(f.title ?? ''),
             steps: res?.steps ?? [],
+            imgCount: Number(f.imgCount ?? 0),
+            sampleSrcs: (f.sampleSrcs ?? []) as string[],
+            snapFile: String((res?.snapshot as { file?: string } | null)?.file ?? ''),
+            snapUrl: String((res?.snapshot as { url?: string } | null)?.url ?? ''),
         };
     } catch (e) {
-        fail(String(e));
+        // 自己点的取消：不是错误，别留一条红字
+        if (ac.signal.aborted) notify('info', '站点规则', '已取消试跑');
+        else fail(String(e));
     } finally {
         running.value = false;
+        if (testAbort === ac) testAbort = null;
     }
 }
+
+const cancelTest = () => {
+    testAbort?.abort();
+};
 
 async function save() {
     saving.value = true;

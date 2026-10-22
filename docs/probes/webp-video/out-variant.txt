@@ -1,0 +1,66 @@
+{
+  "webp": {
+    "anim.webp": {
+      "made": true,
+      "bytes": 5362,
+      "thumbBytes": 9585
+    },
+    "alpha.webp": {
+      "made": true,
+      "bytes": 16390,
+      "thumbBytes": 9397
+    },
+    "big.webp": {
+      "made": true,
+      "bytes": 82110,
+      "thumbBytes": 11376
+    }
+  },
+  "mp4": {
+    "normal.mp4": {
+      "made": true,
+      "bytes": 15234,
+      "probe": {
+        "code": 0,
+        "raw": "3.000000"
+      },
+      "thumbBytes": 7391
+    },
+    "frag.mp4": {
+      "made": true,
+      "bytes": 15173,
+      "probe": {
+        "code": 0,
+        "raw": "3.000000"
+      },
+      "thumbBytes": 7391
+    },
+    "fast.mp4": {
+      "made": true,
+      "bytes": 15234,
+      "probe": {
+        "code": 0,
+        "raw": "3.000000"
+      },
+      "thumbBytes": 7391
+    },
+    "short.mp4": {
+      "made": true,
+      "bytes": 5592,
+      "probe": {
+        "code": 0,
+        "raw": "0.400000"
+      },
+      "thumbBytes": 7383
+    },
+    "poster.mp4": {
+      "made": true,
+      "bytes": 44229,
+      "probe": {
+        "code": 0,
+        "raw": "3.000000"
+      },
+      "thumbBytes": 7391
+    }
+  }
+}

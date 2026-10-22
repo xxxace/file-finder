@@ -58,6 +58,7 @@ import * as fsasync from 'node:fs/promises';
 import type { FileInfo } from '../index';
 import { findCache, loadMeta } from '../nedb';
 import { VIDEO_EXT } from '../videoExt';
+import { DIR_COVER_FILES, isDirCover } from '../dirCover';
 import { getDrives } from '../../utils/driveIdentity';
 import { parseTitle } from './match';
 
@@ -170,8 +171,6 @@ function inScope(relPath: string, scope: string): boolean {
 const EXCLUDED = ['System Volume Information', '$RECYCLE.BIN', 'Config.Msi', 'found.000', 'found.001'];
 /** 视频扩展名来自单一真相源 `../videoExt`，与 server/index.ts 共用同一份名单 */
 const IMAGE_EXT = ['jpg', 'jpeg', 'png', 'bmp', 'gif', 'svg', 'psd', 'webp'];
-/** 目录的脸只认这两个固定名（与 DIR_COVER_FILES 同款判据） */
-const DIR_COVER_FILES = ['avatar.jpg', 'cover.jpg'];
 
 function getExt(filename: string): string {
     const i = filename.lastIndexOf('.');
@@ -335,7 +334,7 @@ async function liveHandleCover(absDir: string): Promise<FileInfo[] | null> {
 
     const fileNames: string[] = [];
     for (const name of names) {
-        if (name.startsWith('.') || EXCLUDED.includes(name) || DIR_COVER_FILES.includes(name.toLowerCase())) continue;
+        if (name.startsWith('.') || EXCLUDED.includes(name) || isDirCover(name)) continue;
         let stat: Awaited<ReturnType<typeof fsasync.stat>>;
         try {
             stat = await fsasync.stat(`${absDir}/${name}`);
@@ -393,7 +392,7 @@ async function liveList(drive: string, rel: string): Promise<FileInfo[]> {
 
         if (!stat.isDirectory()) {
             // cover 模式下目录封面图不单独成条目（与缓存扫描同一规则）
-            if (DIR_COVER_FILES.includes(name.toLowerCase())) continue;
+            if (isDirCover(name)) continue;
             const ext = getExt(name);
             out.push({
                 dir: rel,
@@ -428,8 +427,8 @@ async function liveList(drive: string, rel: string): Promise<FileInfo[]> {
             type: 'folder',
             size: 0,
         };
-        // 目录自己的脸：makeDirCover 同款判据 —— 只探两个固定名（有子目录的目录
-        // 收敛不了，能长脸的只剩 avatar.jpg/cover.jpg 这一个来源）
+        // 目录自己的脸：与 makeDirCover 同款判据、同一份名单（`../dirCover`）——
+        // 有子目录的目录收敛不了，能长脸的只剩这几个固定名这一个来源
         for (const cover of DIR_COVER_FILES) {
             try {
                 await fsasync.access(`${coverDir}/${cover}`);

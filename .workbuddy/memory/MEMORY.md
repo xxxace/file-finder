@@ -34,6 +34,8 @@
 - **没有测试框架** ⇒ 验证三件套：`typecheck` 0 error + `docs/probes/` 只读探针 + 真机目视（**别写 TDD 式假测试**）；探针证据**必须 `.txt`**。⚠️ `@media (max-width)` 看 **viewport** ⇒ 须 `win.setSize()`。**探针细则 → appendix-10-05 §一**。
 
 ## 五、当前状态（长清单全文 → `MEMORY-APPENDIX-2026-10-05.md` §二）
+- ⭐ **10-22 补/换封面「暂停·终止·试跑中断」已落地**（`jobs.ts` 加 Gate + pause/resume/reopen；抓取/写盘在取下一条前等闸门；终止保留已抓到的行可写入；`dryrun` 接 abortOnClose；追加 jobId 不再丢命中行）⇒ **待重启 dev 目视**。详情 `docs/FIX-COVER-PAUSE-2026-10-22.md`，探针 `probes/jobs-pause/` 11/11。
+- ⭐ **10-22 webp/视频裂图已修**：根因＝**打包版**里 `@ffmpeg-installer` 的路径在 `app.asar` 内、`spawn` 不走 asar 补丁 ⇒ `ENOENT` ⇒ webp 转码与视频抽帧**全挂**（jpg/png 走 nativeImage 所以正常）；修 4 处：`thumbnail.ts` 加 `realBin()` 重写 + `probeDuration` 先查**视频流**时长 + `extractFrame` 校验产出非空 + 前端无 `thumb` 不渲染 `<img>` + `asarUnpack` 显式化。证据与验收 → `docs/FIX-WEBP-VIDEO-COVER-2026-10-22.md`（探针 `probes/webp-video/`）。**旧缓存失败条目要按 ↻ 才重扫**。
 - ⭐ **Q1 增量对账已落地**（`server/index.ts` 9 处 ~25 行；探针 13 PASS；闸门只在唯一读取点 `readFolder`）⇒ **待重启 dev 目视**。
 - **唯一真缺口 = 全局搜索**：`index.vue:466` 只过滤当前层；`data[].name` 1471/1471 全在内存 ⇒ 纯前端可搜、零读盘（**只下发投影，绝不下发原始 `data[]`**，会冻界面）。
 - **伪缺口**：`create_at` 刷新年龄、抽帧失败率 0.5%、ffprobe 泄漏（已修）。**最高性价比漏项** = cover-blur A 档（真收益 113 个目录，非 116）。**该删 7 项**（撤回 `parseSize`）。❌ **`flexible.ts` 绝不能删**。
@@ -45,6 +47,7 @@
 
 ## 六、待他动作
 重启 dev · PRD §15/§16 真机自测 · 目视验收离线只读层 · 真机回归导航 · **exe 图标目视**。
+**10-22 起**：关掉运行中的 app 再 `npm run build` 装新 exe（旧 exe 里 ffmpeg 起不来），然后对没封面的目录按 **↻** 重扫。
 ❌ 不再待办 `npm install`。**旧结论作废**：`node_modules/.app-builder-bin-*` 与打包无因果 ⇒ 判因果必须 grep 真实 `require`。
 
 ## 七、暂缓

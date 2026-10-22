@@ -1,0 +1,51 @@
+{
+  "makeWebp": {
+    "ok": true,
+    "code": 0,
+    "stderr": "etadata:\r\n      encoder         : Lavc58.42.102 libwebp\r\n[libwebp @ 000002973fcf0e00] Using libwebp for RGB-to-YUV conversion. You may want to consider passing in YUV instead for lossy encoding.\r\nframe=    1 fps=0.0 q=-0.0 Lsize=      18kB time=00:00:00.00 bitrate=147920.0kbits/s speed=0.00964x    \r\nvideo:18kB audio:0kB subtitle:0kB other streams:0kB global headers:0kB muxing overhead: 0.000000%\r\n"
+  },
+  "makeMp4": {
+    "ok": true,
+    "code": 0,
+    "stderr": "dc,ddl,ddr,vr,hd,vl,hu: 41% 35% 19%  2%  1%  1%  0%  1%  0%\r\n[libx264 @ 000001410ca53780] i8c dc,h,v,p: 28% 23% 40%  9%\r\n[libx264 @ 000001410ca53780] Weighted P-Frames: Y:0.0% UV:0.0%\r\n[libx264 @ 000001410ca53780] ref P L0: 84.9%  5.3%  8.7%  1.2%\r\n[libx264 @ 000001410ca53780] ref B L0: 74.5% 23.4%  2.1%\r\n[libx264 @ 000001410ca53780] ref B L1: 94.5%  5.5%\r\n[libx264 @ 000001410ca53780] kb/s:35.07\r\n"
+  },
+  "sizes": {
+    "webp": 18490,
+    "mp4": 15234
+  },
+  "nativeWebp": {
+    "isEmpty": true,
+    "size": {
+      "width": 0,
+      "height": 0
+    }
+  },
+  "image": {
+    "thumbBytes": 11469,
+    "thumbIsJpeg": true,
+    "previewBytes": 37223
+  },
+  "imageNoExt": {
+    "thumbBytes": 11469
+  },
+  "probeDuration": {
+    "code": 0,
+    "out": "3.000000"
+  },
+  "video": {
+    "thumbBytes": 7391,
+    "thumbIsJpeg": true,
+    "previewBytes": 6941
+  },
+  "makeLong": {
+    "ok": true,
+    "code": 0,
+    "stderr": "d,vl,hu: 85% 10%  5%  0%  0%  0%  0%  0%  0%\r\n[libx264 @ 000001b3b9a90380] i4 v,h,dc,ddl,ddr,vr,hd,vl,hu: 50% 26% 15%  2%  2%  2%  0%  2%  0%\r\n[libx264 @ 000001b3b9a90380] i8c dc,h,v,p: 41% 16% 37%  5%\r\n[libx264 @ 000001b3b9a90380] Weighted P-Frames: Y:0.0% UV:0.0%\r\n[libx264 @ 000001b3b9a90380] ref B L0: 92.4%  7.6%\r\n[libx264 @ 000001b3b9a90380] kb/s:64.61\r\n[aac @ 000001b3b9a93980] Qavg: 215.196\r\n"
+  },
+  "longDurations": {
+    "formatSeconds": "60.000000"
+  },
+  "videoLongContainer": {
+    "thumbBytes": 7374
+  }
+}

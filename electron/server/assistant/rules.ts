@@ -101,9 +101,32 @@ export function buildExtractScript(fields: SiteFields): string {
       function tryCss(c){
         var el = document.querySelector(c.selector);
         if(!el) return '';
-        if((c.attr||'src') === 'text') return (el.textContent||'').trim();
-        if((c.attr||'src') === 'html') return (el.innerHTML||'').trim();
-        return el.getAttribute(c.attr || 'src') || '';
+        var A = c.attr || 'src';
+        if(A === 'text') return (el.textContent||'').trim();
+        if(A === 'html') return (el.innerHTML||'').trim();
+        // 属性回退链：写成 src|data-src|data-original。
+        // 懒加载站的 src 常是占位图、真地址在 data-* 里，而 lazyloaded 这类类名
+        // 只在图**加载完成后**才加上 —— 隐藏窗不滚动（1000×720），页面下方的图可能
+        // 永远不加载 ⇒ 只认一个属性会在"已加载/未加载"两种时机各错一半。
+        var keys = A.split('|');
+        for(var i=0;i<keys.length;i++){
+          var k = keys[i].replace(/^\\s+|\\s+$/g,'');
+          var v = el.getAttribute(k);
+          if(!v) continue;
+          // srcset 形如 "a.jpg 1x, b.jpg 2x"，取第一个候选地址 ——
+          // 与 rawSrc()（sampleSrcs 用的那个）同一套解析，两处不能各写一份
+          if(k === 'srcset') v = v.split(',')[0].replace(/\\s+/g,' ').trim().split(' ')[0];
+          if(v) return v;
+        }
+        return '';
+      }
+      // 值是不是 URL 形态。要挡住的不是"像不像"，而是 attr 写 style 时返回的**整串 CSS**
+      // （background: url(...) 0% 0% / cover;）—— 它非空、不含黑名单词，会被当成命中，
+      // 把后面本来能用的 og:image 一起堵死。URL 里不会有空白/分号/花括号。
+      function looksUrl(v){
+        if(!v) return false;
+        if(/^data:/i.test(v)) return true;
+        return !/[\\s{};()'"]/.test(v);
       }
       function tryMeta(c){
         var el = document.querySelector('meta[name="'+c.selector+'"],meta[property="'+c.selector+'"]');
@@ -130,6 +153,7 @@ export function buildExtractScript(fields: SiteFields): string {
             v = c.kind==='css' ? tryCss(c) : c.kind==='meta' ? tryMeta(c) : c.kind==='regex' ? tryRegex(c) : '';
           } catch(e){ v=''; }
           if(!v) continue;
+          if(isUrl && !looksUrl(v)) continue;
           if(isUrl) v = abs(v);
           if(isCover && BAD.test(v)) continue;
           return v;

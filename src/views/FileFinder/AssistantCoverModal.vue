@@ -15,7 +15,8 @@
                 <n-select v-if="diskOptions.length" v-model:value="selectedSerial" :options="diskOptions"
                     size="small" style="width: 380px" :disabled="busy || faceMode" @update:value="runScan" />
                 <n-spin v-if="disksLoading" :size="16" />
-                <n-button size="small" :disabled="busy || !selectedSerial" @click="runScan">
+                <n-button size="small" :loading="scanLoading" :disabled="busy || !selectedSerial"
+                    @click="runScan">
                     重新扫描
                 </n-button>
                 <!-- 深度重扫：扫描是零读盘、只认缓存的。用户在盘上手动删过图/动过文件后，
@@ -84,45 +85,83 @@
 
             <!-- 底部动作区：随阶段变化，但每一段内部都是静态结构 -->
             <div class="ffassist-footer">
-                <!-- 抓取中 -->
-                <template v-if="grabJob && grabJob.status === 'running'">
+                <!-- 写盘中 / 写盘暂停（排在抓取之前：这时用户刚点的就是写入） -->
+                <template v-if="applyActive">
                     <span class="ffassist-progress">
-                        抓取中 {{ grabJob.progress.processed }} / {{ grabJob.progress.total }}
-                        （命中 {{ grabJob.progress.hits }}，被拦 {{ grabJob.progress.blocked }}）
+                        {{ applyActive.status === 'paused' ? '写入已暂停' : '写入中' }}
+                        {{ applyActive.progress.processed }} / {{ applyActive.progress.total }}
                     </span>
-                    <span v-if="grabJob.progress.current" class="ffassist-hint">{{ grabJob.progress.current }}</span>
-                    <n-button size="small" @click="cancelJob(grabJob.id)">取消</n-button>
+                    <span v-if="applyActive.progress.current" class="ffassist-hint">{{ applyActive.progress.current }}</span>
+                    <n-button v-if="applyActive.status === 'running'" size="small"
+                        :loading="acting === 'pause'" :disabled="!!acting && acting !== 'pause'"
+                        @click="pauseJob(applyActive.id)">暂停</n-button>
+                    <n-button v-else size="small" type="primary" :loading="acting === 'resume'"
+                        :disabled="!!acting && acting !== 'resume'"
+                        @click="resumeJob(applyActive.id)">继续</n-button>
+                    <n-button size="small" :loading="acting === 'stop'"
+                        :disabled="!!acting && acting !== 'stop'"
+                        @click="stopJob(applyActive.id)">终止</n-button>
                 </template>
 
-                <!-- 抓完 -->
-                <template v-else-if="grabDone">
-                    <span class="ffassist-progress">{{ grabJob!.message || '抓取结束' }}</span>
-                    <n-button v-if="blockedRows.length" size="small" type="warning" :disabled="challengeRunning"
-                        @click="passChallenge">
+                <!-- 抓取中 / 暂停中 -->
+                <template v-else-if="grabActive">
+                    <span class="ffassist-progress">
+                        {{ grabActive.status === 'paused' ? '已暂停' : '抓取中' }}
+                        {{ grabActive.progress.processed }} / {{ grabActive.progress.total }}
+                        （命中 {{ grabActive.progress.hits }}，被拦 {{ grabActive.progress.blocked }}）
+                    </span>
+                    <!-- 暂停时说明"为什么会慢一拍"；跑着的时候显示当前在抓哪一条 -->
+                    <span v-if="grabActive.status === 'paused'" class="ffassist-hint">
+                        在飞的几条会跑完再停，结果都留着
+                    </span>
+                    <span v-else-if="grabActive.progress.current" class="ffassist-hint">
+                        {{ grabActive.progress.current }}
+                    </span>
+                    <n-button v-if="grabActive.status === 'running'" size="small"
+                        :loading="acting === 'pause'" :disabled="!!acting && acting !== 'pause'"
+                        @click="pauseJob(grabActive.id)">暂停</n-button>
+                    <n-button v-else size="small" type="primary" :loading="acting === 'resume'"
+                        :disabled="!!acting && acting !== 'resume'"
+                        @click="resumeJob(grabActive.id)">继续</n-button>
+                    <!-- 暂停后**已经抓到的就能写**，不用等整批跑完（用户 2026-10-22 明确要求）。
+                         只在暂停时给：抓取还在滚的时候快照一直在变，服务端也会拒。 -->
+                    <n-button v-if="pendingHits > 0 && grabActive.status === 'paused'" size="small"
+                        :disabled="!!acting" @click="openConfirm">
+                        写入已抓到的（{{ pendingHits }} 部）
+                    </n-button>
+                    <n-button size="small" :loading="acting === 'stop'"
+                        :disabled="!!acting && acting !== 'stop'"
+                        @click="stopJob(grabActive.id)">终止</n-button>
+                </template>
+
+                <!-- 抓完了 / 被终止了 -->
+                <template v-else-if="grabFinished">
+                    <span class="ffassist-progress">{{ grabFinished.message || '抓取结束' }}</span>
+                    <n-button v-if="blockedRows.length" size="small" type="warning" :loading="challengeRunning"
+                        :disabled="challengeRunning" @click="passChallenge">
                         {{ challengeRunning ? '等待人工过验证…' : `人工过验证并重抓（${blockedRows.length} 条被拦）` }}
                     </n-button>
-                    <n-button v-if="applyHits > 0" size="small" type="primary" :disabled="applying || challengeRunning"
-                        @click="openConfirm">
-                        确认写入…（{{ applyHits }} 张）
+                    <!-- 没轮到的 + 试过失败的，一并补抓；结果并进同一张表 -->
+                    <n-button v-if="unfinishedTargets.length" size="small"
+                        :loading="acting === 'grab'" :disabled="challengeRunning || (!!acting && acting !== 'grab')"
+                        @click="retryUnfinished">
+                        继续抓未完成的（{{ unfinishedTargets.length }} 条）
                     </n-button>
-                    <n-button size="small" :disabled="busy" @click="runScan">重扫</n-button>
-                </template>
-
-                <!-- 写盘中 -->
-                <template v-else-if="applying">
-                    <span class="ffassist-progress">
-                        写入中 {{ applyJob?.progress.processed ?? 0 }} / {{ applyJob?.progress.total ?? 0 }}
-                    </span>
-                    <span v-if="applyJob?.progress.current" class="ffassist-hint">{{ applyJob.progress.current }}</span>
-                    <n-button size="small" @click="cancelJob(applyJob!.id)">取消</n-button>
+                    <n-button v-if="pendingHits > 0" size="small" type="primary"
+                        :disabled="challengeRunning || !!acting" @click="openConfirm">
+                        确认写入…（{{ pendingHits }} 部）
+                    </n-button>
+                    <n-button size="small" :disabled="busy || !!acting" @click="runScan">重扫</n-button>
                 </template>
 
                 <!-- 待抓取 -->
                 <template v-else>
                     <span class="ffassist-hint">{{ faceMode
-                        ? '这些是你刚在主界面挑的；抓到后还要点「写入」才会真的换掉。翻新封面会**先备份原图**'
+                        ? '这些是你刚在主界面挑的；抓到后还要点「写入」才会真的换掉。换封面不复用缓存，会重新访问站点（较慢）；覆盖前会先备份原图'
                         : '勾选要补封面的片子，抓到后还需要点「写入」才会进盘' }}</span>
-                    <n-button size="small" type="primary" :disabled="!checkedCount || scanLoading" @click="startGrab()">
+                    <n-button size="small" type="primary" :loading="acting === 'grab'"
+                        :disabled="!checkedCount || scanLoading || (!!acting && acting !== 'grab')"
+                        @click="startGrab()">
                         {{ faceMode ? `开始抓取新封面（${checkedCount} 条）` : `开始抓取（${checkedCount} 条）` }}
                     </n-button>
                 </template>
@@ -132,7 +171,7 @@
                  这就是"确认内容对不对"的那一环（用户 2026-09-25 明确要的）。
                  no-referrer：部分封面 CDN 检测 Referer 防外链，不带更稳。 -->
             <div v-if="resultRows.length" class="ffassist-results">
-                <div v-for="r in resultRows" :key="r.writeRel + r.status" class="ffassist-result-row">
+                <div v-for="(r, i) in resultRows" :key="r.writeRel + r.status + i" class="ffassist-result-row">
                     <img v-if="r.coverUrl" :src="previewSrc(r.coverUrl)" class="ffassist-thumb" loading="lazy"
                         referrerpolicy="no-referrer" alt="">
                     <n-tag size="small" :bordered="false" :type="rowTagType(r)">{{ rowTagText(r) }}</n-tag>
@@ -167,9 +206,10 @@
                     @update:checked="v => togglePick(c.key, v)" />
                 <img :src="previewSrc(c.coverUrl)" loading="lazy" referrerpolicy="no-referrer" alt="">
                 <div class="pick-name">{{ c.title }}</div>
-                <div class="pick-tag">{{ c.kind === 'cover' ? '覆盖原封面 · 先备份'
-                    : c.kind === 'dir' ? '写新封面 · 旧头像自动让位'
-                        : (c.volumes > 1 ? `${c.volumes} 个分卷搬入` : '单文件搬入') }}</div>
+                <div class="pick-tag">{{ writtenSet.has(c.coverWriteRel) ? '已写入'
+                    : c.kind === 'cover' ? '覆盖原封面 · 先备份'
+                        : c.kind === 'dir' ? '写新封面 · 旧头像自动让位'
+                            : (c.volumes > 1 ? `${c.volumes} 个分卷搬入` : '单文件搬入') }}</div>
             </div>
         </div>
         <div class="ffassist-row">
@@ -177,7 +217,8 @@
             <n-button size="small" @click="toggleAllPick(false)">全不选</n-button>
             <span style="flex: 1"></span>
             <n-button size="small" @click="showConfirm = false">取消</n-button>
-            <n-button size="small" type="primary" :disabled="!pickChecked.size || applying"
+            <n-button size="small" type="primary" :loading="acting === 'apply'"
+                :disabled="!pickChecked.size || !!applyActive || (!!acting && acting !== 'apply')"
                 @click="confirmApply">
                 确认写入（{{ pickChecked.size }} 部）
             </n-button>
@@ -248,7 +289,7 @@ interface PickCard {
     volumes: number;
 }
 interface JobSnapshot {
-    id: string; kind: string; status: 'running' | 'done' | 'cancelled' | 'error';
+    id: string; kind: string; status: 'running' | 'paused' | 'done' | 'cancelled' | 'error';
     progress: { total: number; processed: number; hits: number; misses: number; blocked: number; current: string };
     rows: (GrabRow | ApplyRow)[];
     message: string;
@@ -278,27 +319,67 @@ const selectedSerial = ref<string | null>(null);
 const scan = ref<ScanResult | null>(null);
 /** 勾选集合，键 = writeRel（盘内唯一） */
 const checked = ref(new Set<string>());
+/** 这一批真正提交过抓取的目标（终止后靠它算出"还剩哪些没抓"） */
+const grabbedTargets = ref<ScanTarget[]>([]);
 const grabJob = ref<JobSnapshot | null>(null);
 const applyJob = ref<JobSnapshot | null>(null);
 const challengeRunning = ref(false);
+/**
+ * 按钮级"正在做"。点完到界面变过来之间必须转圈 ——
+ * 这段延迟 = 一次 POST + 最多 1.2s 的轮询，不转圈就像点了没反应（用户 2026-10-22）。
+ * 同一时刻只放行一个动作：这些都是"改任务状态"的按钮，连点没有意义。
+ */
+const acting = ref<'' | 'grab' | 'apply' | 'pause' | 'resume' | 'stop'>('');
+
 const challengeMsg = ref('');
 
-const busy = computed(() => scanLoading.value || !!runningJob.value || challengeRunning.value);
-const runningJob = computed(() =>
-    (grabJob.value?.status === 'running' && grabJob.value) ||
-    (applyJob.value?.status === 'running' && applyJob.value) ||
-    null,
+/** 正在跑或暂停中的任务 —— 两者都占着"这一批"，都不该被重扫顶掉 */
+const grabActive = computed(() => {
+    const s = grabJob.value?.status;
+    return s === 'running' || s === 'paused' ? grabJob.value : null;
+});
+const applyActive = computed(() => {
+    const s = applyJob.value?.status;
+    return s === 'running' || s === 'paused' ? applyJob.value : null;
+});
+/** 抓取已经收尾（完成 / 终止 / 出错）：结果留在 rows 里，可以写入 */
+const grabFinished = computed(() => {
+    const s = grabJob.value?.status;
+    return s === 'done' || s === 'cancelled' || s === 'error' ? grabJob.value : null;
+});
+const busy = computed(() =>
+    scanLoading.value || !!grabActive.value || !!applyActive.value || challengeRunning.value,
 );
-const grabDone = computed(() => !!grabJob.value && grabJob.value.status !== 'running' && !applyJob.value);
-const applying = computed(() => applyJob.value?.status === 'running' || false);
 const checkedCount = computed(() => checked.value.size);
-const applyHits = computed(() => grabJob.value?.progress.hits ?? 0);
 const blockedRows = computed(() => {
     const seen = new Set<string>();
     return (grabJob.value?.rows as GrabRow[] | undefined ?? [])
         .filter(r => r.status === 'blocked' && r.blockedSite && !seen.has(r.writeRel) && seen.add(r.writeRel));
 });
-/** 结果明细：写盘结果优先（最终事实），没有就展示抓取结果（命中/未命中/被拦） */
+/**
+ * 还没拿到封面的目标 = **没轮到的**（终止时队列里剩下的）+ **试过但失败/被拦的**。
+ * 认不出番号的除外（再抓一次还是认不出）。
+ *
+ * 重抓的结果**追加进同一个 job**（后端 `jobId`），不然之前命中的那些行会跟着消失。
+ */
+const unfinishedTargets = computed(() => {
+    const seen = new Map<string, GrabRow>();
+    for (const r of (grabJob.value?.rows as GrabRow[] | undefined ?? [])) seen.set(r.writeRel, r);
+    return grabbedTargets.value.filter((t) => {
+        const r = seen.get(t.writeRel);
+        return !r || (r.status !== 'ok' && r.status !== 'no-id');
+    });
+});
+/**
+ * 本轮已经写成功的封面（跨多次写入**累积** —— 写入可以暂停/终止后再接着写，
+ * 只认最后一次 apply 的 rows 会让前一次写好的重新变成"待写入"）。
+ * 换一批目标（重扫 / 重新抓取）时才清空。
+ */
+const writtenSet = ref(new Set<string>());
+/**
+ * 结果明细：写盘结果优先（最终事实），没有就展示抓取结果。
+ * 抓取结果**同一目标只留最后一条** —— 重抓成功后不该还挂着旧的"未命中"。
+ */
 const resultRows = computed(() => {
     const apply = applyJob.value?.rows as ApplyRow[] | undefined;
     if (apply?.length) {
@@ -311,7 +392,9 @@ const resultRows = computed(() => {
             coverUrl: urlOf.get(r.writeRel) ?? null,
         }));
     }
-    return (grabJob.value?.rows as GrabRow[] | undefined ?? []);
+    const last = new Map<string, GrabRow>();
+    for (const r of (grabJob.value?.rows as GrabRow[] | undefined ?? [])) last.set(r.writeRel, r);
+    return [...last.values()];
 });
 
 /**
@@ -330,7 +413,11 @@ const pickCards = computed<PickCard[]>(() => {
             // ⚠️ 分组键必须与后端 `buildGroups` **同一口径**（`kind|writeRel`）：
             // 原来这里和后端都用 `layerDir` 作键，同一层的第二个目标会被吞掉、静默丢失。
             const key = `${r.kind}|${r.writeRel}`;
-            if (!map.has(key)) {
+            const prev = map.get(key);
+            if (prev) {
+                // 重抓成功：同一目标有了更新的图 ⇒ 用新的，别再留旧的
+                prev.coverUrl = r.coverUrl!;
+            } else {
                 map.set(key, {
                     key, kind: r.kind,
                     // 卡片标题：`cover` 形态优先用**番号**（`query`）—— 它的 `name` 是
@@ -348,8 +435,12 @@ const pickCards = computed<PickCard[]>(() => {
         const key = `file|${layerDir}|${r.query}`;
         const card = map.get(key);
         if (card) {
-            card.writeRels.push(r.writeRel);
-            card.volumes += 1;
+            // 同一卷被重抓过：换图，不重复计数（否则分卷数会虚高）
+            if (card.writeRels.includes(r.writeRel)) card.coverUrl = r.coverUrl!;
+            else {
+                card.writeRels.push(r.writeRel);
+                card.volumes += 1;
+            }
         } else {
             map.set(key, {
                 key, kind: 'file',
@@ -364,12 +455,20 @@ const pickCards = computed<PickCard[]>(() => {
     return [...map.values()];
 });
 
+/** 还没写成功的部数 —— 写入按钮按它显示，写完就不再引导"再写一遍" */
+const pendingHits = computed(() =>
+    pickCards.value.filter(c => !writtenSet.value.has(c.coverWriteRel)).length,
+);
+
 // ── 写入确认弹窗（grid，默认全勾，可反选；不勾的不写也不搬） ──
 const showConfirm = ref(false);
 const pickChecked = ref(new Set<string>());
 
 const openConfirm = () => {
-    pickChecked.value = new Set(pickCards.value.map(c => c.key));
+    // 已经写成功的不再默认勾上（写盘很贵，重复写一遍没有意义；想重写可以自己勾）
+    pickChecked.value = new Set(
+        pickCards.value.filter(c => !writtenSet.value.has(c.coverWriteRel)).map(c => c.key),
+    );
     showConfirm.value = true;
 };
 
@@ -395,21 +494,37 @@ const blockedTargets = computed(() => {
 });
 
 // ── 轮询（同一时刻只有一个任务在跑，一个 poller 够了） ──
+/** 任务还活着（跑着或暂停着）—— 轮询在这两种状态都不停 */
+const isLive = (job: JobSnapshot) => job.status === 'running' || job.status === 'paused';
+/** 「终止中…」的转圈要盯到任务真收尾（worker 还在退出），不能一返回就收 */
+const settleActing = (job: JobSnapshot) => {
+    if (!isLive(job) && acting.value === 'stop') acting.value = '';
+};
+
 let pollTimer: ReturnType<typeof setInterval> | null = null;
 const stopPoll = () => {
     if (pollTimer) { clearInterval(pollTimer); pollTimer = null; }
 };
+/**
+ * 轮询某个 job。
+ *
+ * ⚠️ 第一轮**立刻**跑：`setInterval` 的第一拍在 1.2 秒后，那段时间界面上什么都没发生
+ *   （按钮还能再点一次，"点了没反应"就是这么来的）。
+ * ⚠️ `onJob` 返回 true 才停轮询 —— **暂停中必须继续轮**：用户随时会点「继续」，
+ *   停掉就再也看不到状态变化了。
+ */
 const poll = (id: string, onJob: (job: JobSnapshot) => boolean | void) => {
     stopPoll();
-    pollTimer = setInterval(async () => {
+    const tick = async () => {
         try {
             const res = await getAction(`${API_BASE}/assistant/jobs?id=${encodeURIComponent(id)}`);
-            const done = onJob(res.job as JobSnapshot);
-            if (done) stopPoll();
+            if (onJob(res.job as JobSnapshot)) stopPoll();
         } catch {
             // 服务忙/网络抖一下：下一轮再试。任务在主进程内存里，不会丢
         }
-    }, 1200);
+    };
+    void tick();
+    pollTimer = setInterval(() => { void tick(); }, 1200);
 };
 onUnmounted(stopPoll);
 
@@ -444,6 +559,8 @@ const setShowModal = async (v: boolean, picks?: FacePick[]) => {
         stopPoll();
         // 关面板就清掉挑选 —— 否则下次从「补封面」进来会沿用上一次的挑选
         facePicks.value = [];
+        // "终止中"的转圈也要收掉：重开面板时会重新 attach + 拉快照，别留一个假 loading
+        acting.value = '';
         return;
     }
     // ⚠️ **只有显式传了才覆盖**：不传时保留已有的（防"回声调用"把选择清掉，
@@ -451,18 +568,21 @@ const setShowModal = async (v: boolean, picks?: FacePick[]) => {
     if (picks) facePicks.value = picks;
     await loadDisks();
     // 面板关了任务还在跑（job 活在主进程内存里）。重开时挂回正在跑的那个，
-    // 不然用户以为取消/关闭就等于任务没了
+    // 不然用户以为取消/关闭就等于任务没了。
+    // ⚠️ **暂停中的也要挂回来** —— 否则重开面板看不到那批已抓到的结果，也没法「继续」。
     let attached = false;
     try {
         const res = await getAction(`${API_BASE}/assistant/jobs`);
-        const running = (res.jobs as JobSnapshot[]).find(j => j.status === 'running');
-        if (running?.kind === 'grab') {
-            grabJob.value = running;
-            poll(running.id, job => { grabJob.value = job; return job.status !== 'running'; });
-            attached = true;
-        } else if (running?.kind === 'apply') {
-            applyJob.value = running;
-            poll(running.id, job => { applyJob.value = job; return job.status !== 'running'; });
+        const live = (res.jobs as JobSnapshot[]).find(j =>
+            (j.kind === 'grab' || j.kind === 'apply') && (j.status === 'running' || j.status === 'paused'));
+        if (live) {
+            if (live.kind === 'grab') {
+                grabJob.value = live;
+                poll(live.id, job => { grabJob.value = job; settleActing(job); return !isLive(job); });
+            } else {
+                applyJob.value = live;
+                poll(live.id, job => { applyJob.value = job; settleActing(job); return !isLive(job); });
+            }
             attached = true;
         }
     } catch { /* 没有任务/服务没起来都无所谓，走正常流程 */ }
@@ -494,7 +614,13 @@ const loadDisks = async () => {
 };
 
 const runScan = async () => {
-    if (runningJob.value) return;
+    // 任务在跑/暂停时不许重扫：重扫会清空当前 job，把已抓到的结果整批顶掉
+    if (busy.value) {
+        if (grabActive.value || applyActive.value) {
+            notify('info', '先处理当前任务', '任务还在（暂停中），继续或终止它之后再重扫');
+        }
+        return;
+    }
     // ⚠️ 「换封面」**不需要先选盘**：picks 里带的是完整路径（或只读锚点），
     // 服务端据此反推这块盘的序列号，再把结果回来告诉你（多盘机器上这一步关键 ——
     // 你挑的是哪块盘的东西，就该查哪块盘的缓存）。
@@ -524,6 +650,8 @@ const runScan = async () => {
         checked.value = new Set(scan.value.targets.map(t => t.writeRel));
         grabJob.value = null;
         applyJob.value = null;
+        writtenSet.value = new Set();   // 换了一批目标，"已写入"的标记跟着重来
+        grabbedTargets.value = [];
         stopPoll();
     } catch (e) {
         notify('error', faceMode.value ? '展开选中项失败' : '扫描失败', String(e));
@@ -548,6 +676,8 @@ const deepRescan = async () => {
         checked.value = new Set(scan.value.targets.map(t => t.writeRel));
         grabJob.value = null;
         applyJob.value = null;
+        writtenSet.value = new Set();   // 换了一批目标，"已写入"的标记跟着重来
+        grabbedTargets.value = [];
         stopPoll();
         if (res.refreshed) {
             notify('success', '深度重扫完成', `实时复核了 ${res.refreshed} 个目录`);
@@ -567,35 +697,108 @@ const toggleTarget = (writeRel: string, v: boolean) => {
     checked.value = next;
 };
 
-const startGrab = async (targets?: ScanTarget[]) => {
+/** 动作之后立刻拉一次快照，不等下一拍轮询 —— 点了就该看见变化 */
+const refreshJob = async (id: string) => {
+    try {
+        const res = await getAction(`${API_BASE}/assistant/jobs?id=${encodeURIComponent(id)}`);
+        const job = res.job as JobSnapshot;
+        if (job.kind === 'grab') grabJob.value = job;
+        else if (job.kind === 'apply') applyJob.value = job;
+    } catch { /* 拉不到也无所谓，轮询会补上 */ }
+};
+
+/**
+ * 起抓取。`appendTo` = 追加到已有 job（重抓失败项 / 过验证后重抓）——
+ * 追加时**不清空** grabJob，结果行会并进同一张表。
+ */
+const startGrab = async (targets?: ScanTarget[], appendTo?: string) => {
     const list = targets ?? (scan.value?.targets ?? []).filter(t => checked.value.has(t.writeRel));
-    if (!list.length || runningJob.value) return;
-    applyJob.value = null;
+    if (!list.length) return;
+    if (!appendTo && (busy.value || acting.value)) return;
+    if (!appendTo) {
+        applyJob.value = null;
+        writtenSet.value = new Set();
+        grabbedTargets.value = list;
+    }
+    acting.value = 'grab';
     try {
         const res = await postAction(`${API_BASE}/assistant/jobs`, {
             kind: 'grab', serial: selectedSerial.value, targets: list,
             // 「换封面」必须**绕开命中缓存**：否则助手以前抓到过的番号会秒回同一张 URL
             // ⇒ 下载到逐字节相同的图，"已替换"就成了假话（详见 grab.ts 的 runGrab 注释）。
             ...(faceMode.value ? { force: true } : {}),
+            ...(appendTo ? { jobId: appendTo } : {}),
         });
         if (!res.jobId) {
             notify('info', '没有可抓的目标', res.message || '');
             return;
         }
-        grabJob.value = null;
-        poll(res.jobId, job => { grabJob.value = job; return job.status !== 'running'; });
+        if (res.reused) {
+            // 已经有一个任务在跑/暂停：接上它，而不是再起一条
+            notify('info', '抓取', res.message || '已接上正在跑的那个抓取任务');
+        } else if (!appendTo) {
+            grabJob.value = null;
+        }
+        poll(res.jobId, job => { grabJob.value = job; settleActing(job); return !isLive(job); });
+        // 先手动拉一次，让 footer 在转圈收掉之前就切到"抓取中"（否则会闪一下"待抓取"）
+        await refreshJob(res.jobId);
     } catch (e) {
         notify('error', '抓取启动失败', String(e));
+    } finally {
+        acting.value = '';
     }
 };
 
-const cancelJob = async (id: string) => {
+/** 暂停：不再取新条目，在飞的跑完即记入结果。可以「继续」，也可以随时写入已抓到的。 */
+const pauseJob = async (id: string) => {
+    if (acting.value) return;
+    acting.value = 'pause';
+    try {
+        const res = await postAction(`${API_BASE}/assistant/jobs?id=${encodeURIComponent(id)}&act=pause`, {});
+        if (!res.ok) notify('info', '暂停', '任务已经结束了，不用暂停');
+        await refreshJob(id);
+    } catch (e) {
+        notify('error', '暂停失败', String(e));
+    } finally {
+        acting.value = '';
+    }
+};
+
+/** 继续：从暂停处接着跑，已抓到的行和剩余队列都还在 */
+const resumeJob = async (id: string) => {
+    if (acting.value) return;
+    acting.value = 'resume';
+    try {
+        const res = await postAction(`${API_BASE}/assistant/jobs?id=${encodeURIComponent(id)}&act=resume`, {});
+        if (!res.ok) notify('info', '继续', '任务已经不在暂停状态了');
+        await refreshJob(id);
+    } catch (e) {
+        notify('error', '继续失败', String(e));
+    } finally {
+        acting.value = '';
+    }
+};
+
+/** 终止：立刻停（在飞的请求会中断）。**已经抓到的结果全部保留，可以写入** */
+const stopJob = async (id: string) => {
+    if (acting.value) return;
+    // ⚠️ 转圈要一直保持到任务**真的收尾**（worker 还在退出），所以不在这里清 ——
+    // 由轮询看到 `!isLive(job)` 时清（见下面两处 poll 的 onJob）。
+    acting.value = 'stop';
     try {
         await deletAction(`${API_BASE}/assistant/jobs?id=${encodeURIComponent(id)}`);
+        await refreshJob(id);
     } catch (e) {
         // 任务已经自己结束了也走这里 —— 提示一句就行，不算错误
-        notify('info', '取消', String(e));
+        notify('info', '终止', String(e));
+        acting.value = '';
     }
+};
+
+/** 补抓未完成项：结果追加进同一个 job，之前命中的那些不会丢 */
+const retryUnfinished = async () => {
+    if (!grabJob.value || !unfinishedTargets.value.length) return;
+    await startGrab(unfinishedTargets.value, grabJob.value.id);
 };
 
 /** 被拦 → 人工过验证 → 过完自动重抓被拦的那批 */
@@ -619,8 +822,9 @@ const passChallenge = async () => {
             }
         }
         challengeMsg.value = '';
-        if (blockedTargets.value.length) {
-            await startGrab(blockedTargets.value);
+        if (blockedTargets.value.length && grabJob.value) {
+            // ⚠️ 必须**追加**进原来的 job：起新 job 会把之前已经命中的那些行整批丢掉
+            await startGrab(blockedTargets.value, grabJob.value.id);
         } else {
             // 面板重开过、没有 targets 上下文：让用户重扫一遍再抓
             notify('info', '验证已通过', '重新扫描后再抓一次即可');
@@ -634,7 +838,8 @@ const passChallenge = async () => {
 };
 
 const startApply = async (picks?: string[]) => {
-    if (!grabJob.value || applying.value) return;
+    if (!grabJob.value || applyActive.value || acting.value) return;
+    acting.value = 'apply';
     try {
         const res = await postAction(`${API_BASE}/assistant/apply`, {
             serial: selectedSerial.value, jobId: grabJob.value.id, picks,
@@ -645,16 +850,26 @@ const startApply = async (picks?: string[]) => {
         }
         poll(res.jobId, job => {
             applyJob.value = job;
-            if (job.status !== 'running') {
+            settleActing(job);
+            if (!isLive(job)) {
+                // 写成功的并进"已写入"集合（累积：上一次写好的不因这次重写而失去标记）
+                const next = new Set(writtenSet.value);
+                for (const r of (job.rows as ApplyRow[])) if (r.ok) next.add(r.writeRel);
+                writtenSet.value = next;
                 // 写完立即失效了对应目录缓存 —— 当前若正看着那块盘，刷新一下就能看到新脸
                 emit('refresh');
                 if (job.status === 'error') notify('error', '写入失败', job.message);
+                else if (job.status === 'cancelled') notify('info', '写入已终止', job.message);
                 else notify('success', '写入完成', job.message);
             }
-            return job.status !== 'running';
+            return !isLive(job);
         });
+        // 同上：先拉一次，别让按钮转圈收掉时 footer 还停在"抓取结束"
+        await refreshJob(res.jobId);
     } catch (e) {
         notify('error', '写入启动失败', String(e));
+    } finally {
+        acting.value = '';
     }
 };
 
@@ -769,13 +984,32 @@ defineExpose({ setShowModal });
     display: flex;
     align-items: center;
     gap: 12px;
+    /* nowrap 是硬约束：一旦允许换行，页脚高度就成了"文案长度"的函数，
+       下面的列表会跟着跳。宁可让长文案（进度/结果摘要）被省略号截断。 */
     flex-wrap: nowrap;
     padding: 4px 0;
+
+    /* 按钮一个都不许被压缩，可压缩的只有文字 */
+    :deep(.n-button) {
+        flex: 0 0 auto;
+    }
+
+    .ffassist-hint {
+        min-width: 0;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+    }
 }
 
 .ffassist-progress {
     font-size: 13px;
     font-weight: bold;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    flex: 0 1 auto;
 }
 
 .ffassist-results {

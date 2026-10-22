@@ -8,8 +8,24 @@ import path from 'node:path';
 import * as fsasync from 'node:fs/promises';
 import { spawn } from 'node:child_process';
 
-ffmpeg.setFfmpegPath(ffmpegPath);
-ffmpeg.setFfprobePath(ffprobePath);
+/**
+ * ⚠️ **打包版（asar）里这两个 path 是死的，必须先重写。**
+ *
+ * `@ffmpeg-installer` 给的 path 是 `path.join(__dirname, 'ffmpeg.exe')`，打包后 `__dirname`
+ * 在 `app.asar` 内部。Electron 只给 **fs 模块**打了 asar 补丁，`child_process.spawn`
+ * 拿的是裸系统调用 ⇒ **ENOENT**。实测（release/1.0.0 的产物）：
+ *   app.asar/.../ffmpeg.exe          → spawn error ENOENT
+ *   app.asar.unpacked/.../ffmpeg.exe → exit 0
+ * 后果不是"少一个功能"：**webp 转码、视频抽帧全部静默失败** ⇒ 卡片没有图 ⇒ 网格裂图。
+ * 解包本身由 `electron-builder.json5` 的 `asarUnpack` 保证（显式写死，不靠自动检测）。
+ */
+const realBin = (p: string) => p.replace(/([\\/])app\.asar([\\/])/, '$1app.asar.unpacked$2');
+
+const FFMPEG_BIN = realBin(ffmpegPath);
+const FFPROBE_BIN = realBin(ffprobePath);
+
+ffmpeg.setFfmpegPath(FFMPEG_BIN);
+ffmpeg.setFfprobePath(FFPROBE_BIN);
 
 /**
  * 缩略图宽度（网格用）。
@@ -261,18 +277,19 @@ function runFfmpeg(cmd: FfmpegCmd, what: string, src: string): Promise<boolean> 
  * 从没挂到命令对象上 → 调用方拿不到 pid → 卡住时没有任何办法把它杀掉。
  * 自己 spawn 才能把句柄握在自己手里（`child.kill` 直接作用于我们持有的那个 pid）。
  *
- * **为什么只查 `format=duration`**：这是"拿到时长"所需的最小查询。ffprobe 是在
+ * **为什么只查 `duration` 这一个字段**：这是"拿到时长"所需的最小查询。ffprobe 是在
  * **移动硬盘上的源文件**上跑的，少读一点就是少碰盘一点 —— 不抄 ffmpeg.ffprobe()
  * 默认那份 `-show_streams -show_format` 的全量元数据。
+ * 查"视频流"还是"容器"由调用方给（选哪个见 `probeDuration`）。
  */
-function probeDuration(filepath: string): Promise<number | null> {
+function probeSeconds(filepath: string, entries: string[]): Promise<number | null> {
     return new Promise((resolve) => {
         let settled = false;
         let timer: ReturnType<typeof setTimeout> | undefined;
 
-        const child = spawn(ffprobePath, [
+        const child = spawn(FFPROBE_BIN, [
             '-v', 'error',
-            '-show_entries', 'format=duration',
+            ...entries,
             '-of', 'default=noprint_wrappers=1:nokey=1',
             filepath,
         ], { windowsHide: true }); // windowsHide 与 fluent-ffmpeg 内部一致：不闪黑框
@@ -311,6 +328,25 @@ function probeDuration(filepath: string): Promise<number | null> {
 }
 
 /**
+ * 取时长（秒）—— **先问视频流，再退容器**。
+ *
+ * ⚠️ 为什么不能只用 `format=duration`（2026-10-22 实测）：容器的时长可能**远大于**
+ * 视频流（多音轨 / 尾部长静音 / 拼接过的文件）。1% 落在视频流末尾之外时，ffmpeg
+ * **exit 0 但一帧都不产出** ⇒ 抽帧"成功"、图却是空的。实测样本：
+ * 容器 60.000s / 视频流 0.500s，抽 0.6s → exit 0 且**不生成文件**。
+ *
+ * mkv 等容器的 `stream=duration` 常是 `N/A` ⇒ 回退容器时长（那种容器的 format
+ * duration 通常就是整段的真实值）。两次查询只在必要时才发生。
+ */
+async function probeDuration(filepath: string): Promise<number | null> {
+    const stream = await probeSeconds(filepath, [
+        '-select_streams', 'v:0', '-show_entries', 'stream=duration',
+    ]);
+    if (stream !== null) return stream;
+    return probeSeconds(filepath, ['-show_entries', 'format=duration']);
+}
+
+/**
  * 取一帧（视频缩略图用）。
  *
  * **为什么不能写 `timestamps: ['1%']`**（下一个人大概率想改回去，所以写在这儿）：
@@ -335,7 +371,7 @@ async function extractFrame(filepath: string, frame: string): Promise<boolean> {
     const duration = await probeDuration(filepath);
     if (duration === null) return false;
 
-    return runFfmpeg(
+    const ok = await runFfmpeg(
         ffmpeg(filepath).screenshots({
             timestamps: [duration * 0.01],
             filename: path.basename(frame),
@@ -344,6 +380,11 @@ async function extractFrame(filepath: string, frame: string): Promise<boolean> {
         '抽帧',
         filepath
     );
+    if (!ok) return false;
+
+    // ⚠️ exit 0 **不等于**产出了一帧：时间点落在视频流末尾之外时，ffmpeg 会静默结束、
+    // 一个字都不写（实测见 probeDuration 的注释）。少了这一句，抽帧就是"报成功、没图"。
+    return (await fsasync.stat(frame).then(s => s.size, () => 0)) > 0;
 }
 
 /**

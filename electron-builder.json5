@@ -4,6 +4,14 @@
 {
   "appId": "ace.tools.finder",
   "asar": true,
+  // ⚠️ 这两个包里的 exe **必须解包**：`child_process.spawn` 不认 asar 虚拟路径
+  // （实测 `app.asar/.../ffmpeg.exe` → ENOENT，解包后的同一份 → exit 0）。
+  // electron-builder 目前会自动解包 .exe，但那是"自动检测"，换版本/换目录结构就可能默默失效 ——
+  // 失效的后果是 webp 转码与视频抽帧**全部静默失败**（卡片没有图、网格裂图）。所以写死。
+  "asarUnpack": [
+    "node_modules/@ffmpeg-installer/**",
+    "node_modules/@ffprobe-installer/**",
+  ],
   "directories": {
     "output": "release/${version}",
     // 图标等打包资源放这里（也是 electron-builder 的默认值，写出来是为了指明图标在哪）。

@@ -44,6 +44,14 @@ export interface TestRun {
     cover: string;
     title: string;
     steps: StepOutcome[];
+    /** 页面上 <img> 的数量 —— 0 说明页面根本没到（被拦/走错页），不是选择器问题 */
+    imgCount: number;
+    /** 前几张图的真实地址（src/data-src/…），用来判断"真图在哪个属性里" */
+    sampleSrcs: string[];
+    /** 抓不到时，当时那份页面 HTML 存到了哪（数据目录里的绝对路径）—— 自己打开看真相 */
+    snapFile?: string;
+    /** 抓不到时页面实际停在哪个地址 */
+    snapUrl?: string;
 }
 
 export const TRANSFORM_OPTIONS = [

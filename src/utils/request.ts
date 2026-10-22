@@ -81,13 +81,18 @@ export async function getAction(url: string) {
     return assertOk(response, json)
 }
 
-export async function postAction(url: string, data: object) {
+/**
+ * `opts.signal`：长请求（试跑 / 点选 / 录制）要能取消 —— abort 会断开连接，
+ * 服务端据此销毁抓取窗（见服务端 `abortOnClose`），不用白等到超时。
+ */
+export async function postAction(url: string, data: object, opts?: { signal?: AbortSignal }) {
     const response = await fetch(apiUrl(url), {
         method: "POST",
         headers: {
             "Content-Type": "application/json"
         },
-        body: JSON.stringify(data)
+        body: JSON.stringify(data),
+        signal: opts?.signal,
     })
 
     const json = await response.json()

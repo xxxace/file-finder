@@ -18,6 +18,7 @@ import {
     readRegistry, serialOfDrive, splitPath, syncRegistry, toFullPath, writeRegistry,
 } from '../utils/driveIdentity';
 import type { DiskRegistry } from '../utils/driveIdentity';
+import { DIR_COVER_FILES, isDirCover } from './dirCover';
 import {
     BEFORE_RESTORE_PATH, CACHE_DB_PATH, CACHE_VERSION, beginRestore, cacheBackup, endRestore,
     exportCompactSnapshot, exportSnapshotPlain, findCache, insertCache, loadMeta, loadSubtreeBytes,
@@ -34,19 +35,6 @@ import { isVideo, VIDEO_MIME } from './videoExt';
 
 const IMAGE_EXT = ['jpg', 'jpeg', 'png', 'bmp', 'gif', 'svg', 'psd', 'webp'];
 const excludedFiles = ['System Volume Information', '$RECYCLE.BIN', 'Config.Msi', 'found.000', 'found.001'];
-
-/**
- * "目录自己的脸"的固定文件名 —— 一个目录要拿哪张图当图标，由这张图的名字声明。
- *
- * `avatar.jpg` 是这套机制原来的名字，`cover.jpg` 是实际盘上在用的。两个都得认，
- * 否则"机制在、图也在、就是不生效"。
- *
- * 为什么只认这两个固定名字，不取"目录里第一张图"：目录里第一张图通常是**影片封面**
- * （`ABC-123/ABC-123.jpg`），那是要被收敛成封面条目的东西，拿它当目录图标等于
- * 把一个影片目录画成了自己。这两个名字是唯一明确表达"我是这个目录的脸"的写法。
- * 名字固定还有个好处：探测不需要列目录，直接按名字试就行。
- */
-const DIR_COVER_FILES = ['avatar.jpg', 'cover.jpg'];
 
 /**
  * /preview 现场生成大图时的**源文件上限**（8 MB）。
@@ -149,11 +137,6 @@ type Req<T = any> = http.IncomingMessage & { params?: URLSearchParams; body?: T 
 
 function isImage(ext: string) {
     return ext ? IMAGE_EXT.includes(ext.toLowerCase()) : false;
-}
-
-/** 这个文件名是不是"目录封面"。大小写不敏感 —— NTFS 本来就不区分大小写 */
-function isDirCover(name: string) {
-    return DIR_COVER_FILES.includes(name.toLowerCase());
 }
 
 function getExt(filename: string): string {
@@ -283,9 +266,10 @@ async function makeRenditions(filepath: string, ext: string, pending: Promise<un
  * "解码失败"**，因为前者绝不能去起子进程。而 nativeImage 并不区分这两者，
  * 所以这里先把存在性问清楚（1 次 stat），顺带也就保住了"没有目录封面时不多花 IO"这个性质：
  * 库里绝大多数目录只有 `cover.jpg`，于是 `avatar.jpg` 那一趟只花 1 次失败的 stat。
+ * （名单有 4 个名字 ⇒ 完全没有封面的目录最坏 4 次失败 stat；命中通常落在第 2 个。）
  *
  * 为什么不先 `readdir` 一下子目录再查名单：那是 1 次**目录读取**（要遍历整张目录表），
- * 比 1 次 stat 贵得多 —— 这条结论没变。
+ * 比按名字 `stat` 贵得多 —— 这条结论没变。
  */
 async function makeDirCover(
     dirPath: string,
@@ -314,7 +298,10 @@ async function makeDirCover(
             && hasBin(previewNameOf(hit.sig))) {
             return { sig: hit.sig, mtime: stat.mtimeMs, bytes: stat.size };
         }
-        const sig = await makeRenditions(filepath, 'jpg', pending);
+        // ext 用**文件名自己的**（可能是 webp）：`makeRenditions` 靠它选走图片还是视频链路，
+        // 写死 'jpg' 会让"这张其实是 webp"这件事在参数上撒谎（webp 的解码兜底不在这条判断里，
+        // 在 `imageRenditions` 内部，所以写死也不报错 —— 正因如此更容易被误读）
+        const sig = await makeRenditions(filepath, getExt(name), pending);
         if (sig) return { sig, mtime: stat.mtimeMs, bytes: stat.size };
     }
     return null;

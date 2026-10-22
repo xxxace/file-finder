@@ -20,24 +20,28 @@
  *   POST   /assistant/scan      找缺封面：{ serial, relPath } → 待补目标（**零读盘**）
  *   POST   /assistant/faces     换封面：{ serial, picks } → 待换目标（**零读盘**；scan 的补集）
  *   POST   /assistant/jobs      起长任务：{ kind, … } → { jobId }
+ *   POST   /assistant/jobs?id=&act=pause|resume  暂停 / 继续（保留队列与结果）
  *   GET    /assistant/jobs      读进度：?id= → 单个快照；不带 id → 列表
- *   DELETE /assistant/jobs?id=  取消任务
+ *   DELETE /assistant/jobs?id=  终止任务（已产出的结果保留，可写入）
  *   POST   /assistant/apply     写盘：{ serial, jobId }（把 grab job 的命中行写进盘）
  *
  * 长任务分三段的原因见 jobs.ts 顶部。**扫描（scan）不走 job**：
  * 它只读内存里的 nedb，快，且结果要立刻给用户看。
  */
 import type http from 'node:http';
+import * as fsp from 'node:fs/promises';
+import path from 'node:path';
 import { applyQueryTransform, buildExtractScript, buildStepScript, deleteRule, loadRules, saveRule } from './rules';
 import type { ExtractedFields, SiteRule } from './rules';
 import { passChallenge, runExtract } from './siteFetch';
+import type { PageSnapshot } from './siteFetch';
 import { openVisiblePage, runSteps, visiblePageUrl } from './siteActions';
 import { pickImageOnPage, recordOnPage } from './siteRecord';
 import { deriveTemplate, expandUrl } from './urlTemplate';
 import type { StepOutcome } from './siteActions';
 import { runGrab } from './grab';
 import type { GrabRow } from './grab';
-import { bumpProgress, cancelJob, createJob, finishJob, getJob, listJobs, snapshotJob } from './jobs';
+import { bumpProgress, cancelJob, createJob, finishJob, getJob, listJobs, pauseJob, reopenJob, resumeJob, snapshotJob } from './jobs';
 import type { Job } from './jobs';
 import { loadMeta } from '../nedb';
 import { runApply, readWrittenDirs, download } from './apply';
@@ -94,6 +98,37 @@ export function createAssistantRoutes(deps: AssistantDeps): AssistantRoute[] {
         sendJson(res, { code: 200, rules: await deleteRule(dataDir, id) });
     }
 
+    /**
+     * 把失败现场落盘（**数据目录**，不碰移动硬盘），只留最近 5 份。
+     *
+     * 为什么必须给文件而不是只给一句话：界面说"被站点验证拦住了"，用户没法验证真假。
+     * 有这份 HTML，挑战页（`Just a moment...` / `#challenge-form`）和正常页面一眼可分，
+     * 也能直接看出"选择器到底在不在页面上"。
+     */
+    async function saveSnapshotFile(snap?: PageSnapshot): Promise<{
+        file: string; title: string; url: string; size: number;
+    } | null> {
+        if (!snap) return null;
+        try {
+            const dir = path.join(dataDir, 'assistant', 'fail');
+            await fsp.mkdir(dir, { recursive: true });
+            const stamp = new Date().toISOString().replace(/[:.]/g, '-');
+            const file = path.join(dir, `fail-${stamp}.html`);
+            await fsp.writeFile(
+                file,
+                `<!-- url: ${snap.url} -->\n<!-- title: ${snap.title} -->\n${snap.html}`,
+                'utf8',
+            );
+            const old = (await fsp.readdir(dir)).filter(f => f.startsWith('fail-')).sort();
+            for (const f of old.slice(0, Math.max(0, old.length - 5))) {
+                await fsp.unlink(path.join(dir, f)).catch(() => undefined);
+            }
+            return { file, title: snap.title, url: snap.url, size: snap.html.length };
+        } catch {
+            return null; // 落盘失败不能连累试跑结果
+        }
+    }
+
     async function dryRun(req: ReqLike, res: http.ServerResponse) {
         // 两种入参都支持（向后兼容 PRD §15 里那条自测命令）：
         //   { siteId, query }  试跑**已保存**的规则
@@ -114,14 +149,18 @@ export function createAssistantRoutes(deps: AssistantDeps): AssistantRoute[] {
         const q = applyQueryTransform(query, rule.queryTransform);
         const url = expandUrl(rule.detailUrl, query, rule.queryTransform);
         const extract = buildExtractScript(rule.fields);
+        // 试跑也必须是**可中断**的：前端点「取消」⇒ 连接断开 ⇒ 立刻销毁抓取窗。
+        // 原来没接这根信号，一次试跑最长会白等到超时（用户 2026-10-22 反馈）。
+        const signal = abortOnClose(res);
 
         // ⚠️ 有动作就必须走**动作通道**（每步只执行一次）；没有动作才走原来的幂等抽取通道。
         // 两条通道不能混：把 click 塞进 runExtract 的轮询循环会反复点击。
         const steps = rule.steps ?? [];
         if (steps.length) {
             const planned = steps.map(s => ({ act: s.act, script: buildStepScript(s, q) }));
-            const r = await runSteps(url, planned, extract, { show });
-            sendJson(res, {
+            const r = await runSteps(url, planned, extract, { show, signal });
+            const snap = r.ok ? null : await saveSnapshotFile(r.snapshot);
+            if (!res.writableEnded) sendJson(res, {
                 code: 200,
                 url,
                 ok: r.ok,
@@ -130,13 +169,15 @@ export function createAssistantRoutes(deps: AssistantDeps): AssistantRoute[] {
                 fields: r.data ?? null,
                 steps: r.steps,
                 httpStatus: r.httpStatus ?? 0,
-                pageTitle: r.pageTitle ?? '',
+                pageTitle: r.pageTitle || snap?.title || '',
+                snapshot: snap,
             });
             return;
         }
 
-        const result = await runExtract<ExtractedFields>(url, extract, { show });
-        sendJson(res, {
+        const result = await runExtract<ExtractedFields>(url, extract, { show, signal });
+        const snap = result.ok ? null : await saveSnapshotFile(result.snapshot);
+        if (!res.writableEnded) sendJson(res, {
             code: 200,
             url,
             ok: result.ok,
@@ -145,7 +186,8 @@ export function createAssistantRoutes(deps: AssistantDeps): AssistantRoute[] {
             fields: result.data ?? null,
             steps: [] as StepOutcome[],
             httpStatus: 0,
-            pageTitle: '',
+            pageTitle: snap?.title || '',
+            snapshot: snap,
         });
     }
 
@@ -339,6 +381,8 @@ export function createAssistantRoutes(deps: AssistantDeps): AssistantRoute[] {
             siteId?: string;
             /** 只对 `kind:'grab'` 有意义：绕开命中缓存、真打站点（「换封面」用） */
             force?: boolean;
+            /** 只对 `kind:'grab'` 有意义：把这一批追加到已有 job（重抓失败项用） */
+            jobId?: string;
         };
 
         if (body.kind === 'challenge') return startChallenge(body, res);
@@ -351,32 +395,65 @@ export function createAssistantRoutes(deps: AssistantDeps): AssistantRoute[] {
     }
 
     async function startGrab(
-        body: { serial?: string; relPath?: string; siteIds?: string[]; targets?: ScanTarget[]; force?: boolean },
+        body: {
+            serial?: string; relPath?: string; siteIds?: string[]; targets?: ScanTarget[];
+            force?: boolean;
+            /** 把这一批**追加到已有 job**（重抓失败项 / 过验证后重抓） */
+            jobId?: string;
+        },
         res: http.ServerResponse,
     ) {
-        // 同一时刻只允许一个抓取任务。重复点击起第二个只会多一条进度条、
-        // 而且两条都在同一个串行队列里排队 —— 直接把已有任务还给前端，让它挂上去。
-        const running = listJobs().find(j => j.kind === 'grab' && j.status === 'running');
-        if (running) {
-            sendJson(res, { code: 409, error: '已经有一个抓取任务在跑', jobId: running.id });
-            return;
-        }
-
         const targets = body.targets?.length
             ? body.targets
             : body.serial
               ? (await scanMissingCovers(body.serial, body.relPath || '')).targets
               : [];
-        if (!targets.length) {
-            sendJson(res, { code: 200, jobId: null, total: 0, message: '没有找到缺封面的视频' });
-            return;
-        }
 
         const rules = await loadRules(dataDir);
         // 前端点名了站点就按点名的来（并强制启用）；没点名就用规则里已启用的
         const picked = body.siteIds?.length
             ? rules.filter(r => body.siteIds!.includes(r.id)).map(r => ({ ...r, enabled: true }))
             : rules;
+
+        // ── 追加：结果必须并进同一个 job ───────────────────────────────────
+        // 起新 job 会把原来命中/失败的行整批丢掉（前端的结果表、确认弹窗都是
+        // `job.rows` 的函数）⇒ 重抓完成后用户之前抓到的那些会凭空消失。
+        if (body.jobId) {
+            const job = getJob<GrabRow>(body.jobId);
+            if (!job || job.kind !== 'grab') {
+                sendJson(res, { code: 404, error: '找不到那个抓取任务（可能已被回收），重新抓一次' });
+                return;
+            }
+            if (job.status === 'running' || job.status === 'paused') {
+                sendJson(res, { code: 409, error: '这个任务还在跑，先暂停或终止它再补抓' });
+                return;
+            }
+            if (!targets.length) {
+                sendJson(res, { code: 200, jobId: null, total: 0, message: '没有需要重抓的项' });
+                return;
+            }
+            reopenJob(job);
+            void runGrab(targets, picked, job, dataDir, body.force === true, true);
+            sendJson(res, { code: 200, jobId: job.id, total: targets.length, appended: true });
+            return;
+        }
+
+        if (!targets.length) {
+            sendJson(res, { code: 200, jobId: null, total: 0, message: '没有找到缺封面的视频' });
+            return;
+        }
+
+        // 同一时刻只允许一个抓取任务。重复点击起第二个只会多一条进度条、
+        // 而且两条都在同一个串行队列里排队 ⇒ 把已有任务还给前端让它挂上去（200 而不是报错：
+        // 前端的期望行为就是"接上正在跑的那个"，回 409 它只会弹一句看不懂的失败）。
+        const running = listJobs().find(j => j.kind === 'grab' && (j.status === 'running' || j.status === 'paused'));
+        if (running) {
+            sendJson(res, {
+                code: 200, jobId: running.id, total: running.progress.total, reused: true,
+                message: running.status === 'paused' ? '这个任务正暂停着，先继续或终止它' : '',
+            });
+            return;
+        }
 
         const job = createJob<GrabRow>('grab', targets.length);
         // `force` 只在「换封面」时为 true：用户已经表示"这张不好、换一张"，
@@ -493,6 +570,27 @@ export function createAssistantRoutes(deps: AssistantDeps): AssistantRoute[] {
             return;
         }
         sendJson(res, { code: 200, cancelled: cancelJob(id) });
+    }
+
+    /**
+     * 暂停 / 继续。`POST /assistant/jobs?id=<jobId>&act=pause|resume`。
+     * 与「终止」（DELETE）分开：暂停不 abort、不丢结果，继续就从原地接着跑。
+     */
+    function controlJob(req: ReqLike, res: http.ServerResponse) {
+        const id = req.params?.get('id') || '';
+        const act = req.params?.get('act') || '';
+        if (!id) {
+            sendJson(res, { code: 400, error: '缺少 id' });
+            return;
+        }
+        if (act !== 'pause' && act !== 'resume') {
+            sendJson(res, { code: 400, error: `未知操作：${act || '(空)'}` });
+            return;
+        }
+        const ok = act === 'pause' ? pauseJob(id) : resumeJob(id);
+        // ok=false 表示它在你看这一眼的工夫已经换了状态（跑完了 / 没在跑）——
+        // 不是错误，但必须如实回给前端，否则按钮会一直显示"暂停中"。
+        sendJson(res, { code: 200, ok, status: getJob(id)?.status ?? '' });
     }
 
     /**
@@ -624,6 +722,9 @@ export function createAssistantRoutes(deps: AssistantDeps): AssistantRoute[] {
         }],
         ['/assistant/jobs', (req, res) => {
             const method = req.method?.toUpperCase();
+            // 带 act 的 POST = 暂停/继续（与"起任务"共用路径，靠 query 区分 ——
+            // `route()` 是精确匹配 pathname，不能再加路径段）
+            if (method === 'POST' && req.params?.get('act')) return controlJob(req, res);
             if (method === 'POST') return startJob(req, res);
             if (method === 'GET') return readJobs(req, res);
             if (method === 'DELETE') return removeJob(req, res);

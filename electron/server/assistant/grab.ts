@@ -115,9 +115,16 @@ export async function runGrab(
      * 而"我想换一张"跟 URL 好坏无关 —— 不该污染那张表。
      */
     force = false,
+    /**
+     * `true` = 追加一批目标到**已有的** job（重抓失败项 / 过验证后重抓）。
+     * 区别只在进度总数要累加，不能把 `total` 重置成这一批的数量。
+     */
+    append = false,
 ): Promise<void> {
     const active = rules.filter(r => r.enabled);
-    bumpProgress(job, { total: targets.length });
+    bumpProgress(job, {
+        total: append ? job.progress.total + targets.length : targets.length,
+    });
 
     if (!active.length) {
         finishJob(job, 'error', '没有启用任何站点规则：先去「站点规则」里启用一个');
@@ -254,7 +261,9 @@ export async function runGrab(
                 title: null,
                 actresses: [],
                 status: 'no-id',
-                message: '认不出番号，已跳过（可手动填写）',
+                // 原文案写的是"可手动填写" —— 界面上**从来没有**这个入口，是句空承诺。
+                // 这里只说事实：跳过了，不会去搜、也不会写任何东西。
+                message: '认不出番号，已跳过',
             });
             step(job, 'miss');
             return;
@@ -274,8 +283,10 @@ export async function runGrab(
             return;
         }
 
-        // 取消发生在等结果的中途：这一行什么都不记（进度收尾时按实际处理数汇报）
-        if (job.cancelled) return;
+        // ⚠️ 终止时**已经拿到的结果照样要记**：用户点「终止」最关心的是
+        // "抓到的那几张还算不算"。原来这里无条件 return，把这一条的命中整条丢掉
+        // ⇒ hits 恒为 0、写入按钮根本不出现（用户 2026-10-22 反馈）。
+        if (job.cancelled && !outcome.match) return;
 
         if (outcome.match) {
             pushRow(job, {
@@ -310,9 +321,17 @@ export async function runGrab(
 
     // 有界并发：GRAB_PARALLEL 个 worker 共享一个下标，谁空谁取下一条。
     // 同番号去重靠 memo 的 Promise 形态；取消时 worker 各自退出，Promise.all 收拢。
+    //
+    // ⚠️ 闸门必须在**取下一条之前**等：暂停时在飞的条目跑完即记入结果，
+    // 停住的是队列 —— 这样"暂停 → 写入已抓到的 → 继续"能串起来（用户 2026-10-22）。
+    // ⚠️ 先看 `next` 再等闸门：否则队列已经跑空时暂停，worker 会挂在闸门上，
+    // job 永远停在 paused（明明已经没事可做了）。
     let next = 0;
     const worker = async () => {
         while (!job.cancelled) {
+            if (next >= targets.length) return;
+            await job.gate.wait();
+            if (job.cancelled) return;
             const i = next++;
             if (i >= targets.length) return;
             await grabOne(targets[i]);
@@ -320,18 +339,27 @@ export async function runGrab(
     };
 
     try {
-        await Promise.all(Array.from({ length: GRAB_PARALLEL }, () => worker()));
+        // ⚠️ allSettled 而不是 all：某个 worker 被 abort 抛 CancelledError 时，
+        // `all` 会立刻 reject，而其他 worker 还在往里 pushRow —— 收尾与写结果赛跑，
+        // 最后几条会被"已经结束"的快照吞掉。等全部收拢再 `finishJob`。
+        const settled = await Promise.allSettled(
+            Array.from({ length: GRAB_PARALLEL }, () => worker()),
+        );
+        const rejected = settled.find(r => r.status === 'rejected');
+        if (rejected) throw (rejected as PromiseRejectedResult).reason;
 
         const { processed, total, hits, misses, blocked } = job.progress;
         if (job.cancelled) {
-            finishJob(job, 'cancelled', `已取消：处理了 ${processed}/${total}`);
+            finishJob(job, 'cancelled',
+                `已终止：处理了 ${processed}/${total}，命中 ${hits} 张（可以写入）`);
         } else {
             finishJob(job, 'done', `完成：命中 ${hits}，未命中 ${misses}，被拦 ${blocked}`);
         }
     } catch (e) {
         if (e instanceof CancelledError) {
-            const { processed, total } = job.progress;
-            finishJob(job, 'cancelled', `已取消：处理了 ${processed}/${total}`);
+            const { processed, total, hits } = job.progress;
+            finishJob(job, 'cancelled',
+                `已终止：处理了 ${processed}/${total}，命中 ${hits} 张（可以写入）`);
         } else {
             finishJob(job, 'error', e instanceof Error ? e.message : String(e));
         }

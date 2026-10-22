@@ -192,6 +192,10 @@ export async function runApply(
     try {
         for (const g of groups) {
             if (job.cancelled) break;
+            // 暂停：当前这一部写完就停，剩下的留在队列里等「继续」——
+            // 半途停在一个分组中间（分卷搬了一半）比停下来更糟
+            await job.gate.wait();
+            if (job.cancelled) break;
 
             bumpProgress(job, { current: g.folderRel || g.layerDir });
             const notes: string[] = [];
@@ -327,7 +331,7 @@ export async function runApply(
 
         const { processed, total } = job.progress;
         if (job.cancelled) {
-            finishJob(job, 'cancelled', `已取消：写了 ${written} 组（处理到 ${processed}/${total}）`);
+            finishJob(job, 'cancelled', `已终止：写了 ${written} 组（处理到 ${processed}/${total}，剩 ${total - processed} 组没写）`);
         } else {
             const failed = processed - written;
             finishJob(job, 'done', `写入完成：成功 ${written}，失败 ${failed}`);

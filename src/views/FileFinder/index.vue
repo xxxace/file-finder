@@ -170,7 +170,11 @@
                      比例定死 ⇒ 同一行所有格子等高 —— 这是 `gridGeometry` 分行算法的前提，
                      ⚠️ 绝不能换成"由内容撑高"。 -->
                 <div class="card-cover" :style="coverBackdrop(item)">
-                    <n-image v-if="item.type === 'image' || item.type === 'video'" class="can-preview"
+                    <!-- ⚠️ 必须同时判 `thumb`：`thumbUrl(undefined)` 是空串，而 `<img src="">`
+                         会被浏览器当成"当前页面地址"去加载 HTML ⇒ 失败 ⇒ **裂开的图标**。
+                         这正是 webp / 抽帧失败的视频在界面上暴露出来的样子，
+                         缺图不是这张卡的问题，它应该退到下面的类型图标。 -->
+                    <n-image v-if="(item.type === 'image' || item.type === 'video') && !!item.thumb" class="can-preview"
                         :src="thumbUrl(item.thumb)" :img-props="{ onClick: () => openPreview(item) }" :alt="item.dir"
                         :lazy="true" objectFit="contain" preview-disabled />
                     <!-- 目录的脸：只在 70% 显示、且本来就不给点开。挑封面时要看得清，所以模式下放到 100% -->
@@ -178,7 +182,9 @@
                         objectFit="contain" :style="picking ? 'width:100%;height:100%' : 'width:70%;height:70%'"
                         preview-disabled />
                     <img v-else-if="item.type === 'folder'" :src="folderIcon" :alt="item.dir || ''" class="folder-face">
-                    <div v-else :title="item.dir" :class="`file-cover fiv-cla fiv-icon-${item.ext}`" class="file-face"></div>
+                    <!-- 类名必须小写：`fiv-icon-*` 是**大小写敏感**的 CSS 类，
+                         而盘上有大写扩展名的文件（实测库里有 `.MOV`）⇒ `fiv-icon-MOV` 匹配不到任何图标。 -->
+                    <div v-else :title="item.dir" :class="`file-cover fiv-cla fiv-icon-${(item.ext || '').toLowerCase()}`" class="file-face"></div>
                     <!-- 角标（B 站封面下沿那一排）：数量在左、大小在右。
                          `pointer-events:none` —— 它盖在封面上，但点它应该等于点封面。 -->
                     <div v-if="(item.files && item.files.length) || (item.size || 0) > 0" class="card-badges">

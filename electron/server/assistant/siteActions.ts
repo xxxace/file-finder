@@ -10,8 +10,8 @@
 import { BrowserWindow } from 'electron';
 import { sleep, trackWindow, untrackWindow } from './queue';
 import {
-    adoptSameOriginPopups, CHROME_UA, CF_DETECT, NAV_TIMEOUT, PARTITION, POLL_INTERVAL, POLL_TIMEOUT,
-    type RunExtractOptions,
+    adoptSameOriginPopups, CHROME_UA, CF_DETECT, lazyNudge, NAV_TIMEOUT, PARTITION, POLL_INTERVAL,
+    POLL_TIMEOUT, snapshotOf, type PageSnapshot, type RunExtractOptions,
 } from './siteFetch';
 
 export interface StepOutcome {
@@ -31,6 +31,8 @@ export interface StepsResult {
     /** 主框架最后一次导航的 HTTP 状态 —— 试跑面板靠它区分「番号不存在」与「选择器不对」 */
     httpStatus?: number;
     pageTitle?: string;
+    /** 失败时的现场快照（挑战页 / 正常页一眼可分） */
+    snapshot?: PageSnapshot;
 }
 
 /** 每步之间给导航留的稳定时间（点击常触发整页跳转） */
@@ -97,7 +99,10 @@ export async function runSteps(
             sleep(NAV_TIMEOUT, signal).catch(() => undefined),
         ]);
 
-        // ① 先等脱离 CF 挑战（挑战页也会"加载成功"，但拿不到目标 DOM）
+        // ① 等脱离 CF 挑战（挑战页也会"加载成功"，但拿不到目标 DOM）。
+        // ⚠️ 判定为挑战**不立刻放弃**：判据可能误伤正常页面（曾经只要整页里出现
+        // turnstile 字样就判死），而"动作执行完 + 抽到值"才是页面正常的硬证据。
+        // 所以继续往下走，最后再按 lastCf 解释失败原因 —— 它是解释，不是否决权。
         const cfDeadline = Date.now() + timeoutMs;
         let lastCf = false;
         while (Date.now() < cfDeadline) {
@@ -110,7 +115,6 @@ export async function runSteps(
             if (!lastCf) break;
             await sleep(POLL_INTERVAL, signal);
         }
-        if (lastCf) return { ok: false, cf: true, err: 'cloudflare', steps };
 
         // ② 逐步执行：每步一次。脚本抛错 = 页面被导航销毁 ⇒ 视为该步已成功
         for (let i = 0; i < planned.length; i++) {
@@ -126,13 +130,20 @@ export async function runSteps(
             }
             const rec: StepOutcome = { index: i, act: planned[i].act, ok: r?.ok !== false, why: r?.why };
             steps.push(rec);
-            if (!rec.ok) return { ok: false, cf: false, err: 'timeout', steps, httpStatus };
+            if (!rec.ok) {
+                return {
+                    ok: false, cf: lastCf, err: lastCf ? 'cloudflare' : 'timeout', steps, httpStatus,
+                    snapshot: (await snapshotOf(win)) ?? undefined,
+                };
+            }
             await sleep(STEP_SETTLE_MS, signal);
         }
 
-        // ③ 抽取（幂等 ⇒ 允许重试）
+        // ③ 抽取（幂等 ⇒ 允许重试）。抽不到就滚一下 —— 与 runExtract 同一套补救，
+        // 否则"有动作的站"和"纯 URL 的站"在懒加载页面上行为不一致。
         let data: unknown;
         let ok = false;
+        let tries = 0;
         const exDeadline = Date.now() + timeoutMs;
         while (Date.now() < exDeadline) {
             if (signal?.aborted || win.isDestroyed()) return aborted;
@@ -145,6 +156,7 @@ export async function runSteps(
                 ok = true;
                 break;
             }
+            await lazyNudge(win, ++tries);
             await sleep(POLL_INTERVAL, signal);
         }
         let title = '';
@@ -153,7 +165,11 @@ export async function runSteps(
         } catch {
             /* ignore */
         }
-        return { ok, cf: false, steps, data, httpStatus, pageTitle: title };
+        // 抽到了就是好的（cf 只用来解释"为什么没抽到"）
+        return {
+            ok, cf: ok ? false : lastCf, steps, data, httpStatus, pageTitle: title,
+            snapshot: ok ? undefined : ((await snapshotOf(win)) ?? undefined),
+        };
     } catch {
         return signal?.aborted ? aborted : { ok: false, cf: false, err: 'timeout', steps };
     } finally {

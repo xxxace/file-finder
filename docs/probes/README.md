@@ -58,6 +58,8 @@
 | `disk-offline-set/` | **离线盘全集来源**：库里每个不在线的 serial 是否都有下拉选项（恒等式 12 PASS，零读盘） | 2 | FIX-disk-offline-set |
 | `rule-builder/` | 站点规则编写器纯函数（动作脚本 / URL 模板 / 选择器候选，46 PASS） | **0** | IMPLEMENT-RULE-BUILDER-P3.2 |
 | `playlist/` | 清单（收藏分类）：图片名↔指纹 / 锚点身份 / 离线 key round-trip / **key 与渲染层同形** / 下发态门控 / 拼格封面 / 存储 CRUD（40 PASS，零读盘） | **0** | DESIGN-PLAYLIST-2026-10-21 |
+| `webp-video/` | **webp 转码 + 视频抽帧**：3 种 webp 变体 / 5 种 mp4 容器（含 AV1、fragmented、attached_pic）/ **容器时长≫视频流时长**的回归样本（修前 exit 0 但零输出） | **0** | FIX-WEBP-VIDEO-COVER-2026-10-22 |
+| `jobs-pause/` | **任务状态机**：暂停闸门（`gate.wait` 挂住/放行）/ 从 paused 收尾 / 终止保留 rows / reopen 换 controller（11 PASS，纯逻辑） | **0** | FIX-COVER-PAUSE-2026-10-22 |
 
 > **结论：早先 23 个目录逐个查过，每一个都被至少一份文档引用 —— 目录级没有孤儿，没有可白删的。**
 > 后续新增两行（`rule-builder/` · `playlist/`）均被当期实现文档引用；**新增目录时照此登记，别让孤儿攒着。**
