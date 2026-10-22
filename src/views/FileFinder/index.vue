@@ -2698,13 +2698,54 @@ const onDisksChangedIpc = (_e: unknown, disks: { serial: string; drive: string }
 .image-box-item {
     position: relative;
 
+    /* ────────────────────────────────────────────────────────────────
+     * 卡片内的**层序契约**（唯一真相源）——"谁盖住谁"写在这里，别在别处补数字。
+     *
+     * 病根（2026-10-22 主人报「换封面时勾选的 UI 被封面遮住」）：
+     * 封面图那层为了压住模糊底设了 `z-index: 1`，而卡片上其它浮层
+     * （右上角 ✓ 徽标 / 左上角 ★ 徽标 / 打开中的遮罩）都是绝对定位
+     * **没给 z-index**（= 层级 0）⇒ 层级 1 的图永远画在它们上面。
+     *
+     * ⚠️ 同一个病 2026-10-21 已经在"数量/大小"角标上犯过一次
+     * （`.card-badges` 那行 `z-index: 2` 就是当时的补丁）—— 当时只补了
+     * **那一个元素** ⇒ 换个元素又复发。所以这次定契约，不逐个补。
+     *
+     *   封面内部（.card-cover 自己是层叠上下文 ⇒ 内部互不干扰）：
+     *     0  模糊底     ::before
+     *     1  封面主体   图片 / 文件夹图标 / 文件图标
+     *     2  封面角标   数量 / 大小
+     *     3  已选绿圈   ::after
+     *   卡片外部：
+     *     2  卡片标记   ✓ 勾选圈 / ★ 收藏星标
+     *     3  临时遮罩   打开中（盖住上面所有）
+     * ──────────────────────────────────────────────────────────────── */
+    --z-cover-img: 1;
+    --z-cover-tag: 2;
+    --z-cover-mark: 3;
+    --z-card-mark: 2;
+    --z-card-mask: 3;
+
+    /* 卡片自成层叠上下文：内部层级不与兄弟卡片、外层 UI 互相比较。
+     * ⚠️ 不加的话，焦点卡放大 1.012 溢出到邻居上时，邻居的角标会盖住它。 */
+    isolation: isolate;
+
     &.pickable {
         cursor: pointer;
     }
 
-    /* 已选（换封面时点中的格子）：绿圈画在封面**内侧**，与焦点的外圈各占一层，不打架 */
-    &.picked .card-cover {
+    /* 已选（换封面时点中的格子）：绿圈画在封面**内侧**，与焦点的外圈各占一层，不打架。
+     * ⚠️ 必须画成 `.card-cover::after`（封面内部的第 3 层）—— 原来挂在
+     * `.card-cover` 自己的 `inset box-shadow` 上，那是**封面背景层**，
+     * 会被封面图（层级 1）盖住 ⇒ 绿圈只剩左右两截、上下边看不见。 */
+    &.picked .card-cover::after {
+        content: '';
+        position: absolute;
+        inset: 0;
+        border-radius: inherit;
         box-shadow: inset 0 0 0 2px #18a058;
+        z-index: var(--z-cover-mark);
+        /* 纯装饰，不该拦点击（盒子贴在图片上，不加就吃掉图片的点击） */
+        pointer-events: none;
     }
 
     &.cursor {
@@ -2736,10 +2777,13 @@ const onDisksChangedIpc = (_e: unknown, disks: { serial: string; drive: string }
 
     /* 遮罩与转圈分开两层：`.opening-mask` 负责铺满，`.n-spin` 留在 naive-ui 自己的定位里
        （它的根是 `.n-spin-body`，自带 translate(-50%,-50%)；去戳它就得连 transform 一起清）。
-       绝对定位 ⇒ 尺寸跟卡片走、不参与布局（网格宽度是 margin 算出来的）。 */
+       绝对定位 ⇒ 尺寸跟卡片走、不参与布局（网格宽度是 margin 算出来的）。
+       ⚠️ `z-index` 走契约的"临时遮罩"层：它要盖住封面图 + 角标 + 卡片标记
+       （"正在双击打开"时整张卡都是这层画面），不给 z-index 就会被封面图盖住。 */
     .opening-mask {
         position: absolute;
         inset: 0;
+        z-index: var(--z-card-mask);
         display: flex;
         align-items: center;
         justify-content: center;
@@ -2751,6 +2795,9 @@ const onDisksChangedIpc = (_e: unknown, disks: { serial: string; drive: string }
         position: absolute;
         top: 2px;
         right: 2px;
+        /* ⚠️ 契约的"卡片标记"层：必须压过封面图（否则换封面时勾选圈看不见，
+           2026-10-22 主人报）。 */
+        z-index: var(--z-card-mark);
         display: block;
         width: 16px;
         height: 16px;
@@ -2776,11 +2823,13 @@ const onDisksChangedIpc = (_e: unknown, disks: { serial: string; drive: string }
 
     /* 收录星标（2026-10-21 清单）：这张卡已进某个清单。
        纪律同 pick-badge：**绝对定位、不参与布局**（6 列网格的宽度是算出来的），
-       换到左上角与 pick-badge（右上）错开。★ 用 CSS 生成，不插 DOM 子节点。 */
+       换到左上角与 pick-badge（右上）错开。★ 用 CSS 生成，不插 DOM 子节点。
+       ⚠️ `z-index` 走契约的"卡片标记"层（同 pick-badge）：压过封面图。 */
     .pl-badge {
         position: absolute;
         top: 2px;
         left: 2px;
+        z-index: var(--z-card-mark);
         display: block;
         width: 16px;
         height: 16px;
@@ -2909,6 +2958,9 @@ const onDisksChangedIpc = (_e: unknown, disks: { serial: string; drive: string }
        不会被自己的 overflow 裁掉 —— 这也是不用 box-shadow 画环的原因。 */
     .card-cover {
         position: relative;
+        /* ⚠️ 封面块自己是层叠上下文（契约里的"封面内部"三层的容器）——
+           内部的模糊底/图/角标/绿圈只在封面内排序，不与卡片外的浮层纠缠。 */
+        isolation: isolate;
         width: 100%;
         /* 比例是 token：实测本库缩略图多在 1.6 左右（16:10），16:9 会左右留边。
            想再调只改 `--ff-cover-ratio` 一个值。 */
@@ -2942,7 +2994,7 @@ const onDisksChangedIpc = (_e: unknown, disks: { serial: string; drive: string }
            旧代码用的是 `&:deep(img)`，我重写时丢了这层。 */
         :deep(.n-image) {
             position: relative;
-            z-index: 1;
+            z-index: var(--z-cover-img);
             width: 100%;
             height: 100%;
         }
@@ -2962,7 +3014,7 @@ const onDisksChangedIpc = (_e: unknown, disks: { serial: string; drive: string }
            `position/z-index` 是为了压在模糊底之上（绝对定位的 `::before` 会盖住静态子元素） */
         .folder-face {
             position: relative;
-            z-index: 1;
+            z-index: var(--z-cover-img);
             width: 56%;
             height: auto;
             object-fit: contain;
@@ -2970,7 +3022,7 @@ const onDisksChangedIpc = (_e: unknown, disks: { serial: string; drive: string }
 
         .file-face {
             position: relative;
-            z-index: 1;
+            z-index: var(--z-cover-img);
             width: 56%;
             font-size: 40px;
         }
@@ -2983,9 +3035,9 @@ const onDisksChangedIpc = (_e: unknown, disks: { serial: string; drive: string }
         left: 6px;
         right: 6px;
         bottom: 6px;
-        /* ⚠️ 必须压过图片：图片那层为了盖住模糊底设了 `z-index:1`，
-           不写这一行角标会被图片**盖住**（2026-10-21 主人截图报的"大小被遮挡"）。 */
-        z-index: 2;
+        /* ⚠️ 必须压过图片（契约的"封面角标"层）：图片那层为了盖住模糊底设了
+           `z-index`，不写这一行角标会被图片**盖住**（2026-10-21 主人截图报的"大小被遮挡"）。 */
+        z-index: var(--z-cover-tag);
         display: flex;
         justify-content: space-between;
         pointer-events: none;

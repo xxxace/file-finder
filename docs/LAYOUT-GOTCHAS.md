@@ -37,3 +37,29 @@
 ⚠️ **附带的坑**：**别把 `scrollWidth > clientWidth` 当"可横向滚动"的判据** ——
 被父级裁掉的内容 `scrollWidth` 照样更大，会把"改前"也判成可滚动，**证据不能用**。
 正确判据是 computed `overflow-x` ∈ {`auto`, `scroll`} **且**内容更宽。
+
+## 4. 卡片浮层被封面图盖住（z-index 契约）
+
+> 症状：换封面时右上角的 **✓ 勾选圈**看不见；双击打开时的**遮罩+转圈**也不显示。
+> 主人 2026-10-22 报："这个问题发生好几次了"。
+
+**病根**（不是"忘了写 z-index"这么简单）：
+`.card-cover` 里的封面图为了压住模糊底 `::before` 设了 `z-index: 1`，
+而卡片上**其它浮层**（✓ 徽标 / ★ 徽标 / 打开遮罩）都是 `position: absolute`
+**没给 z-index**（= 层级 0）⇒ 层级 1 的图永远画在它们上面。
+
+⚠️ **同一类病 2026-10-21 已在"数量/大小"角标上犯过一次**
+（`.card-badges` 那行 `z-index: 2` 就是当时的补丁）—— 当时只补了**那一个元素**，
+换个元素又复发 ⇒ **逐个补 z-index 治不好**。
+
+**正解 = 定契约，不逐个补**（`src/views/FileFinder/index.vue` 的 `.image-box-item` 块里有完整表格）：
+
+- 变量：`--z-cover-img/tag/mark`（封面内部）、`--z-card-mark/mask`（卡片外部）。
+- 封面块 `.card-cover` 与卡片 `.image-box-item` 各自 `isolation: isolate`
+  ⇒ 内部层级不与外部纠缠。
+- ⚠️ **装饰性浮层必须 `pointer-events: none`**：它贴在图片上，不加就吃掉图片的点击。
+- ⚠️ **画在元素自己身上的 `inset box-shadow` 属于"背景层"**，会被子元素（图片）盖住 ——
+  选中绿圈因此要从 `.card-cover` 自己的 box-shadow 改成 `.card-cover::after`。
+
+**判据**：新增任何卡片浮层时，从契约里取层级，**别在别处写裸数字**；
+写完问一句"它会被兄弟的图压住吗"。
