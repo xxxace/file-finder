@@ -20,7 +20,7 @@
         { "dir": "film", "name": "TST-088", "isDirectory": true, "ext": "", "type": "folder", "size": 1 },
         { "dir": "film", "name": "SSNI-777", "isDirectory": false, "ext": "mp4", "type": "video", "size": 100 },
         { "dir": "film", "name": "SSNI-777", "isDirectory": false, "ext": "jpg", "type": "image", "size": 10 },
-        { "dir": "film", "name": "HAS-FACE", "isDirectory": true, "ext": "", "type": "folder", "size": 1, "avatar": "k1" }
+        { "dir": "film", "name": "HAS-FACE", "isDirectory": true, "ext": "", "type": "folder", "size": 1, "sig": "k1" }
       ]
     },
     "SERIAL01|film/TST-088": {

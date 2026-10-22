@@ -57,7 +57,7 @@
 - 隐藏 BrowserWindow 抓取（不引 puppeteer/cheerio）；站点规则=JSON 候选链；接口走 `/assistant/*`；UI=全屏 `n-modal`。apply 后**必须 `removeCache` 失效**；`tmp→rename` 原子写 + `apply.log` + 回滚。
 - `cf_clearance` 绑 IP+UA+TLS ⇒ **不能**走 Node `fetch`，全程 Chromium 网络栈。
 - `avatar.jpg`/`cover.jpg` 是**保留名，助手永不写**。降级链：解析出番号 → 站点抓封面；认不出 → **视频抽帧**；都不行 → 手动 URL。**禁止**对"认不出"自动乱搜。
-- `parseTitle` = 有序候选链（FC2 排前；连写无分隔**不识别**）；**容器判断先于条目判断**。
+- `parseTitle` = 有序候选链（FC2 排前；连写无分隔**不识别**；**字母段可混数字 / 数字段可带字母前缀 / 6 位日期型**；**空格不算分隔符**）；**容器判断先于条目判断**。实测/边界 → `docs/FIX-PARSE-TITLE-COVERAGE-2026-10-22.md`，覆盖率探针 `docs/probes/parse-title/{run,coverage,ab}.mjs`（零读盘）。
 - ⚠️ `route()` 精确匹配 pathname ⇒ 任务 id 走 `?id=`；⚠️ 隐藏窗使 `window-all-closed` 永不触发 ⇒ 加 `win.on('closed')` 清理。
 - 站点：`freejavbt`/`javwine`/`javbus`/`javdock`/`onejav` + `javtext.net`，均无账号。
 - **数据在系统盘 `~/.file-finder/`**：`assistant/rules.json`（站点规则，**明文 JSON 为真相源**；删了回落到内置 PRESET 并重写）、`assistant/cover-backup/<serial>/`（**换封面覆盖前**的原图备份；**无自动回滚入口**）、`assistant-hits.jsonl`（命中缓存）、`apply.log`（写入流水，也是「深度重扫」来源）。
