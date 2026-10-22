@@ -2082,6 +2082,9 @@ const {
     isPreviewOpen: () => previewOpen.value,
     isActive: () => pageActive.value,
     onConfirm: onCursorConfirm,
+    // ⚠️ 必须写成箭头函数：`openPreview` 在下面 `usePreview` 那一块才声明
+    // （它要拿本块的 `focusCursor`）⇒ 裸引用 `onPreview: openPreview` 会在 setup 期间 TDZ 报错。
+    onPreview: (item) => openPreview(item),
 });
 
 // ── 预览域接线 ───────────────────────────────────────────────────────────────

@@ -1,5 +1,5 @@
 /**
- * 网格选择器：方向键移动 + 回车确认。
+ * 网格选择器：方向键移动 + 回车确认 + 空格看预览。
  *
  * ## 它是什么
  *
@@ -91,8 +91,20 @@ export function useGridCursor(deps: {
      * 一份"什么条目该怎么打开"的判断，而那条规则还在演进。
      */
     onConfirm: (item: WiredFileInfo) => void;
+    /**
+     * 空格干什么：**看一眼**（开内置预览），不打开这一格代表的东西。
+     *
+     * 为什么不能并进 `onConfirm`：同一个格子上两者结论**不同** ——
+     * 封面卡按 `Enter` 是"打开里面的片子"，按空格是"看封面大图"（鼠标点封面那个行为）。
+     * 合成一个入口就必然出现"想看一眼，结果把片子打开了"。
+     *
+     * ⚠️ 调用方必须传**箭头函数**（`(i) => openPreview(i)`），不能传裸引用：
+     * `openPreview` 在 `index.vue` 里声明在本模块**之后**（它要用本模块的 `focusCursor`）
+     * ⇒ 裸引用会在 setup 期间 TDZ 报错。与 `isPreviewOpen` 只能收函数是同一条理由。
+     */
+    onPreview: (item: WiredFileInfo) => void;
 }) {
-    const { fileList, keyOf, imageBox, isPreviewOpen, isActive, onConfirm } = deps;
+    const { fileList, keyOf, imageBox, isPreviewOpen, isActive, onConfirm, onPreview } = deps;
 
     // ── 状态：只有一个真相 ────────────────────────────────────────────────
     /**
@@ -394,7 +406,7 @@ export function useGridCursor(deps: {
     };
 
     /**
-     * 网格的keydown。**只有方向键与回车**。
+     * 网格的keydown。**只有方向键、回车与空格**。
      *
      * 为什么是 **keydown** 而不是 keyup：长按方向键要能连续移动，
      * 那是 keydown 的自动重复（`event.repeat`）提供的，keyup 做不到。
@@ -435,6 +447,23 @@ export function useGridCursor(deps: {
             if (!item) return;                        // 没选中就别抢（免得吞掉别人的回车）
             e.preventDefault();
             onConfirm(item);
+            return;
+        }
+        /**
+         * 空格 = **看一眼**（= 鼠标点封面），不打开这一格代表的文件。
+         * 与 `Enter` 是两条路：封面卡按回车会去播片，按空格才看到封面大图。
+         *
+         * ⚠️ 焦点停在工具条按钮上时，空格可能连带激活那个按钮（按钮的 Space 在 keyup
+         * 触发，`preventDefault` 未必拦得住）—— 与"Enter 已被网格接管"同一类取舍，**未实测**。
+         */
+        if (e.key === ' ') {
+            if (isPreviewOpen()) return;              // 已经开着：不再"开"一次（免得重排升级计时器）
+            if (isGridKeyBlocked(e)) return;          // 焦点在搜索框 ⇒ 空格是打字
+            if (e.repeat) return;                     // 长按只算一次，纪律同 Enter
+            const item = cursorItem.value;
+            if (!item) return;
+            e.preventDefault();                       // 别让空格滚页面
+            onPreview(item);
             return;
         }
         const dir = DIR_KEYS[e.key];
