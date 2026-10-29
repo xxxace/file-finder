@@ -103,6 +103,18 @@
                         <span class="suffix-icon">S</span>
                     </template>
                 </n-input>
+                <!-- 平铺视图切换：仅在根缓存目录可用，跳过女优/父文件夹直接平铺全部作品 -->
+                <n-tooltip>
+                    <template #trigger>
+                        <n-button size="small" :type="isFlatView ? 'primary' : 'default'"
+                            :disabled="scanning || !canToggleFlat" @click="toggleFlatView">
+                            <template #icon>
+                                <n-icon :component="AppsOutline" />
+                            </template>
+                        </n-button>
+                    </template>
+                    {{ isFlatView ? '当前为平铺视图（点击切回正常视图）' : (canToggleFlat ? '切换为平铺视图（摊开所有子目录作品）' : '仅在根缓存目录可开启平铺视图') }}
+                </n-tooltip>
                 <!-- tooltip 只为说清它和「重读这一片」的分工：它只重读**当前这一层**，
                      那个是整片。名字沿用用户已经在用的"刷新"，不改名（改名有认知成本）。
                      扫描期间禁掉：它带 noCache、会真的再读一次盘，和正在跑的整片扫描
@@ -314,7 +326,7 @@ import useNotify from '@/hooks/useNotify';
 import { usePreview } from './usePreview';
 import { useGridCursor } from './useGridCursor';
 import { decideOpen, isMultiFileCard } from './openDecision';
-import { Search, Refresh, ChevronDownOutline } from '@vicons/ionicons5';
+import { Search, Refresh, ChevronDownOutline, AppsOutline } from '@vicons/ionicons5';
 import { NButton, NInput, NIcon, NImage, NImageGroup, NTag, NPopover, NSpin, NAlert, NTooltip, NDropdown, useLoadingBar, useDialog } from 'naive-ui';
 import FolderSelector from '@/components/FolderSelector/index.vue';
 import AssistantCoverModal from './AssistantCoverModal.vue';
@@ -572,6 +584,10 @@ const crumbs = computed(() => {
     }
     return ancestorsOf(currentPath.value);
 });
+/** 平铺视图（Flat 模式）：跳过中间女优/父文件夹，单纯摊开所有子目录作品。限定根缓存目录开启。 */
+const isFlatView = ref(false);
+/** 仅在导航处于根目录（未下钻、非清单屏、且有有效路径）时允许开启 Flat 视图 */
+const canToggleFlat = computed(() => history.value.length === 1 && !playlistLevel.value && !!currentPath.value);
 /** 折叠决策（保首尾）。`null` = 全显。规则在 `@/utils` 的 `foldCrumbList` 里，可单独验证。 */
 const crumbFold = computed(() => foldCrumbList(crumbs.value));
 /**
@@ -1040,6 +1056,9 @@ const enterScreen = (path: string, mode: OpenMode = 'cover', pl?: NavEntry['pl']
     // 新的一屏**从零开始**：选择器不继承上一屏的（它属于那一屏，不属于这一屏）
     // pl = 清单屏标记（2026-10-21）：与 path 上的 `@pl:<id>` 前缀同进同退
     history.value.push({ path, mode, pl, searchText: '', scrollY: 0, cursorKey: '' });
+    if (history.value.length > 1) {
+        isFlatView.value = false;
+    }
     // 进新的一屏不带上一屏的搜索词（原有行为，不动）
     searchText.value = '';
     /**
@@ -1345,16 +1364,19 @@ const copyNameStem = async () => {
  */
 let fetchSeq = 0;
 
-const fetchFolder = (path: string, mode: OpenMode, noCache?: boolean) => {
+const fetchFolder = (path: string, mode: OpenMode, noCache?: boolean, flat?: boolean) => {
     const seq = ++fetchSeq;
     loading.value = true;
     failKind.value = '';
     loadingBar.start();
     // path 必须编码：中文/空格/&/#/+ 会让 query 被截断或误解析
-    const url = `${API_BASE}/openFolder?path=${encodeURIComponent(path)}&mode=${mode}`;
+    let url = `${API_BASE}/openFolder?path=${encodeURIComponent(path)}&mode=${mode}`;
+    if (noCache) url += '&noCache=true';
+    const useFlat = flat ?? (canToggleFlat.value && isFlatView.value);
+    if (useFlat) url += '&flat=true';
 
     // 必须 return：调用方要等数据真的落地才能做后面的事（恢复滚动位置）
-    return getAction(noCache ? url + '&noCache=true' : url).then((data: WiredFileInfo[]) => {
+    return getAction(url).then((data: WiredFileInfo[]) => {
         // 过期响应：已经不是最新那次请求了 —— 什么都不做。
         // `loadingBar` 的收尾也要跳过，否则它会替最新那次提前收尾
         if (seq !== fetchSeq) return;
@@ -1618,6 +1640,16 @@ const waitForGridOf = async (path: string, maxFrames = 20) => {
     return false;
 }
 
+/** 切换正常视图 / Flat 平铺视图（单纯摊开全部作品） */
+const toggleFlatView = async () => {
+    if (!canToggleFlat.value || scanning.value) return;
+    isFlatView.value = !isFlatView.value;
+    const cur = history.value[history.value.length - 1];
+    if (cur) {
+        await fetchFolder(cur.path, cur.mode, false, isFlatView.value);
+    }
+};
+
 const onRefresh = () => {
     // 只读层没有"重读"这回事：它的源就是缓存，盘不在，F5 也读不出新东西。
     // 拦住而不是让服务端静默回一份缓存 —— 静默最坏（用户以为他重读过了）。
@@ -1636,6 +1668,7 @@ const onRefresh = () => {
  * 这两件事原来混在同一个 `handleDirChange` 里，是"返回体验怪"的根因之一。
  */
 const setRoot = (value: string) => {
+    isFlatView.value = false;
     if (!value) {
         dir.value = '';
         history.value = [];
