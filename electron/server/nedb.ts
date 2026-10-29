@@ -682,31 +682,57 @@ export function mergeSubtreeLeafItems(
     baseRel: string,
 ): FileInfo[] {
     if (!serial) return [];
-    const prefix = baseRel ? `${baseRel.toLowerCase()}/` : '';
-    const baseLower = baseRel.toLowerCase();
+    const baseLower = (baseRel || '').replace(/\\/g, '/').replace(/\/+$/, '').toLowerCase();
+    const prefix = baseLower ? `${baseLower}/` : '';
     const seen = new Set<string>();
     const leaves: FileInfo[] = [];
 
+    // 建立相对路径索引：仅收纳当前盘的记录
+    const docByPath = new Map<string, FileInfo[]>();
     for (const doc of rows) {
-        if (doc.serial !== serial) continue;
-        const curLower = (doc.relPath || '').toLowerCase();
-        const isSelf = curLower === baseLower;
-        const isChild = prefix ? curLower.startsWith(prefix) : true;
-        if (!isSelf && !isChild) continue;
+        if (doc.serial === serial && Array.isArray(doc.data)) {
+            const rel = (doc.relPath || '').replace(/\\/g, '/').replace(/\/+$/, '').toLowerCase();
+            docByPath.set(rel, doc.data);
+        }
+    }
 
-        if (Array.isArray(doc.data)) {
-            for (const it of doc.data) {
-                if (it.type === 'folder' || it.isDirectory) continue;
+    const visitedDirs = new Set<string>();
+
+    function collect(relLower: string) {
+        if (visitedDirs.has(relLower)) return;
+        visitedDirs.add(relLower);
+        const items = docByPath.get(relLower);
+        if (!items) return;
+
+        for (const it of items) {
+            if (it.type === 'folder' || it.isDirectory) {
+                const childRel = it.dir ? `${it.dir}/${it.name}` : it.name;
+                const childLower = childRel.replace(/\\/g, '/').replace(/\/+$/, '').toLowerCase();
+                collect(childLower);
+            } else {
                 const diskName = it.ext ? `${it.name}.${it.ext}` : it.name;
                 const key = `${it.dir || ''}/${diskName}`.toLowerCase();
-                if (seen.has(key)) continue;
-                seen.add(key);
-                leaves.push(it);
+                if (!seen.has(key)) {
+                    seen.add(key);
+                    leaves.push(it);
+                }
             }
         }
     }
 
-    leaves.sort((a, b) => a.name.localeCompare(b.name, 'zh-Hans-CN', { numeric: true, sensitivity: 'base' }));
+    // 1. 深度优先递归遍历，保全原生平铺顺序（如 [3, [1,2,4], [5,7], 9] -> 3,1,2,4,5,7,9）
+    collect(baseLower);
+
+    // 2. 兜底未在父目录索引中展开的子孙目录记录
+    for (const doc of rows) {
+        if (doc.serial !== serial) continue;
+        const curLower = (doc.relPath || '').replace(/\\/g, '/').replace(/\/+$/, '').toLowerCase();
+        const isChild = prefix ? curLower.startsWith(prefix) : true;
+        if (isChild && !visitedDirs.has(curLower)) {
+            collect(curLower);
+        }
+    }
+
     return leaves;
 }
 

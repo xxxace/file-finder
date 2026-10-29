@@ -87,7 +87,7 @@ test('mergeSubtreeLeafItems filters folders and flattens leaf items', () => {
     const result = mergeSubtreeLeafItems(mockRows, 'AAAA1111', 'JAV');
     const names = result.map(it => it.name);
 
-    assert.deepEqual(names, ['IPX-123', 'README', 'SSNI-001', 'SSNI-002']);
+    assert.deepEqual(names, ['SSNI-001', 'SSNI-002', 'IPX-123', 'README']);
     assert.equal(result.every(it => it.type !== 'folder' && !it.isDirectory), true);
 });
 
@@ -114,7 +114,57 @@ test('mergeSubtreeLeafItems works with empty baseRel (disk root)', () => {
 
     const result = mergeSubtreeLeafItems(mockRows, 'AAAA1111', '');
     const names = result.map(it => it.name);
-    assert.deepEqual(names, ['child-movie', 'root-movie']);
+    assert.deepEqual(names, ['root-movie', 'child-movie']);
+});
+
+test('mergeSubtreeLeafItems preserves natural DFS flat order: [3,[1,2,4],[5,7],[6,8],9]', () => {
+    const mockRows = [
+        {
+            serial: 'DISK1',
+            relPath: 'root',
+            mode: 'cover',
+            data: [
+                { dir: 'root', name: '3', ext: 'mp4', type: 'video', isDirectory: false },
+                { dir: 'root', name: 'folderA', type: 'folder', isDirectory: true },
+                { dir: 'root', name: 'folderB', type: 'folder', isDirectory: true },
+                { dir: 'root', name: 'folderC', type: 'folder', isDirectory: true },
+                { dir: 'root', name: '9', ext: 'mp4', type: 'video', isDirectory: false },
+            ],
+        },
+        {
+            serial: 'DISK1',
+            relPath: 'root/folderA',
+            mode: 'cover',
+            data: [
+                { dir: 'root/folderA', name: '1', ext: 'mp4', type: 'video', isDirectory: false },
+                { dir: 'root/folderA', name: '2', ext: 'mp4', type: 'video', isDirectory: false },
+                { dir: 'root/folderA', name: '4', ext: 'mp4', type: 'video', isDirectory: false },
+            ],
+        },
+        {
+            serial: 'DISK1',
+            relPath: 'root/folderB',
+            mode: 'cover',
+            data: [
+                { dir: 'root/folderB', name: '5', ext: 'mp4', type: 'video', isDirectory: false },
+                { dir: 'root/folderB', name: '7', ext: 'mp4', type: 'video', isDirectory: false },
+            ],
+        },
+        {
+            serial: 'DISK1',
+            relPath: 'root/folderC',
+            mode: 'cover',
+            data: [
+                { dir: 'root/folderC', name: '6', ext: 'mp4', type: 'video', isDirectory: false },
+                { dir: 'root/folderC', name: '8', ext: 'mp4', type: 'video', isDirectory: false },
+            ],
+        },
+    ];
+
+    const result = mergeSubtreeLeafItems(mockRows, 'DISK1', 'root');
+    const names = result.map(it => it.name);
+    // User expectation: 3, 1, 2, 4, 5, 7, 6, 8, 9 (NOT sorted 1, 2, 3...)
+    assert.deepEqual(names, ['3', '1', '2', '4', '5', '7', '6', '8', '9']);
 });
 
 test('mergeSubtreeLeafItems deduplicates by path and disk name', () => {
