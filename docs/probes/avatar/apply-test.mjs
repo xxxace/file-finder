@@ -26,6 +26,7 @@ await esbuild.build({
 const {
     applyActressAvatars,
     saveAvatarFile,
+    fetchAndTranscode,
 } = await import(pathToFileURL(outfile).href);
 
 try {
@@ -67,4 +68,15 @@ test('saveAvatarFile writes avatar.jpg atomically and creates backup if existing
     assert.equal(backupContent, 'old-image-bytes');
 
     await fsasync.rm(testDir, { recursive: true, force: true });
+});
+
+test('fetchAndTranscode hits previewCache instantly without network', async () => {
+    const mockCache = new Map();
+    const fakeJpeg = Buffer.from([0xff, 0xd8, 0xff, 0xe0, 0x00, 0x10]);
+    const testUrl = 'https://fastly.jsdelivr.net/gh/gfriends/gfriends@master/Content/test.jpg';
+    mockCache.set(testUrl, { buf: fakeJpeg, type: 'image/jpeg' });
+
+    const result = await fetchAndTranscode(testUrl, mockCache);
+    assert.ok(result);
+    assert.deepEqual(result, fakeJpeg);
 });

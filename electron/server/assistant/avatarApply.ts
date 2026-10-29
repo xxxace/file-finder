@@ -13,7 +13,7 @@ import * as fsasync from 'node:fs/promises';
 import path from 'node:path';
 import { getDrives } from '../../utils/driveIdentity';
 import { removeCache } from '../nedb';
-import { toJpeg } from './apply';
+import { toJpeg, download } from './apply';
 import { GFRIENDS_MIRRORS } from './gfriends';
 
 export interface AvatarApplyItem {
@@ -90,28 +90,60 @@ function getCandidateUrls(originalUrl: string): string[] {
 }
 
 /**
- * 下载单个图片并转成标准 JPEG Buffer，支持多 CDN 镜像自动重试回退。
+ * 稳健快速下载图片 Buffer：优先走 Chromium net.request（原生代理/防盗链），失败兜底走 Node fetch
  */
-async function fetchAndTranscode(url: string): Promise<Buffer | null> {
-    const candidates = getCandidateUrls(url);
+async function downloadBuffer(url: string, timeoutMs = 8000): Promise<Buffer | null> {
+    try {
+        const timeout = AbortSignal.timeout(timeoutMs);
+        const r = await download(url, timeout);
+        if (r.status === 200 && r.buf && r.buf.length > 0) {
+            return r.buf;
+        }
+    } catch {
+        // net.request 失败或单测环境没有 electron net，回退到 Node fetch
+    }
 
-    for (const targetUrl of candidates) {
-        try {
-            const controller = new AbortController();
-            const timer = setTimeout(() => controller.abort(), 6000);
-            const res = await fetch(targetUrl, { signal: controller.signal });
-            clearTimeout(timer);
-
-            if (!res.ok) {
-                continue;
-            }
-
+    try {
+        const controller = new AbortController();
+        const timer = setTimeout(() => controller.abort(), timeoutMs);
+        const res = await fetch(url, { signal: controller.signal });
+        clearTimeout(timer);
+        if (res.ok) {
             const arrayBuf = await res.arrayBuffer();
-            const rawBuf = Buffer.from(arrayBuf);
+            return Buffer.from(arrayBuf);
+        }
+    } catch {
+        // fetch 失败
+    }
+    return null;
+}
+
+/**
+ * 获取头像图片并转成标准 JPEG Buffer：
+ * 1. 优先从预览内存缓存读取（用户在界面浏览时已预加载，0 网络开销极速落盘）
+ * 2. 内存未命中时，通过多 CDN 镜像自动容灾重试下载并回填缓存
+ */
+export async function fetchAndTranscode(
+    url: string,
+    previewCache?: Map<string, { buf: Buffer; type: string | null }>
+): Promise<Buffer | null> {
+    // 1. 命中预览内存缓存：直接复用，0 网络开销
+    const cached = previewCache?.get(url);
+    if (cached?.buf && cached.buf.length > 0) {
+        const jpeg = await toJpeg(cached.buf);
+        if (jpeg) return jpeg;
+    }
+
+    // 2. 依次尝试候选镜像
+    const candidates = getCandidateUrls(url);
+    for (const targetUrl of candidates) {
+        const rawBuf = await downloadBuffer(targetUrl, 6000);
+        if (rawBuf && rawBuf.length > 0) {
+            if (previewCache) {
+                previewCache.set(url, { buf: rawBuf, type: 'image/jpeg' });
+            }
             const jpeg = await toJpeg(rawBuf);
             if (jpeg) return jpeg;
-        } catch {
-            // 当前镜像超时或失败，自动重试下一个镜像
         }
     }
 
@@ -121,12 +153,13 @@ async function fetchAndTranscode(url: string): Promise<Buffer | null> {
 
 /**
  * 批量应用女优头像回收：
- * 强制检查盘在线状态，受控并发下载并原子写盘，最后等待缓存失效完成。
+ * 强制检查盘在线状态，通过动态 Worker Pool 高并发写入，最后去重失效 NeDB 缓存。
  */
 export async function applyActressAvatars(
     serial: string,
     items: AvatarApplyItem[],
-    dataDir: string
+    dataDir: string,
+    previewCache?: Map<string, { buf: Buffer; type: string | null }>
 ): Promise<AvatarApplyResult> {
     const result: AvatarApplyResult = {
         total: items.length,
@@ -152,48 +185,50 @@ export async function applyActressAvatars(
     }
 
     const diskRoot = drive.root; // e.g. "H:/"
-    const concurrency = 3;
-    const cachePromises: Promise<number>[] = [];
+    const concurrency = 8;
+    const invalidateDirs = new Set<string>();
 
-    // ── ② 受控并发处理 ──
-    for (let i = 0; i < items.length; i += concurrency) {
-        const batch = items.slice(i, i + concurrency);
-        await Promise.all(
-            batch.map(async (item) => {
-                const targetDir = path.join(diskRoot, item.relDir);
-                const jpegBuf = await fetchAndTranscode(item.avatarUrl);
+    // ── ② 动态 Worker Pool 受控并发处理 ──
+    let nextIndex = 0;
+    const workers = Array.from({ length: Math.min(concurrency, items.length) }, async () => {
+        while (nextIndex < items.length) {
+            const item = items[nextIndex++];
+            const targetDir = path.join(diskRoot, item.relDir);
+            const jpegBuf = await fetchAndTranscode(item.avatarUrl, previewCache);
 
-                if (!jpegBuf) {
-                    result.failed += 1;
-                    result.logs.push({
-                        relDir: item.relDir,
-                        status: 'error',
-                        message: '头像下载或图片转码失败（已尝试多镜像回退）',
-                    });
-                    return;
-                }
+            if (!jpegBuf) {
+                result.failed += 1;
+                result.logs.push({
+                    relDir: item.relDir,
+                    status: 'error',
+                    message: '头像下载或图片转码失败（已尝试多镜像回退）',
+                });
+                continue;
+            }
 
-                const saved = await saveAvatarFile(serial, item.relDir, targetDir, jpegBuf, dataDir);
-                if (saved) {
-                    result.succeeded += 1;
-                    result.logs.push({ relDir: item.relDir, status: 'ok' });
+            const saved = await saveAvatarFile(serial, item.relDir, targetDir, jpegBuf, dataDir);
+            if (saved) {
+                result.succeeded += 1;
+                result.logs.push({ relDir: item.relDir, status: 'ok' });
 
-                    // ── ③ 缓存失效（同时失效女优目录本身及父层目录） ──
-                    cachePromises.push(removeCache(serial, item.relDir, 'cover'));
-                    cachePromises.push(removeCache(serial, dirOf(item.relDir), 'cover'));
-                } else {
-                    result.failed += 1;
-                    result.logs.push({
-                        relDir: item.relDir,
-                        status: 'error',
-                        message: '原子写盘失败',
-                    });
-                }
-            })
-        );
-    }
+                // 收集待失效目录
+                invalidateDirs.add(item.relDir);
+                invalidateDirs.add(dirOf(item.relDir));
+            } else {
+                result.failed += 1;
+                result.logs.push({
+                    relDir: item.relDir,
+                    status: 'error',
+                    message: '原子写盘失败',
+                });
+            }
+        }
+    });
 
-    // ── ④ 等待所有缓存清除完成，杜绝前端刷新竞态 ──
+    await Promise.all(workers);
+
+    // ── ③ 统一失效 NeDB 缓存（去重后执行，避免父层目录重复被删除几十次） ──
+    const cachePromises = [...invalidateDirs].map(dir => removeCache(serial, dir, 'cover'));
     await Promise.all(cachePromises);
 
     return result;

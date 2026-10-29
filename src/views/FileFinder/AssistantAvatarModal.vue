@@ -26,6 +26,7 @@
                     size="small"
                     tertiary
                     :loading="updatingIndex"
+                    :disabled="applying || scanning"
                     @click="updateIndex"
                 >
                     更新索引
@@ -34,7 +35,7 @@
                     size="small"
                     type="primary"
                     :loading="scanning"
-                    :disabled="!activeIsOnline || applying"
+                    :disabled="!activeIsOnline || applying || updatingIndex"
                     @click="runScan"
                 >
                     扫描直属目录
@@ -61,9 +62,9 @@
             <div v-else class="avatar-table-wrap">
                 <div class="avatar-toolbar">
                     <div class="avatar-toolbar-left">
-                        <n-button size="tiny" tertiary @click="selectAll(true)">全选</n-button>
-                        <n-button size="tiny" tertiary @click="selectAll(false)">取消全选</n-button>
-                        <n-button size="tiny" tertiary @click="selectMatchedOnly">仅选已匹配</n-button>
+                        <n-button size="tiny" tertiary :disabled="applying" @click="selectAll(true)">全选</n-button>
+                        <n-button size="tiny" tertiary :disabled="applying" @click="selectAll(false)">取消全选</n-button>
+                        <n-button size="tiny" tertiary :disabled="applying" @click="selectMatchedOnly">仅选已匹配</n-button>
                         <span class="avatar-count-info">
                             共发现 {{ candidates.length }} 个待处理目录 · 已匹配 {{ matchedCount }} · 选中 {{ selectedCount }}
                         </span>
@@ -79,6 +80,7 @@
                                         type="checkbox"
                                         :checked="isAllSelected"
                                         :indeterminate="isIndeterminate"
+                                        :disabled="applying"
                                         @change="toggleSelectAll"
                                     />
                                 </th>
@@ -92,18 +94,20 @@
                         <tbody>
                             <tr v-for="row in candidates" :key="row.relDir">
                                 <td style="text-align: center">
-                                    <input type="checkbox" v-model="row.selected" />
+                                    <input type="checkbox" v-model="row.selected" :disabled="applying" />
                                 </td>
                                 <td style="text-align: center">
                                     <div class="avatar-preview-box">
                                         <n-image
                                             v-if="row.avatarUrl"
                                             :src="previewSrc(row.avatarUrl)"
+                                            :preview-src="previewSrc(row.avatarUrl)"
                                             width="44"
                                             height="44"
                                             object-fit="cover"
                                             style="border-radius: 4px; display: block"
-                                            preview-disabled
+                                            :img-props="{ style: 'cursor: zoom-in' }"
+                                            show-toolbar-tooltip
                                         />
                                         <div v-else class="avatar-no-img">无图</div>
                                     </div>
@@ -119,6 +123,7 @@
                                         size="small"
                                         placeholder="女优名"
                                         style="max-width: 150px"
+                                        :disabled="applying"
                                         @blur="recheckName(row)"
                                         @keydown.enter="recheckName(row)"
                                     />
@@ -134,7 +139,7 @@
                                 <td>
                                     <n-popover trigger="click" placement="bottom">
                                         <template #trigger>
-                                            <n-button size="tiny" tertiary>手动填 URL</n-button>
+                                            <n-button size="tiny" tertiary :disabled="applying">手动填 URL</n-button>
                                         </template>
                                         <div style="padding: 6px; width: 280px">
                                             <div style="font-size: 12px; margin-bottom: 6px; color: var(--n-text-color)">
@@ -164,7 +169,11 @@
         <!-- 底部状态与应用确认栏 -->
         <div class="avatar-modal-footer">
             <div class="avatar-footer-status">
-                <span v-if="applyResult" class="avatar-result-text">
+                <span v-if="applying" class="avatar-applying-status">
+                    <n-spin :size="14" />
+                    <span>正在批量写入头像并更新缓存，请稍候...</span>
+                </span>
+                <span v-else-if="applyResult" class="avatar-result-text">
                     处理完毕：成功 {{ applyResult.succeeded }} 个 · 失败 {{ applyResult.failed }} 个
                 </span>
             </div>
@@ -173,9 +182,10 @@
                     {{ applyResult ? '关闭' : '取消' }}
                 </n-button>
                 <n-popconfirm
+                    v-model:show="showConfirmPop"
                     positive-text="确定写入"
                     negative-text="取消"
-                    @positive-click="runApply"
+                    @positive-click="handleConfirmApply"
                 >
                     <template #trigger>
                         <n-button
@@ -243,6 +253,7 @@ const scanning = ref(false);
 const applying = ref(false);
 const updatingIndex = ref(false);
 const hasScanned = ref(false);
+const showConfirmPop = ref(false);
 const candidates = ref<AvatarRow[]>([]);
 const applyResult = ref<{ succeeded: number; failed: number } | null>(null);
 
@@ -430,7 +441,13 @@ function applyManualUrl(row: AvatarRow) {
     message.success('已指定头像图片地址');
 }
 
+function handleConfirmApply() {
+    showConfirmPop.value = false;
+    runApply();
+}
+
 async function runApply() {
+    showConfirmPop.value = false;
     const selectedItems = candidates.value
         .filter(c => c.selected && c.avatarUrl)
         .map(c => ({
@@ -534,6 +551,14 @@ watch(
     align-items: center;
     gap: 6px;
     font-size: 13px;
+    min-width: 0;
+    flex: 1;
+}
+.avatar-modal-actions {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    flex-shrink: 0;
 }
 .avatar-label {
     color: var(--n-text-color-3);
@@ -625,6 +650,7 @@ watch(
     background-color: var(--n-color-embedded);
     border-radius: 4px;
     overflow: hidden;
+    cursor: pointer;
 }
 .avatar-no-img {
     font-size: 11px;
@@ -643,6 +669,13 @@ watch(
     padding-top: 14px;
     border-top: 1px solid var(--n-border-color);
     margin-top: 12px;
+}
+.avatar-applying-status {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    font-size: 13px;
+    color: var(--n-text-color-2);
 }
 .avatar-result-text {
     font-size: 13px;

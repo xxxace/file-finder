@@ -652,7 +652,7 @@ export function createAssistantRoutes(deps: AssistantDeps): AssistantRoute[] {
             }
             // 上游给的 content-type 可能带 charset 之类的尾巴，只留主类型
             const type = r.type?.split(';')[0]?.trim() || 'image/jpeg';
-            if (previewCache.size >= 100) {
+            if (previewCache.size >= 500) {
                 previewCache.delete(previewCache.keys().next().value as string);
             }
             previewCache.set(raw, { buf: r.buf, type });
@@ -734,7 +734,7 @@ export function createAssistantRoutes(deps: AssistantDeps): AssistantRoute[] {
             return;
         }
         try {
-            const result = await applyActressAvatars(serial, items as AvatarApplyItem[], dataDir);
+            const result = await applyActressAvatars(serial, items as AvatarApplyItem[], dataDir, previewCache);
             sendJson(res, { code: 200, result });
         } catch (e) {
             sendJson(res, { code: 400, error: e instanceof Error ? e.message : String(e) }, 400);
