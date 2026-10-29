@@ -1,0 +1,21 @@
+✔ mergeSubtreeLeafItems filters folders and flattens leaf items (7.754ms)
+✔ mergeSubtreeLeafItems works with empty baseRel (disk root) (0.187ms)
+✔ mergeSubtreeLeafItems deduplicates by path and disk name (0.1047ms)
+ℹ tests 3
+ℹ suites 0
+ℹ pass 3
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 68.0056
+
+✔ openFolderController is exported and handles flat=true query param (73.7237ms)
+ℹ tests 1
+ℹ suites 0
+ℹ pass 1
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 79.7616
