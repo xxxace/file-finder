@@ -8,9 +8,7 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const repo = path.resolve(here, '../../..');
-const outDir = path.join(os.tmpdir(), 'ff-avatar-probe');
-mkdirSync(outDir, { recursive: true });
-const outfile = path.join(outDir, 'gfriends.mjs');
+const outfile = path.join(here, '.tmp-gfriends.mjs');
 
 await esbuild.build({
     entryPoints: [path.join(repo, 'electron/server/assistant/gfriends.ts')],
@@ -28,6 +26,11 @@ const {
     matchGfriends,
     getAvatarUrl,
 } = await import(pathToFileURL(outfile).href);
+
+try {
+    const fs = await import('node:fs');
+    fs.unlinkSync(outfile);
+} catch {}
 
 test('cleanActressName removes tags, years, and returns cleaned name', () => {
     assert.equal(cleanActressName('[S1] 三上悠亚 (2020)'), '三上悠亚');
