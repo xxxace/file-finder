@@ -903,13 +903,86 @@ function queueCacheWrite<T>(serial: string, relPath: string, mode: OpenMode, tas
  * 扫目录并把结果写进缓存。
  * 存储态里 dir 是盘内相对路径，不含盘符。
  */
+/**
+ * 清除已在磁盘上被物理删除的目录（及其全部子目录）在 NeDB 中的缓存。
+ * 覆盖 'cover' 和 'folder' 两种模式，并通过 queueCacheWrite 保证串行。
+ */
+async function evictDeletedCache(serial: string, relPath: string): Promise<void> {
+    const norm = relPath.toLowerCase();
+    const metas = await loadMeta();
+    const targets = metas.filter(m => {
+        if (m.serial !== serial) return false;
+        const mNorm = m.relPath.toLowerCase();
+        return mNorm === norm || mNorm.startsWith(norm + '/');
+    });
+
+    for (const t of targets) {
+        await queueCacheWrite(t.serial, t.relPath, t.mode, async () => {
+            await removeCache(t.serial, t.relPath, t.mode);
+        });
+    }
+}
+
+/**
+ * 校验已命中缓存的目录在物理磁盘上是否依然存在。
+ * 若抛出 ENOENT / ENOTDIR，在确认盘依然在线的前提下清除该目录及其子树缓存并抛出 notFound。
+ */
+async function verifyAndEvictIfDeleted(drive: string, serial: string, relPath: string): Promise<void> {
+    if (!relPath) return; // 盘根在盘在线时恒存在，跳过检查避免 Windows 工作目录歧义
+    const fullPath = toFullPath(drive, relPath);
+    try {
+        const stat = await fsasync.stat(fullPath);
+        if (!stat.isDirectory()) {
+            throw Object.assign(new Error(`路径已不是文件夹: ${fullPath}`), { code: 'ENOTDIR' });
+        }
+        // 核验物理盘上的真实大小写（Windows 下 fs.realpath 获取实际存在的大小写）
+        const real = await fsasync.realpath(fullPath);
+        const parts = splitPath(real);
+        if (parts && parts.relPath !== relPath) {
+            // 大小写已被重命名（例如 Julia -> JULIA）
+            // 旧大小写的记录必须剔除！
+            await evictDeletedCache(serial, relPath);
+            const err = new Error(`文件夹名称大小写已变更: ${relPath} -> ${parts.relPath}`) as Error & { kind?: string };
+            err.kind = 'notFound';
+            throw err;
+        }
+    } catch (e: any) {
+        if (e?.code === 'ENOENT' || e?.code === 'ENOTDIR' || String(e?.message).includes('ENOENT')) {
+            const diskNow = await findDriveByLetter(drive);
+            if (diskNow?.serial !== serial) {
+                const err = new Error(`盘 ${drive}: 现在不在`) as Error & { kind?: string };
+                err.kind = 'offline';
+                throw err;
+            }
+            await evictDeletedCache(serial, relPath);
+            const err = new Error(`文件夹已不存在（${e?.code || 'ENOENT'}）`) as Error & { kind?: string };
+            err.kind = 'notFound';
+            throw err;
+        }
+        throw e;
+    }
+}
 async function scanAndCache(serial: string, drive: string, relPath: string, mode: OpenMode): Promise<SearchCache> {
     // ★ 取这一层的**旧条目作对账基线**：源文件没变的那些缩略图直接复用，不再重抽。
     //   为什么在这儿查、而不是让调用方传进来：`scanAndCache` 是**唯一**的写缓存口，
     //   它自己保证"读旧 → 读盘 → 写新"是一件事，比要求每个调用方记得传 prev 更漏不掉。
     //   代价只是一次 `findCache` —— **纯内存查询、零读盘**（nedb 启动时整库已载入内存）。
     const prevDoc = await findCache(serial, relPath, mode);
-    const data = await readFolder(toFullPath(drive, relPath), mode, serial, relPath, prevDoc?.data);
+    let data: FileInfo[];
+    try {
+        data = await readFolder(toFullPath(drive, relPath), mode, serial, relPath, prevDoc?.data);
+    } catch (e: any) {
+        if (relPath && (e?.code === 'ENOENT' || e?.code === 'ENOTDIR' || String(e?.message).includes('ENOENT'))) {
+            const diskNow = await findDriveByLetter(drive);
+            if (diskNow?.serial === serial) {
+                await evictDeletedCache(serial, relPath);
+                const notFoundErr = new Error(`文件夹已不存在（ENOENT）`) as Error & { kind?: string };
+                notFoundErr.kind = 'notFound';
+                throw notFoundErr;
+            }
+        }
+        throw e;
+    }
 
     const doc: SearchCache = {
         v: CACHE_VERSION,
@@ -1003,6 +1076,10 @@ async function openFolderController(req: Req, res: http.ServerResponse) {
     // 读盘期间并发进来的读者会看到"这个目录没缓存"。
     const cached = noCache ? null : await findCache(serial, relPath, mode);
     const doc = cached ?? (await scanAndCache(serial, drive, relPath, mode));
+
+    if (cached) {
+        await verifyAndEvictIfDeleted(drive, serial, relPath);
+    }
 
     sendJson(res, await toWire(doc.data, drive, serial, relPath));
 }

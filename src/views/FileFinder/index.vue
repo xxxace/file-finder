@@ -301,7 +301,7 @@
 <script setup lang="ts">
 import { formatBytes, ancestorsOf, foldCrumbList, isGridKeyBlocked, ANCHOR_PREFIX } from '@/utils';
 import type { PathCrumb } from '@/utils';
-import { apiUrl, getAction, ApiError } from '@/utils/request';
+import { apiUrl, getAction, postAction, ApiError } from '@/utils/request';
 import {
     addToPlaylist, buildMemberMap, defaultPlaylist, getPlaylistItems, playlistIndex,
     refreshIndex, removeFromPlaylist,
@@ -604,7 +604,7 @@ let openSeq = 0;
  * 原来那个 `err.kind === 'offline' || err.kind === 'unreadable'` 的条件写在 fetchFolder 里，
  * 多一种分类就要在那儿再加一个 `||`（漏了就是"失败了却什么都不说"）。
  */
-const BANNER_KINDS = ['offline', 'unreadable', 'notCached'];
+const BANNER_KINDS = ['offline', 'unreadable', 'notCached', 'notFound'];
 
 const failKind = ref('');
 
@@ -692,6 +692,9 @@ const banner = computed(() => {
     }
     if (failKind.value === 'unreadable') {
         return { type: 'error' as const, text: '这个文件夹读不到（可能被占用或权限不足）—— 稍后再试' };
+    }
+    if (failKind.value === 'notFound') {
+        return { type: 'error' as const, text: '文件夹已在磁盘上被删除，已自动清理该缓存记录' };
     }
     // 只读层才会出现：当时没扫到过这一层。只读视图不会为了它去碰盘 —— 那是"只读"的定义
     if (failKind.value === 'notCached') {
@@ -1366,6 +1369,9 @@ const fetchFolder = (path: string, mode: OpenMode, noCache?: boolean) => {
             ? err.kind
             : 'other';
         loadingBar.error();
+        if (failKind.value === 'notFound') {
+            dataSource.value = [];
+        }
         // 取数失败**必须说出来**：原来只有顶部进度条闪一下红，而 dataSource 会保留
         // 上一个目录的列表 —— 面包屑已经切到新目录、格子里却是旧内容，
         // 用户没有任何线索。这里不清空 dataSource（网络抖一下不该丢掉整个列表），
@@ -1784,7 +1790,7 @@ const splitDrive = (fullPath: string) => {
  *
  * 拼不出序列号（UNC / 网络位置 / 虚拟盘）的目录一律当"没缓存"处理，见下面 `keyOf`。
  */
-const fetchScanContext = async () => {
+const fetchScanContext = async (targetDrive?: string, targetRootRel?: string) => {
     const disks = await getAction(`${API_BASE}/getDisks`);
     const serialOf: Record<string, string> = {};
     for (const d of disks?.disks ?? []) {
@@ -1792,18 +1798,30 @@ const fetchScanContext = async () => {
     }
 
     const keys = new Set<string>();
+    const subtreeRecords: { id: string; relPath: string }[] = [];
+    const targetSerial = targetDrive ? serialOf[targetDrive.toUpperCase()] : null;
+    const normRoot = (targetRootRel ?? '').toLowerCase();
+
     const PAGE = 200;
     for (let pageNo = 1; ; pageNo++) {
         const res = await getAction(`${API_BASE}/getHistory?pageNo=${pageNo}&pageSize=${PAGE}`);
         for (const r of res?.records ?? []) {
-            // 统一转小写：NTFS 不区分大小写，而 relPath 是从用户给的路径里切出来的，
-            // 大小写未必和当初写进缓存的那一次一致（relPath 大小写未归一化是已知观察项）
+            const normRel = (r.relPath || '').toLowerCase();
             keys.add(`${r.serial}|${r.relPath}`.toLowerCase());
+
+            if (targetSerial && r.serial === targetSerial && r._id) {
+                const inSubtree = normRoot === ''
+                    ? true
+                    : (normRel === normRoot || normRel.startsWith(normRoot + '/'));
+                if (inSubtree) {
+                    subtreeRecords.push({ id: r._id, relPath: r.relPath });
+                }
+            }
         }
         if (pageNo * PAGE >= (Number(res?.total) || 0)) break;
     }
 
-    return { serialOf, keys };
+    return { serialOf, keys, subtreeRecords };
 };
 
 /**
@@ -1848,8 +1866,14 @@ const startScan = async (rescan: boolean) => {
     scanPending.value = 1;
     let processed = 0;
 
+    const rootParts = splitDrive(root);
+    const rootDrive = rootParts?.drive;
+    const rootRel = rootParts?.relPath ?? '';
+    const visitedRel = new Set<string>();
+    const failedPrefixes: string[] = [];
+
     try {
-        const { serialOf, keys } = await fetchScanContext();
+        const { serialOf, keys, subtreeRecords } = await fetchScanContext(rootDrive, rootRel);
         const keyOf = (dir: string) => {
             const parts = splitDrive(dir);
             if (!parts) return null;
@@ -1869,6 +1893,10 @@ const startScan = async (rescan: boolean) => {
             try {
                 // 补全模式不带 noCache：命中缓存时服务端只回缓存，不碰盘
                 let items = await requestFolder(dir, rescan);
+                const dirParts = splitDrive(dir);
+                if (dirParts) {
+                    visitedRel.add(dirParts.relPath);
+                }
 
                 // 「补全」现在还欠一样东西：**预览大图**。
                 // 2026-10-04 图片出库那次迁移只搬得走库里已有的**缩略图**，所以迁移来的那些层
@@ -1900,15 +1928,38 @@ const startScan = async (rescan: boolean) => {
                     visited.add(norm);
                     queue.push(child);
                 }
-            } catch (err) {
+            } catch (err: any) {
                 // 单个目录失败不中断整轮 —— 和 readFolder 里"逐项 try/catch"同一个原则
                 console.error('[批量扫描] 目录失败:', dir, err);
+                const dirParts = splitDrive(dir);
+                if (dirParts && err?.kind !== 'notFound') {
+                    failedPrefixes.push(dirParts.relPath.toLowerCase());
+                }
             }
 
             scanPending.value = queue.length;
 
             processed += 1;
             if (processed % SCAN_BATCH === 0) await new Promise(r => setTimeout(r, 0));
+        }
+
+        if (rescan && !scanCancelled && queue.length === 0) {
+            const orphanIds = subtreeRecords
+                .filter(rec => {
+                    if (visitedRel.has(rec.relPath)) return false;
+                    if (failedPrefixes.some(fp => rec.relPath === fp || rec.relPath.startsWith(fp + '/'))) {
+                        return false;
+                    }
+                    return true;
+                })
+                .map(rec => rec.id);
+
+            if (orphanIds.length > 0) {
+                console.log(`[重读这一片] 清理已在磁盘上删除的孤儿缓存: ${orphanIds.length} 条`);
+                await postAction(`${API_BASE}/removeHistoryBatch`, { ids: orphanIds }).catch((e: unknown) => {
+                    console.error('[重读这一片] 清理孤儿缓存失败:', e);
+                });
+            }
         }
     } catch (err) {
         // 连已缓存集合/盘列表都取不到（服务没起来）—— 再往下扫也没意义，直接报错收工

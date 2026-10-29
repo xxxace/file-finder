@@ -509,7 +509,11 @@ export function insertCache(doc: SearchCache): Promise<void> {
 export function removeCache(serial: string, relPath: string, mode: OpenMode): Promise<number> {
     assertUsable();
     return new Promise((resolve, reject) => {
-        nedb.remove({ serial, relPath, mode }, {}, (err, n) => (err ? reject(err) : resolve(n)));
+        // Windows 文件系统大小写不敏感：清理缓存时对同一盘下的 relPath 采用不区分大小写匹配，
+        // 这样当文件夹更名大小写（如 Julia -> JULIA）时，旧大小写的记录会被彻底清理，避免双胞胎残留。
+        const escaped = relPath.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+        const regex = new RegExp(`^${escaped}$`, 'i');
+        nedb.remove({ serial, relPath: regex, mode }, { multi: true }, (err, n) => (err ? reject(err) : resolve(n)));
     });
 }
 
