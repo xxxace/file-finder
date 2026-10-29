@@ -347,8 +347,7 @@ async function readFolder(
         // `kind` 是给前端用的**机器可读**分类，由 `route()` 原样透传、
         // 由 `request.ts` 的 ApiError 接住。前端据此决定横幅文案与"要不要让他重试"，
         // **不是**去 match 这里的文案 —— 那样文案改一个字，判别就静默失效。
-        const err = new Error(`读不到这个文件夹（${code}）`) as Error & { kind?: string };
-        err.kind = 'unreadable';
+        const err = Object.assign(new Error(`读不到这个文件夹（${code}）`), { code, kind: 'unreadable' }) as Error & { kind?: string; code?: string };
         throw err;
     }
 
@@ -882,9 +881,10 @@ async function toAnchor(items: FileInfo[], serial: string, relPath: string): Pro
  */
 const writeChains = new Map<string, Promise<void>>();
 
-function queueCacheWrite<T>(serial: string, relPath: string, mode: OpenMode, task: () => Promise<T>): Promise<T> {
+export function queueCacheWrite<T>(serial: string, relPath: string, mode: OpenMode, task: () => Promise<T>): Promise<T> {
     // 分隔符用 \u0000：Windows 文件名里不可能出现，不会有 A|B 和 A|B 撞键的歧义
-    const key = `${serial}\u0000${relPath}\u0000${mode}`;
+    // 归一化为小写：确保 Windows 下不同大小写的写入串行在同一条链上
+    const key = `${serial}\u0000${relPath.toLowerCase()}\u0000${mode}`;
     const prev = writeChains.get(key) ?? Promise.resolve();
     const run = prev.then(task, task);
 
@@ -938,13 +938,18 @@ async function verifyAndEvictIfDeleted(drive: string, serial: string, relPath: s
         // 核验物理盘上的真实大小写（Windows 下 fs.realpath 获取实际存在的大小写）
         const real = await fsasync.realpath(fullPath);
         const parts = splitPath(real);
-        if (parts && parts.relPath !== relPath) {
-            // 大小写已被重命名（例如 Julia -> JULIA）
-            // 旧大小写的记录必须剔除！
-            await evictDeletedCache(serial, relPath);
-            const err = new Error(`文件夹名称大小写已变更: ${relPath} -> ${parts.relPath}`) as Error & { kind?: string };
-            err.kind = 'notFound';
-            throw err;
+        if (parts && parts.drive.toUpperCase() === drive.toUpperCase()) {
+            const normRel = relPath.replace(/\/+$/, '');
+            const normRealRel = parts.relPath.replace(/\/+$/, '');
+            // 严格限定只有在同路径但大小写不一致时才判定为更名，避免联接点(junction/symlink)或斜杠被误判
+            if (normRealRel.toLowerCase() === normRel.toLowerCase() && normRealRel !== normRel) {
+                // 大小写已被重命名（例如 Julia -> JULIA）
+                // 旧大小写的记录必须剔除！
+                await evictDeletedCache(serial, relPath);
+                const err = new Error(`文件夹名称大小写已变更: ${relPath} -> ${parts.relPath}`) as Error & { kind?: string };
+                err.kind = 'notFound';
+                throw err;
+            }
         }
     } catch (e: any) {
         if (e?.code === 'ENOENT' || e?.code === 'ENOTDIR' || String(e?.message).includes('ENOENT')) {
@@ -963,14 +968,32 @@ async function verifyAndEvictIfDeleted(drive: string, serial: string, relPath: s
     }
 }
 async function scanAndCache(serial: string, drive: string, relPath: string, mode: OpenMode): Promise<SearchCache> {
+    const fullPath = toFullPath(drive, relPath);
+    let canonicalRelPath = relPath;
+    if (relPath) {
+        try {
+            const real = await fsasync.realpath(fullPath);
+            const realParts = splitPath(real);
+            if (realParts && realParts.drive.toUpperCase() === drive.toUpperCase()) {
+                const normReq = relPath.replace(/\/+$/, '').toLowerCase();
+                const normReal = realParts.relPath.replace(/\/+$/, '').toLowerCase();
+                if (normReq === normReal) {
+                    canonicalRelPath = realParts.relPath.replace(/\/+$/, '');
+                }
+            }
+        } catch {
+            // realpath 出错会在下方的 readFolder 中被捕获并走 ENOENT 处理
+        }
+    }
+
     // ★ 取这一层的**旧条目作对账基线**：源文件没变的那些缩略图直接复用，不再重抽。
     //   为什么在这儿查、而不是让调用方传进来：`scanAndCache` 是**唯一**的写缓存口，
     //   它自己保证"读旧 → 读盘 → 写新"是一件事，比要求每个调用方记得传 prev 更漏不掉。
     //   代价只是一次 `findCache` —— **纯内存查询、零读盘**（nedb 启动时整库已载入内存）。
-    const prevDoc = await findCache(serial, relPath, mode);
+    const prevDoc = await findCache(serial, canonicalRelPath, mode);
     let data: FileInfo[];
     try {
-        data = await readFolder(toFullPath(drive, relPath), mode, serial, relPath, prevDoc?.data);
+        data = await readFolder(toFullPath(drive, canonicalRelPath), mode, serial, canonicalRelPath, prevDoc?.data);
     } catch (e: any) {
         if (relPath && (e?.code === 'ENOENT' || e?.code === 'ENOTDIR' || String(e?.message).includes('ENOENT'))) {
             const diskNow = await findDriveByLetter(drive);
@@ -987,20 +1010,25 @@ async function scanAndCache(serial: string, drive: string, relPath: string, mode
     const doc: SearchCache = {
         v: CACHE_VERSION,
         serial,
-        relPath,
+        relPath: canonicalRelPath,
         mode,
         count: data.length,
         data,
         create_at: dayjs().format('YYYY-MM-DD HH:mm:ss'),
     };
 
+    // 如果请求的大小写和真实磁盘大小写不同，先清理旧大小写的缓存
+    if (canonicalRelPath.toLowerCase() === relPath.toLowerCase() && canonicalRelPath !== relPath) {
+        await removeCache(serial, relPath, mode);
+    }
+
     // 「先删后插」两步收进同主键的串行队列 —— 见 queueCacheWrite。
     // 读盘（readFolder）留在队列外面：它慢，而且两个并发扫描各读各的没有危害，
     // 真正会互相破坏的只有"写"这一段。后写的整条覆盖先写的，这正是想要的语义
-    await queueCacheWrite(serial, relPath, mode, async () => {
+    await queueCacheWrite(serial, canonicalRelPath, mode, async () => {
         // 先删后插：nedb 是 append-only，直接 insert 会在文件里留下两份，
         // 而且 findCache 会取到旧的那份
-        await removeCache(serial, relPath, mode);
+        await removeCache(serial, canonicalRelPath, mode);
         await insertCache(doc);
     });
 
@@ -1020,6 +1048,7 @@ async function openFolderController(req: Req, res: http.ServerResponse) {
     const raw = req.params?.get('path');
     const mode = (req.params?.get('mode') || 'folder') as OpenMode;
     const noCache = req.params?.get('noCache') === 'true';
+    const verifyRequested = req.params?.get('verify') === 'true';
 
     if (!raw) return sendJson(res, []);
 
@@ -1077,7 +1106,7 @@ async function openFolderController(req: Req, res: http.ServerResponse) {
     const cached = noCache ? null : await findCache(serial, relPath, mode);
     const doc = cached ?? (await scanAndCache(serial, drive, relPath, mode));
 
-    if (cached) {
+    if (cached && verifyRequested) {
         await verifyAndEvictIfDeleted(drive, serial, relPath);
     }
 

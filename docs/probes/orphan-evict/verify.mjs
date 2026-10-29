@@ -107,10 +107,10 @@ async function main() {
     const historyBefore = await request('GET', `/getHistory?pageNo=1&pageSize=50`);
     console.log('  当前总缓存数:', historyBefore.body?.total);
 
-    console.log('\n[PROBE] 2. 从磁盘删除 folderB，再次以 noCache=false 访问 folderB...');
+    console.log('\n[PROBE] 2. 从磁盘删除 folderB，再次以 verify=true 访问 folderB...');
     fs.rmSync(path.join(testRoot, 'folderB'), { recursive: true, force: true });
 
-    const rB_cached = await request('GET', `/openFolder?path=${encodeURIComponent(path.join(testRoot, 'folderB'))}&mode=cover`);
+    const rB_cached = await request('GET', `/openFolder?path=${encodeURIComponent(path.join(testRoot, 'folderB'))}&mode=cover&verify=true`);
     console.log('  访问已删目录响应:', rB_cached.status, rB_cached.body);
 
     const historyAfterDel = await request('GET', `/getHistory?pageNo=1&pageSize=50`);
@@ -123,8 +123,8 @@ async function main() {
     fs.renameSync(path.join(testRoot, 'caseFolder', 'Julia'), path.join(testRoot, 'caseFolder', 'JULIA_TMP'));
     fs.renameSync(path.join(testRoot, 'caseFolder', 'JULIA_TMP'), path.join(testRoot, 'caseFolder', 'JULIA'));
 
-    console.log('  以旧大小写访问 caseFolder/Julia (noCache=false)...');
-    const rJulia_old = await request('GET', `/openFolder?path=${encodeURIComponent(path.join(testRoot, 'caseFolder', 'Julia'))}&mode=cover`);
+    console.log('  以旧大小写访问 caseFolder/Julia (verify=true)...');
+    const rJulia_old = await request('GET', `/openFolder?path=${encodeURIComponent(path.join(testRoot, 'caseFolder', 'Julia'))}&mode=cover&verify=true`);
     console.log('  旧大小写响应:', rJulia_old.status, rJulia_old.body);
 
     const pass2 = rJulia_old.status === 500 && rJulia_old.body?.kind === 'notFound';

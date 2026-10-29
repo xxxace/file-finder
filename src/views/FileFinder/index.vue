@@ -1818,7 +1818,7 @@ const fetchScanContext = async (targetDrive?: string, targetRootRel?: string) =>
                 }
             }
         }
-        if (pageNo * PAGE >= (Number(res?.total) || 0)) break;
+        if (!res?.records?.length || pageNo * PAGE >= (Number(res?.total) || 0)) break;
     }
 
     return { serialOf, keys, subtreeRecords };
@@ -1944,10 +1944,16 @@ const startScan = async (rescan: boolean) => {
         }
 
         if (rescan && !scanCancelled && queue.length === 0) {
+            const visitedRelNorm = new Set<string>();
+            for (const r of visitedRel) {
+                visitedRelNorm.add(r.toLowerCase());
+            }
+
             const orphanIds = subtreeRecords
                 .filter(rec => {
-                    if (visitedRel.has(rec.relPath)) return false;
-                    if (failedPrefixes.some(fp => rec.relPath === fp || rec.relPath.startsWith(fp + '/'))) {
+                    const normRel = (rec.relPath || '').toLowerCase();
+                    if (visitedRelNorm.has(normRel)) return false;
+                    if (failedPrefixes.some(fp => normRel === fp || normRel.startsWith(fp + '/'))) {
                         return false;
                     }
                     return true;
@@ -2064,7 +2070,7 @@ const moreOptions = computed(() => [
     { label: '补全这一片', key: 'fill', disabled: scanning.value || picking.value || !history.value.length || readOnlyLevel.value },
     { label: '重读这一片', key: 'rescan', disabled: scanning.value || picking.value || !history.value.length || readOnlyLevel.value },
     { label: '补封面', key: 'cover', disabled: scanning.value },
-    { label: '女优头像回收', key: 'avatar-recovery', disabled: scanning.value || readOnlyLevel.value },
+    { label: '女优头像回收', key: 'avatar-recovery', disabled: scanning.value || picking.value || !history.value.length || readOnlyLevel.value },
     // 「站点规则」= 抓取规则的编辑器（入口 / 动作 / 抽取三段）。它是**系统盘上的配置**，
     // 与移动硬盘无关 ⇒ 离线只读层里也允许打开（不禁用）。
     { label: '站点规则', key: 'rules' },

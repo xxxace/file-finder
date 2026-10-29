@@ -144,9 +144,6 @@ export function parseJavBusSearchHtml(
     );
     if (partial) return partial;
 
-    // 3. 只有一个结果且非空，直接返回
-    if (items.length === 1) return items[0];
-
     return null;
 }
 

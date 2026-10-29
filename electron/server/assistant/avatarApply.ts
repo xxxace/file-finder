@@ -13,6 +13,7 @@ import * as fsasync from 'node:fs/promises';
 import path from 'node:path';
 import { getDrives } from '../../utils/driveIdentity';
 import { removeCache } from '../nedb';
+import { queueCacheWrite } from '../index';
 import { toJpeg, download } from './apply';
 import { GFRIENDS_MIRRORS } from './gfriends';
 
@@ -54,7 +55,8 @@ export async function saveAvatarFile(
     // 1. 若旧头像存在，先备份至数据目录
     try {
         await fsasync.access(targetFile);
-        const backupDir = path.join(dataDir, 'backups', serial, relDir);
+        const cleanRel = path.normalize(relDir).replace(/^([\\/]+)/, '').replace(/^[A-Za-z]:[\\/]+/, '');
+        const backupDir = path.join(dataDir, 'backups', serial, cleanRel);
         await fsasync.mkdir(backupDir, { recursive: true });
         await fsasync.copyFile(targetFile, path.join(backupDir, 'avatar.jpg'));
     } catch {
@@ -106,7 +108,13 @@ async function downloadBuffer(url: string, timeoutMs = 8000): Promise<Buffer | n
     try {
         const controller = new AbortController();
         const timer = setTimeout(() => controller.abort(), timeoutMs);
-        const res = await fetch(url, { signal: controller.signal });
+        const headers: Record<string, string> = {
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+        };
+        if (url.includes('javbus.com') || url.includes('dmm.co.jp')) {
+            headers['Referer'] = 'https://www.javbus.com/';
+        }
+        const res = await fetch(url, { signal: controller.signal, headers });
         clearTimeout(timer);
         if (res.ok) {
             const arrayBuf = await res.arrayBuffer();
@@ -193,7 +201,18 @@ export async function applyActressAvatars(
     const workers = Array.from({ length: Math.min(concurrency, items.length) }, async () => {
         while (nextIndex < items.length) {
             const item = items[nextIndex++];
-            const targetDir = path.join(diskRoot, item.relDir);
+            const cleanRel = path.normalize(item.relDir).replace(/^([\\/]+)/, '').replace(/^[A-Za-z]:[\\/]+/, '');
+            const targetDir = path.resolve(diskRoot, cleanRel);
+            if (!targetDir.startsWith(path.resolve(diskRoot))) {
+                result.failed += 1;
+                result.logs.push({
+                    relDir: item.relDir,
+                    status: 'error',
+                    message: '非法路径，禁止跨目录操作',
+                });
+                continue;
+            }
+
             const jpegBuf = await fetchAndTranscode(item.avatarUrl, previewCache);
 
             if (!jpegBuf) {
@@ -206,14 +225,14 @@ export async function applyActressAvatars(
                 continue;
             }
 
-            const saved = await saveAvatarFile(serial, item.relDir, targetDir, jpegBuf, dataDir);
+            const saved = await saveAvatarFile(serial, cleanRel, targetDir, jpegBuf, dataDir);
             if (saved) {
                 result.succeeded += 1;
                 result.logs.push({ relDir: item.relDir, status: 'ok' });
 
                 // 收集待失效目录
-                invalidateDirs.add(item.relDir);
-                invalidateDirs.add(dirOf(item.relDir));
+                invalidateDirs.add(cleanRel);
+                invalidateDirs.add(dirOf(cleanRel));
             } else {
                 result.failed += 1;
                 result.logs.push({
@@ -227,8 +246,8 @@ export async function applyActressAvatars(
 
     await Promise.all(workers);
 
-    // ── ③ 统一失效 NeDB 缓存（去重后执行，避免父层目录重复被删除几十次） ──
-    const cachePromises = [...invalidateDirs].map(dir => removeCache(serial, dir, 'cover'));
+    // ── ③ 统一失效 NeDB 缓存（经由 queueCacheWrite 保证串行与缓存一致性） ──
+    const cachePromises = [...invalidateDirs].map(dir => queueCacheWrite(serial, dir, 'cover', () => removeCache(serial, dir, 'cover')));
     await Promise.all(cachePromises);
 
     return result;

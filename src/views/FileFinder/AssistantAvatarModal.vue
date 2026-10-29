@@ -2,7 +2,9 @@
     <n-modal
         :show="show"
         preset="card"
-        title="女优头像回收（JavBus 官方高清）"
+        :title="'女优头像回收（' + (activeSource === 'javbus' ? 'JavBus 官方高清' : 'Gfriends 社区精选') + '）'"
+        :mask-closable="!applying"
+        :close-on-esc="!applying"
         style="width: 90vw; max-width: 1080px; height: 85vh"
         content-style="display: flex; flex-direction: column; overflow: hidden; padding: 16px 20px"
         @update:show="onClose"
@@ -297,16 +299,18 @@ const matchedCount = computed(() => {
 });
 
 const selectedCount = computed(() => {
-    return candidates.value.filter(c => c.selected).length;
+    return candidates.value.filter(c => c.selected && c.avatarUrl).length;
 });
 
 const isAllSelected = computed(() => {
-    return candidates.value.length > 0 && candidates.value.every(c => c.selected);
+    const actionable = candidates.value.filter(c => !!c.avatarUrl);
+    return actionable.length > 0 && actionable.every(c => c.selected);
 });
 
 const isIndeterminate = computed(() => {
-    const sel = selectedCount.value;
-    return sel > 0 && sel < candidates.value.length;
+    const actionable = candidates.value.filter(c => !!c.avatarUrl);
+    const count = actionable.filter(c => c.selected).length;
+    return count > 0 && count < actionable.length;
 });
 
 function onClose() {
@@ -314,12 +318,12 @@ function onClose() {
 }
 
 function selectAll(val: boolean) {
-    candidates.value.forEach(c => (c.selected = val));
+    candidates.value.forEach(c => (c.selected = val && !!c.avatarUrl));
 }
 
 function selectMatchedOnly() {
     candidates.value.forEach(c => {
-        c.selected = c.status === 'matched';
+        c.selected = c.status === 'matched' && !!c.avatarUrl;
     });
 }
 
@@ -329,6 +333,10 @@ function toggleSelectAll(e: Event) {
 }
 
 async function resolveDriveContext() {
+    activeSerial.value = '';
+    activeRelPath.value = '';
+    activeIsOnline.value = false;
+
     if (props.serial) {
         activeSerial.value = props.serial;
         activeRelPath.value = props.relPath || '';
@@ -457,6 +465,7 @@ async function recheckName(row: AvatarRow) {
             row.matchedName = null;
             row.avatarUrl = null;
             row.source = undefined;
+            row.selected = false;
         }
     } catch {
         // 静默处理单条匹配错误
@@ -517,6 +526,8 @@ async function runApply() {
                 failed: res.result.failed,
             };
             if (res.result.succeeded > 0) {
+                const okDirs = new Set(res.result.logs.filter((l: any) => l.status === 'ok').map((l: any) => l.relDir));
+                candidates.value = candidates.value.filter(c => !okDirs.has(c.relDir));
                 message.success(`成功写入 ${res.result.succeeded} 个目录头像${res.result.failed > 0 ? `，${res.result.failed} 个失败` : ''}`);
                 emit('applied'); // 触发主网格刷新
             } else {
