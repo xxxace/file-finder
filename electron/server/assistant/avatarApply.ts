@@ -140,8 +140,12 @@ export async function applyActressAvatars(
     }
 
     // ── ① 在线盘强校验闸门：离线盘坚决抛错拒绝 ──
-    const drives = await getDrives();
-    const drive = drives.find(d => d.serial.toUpperCase() === serial.toUpperCase());
+    let drives = await getDrives();
+    let drive = drives.find(d => d.serial.toUpperCase() === serial.toUpperCase());
+    if (!drive || !drive.root) {
+        drives = await getDrives(true);
+        drive = drives.find(d => d.serial.toUpperCase() === serial.toUpperCase());
+    }
 
     if (!drive || !drive.root) {
         throw new Error(`目标磁盘 (${serial}) 处于离线状态，禁止执行写盘与缓存操作`);

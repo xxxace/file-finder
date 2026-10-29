@@ -98,7 +98,7 @@
                                     <div class="avatar-preview-box">
                                         <n-image
                                             v-if="row.avatarUrl"
-                                            :src="row.avatarUrl"
+                                            :src="previewSrc(row.avatarUrl)"
                                             width="44"
                                             height="44"
                                             object-fit="cover"
@@ -199,7 +199,11 @@ import { ref, computed, watch } from 'vue';
 import {
     NModal, NAlert, NButton, NSpin, NImage, NTag, NInput, NPopover, NPopconfirm, useMessage
 } from 'naive-ui';
-import { getAction, postAction } from '@/utils/request';
+import { apiUrl, getAction, postAction } from '@/utils/request';
+
+const API_BASE = 'http://127.0.0.1:3060';
+const previewSrc = (url?: string | null) =>
+    url ? apiUrl(`${API_BASE}/assistant/preview?url=${encodeURIComponent(url)}`) : '';
 
 const props = withDefaults(
     defineProps<{
@@ -247,7 +251,7 @@ const activeRelPath = ref('');
 const activeIsOnline = ref(true);
 
 const currentPathDisplay = computed(() => {
-    return activeRelPath.value ? activeRelPath.value : (props.currentPath || '当前目录');
+    return props.currentPath || (activeRelPath.value ? `${activeSerial.value}/${activeRelPath.value}` : '当前目录');
 });
 
 const matchedCount = computed(() => {
@@ -321,11 +325,20 @@ async function resolveDriveContext() {
             .replace(/^\/+/, '')
             .replace(/\/+$/, '');
         try {
-            const res = (await getAction('/getDisks')) as { disks?: { serial: string; drive: string }[] };
-            const disk = (res.disks || []).find(d => d.drive?.toUpperCase() === letter);
+            let res = (await getAction(`${API_BASE}/getDisks`)) as {
+                disks?: { serial: string; drive: string; online?: boolean }[];
+            };
+            let disk = (res.disks || []).find(d => d.drive?.toUpperCase() === letter);
+            // 若内存缓存盘表中未找到，加 refresh=true 重新探测系统挂载盘符
+            if (!disk || !disk.serial) {
+                res = (await getAction(`${API_BASE}/getDisks?refresh=true`)) as {
+                    disks?: { serial: string; drive: string; online?: boolean }[];
+                };
+                disk = (res.disks || []).find(d => d.drive?.toUpperCase() === letter);
+            }
             if (disk && disk.serial) {
                 activeSerial.value = disk.serial;
-                activeIsOnline.value = true;
+                activeIsOnline.value = disk.online !== false;
             } else {
                 activeIsOnline.value = false;
             }
@@ -342,7 +355,7 @@ async function runScan() {
     applyResult.value = null;
 
     try {
-        const res = (await postAction('/assistant/avatar/scan', {
+        const res = (await postAction(`${API_BASE}/assistant/avatar/scan`, {
             serial: activeSerial.value,
             relPath: activeRelPath.value,
         })) as {
@@ -382,7 +395,7 @@ async function recheckName(row: AvatarRow) {
     if (!name) return;
 
     try {
-        const res = (await postAction('/assistant/avatar/match', { name })) as {
+        const res = (await postAction(`${API_BASE}/assistant/avatar/match`, { name })) as {
             code: number;
             matched: boolean;
             matchedName?: string;
@@ -432,7 +445,7 @@ async function runApply() {
 
     applying.value = true;
     try {
-        const res = (await postAction('/assistant/avatar/apply', {
+        const res = (await postAction(`${API_BASE}/assistant/avatar/apply`, {
             serial: activeSerial.value,
             items: selectedItems,
         })) as {
@@ -470,7 +483,7 @@ async function runApply() {
 async function updateIndex() {
     updatingIndex.value = true;
     try {
-        const res = (await postAction('/assistant/avatar/index-update', {})) as {
+        const res = (await postAction(`${API_BASE}/assistant/avatar/index-update`, {})) as {
             code: number;
             actorCount?: number;
             error?: string;
