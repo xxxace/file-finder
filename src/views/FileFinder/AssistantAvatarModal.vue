@@ -2,7 +2,7 @@
     <n-modal
         :show="show"
         preset="card"
-        title="女优头像回收（基于 Gfriends）"
+        title="女优头像回收（JavBus 官方高清）"
         style="width: 90vw; max-width: 1080px; height: 85vh"
         content-style="display: flex; flex-direction: column; overflow: hidden; padding: 16px 20px"
         @update:show="onClose"
@@ -22,7 +22,16 @@
                 <span class="avatar-hint">（仅扫描该目录下一级的直属子文件夹）</span>
             </div>
             <div class="avatar-modal-actions">
+                <span class="avatar-label" style="font-size: 12px">数据源：</span>
+                <n-select
+                    v-model:value="activeSource"
+                    size="small"
+                    style="width: 175px"
+                    :disabled="applying || scanning"
+                    :options="sourceOptions"
+                />
                 <n-button
+                    v-if="activeSource === 'gfriends'"
                     size="small"
                     tertiary
                     :loading="updatingIndex"
@@ -46,7 +55,10 @@
         <!-- 主体区域：表格或空态 -->
         <div class="avatar-modal-body">
             <div v-if="scanning" class="avatar-modal-center">
-                <n-spin size="medium" description="正在读取目录并匹配 Gfriends 索引..." />
+                <n-spin
+                    size="medium"
+                    :description="activeSource === 'javbus' ? '正在读取目录并通过 JavBus 检索官方大头照...' : '正在读取目录并匹配 Gfriends 索引...'"
+                />
             </div>
 
             <div v-else-if="!candidates.length && hasScanned" class="avatar-modal-center avatar-empty">
@@ -129,9 +141,17 @@
                                     />
                                 </td>
                                 <td>
-                                    <n-tag v-if="row.status === 'matched'" size="small" type="success" :bordered="false">
-                                        {{ row.matchedName || '已匹配' }}
-                                    </n-tag>
+                                    <template v-if="row.status === 'matched'">
+                                        <n-tag size="small" type="success" :bordered="false">
+                                            {{ row.matchedName || '已匹配' }}
+                                        </n-tag>
+                                        <n-tag v-if="row.source === 'javbus'" size="tiny" type="info" :bordered="false" style="margin-left: 4px">
+                                            JavBus
+                                        </n-tag>
+                                        <n-tag v-else-if="row.source === 'gfriends'" size="tiny" :bordered="false" style="margin-left: 4px">
+                                            Gfriends
+                                        </n-tag>
+                                    </template>
                                     <n-tag v-else size="small" type="warning" :bordered="false">
                                         未找到
                                     </n-tag>
@@ -207,7 +227,7 @@
 <script setup lang="ts">
 import { ref, computed, watch } from 'vue';
 import {
-    NModal, NAlert, NButton, NSpin, NImage, NTag, NInput, NPopover, NPopconfirm, useMessage
+    NModal, NAlert, NButton, NSpin, NImage, NTag, NInput, NPopover, NPopconfirm, NSelect, useMessage
 } from 'naive-ui';
 import { apiUrl, getAction, postAction } from '@/utils/request';
 
@@ -247,7 +267,14 @@ interface AvatarRow {
     status: 'matched' | 'unmatched';
     selected: boolean;
     manualUrl?: string;
+    source?: 'javbus' | 'gfriends';
 }
+
+const activeSource = ref<'javbus' | 'gfriends'>('javbus');
+const sourceOptions = [
+    { label: 'JavBus 官方写真 (推荐)', value: 'javbus' },
+    { label: 'Gfriends 社区库', value: 'gfriends' },
+];
 
 const scanning = ref(false);
 const applying = ref(false);
@@ -369,6 +396,7 @@ async function runScan() {
         const res = (await postAction(`${API_BASE}/assistant/avatar/scan`, {
             serial: activeSerial.value,
             relPath: activeRelPath.value,
+            source: activeSource.value,
         })) as {
             code: number;
             candidates: {
@@ -378,6 +406,7 @@ async function runScan() {
                 matchedName: string | null;
                 avatarUrl: string | null;
                 status: 'matched' | 'unmatched';
+                source?: 'javbus' | 'gfriends';
             }[];
             error?: string;
         };
@@ -406,22 +435,28 @@ async function recheckName(row: AvatarRow) {
     if (!name) return;
 
     try {
-        const res = (await postAction(`${API_BASE}/assistant/avatar/match`, { name })) as {
+        const res = (await postAction(`${API_BASE}/assistant/avatar/match`, {
+            name,
+            source: activeSource.value,
+        })) as {
             code: number;
             matched: boolean;
             matchedName?: string;
             avatarUrl?: string;
+            source?: 'javbus' | 'gfriends';
         };
 
         if (res.code === 200 && res.matched && res.avatarUrl) {
             row.status = 'matched';
             row.matchedName = res.matchedName || name;
             row.avatarUrl = res.avatarUrl;
+            row.source = res.source;
             row.selected = true;
         } else {
             row.status = 'unmatched';
             row.matchedName = null;
             row.avatarUrl = null;
+            row.source = undefined;
         }
     } catch {
         // 静默处理单条匹配错误
@@ -535,6 +570,13 @@ watch(
         }
     }
 );
+
+// 切换数据源时若已扫描过则自动重新扫描
+watch(activeSource, () => {
+    if (activeIsOnline.value && activeSerial.value && hasScanned.value) {
+        runScan();
+    }
+});
 </script>
 
 <style scoped>
