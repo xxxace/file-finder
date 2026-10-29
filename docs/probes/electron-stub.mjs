@@ -47,3 +47,11 @@ export const net = {
 export const session = {
     fromPartition: () => ({}),
 };
+
+export const BrowserWindow = class {
+    loadURL() { return Promise.resolve(); }
+    webContents = {
+        executeJavaScript() { return Promise.resolve(null); },
+    };
+    destroy() {}
+};
