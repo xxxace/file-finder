@@ -730,14 +730,14 @@ export function createAssistantRoutes(deps: AssistantDeps): AssistantRoute[] {
     async function avatarApply(req: ReqLike, res: http.ServerResponse) {
         const { serial, items } = req.body || {};
         if (!serial || !Array.isArray(items)) {
-            sendJson(res, { code: 400, error: '缺少 serial 或 items' });
+            sendJson(res, { code: 400, error: '缺少 serial 或 items' }, 400);
             return;
         }
         try {
             const result = await applyActressAvatars(serial, items as AvatarApplyItem[], dataDir);
             sendJson(res, { code: 200, result });
         } catch (e) {
-            sendJson(res, { code: 500, error: String(e) });
+            sendJson(res, { code: 400, error: e instanceof Error ? e.message : String(e) }, 400);
         }
     }
 

@@ -2,17 +2,19 @@
  * 女优头像安全写入与缓存失效
  * ===========================================================================
  * 强约束：
- * 1. 在线盘闸门：如果盘处于离线状态（未在 getDrives() 中找到挂载路径），坚决拒绝写盘与缓存操作。
+ * 1. 在线盘闸门：如果盘处于离线状态（未在 getDrives() 中找到挂载路径），坚决拒绝写盘与缓存操作（抛错返回 400）。
  * 2. 旧图备份：如果目标目录已有 avatar.jpg，先备份到 ~/.file-finder/backups/<serial>/<relDir>/avatar.jpg
  * 3. 限制并发下载与写入（3 并发）
- * 4. 转 JPEG 后原子写入：.avatar-<pid>-<time>.tmp -> avatar.jpg
- * 5. 缓存失效：同时失效当前目录与其父目录的 'cover' 缓存，以便让目录在网格立即长脸
+ * 4. 多 CDN 镜像自动回退：默认 fastly 失败则自动重试 cdn.jsdelivr.net / raw.githubusercontent.com
+ * 5. 转 JPEG 后原子写入：.avatar-<pid>-<time>.tmp -> avatar.jpg
+ * 6. 缓存失效：同时失效当前目录与其父目录的 'cover' 缓存，并等待 NeDB 清除完成后再返回，避免刷新竞态
  */
 import * as fsasync from 'node:fs/promises';
 import path from 'node:path';
 import { getDrives } from '../../utils/driveIdentity';
 import { removeCache } from '../nedb';
 import { toJpeg } from './apply';
+import { GFRIENDS_MIRRORS } from './gfriends';
 
 export interface AvatarApplyItem {
     relDir: string;
@@ -75,32 +77,51 @@ export async function saveAvatarFile(
 }
 
 /**
- * 下载单个图片并转成标准 JPEG Buffer
+ * 若给定的 URL 来自 Gfriends，提取出相对路径并生成各个可用镜像 URL 列表，用于容灾回退。
+ */
+function getCandidateUrls(originalUrl: string): string[] {
+    for (const mirror of GFRIENDS_MIRRORS) {
+        if (originalUrl.startsWith(mirror)) {
+            const rel = originalUrl.slice(mirror.length);
+            return GFRIENDS_MIRRORS.map(m => `${m}${rel}`);
+        }
+    }
+    return [originalUrl];
+}
+
+/**
+ * 下载单个图片并转成标准 JPEG Buffer，支持多 CDN 镜像自动重试回退。
  */
 async function fetchAndTranscode(url: string): Promise<Buffer | null> {
-    try {
-        const controller = new AbortController();
-        const timer = setTimeout(() => controller.abort(), 12000);
-        const res = await fetch(url, { signal: controller.signal });
-        clearTimeout(timer);
+    const candidates = getCandidateUrls(url);
 
-        if (!res.ok) {
-            console.warn(`[avatarApply] 下载失败 HTTP ${res.status}: ${url}`);
-            return null;
+    for (const targetUrl of candidates) {
+        try {
+            const controller = new AbortController();
+            const timer = setTimeout(() => controller.abort(), 6000);
+            const res = await fetch(targetUrl, { signal: controller.signal });
+            clearTimeout(timer);
+
+            if (!res.ok) {
+                continue;
+            }
+
+            const arrayBuf = await res.arrayBuffer();
+            const rawBuf = Buffer.from(arrayBuf);
+            const jpeg = await toJpeg(rawBuf);
+            if (jpeg) return jpeg;
+        } catch {
+            // 当前镜像超时或失败，自动重试下一个镜像
         }
-
-        const arrayBuf = await res.arrayBuffer();
-        const rawBuf = Buffer.from(arrayBuf);
-        return await toJpeg(rawBuf);
-    } catch (e) {
-        console.error(`[avatarApply] 网络请求失败 (${url}):`, e);
-        return null;
     }
+
+    console.warn(`[avatarApply] 尝试所有镜像后下载失败: ${url}`);
+    return null;
 }
 
 /**
  * 批量应用女优头像回收：
- * 强制检查盘在线状态，受控并发下载并原子写盘，最后失效对应层级缓存。
+ * 强制检查盘在线状态，受控并发下载并原子写盘，最后等待缓存失效完成。
  */
 export async function applyActressAvatars(
     serial: string,
@@ -118,21 +139,17 @@ export async function applyActressAvatars(
         return result;
     }
 
-    // ── ① 在线盘强校验闸门 ──
+    // ── ① 在线盘强校验闸门：离线盘坚决抛错拒绝 ──
     const drives = await getDrives();
     const drive = drives.find(d => d.serial.toUpperCase() === serial.toUpperCase());
 
     if (!drive || !drive.root) {
-        const errMessage = `目标磁盘 (${serial}) 处于离线状态，禁止执行写盘与缓存操作`;
-        for (const it of items) {
-            result.logs.push({ relDir: it.relDir, status: 'error', message: errMessage });
-        }
-        result.failed = items.length;
-        return result;
+        throw new Error(`目标磁盘 (${serial}) 处于离线状态，禁止执行写盘与缓存操作`);
     }
 
     const diskRoot = drive.root; // e.g. "H:/"
     const concurrency = 3;
+    const cachePromises: Promise<number>[] = [];
 
     // ── ② 受控并发处理 ──
     for (let i = 0; i < items.length; i += concurrency) {
@@ -147,7 +164,7 @@ export async function applyActressAvatars(
                     result.logs.push({
                         relDir: item.relDir,
                         status: 'error',
-                        message: '头像下载或图片转码失败',
+                        message: '头像下载或图片转码失败（已尝试多镜像回退）',
                     });
                     return;
                 }
@@ -158,8 +175,8 @@ export async function applyActressAvatars(
                     result.logs.push({ relDir: item.relDir, status: 'ok' });
 
                     // ── ③ 缓存失效（同时失效女优目录本身及父层目录） ──
-                    removeCache(serial, item.relDir, 'cover').catch(() => {});
-                    removeCache(serial, dirOf(item.relDir), 'cover').catch(() => {});
+                    cachePromises.push(removeCache(serial, item.relDir, 'cover'));
+                    cachePromises.push(removeCache(serial, dirOf(item.relDir), 'cover'));
                 } else {
                     result.failed += 1;
                     result.logs.push({
@@ -171,6 +188,9 @@ export async function applyActressAvatars(
             })
         );
     }
+
+    // ── ④ 等待所有缓存清除完成，杜绝前端刷新竞态 ──
+    await Promise.all(cachePromises);
 
     return result;
 }

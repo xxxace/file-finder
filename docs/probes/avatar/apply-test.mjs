@@ -34,11 +34,11 @@ try {
 } catch {}
 
 test('applyActressAvatars rejects offline drives', async () => {
-    // Non-existent serial
-    const res = await applyActressAvatars('OFFLINE99', [{ relDir: 'JAV/Test', avatarUrl: 'http://example.com/1.jpg' }], os.tmpdir());
-    assert.equal(res.succeeded, 0);
-    assert.equal(res.failed, 1);
-    assert.ok(res.logs[0].message.includes('离线'));
+    // Non-existent serial should reject with offline error
+    await assert.rejects(
+        () => applyActressAvatars('OFFLINE99', [{ relDir: 'JAV/Test', avatarUrl: 'http://example.com/1.jpg' }], os.tmpdir()),
+        /离线/
+    );
 });
 
 test('saveAvatarFile writes avatar.jpg atomically and creates backup if existing', async () => {

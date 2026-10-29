@@ -8,7 +8,7 @@
         @update:show="onClose"
     >
         <!-- 离线提示 -->
-        <div v-if="!isOnline" style="margin-bottom: 14px">
+        <div v-if="!activeIsOnline" style="margin-bottom: 14px">
             <n-alert type="warning" title="磁盘处于离线状态" :bordered="false">
                 当前目录所在磁盘处于离线（未挂载）状态，仅可查看缓存。如需写入头像及更新缓存，请先将移动硬盘连接至电脑。
             </n-alert>
@@ -24,9 +24,17 @@
             <div class="avatar-modal-actions">
                 <n-button
                     size="small"
+                    tertiary
+                    :loading="updatingIndex"
+                    @click="updateIndex"
+                >
+                    更新索引
+                </n-button>
+                <n-button
+                    size="small"
                     type="primary"
                     :loading="scanning"
-                    :disabled="!isOnline || applying"
+                    :disabled="!activeIsOnline || applying"
                     @click="runScan"
                 >
                     扫描直属目录
@@ -174,7 +182,7 @@
                             size="small"
                             type="primary"
                             :loading="applying"
-                            :disabled="!isOnline || selectedCount === 0 || applying"
+                            :disabled="!activeIsOnline || selectedCount === 0 || applying"
                         >
                             写入选中头像 ({{ selectedCount }})
                         </n-button>
@@ -191,14 +199,23 @@ import { ref, computed, watch } from 'vue';
 import {
     NModal, NAlert, NButton, NSpin, NImage, NTag, NInput, NPopover, NPopconfirm, useMessage
 } from 'naive-ui';
-import { postAction } from '@/utils/request';
+import { getAction, postAction } from '@/utils/request';
 
-const props = defineProps<{
-    show: boolean;
-    serial: string;
-    relPath: string;
-    isOnline: boolean;
-}>();
+const props = withDefaults(
+    defineProps<{
+        show: boolean;
+        currentPath?: string;
+        serial?: string;
+        relPath?: string;
+        isOnline?: boolean;
+    }>(),
+    {
+        currentPath: '',
+        serial: '',
+        relPath: '',
+        isOnline: true,
+    }
+);
 
 const emit = defineEmits<{
     (e: 'update:show', val: boolean): void;
@@ -220,12 +237,17 @@ interface AvatarRow {
 
 const scanning = ref(false);
 const applying = ref(false);
+const updatingIndex = ref(false);
 const hasScanned = ref(false);
 const candidates = ref<AvatarRow[]>([]);
 const applyResult = ref<{ succeeded: number; failed: number } | null>(null);
 
+const activeSerial = ref('');
+const activeRelPath = ref('');
+const activeIsOnline = ref(true);
+
 const currentPathDisplay = computed(() => {
-    return props.relPath ? props.relPath : '根目录';
+    return activeRelPath.value ? activeRelPath.value : (props.currentPath || '当前目录');
 });
 
 const matchedCount = computed(() => {
@@ -264,16 +286,65 @@ function toggleSelectAll(e: Event) {
     selectAll(checked);
 }
 
+async function resolveDriveContext() {
+    if (props.serial) {
+        activeSerial.value = props.serial;
+        activeRelPath.value = props.relPath || '';
+        activeIsOnline.value = props.isOnline ?? true;
+        return;
+    }
+    const pathStr = props.currentPath || '';
+    if (!pathStr) {
+        activeSerial.value = '';
+        activeRelPath.value = '';
+        activeIsOnline.value = false;
+        return;
+    }
+
+    if (pathStr.startsWith('#')) {
+        // 离线只读锚点: #SERIAL/rel/path
+        const rest = pathStr.slice(1);
+        const cut = rest.indexOf('/');
+        activeSerial.value = cut === -1 ? rest : rest.slice(0, cut);
+        activeRelPath.value = cut === -1 ? '' : rest.slice(cut + 1);
+        activeIsOnline.value = false;
+        return;
+    }
+
+    // 在线盘符: H:/...
+    const match = pathStr.match(/^([A-Za-z]):[\\/]?/);
+    if (match) {
+        const letter = match[1].toUpperCase();
+        activeRelPath.value = pathStr
+            .replace(/^[A-Za-z]:[\\/]?/, '')
+            .replace(/\\/g, '/')
+            .replace(/^\/+/, '')
+            .replace(/\/+$/, '');
+        try {
+            const res = (await getAction('/getDisks')) as { disks?: { serial: string; drive: string }[] };
+            const disk = (res.disks || []).find(d => d.drive?.toUpperCase() === letter);
+            if (disk && disk.serial) {
+                activeSerial.value = disk.serial;
+                activeIsOnline.value = true;
+            } else {
+                activeIsOnline.value = false;
+            }
+        } catch {
+            activeIsOnline.value = false;
+        }
+    }
+}
+
 async function runScan() {
-    if (!props.serial || !props.isOnline) return;
+    if (!activeSerial.value || !activeIsOnline.value) return;
     scanning.value = true;
     hasScanned.value = true;
     applyResult.value = null;
 
     try {
         const res = (await postAction('/assistant/avatar/scan', {
-            serial: props.serial,
-            relPath: props.relPath,
+            serial: activeSerial.value,
+            relPath: activeRelPath.value,
         })) as {
             code: number;
             candidates: {
@@ -362,7 +433,7 @@ async function runApply() {
     applying.value = true;
     try {
         const res = (await postAction('/assistant/avatar/apply', {
-            serial: props.serial,
+            serial: activeSerial.value,
             items: selectedItems,
         })) as {
             code: number;
@@ -380,8 +451,12 @@ async function runApply() {
                 succeeded: res.result.succeeded,
                 failed: res.result.failed,
             };
-            message.success(`成功写入 ${res.result.succeeded} 个目录头像`);
-            emit('applied'); // 触发主网格刷新
+            if (res.result.succeeded > 0) {
+                message.success(`成功写入 ${res.result.succeeded} 个目录头像${res.result.failed > 0 ? `，${res.result.failed} 个失败` : ''}`);
+                emit('applied'); // 触发主网格刷新
+            } else {
+                message.error(`所有 ${res.result.failed} 个头像写入均失败，请检查网络或日志`);
+            }
         } else {
             message.error(res.error || '写入失败');
         }
@@ -392,15 +467,41 @@ async function runApply() {
     }
 }
 
-// 弹窗打开且在线时自动触发一次扫描
+async function updateIndex() {
+    updatingIndex.value = true;
+    try {
+        const res = (await postAction('/assistant/avatar/index-update', {})) as {
+            code: number;
+            actorCount?: number;
+            error?: string;
+        };
+        if (res.code === 200) {
+            message.success(`Gfriends 索引已更新，收录女优 ${res.actorCount || 0} 位`);
+            if (candidates.value.length > 0) {
+                runScan();
+            }
+        } else {
+            message.error(res.error || '更新索引失败');
+        }
+    } catch (e) {
+        message.error(`更新索引出错: ${e instanceof Error ? e.message : e}`);
+    } finally {
+        updatingIndex.value = false;
+    }
+}
+
+// 弹窗打开时自动解析盘符并尝试扫描
 watch(
     () => props.show,
-    (showVal) => {
-        if (showVal && props.isOnline) {
+    async (showVal) => {
+        if (showVal) {
             hasScanned.value = false;
             candidates.value = [];
             applyResult.value = null;
-            runScan();
+            await resolveDriveContext();
+            if (activeIsOnline.value && activeSerial.value) {
+                runScan();
+            }
         }
     }
 );

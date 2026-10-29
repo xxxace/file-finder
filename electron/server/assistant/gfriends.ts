@@ -96,18 +96,16 @@ export function cleanActressName(raw: string): string {
         return '';
     }
 
-    // 2. 去除前后各类中括号、圆括号标签（如 [S1]、(2020)、【独家】等）
+    // 2. 全局剔除中英文各类方括号、圆括号标签及常见画质/年份标签
     let clean = trimmed
-        .replace(/^(\[.*?\]|【.*?】|\(.*?\))\s*/g, '')
-        .replace(/\s*(\[.*?\]|【.*?】|\(.*?\))$/g, '')
-        .replace(/\s*(4k|1080p|720p|hd|fhd|uhd)\s*$/i, '')
-        .replace(/\b(19|20)\d{2}\b/g, '') // 年份
+        .replace(/(\[.*?\]|【.*?】|\(.*?\)|（.*?）)/g, ' ')
+        .replace(/\b(4k|1080p|720p|hd|fhd|uhd)\b/gi, ' ')
+        .replace(/\b(19|20)\d{2}\b/g, ' ')
+        .replace(/[\[\]\(\)【】（）]/g, ' ')
+        .replace(/\s+/g, ' ')
         .trim();
 
-    // 3. 再次去除残留的前后括号
-    clean = clean.replace(/^[\[\(【（]/, '').replace(/[\]\)】）]$/, '').trim();
-
-    // 4. 若清洗后只剩纯数字、无字符或仍匹配番号，排除
+    // 3. 若清洗后只剩纯数字、无字符或仍匹配番号，排除
     if (!clean || /^\d+$/.test(clean) || (parseTitle(clean).id && parseTitle(clean).id === clean)) {
         return '';
     }
@@ -185,15 +183,18 @@ export function getAvatarUrl(avatarPath: string, mirrorIndex = 0): string {
 }
 
 /** 递归将 Gfriends Filetree.json 的多层树拍平成 actors 字典 */
-function flattenFiletree(node: any, currentPath: string, result: Record<string, string>) {
+export function flattenFiletree(node: any, currentPath: string, result: Record<string, string>) {
     if (!node || typeof node !== 'object') return;
     for (const key of Object.keys(node)) {
         const val = node[key];
         const nextPath = currentPath ? `${currentPath}/${key}` : key;
         if (typeof val === 'string') {
-            // 叶子节点：val 即 relativePath，例如 "Content/S/三上悠亜.jpg"
+            // 叶子节点：val 可能是 "AI-Fix-黒瀬萌衣.jpg?t=1607433809"
+            // 去除末尾查询参数（?t=...）
+            const cleanFileName = val.split('?')[0];
             const actorName = key.replace(/\.(jpg|jpeg|png|webp)$/i, '');
-            result[actorName] = val;
+            // 保留目录路径（如 Content/z-ラグジュTV/AI-Fix-黒瀬萌衣.jpg）
+            result[actorName] = currentPath ? `${currentPath}/${cleanFileName}` : cleanFileName;
         } else if (typeof val === 'object') {
             flattenFiletree(val, nextPath, result);
         }

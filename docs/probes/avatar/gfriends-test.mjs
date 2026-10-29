@@ -25,6 +25,7 @@ const {
     normalizeChineseKana,
     matchGfriends,
     getAvatarUrl,
+    flattenFiletree,
 } = await import(pathToFileURL(outfile).href);
 
 try {
@@ -32,10 +33,14 @@ try {
     fs.unlinkSync(outfile);
 } catch {}
 
-test('cleanActressName removes tags, years, and returns cleaned name', () => {
+test('cleanActressName removes multiple tags, full-width brackets, and years', () => {
     assert.equal(cleanActressName('[S1] 三上悠亚 (2020)'), '三上悠亚');
     assert.equal(cleanActressName('河北彩花 [4K]'), '河北彩花');
     assert.equal(cleanActressName('【唯美】桥本有菜'), '桥本有菜');
+    assert.equal(cleanActressName('三上悠亚（2020）'), '三上悠亚');
+    assert.equal(cleanActressName('（独家）三上悠亚'), '三上悠亚');
+    assert.equal(cleanActressName('[S1] [4K] 三上悠亚'), '三上悠亚');
+    assert.equal(cleanActressName('三上悠亚 [S1] (2020)'), '三上悠亚');
     assert.equal(cleanActressName('  三上悠亜  '), '三上悠亜');
     assert.equal(cleanActressName('SSNI-001'), ''); // pure movie code should be rejected
     assert.equal(cleanActressName('12345'), ''); // pure number should be rejected
@@ -84,4 +89,27 @@ test('getAvatarUrl generates valid CDN urls', () => {
 
     const url2 = getAvatarUrl(path, 2);
     assert.ok(url2.includes('raw.githubusercontent.com'));
+});
+
+test('flattenFiletree preserves directory path and strips query params from Gfriends tree', () => {
+    const mockTree = {
+        Content: {
+            'z-ラグジュTV': {
+                '黒瀬萌衣.jpg': 'AI-Fix-黒瀬萌衣.jpg?t=1607433809',
+            },
+            'S': {
+                '三上悠亜.jpg': '三上悠亜.jpg?t=1607433809',
+            },
+        },
+    };
+
+    const actors = {};
+    flattenFiletree(mockTree, '', actors);
+
+    assert.equal(actors['黒瀬萌衣'], 'Content/z-ラグジュTV/AI-Fix-黒瀬萌衣.jpg');
+    assert.equal(actors['三上悠亜'], 'Content/S/三上悠亜.jpg');
+
+    const url = getAvatarUrl(actors['黒瀬萌衣'], 0);
+    assert.ok(url.includes('Content/z-%E3%83%A9%E3%82%B0%E3%82%B8%E3%83%A5TV/'));
+    assert.ok(!url.includes('%3Ft'));
 });
