@@ -49,6 +49,10 @@ import type { ApplyRow } from './apply';
 import { scanMissingCovers, deepScanMissingCovers, collectFaces } from './scan';
 import type { ScanTarget, FacePick } from './scan';
 import { getDrives } from '../../utils/driveIdentity';
+import { ensureGfriendsIndex, matchGfriends, getAvatarUrl } from './gfriends';
+import { scanActressFolders } from './avatarScan';
+import { applyActressAvatars } from './avatarApply';
+import type { AvatarApplyItem } from './avatarApply';
 
 type ReqLike = http.IncomingMessage & { params?: URLSearchParams; body?: any };
 type SendJson = (res: http.ServerResponse, body: unknown, status?: number) => void;
@@ -659,6 +663,84 @@ export function createAssistantRoutes(deps: AssistantDeps): AssistantRoute[] {
         }
     }
 
+    async function avatarIndexStatus(_req: ReqLike, res: http.ServerResponse) {
+        try {
+            const index = await ensureGfriendsIndex(dataDir, false);
+            sendJson(res, {
+                code: 200,
+                updatedAt: index.updatedAt,
+                actorCount: Object.keys(index.actors || {}).length,
+            });
+        } catch (e) {
+            sendJson(res, { code: 500, error: String(e) });
+        }
+    }
+
+    async function avatarIndexUpdate(_req: ReqLike, res: http.ServerResponse) {
+        try {
+            const index = await ensureGfriendsIndex(dataDir, true);
+            sendJson(res, {
+                code: 200,
+                updatedAt: index.updatedAt,
+                actorCount: Object.keys(index.actors || {}).length,
+            });
+        } catch (e) {
+            sendJson(res, { code: 500, error: String(e) });
+        }
+    }
+
+    async function avatarScan(req: ReqLike, res: http.ServerResponse) {
+        const { serial, relPath } = req.body || {};
+        if (!serial) {
+            sendJson(res, { code: 400, error: '缺少 serial' });
+            return;
+        }
+        try {
+            const candidates = await scanActressFolders(serial, relPath || '', dataDir);
+            sendJson(res, { code: 200, candidates });
+        } catch (e) {
+            sendJson(res, { code: 500, error: String(e) });
+        }
+    }
+
+    async function avatarMatch(req: ReqLike, res: http.ServerResponse) {
+        const { name } = req.body || {};
+        if (!name) {
+            sendJson(res, { code: 400, error: '缺少 name' });
+            return;
+        }
+        try {
+            const index = await ensureGfriendsIndex(dataDir, false);
+            const match = matchGfriends(name, index);
+            if (match) {
+                sendJson(res, {
+                    code: 200,
+                    matched: true,
+                    matchedName: match.matchedName,
+                    avatarUrl: getAvatarUrl(match.avatarPath),
+                });
+            } else {
+                sendJson(res, { code: 200, matched: false });
+            }
+        } catch (e) {
+            sendJson(res, { code: 500, error: String(e) });
+        }
+    }
+
+    async function avatarApply(req: ReqLike, res: http.ServerResponse) {
+        const { serial, items } = req.body || {};
+        if (!serial || !Array.isArray(items)) {
+            sendJson(res, { code: 400, error: '缺少 serial 或 items' });
+            return;
+        }
+        try {
+            const result = await applyActressAvatars(serial, items as AvatarApplyItem[], dataDir);
+            sendJson(res, { code: 200, result });
+        } catch (e) {
+            sendJson(res, { code: 500, error: String(e) });
+        }
+    }
+
     return [
         ['/assistant/rules', (req, res) => {
             const method = req.method?.toUpperCase();
@@ -718,6 +800,26 @@ export function createAssistantRoutes(deps: AssistantDeps): AssistantRoute[] {
         ['/assistant/preview', (req, res) => {
             const method = req.method?.toUpperCase();
             if (method === 'GET') return preview(req, res);
+            return sendJson(res, { code: 405, error: 'method not allowed' }, 405);
+        }],
+        ['/assistant/avatar/index-status', (req, res) => {
+            if (req.method?.toUpperCase() === 'GET') return avatarIndexStatus(req, res);
+            return sendJson(res, { code: 405, error: 'method not allowed' }, 405);
+        }],
+        ['/assistant/avatar/index-update', (req, res) => {
+            if (req.method?.toUpperCase() === 'POST') return avatarIndexUpdate(req, res);
+            return sendJson(res, { code: 405, error: 'method not allowed' }, 405);
+        }],
+        ['/assistant/avatar/scan', (req, res) => {
+            if (req.method?.toUpperCase() === 'POST') return avatarScan(req, res);
+            return sendJson(res, { code: 405, error: 'method not allowed' }, 405);
+        }],
+        ['/assistant/avatar/match', (req, res) => {
+            if (req.method?.toUpperCase() === 'POST') return avatarMatch(req, res);
+            return sendJson(res, { code: 405, error: 'method not allowed' }, 405);
+        }],
+        ['/assistant/avatar/apply', (req, res) => {
+            if (req.method?.toUpperCase() === 'POST') return avatarApply(req, res);
             return sendJson(res, { code: 405, error: 'method not allowed' }, 405);
         }],
         ['/assistant/jobs', (req, res) => {

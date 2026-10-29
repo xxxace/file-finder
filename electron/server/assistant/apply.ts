@@ -349,7 +349,7 @@ export async function runApply(
  *   thumbnail.ts 的 `transcodeImage`，中转文件在系统盘临时目录，用完即删）。
  * 都失败返回 null —— 调用方把这一行记成失败，不写半截文件。
  */
-async function toJpeg(buf: Buffer): Promise<Buffer | null> {
+export async function toJpeg(buf: Buffer): Promise<Buffer | null> {
     if (isJpeg(buf)) return buf;
 
     const img = nativeImage.createFromBuffer(buf);

@@ -26,4 +26,24 @@ export const nativeImage = {
             toJPEG: () => Buffer.from(`STUB-JPEG:${size}`),
         };
     },
+    createFromBuffer(buf) {
+        return {
+            isEmpty: () => !buf || buf.length === 0,
+            getSize: () => ({ width: 800, height: 600 }),
+            resize() { return this; },
+            toJPEG: () => buf,
+        };
+    },
+};
+
+export const net = {
+    request: () => ({
+        on: () => {},
+        end: () => {},
+        abort: () => {},
+    }),
+};
+
+export const session = {
+    fromPartition: () => ({}),
 };
