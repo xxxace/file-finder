@@ -17,7 +17,10 @@ await esbuild.build({
     platform: 'node',
     outfile,
     logLevel: 'silent',
-    external: ['electron', '@seald-io/nedb'],
+    alias: {
+        electron: path.join(repo, 'docs/probes/electron-stub.mjs'),
+    },
+    external: ['@seald-io/nedb'],
 });
 
 const {

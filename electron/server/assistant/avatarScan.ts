@@ -9,6 +9,7 @@ import { findCache } from '../nedb';
 import { parseTitle } from './match';
 import { cleanActressName, matchGfriends, getAvatarUrl, ensureGfriendsIndex } from './gfriends';
 import type { GfriendsIndex } from './gfriends';
+import { searchJavBusActress } from './javbus';
 
 export interface AvatarCandidate {
     /** 目标子目录在盘内的相对路径（如 "JAV/三上悠亚"） */
@@ -23,6 +24,8 @@ export interface AvatarCandidate {
     avatarUrl: string | null;
     /** 匹配状态 */
     status: 'matched' | 'unmatched';
+    /** 头像来源 */
+    source?: 'javbus' | 'gfriends';
 }
 
 /** 归一化盘内相对路径 */
@@ -89,6 +92,7 @@ export function filterAndMatchCandidates(
                 matchedName: match.matchedName,
                 avatarUrl: getAvatarUrl(match.avatarPath),
                 status: 'matched',
+                source: 'gfriends',
             });
         } else {
             candidates.push({
@@ -106,14 +110,14 @@ export function filterAndMatchCandidates(
 }
 
 /**
- * 零读盘扫描：读取当前浏览路径的直属子目录并完成 Gfriends 匹配。
+ * 零读盘扫描：读取当前浏览路径的直属子目录并完成头像匹配（支持 JavBus 官方大头照与 Gfriends 模式）。
  */
 export async function scanActressFolders(
     serial: string,
     relPath: string,
-    dataDir: string
+    dataDir: string,
+    source: 'javbus' | 'gfriends' = 'javbus'
 ): Promise<AvatarCandidate[]> {
-    const index = await ensureGfriendsIndex(dataDir);
     const normRel = relOfPath(relPath);
 
     // 模式固定为 'cover'
@@ -122,5 +126,104 @@ export async function scanActressFolders(
         return [];
     }
 
-    return filterAndMatchCandidates(normRel, doc.data, index);
+    if (source === 'gfriends') {
+        const index = await ensureGfriendsIndex(dataDir);
+        return filterAndMatchCandidates(normRel, doc.data, index);
+    }
+
+    // ── JavBus 官方大头照优先模式 ──
+    const gfIndexPromise = ensureGfriendsIndex(dataDir, false).catch(() => null);
+
+    // 1. 过滤：只看文件夹、未有头像且非影片番号
+    interface TargetFolder {
+        folderName: string;
+        cleanName: string;
+        relDir: string;
+    }
+    const targets: TargetFolder[] = [];
+
+    for (const item of doc.data) {
+        if (item.type !== 'folder') continue;
+        if (item.sig) continue;
+        const folderName = diskNameOf(item.name, item.ext);
+        const parsed = parseTitle(folderName);
+        if (parsed.id) continue;
+        const cleanName = cleanActressName(folderName);
+        if (!cleanName) continue;
+        targets.push({
+            folderName,
+            cleanName,
+            relDir: joinRel(normRel, folderName),
+        });
+    }
+
+    if (!targets.length) return [];
+
+    // 2. 受控并发池查询 JavBus（5 并发）
+    const concurrency = 5;
+    const candidates: AvatarCandidate[] = new Array(targets.length);
+    let nextIdx = 0;
+
+    const gfIndex = await gfIndexPromise;
+
+    const workers = Array.from({ length: Math.min(concurrency, targets.length) }, async () => {
+        while (nextIdx < targets.length) {
+            const idx = nextIdx++;
+            const t = targets[idx];
+
+            let jbResult = null;
+            try {
+                jbResult = await searchJavBusActress(t.cleanName, dataDir);
+            } catch {
+                // 网络异常跳过
+            }
+
+            if (jbResult) {
+                candidates[idx] = {
+                    relDir: t.relDir,
+                    folderName: t.folderName,
+                    cleanName: t.cleanName,
+                    matchedName: jbResult.matchedName,
+                    avatarUrl: jbResult.avatarUrl,
+                    status: 'matched',
+                    source: 'javbus',
+                };
+            } else if (gfIndex) {
+                // JavBus 未命中时，自动由 Gfriends 兜底
+                const gfMatch = matchGfriends(t.cleanName, gfIndex);
+                if (gfMatch) {
+                    candidates[idx] = {
+                        relDir: t.relDir,
+                        folderName: t.folderName,
+                        cleanName: t.cleanName,
+                        matchedName: gfMatch.matchedName,
+                        avatarUrl: getAvatarUrl(gfMatch.avatarPath),
+                        status: 'matched',
+                        source: 'gfriends',
+                    };
+                } else {
+                    candidates[idx] = {
+                        relDir: t.relDir,
+                        folderName: t.folderName,
+                        cleanName: t.cleanName,
+                        matchedName: null,
+                        avatarUrl: null,
+                        status: 'unmatched',
+                    };
+                }
+            } else {
+                candidates[idx] = {
+                    relDir: t.relDir,
+                    folderName: t.folderName,
+                    cleanName: t.cleanName,
+                    matchedName: null,
+                    avatarUrl: null,
+                    status: 'unmatched',
+                };
+            }
+        }
+    });
+
+    await Promise.all(workers);
+    return candidates;
 }

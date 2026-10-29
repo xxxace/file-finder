@@ -51,6 +51,7 @@ import type { ScanTarget, FacePick } from './scan';
 import { getDrives } from '../../utils/driveIdentity';
 import { ensureGfriendsIndex, matchGfriends, getAvatarUrl } from './gfriends';
 import { scanActressFolders } from './avatarScan';
+import { searchJavBusActress } from './javbus';
 import { applyActressAvatars } from './avatarApply';
 import type { AvatarApplyItem } from './avatarApply';
 
@@ -690,13 +691,13 @@ export function createAssistantRoutes(deps: AssistantDeps): AssistantRoute[] {
     }
 
     async function avatarScan(req: ReqLike, res: http.ServerResponse) {
-        const { serial, relPath } = req.body || {};
+        const { serial, relPath, source } = req.body || {};
         if (!serial) {
             sendJson(res, { code: 400, error: '缺少 serial' });
             return;
         }
         try {
-            const candidates = await scanActressFolders(serial, relPath || '', dataDir);
+            const candidates = await scanActressFolders(serial, relPath || '', dataDir, source || 'javbus');
             sendJson(res, { code: 200, candidates });
         } catch (e) {
             sendJson(res, { code: 500, error: String(e) });
@@ -704,12 +705,26 @@ export function createAssistantRoutes(deps: AssistantDeps): AssistantRoute[] {
     }
 
     async function avatarMatch(req: ReqLike, res: http.ServerResponse) {
-        const { name } = req.body || {};
+        const { name, source } = req.body || {};
         if (!name) {
             sendJson(res, { code: 400, error: '缺少 name' });
             return;
         }
         try {
+            if (source !== 'gfriends') {
+                const jbMatch = await searchJavBusActress(name, dataDir);
+                if (jbMatch) {
+                    sendJson(res, {
+                        code: 200,
+                        matched: true,
+                        matchedName: jbMatch.matchedName,
+                        avatarUrl: jbMatch.avatarUrl,
+                        source: 'javbus',
+                    });
+                    return;
+                }
+            }
+
             const index = await ensureGfriendsIndex(dataDir, false);
             const match = matchGfriends(name, index);
             if (match) {
@@ -718,6 +733,7 @@ export function createAssistantRoutes(deps: AssistantDeps): AssistantRoute[] {
                     matched: true,
                     matchedName: match.matchedName,
                     avatarUrl: getAvatarUrl(match.avatarPath),
+                    source: 'gfriends',
                 });
             } else {
                 sendJson(res, { code: 200, matched: false });
