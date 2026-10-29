@@ -294,6 +294,7 @@
         <!-- 清单 / 缓存 / 站点规则 2026-10-21 起是**独立页**（左轨切换），不再挂在这里。
              ⚠️ 别再往这个文件里塞页级弹窗 —— 判据见 docs/DESIGN-BILIBILI-2026-10-21.md： -->
         <AssistantCoverModal ref="assistantModal" @refresh="refreshAfterApply" />
+        <AssistantAvatarModal v-model:show="showAvatarModal" :current-path="currentPath" @applied="refreshAfterApply" />
     </div>
 </template>
 
@@ -317,6 +318,7 @@ import { Search, Refresh, ChevronDownOutline } from '@vicons/ionicons5';
 import { NButton, NInput, NIcon, NImage, NImageGroup, NTag, NPopover, NSpin, NAlert, NTooltip, NDropdown, useLoadingBar, useDialog } from 'naive-ui';
 import FolderSelector from '@/components/FolderSelector/index.vue';
 import AssistantCoverModal from './AssistantCoverModal.vue';
+import AssistantAvatarModal from './AssistantAvatarModal.vue';
 import PlaylistPicker from './PlaylistPicker.vue';
 import { consumeTarget } from './target';
 import { useRouter } from 'vue-router';
@@ -476,6 +478,7 @@ const dir = ref('');
 const pageActive = ref(true);
 const router = useRouter();
 const assistantModal = ref<typeof AssistantCoverModal | null>(null)
+const showAvatarModal = ref(false);
 // const dirRoot = ref('');
 const popover = ref<{
     visible: boolean;
@@ -2010,6 +2013,7 @@ const moreOptions = computed(() => [
     { label: '补全这一片', key: 'fill', disabled: scanning.value || picking.value || !history.value.length || readOnlyLevel.value },
     { label: '重读这一片', key: 'rescan', disabled: scanning.value || picking.value || !history.value.length || readOnlyLevel.value },
     { label: '补封面', key: 'cover', disabled: scanning.value },
+    { label: '女优头像回收', key: 'avatar-recovery', disabled: scanning.value || readOnlyLevel.value },
     // 「站点规则」= 抓取规则的编辑器（入口 / 动作 / 抽取三段）。它是**系统盘上的配置**，
     // 与移动硬盘无关 ⇒ 离线只读层里也允许打开（不禁用）。
     { label: '站点规则', key: 'rules' },
@@ -2041,6 +2045,8 @@ const onMoreSelect = (key: string) => {
         });
     } else if (key === 'cover') {
         assistantModal.value?.setShowModal(true);
+    } else if (key === 'avatar-recovery') {
+        showAvatarModal.value = true;
     } else if (key === 'rules') {
         // 站点规则是**长期配置**，从 2026-10-21 起是设置页的一部分（不再全屏弹窗）
         void router.push('/settings');
