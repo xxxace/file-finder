@@ -49,8 +49,11 @@ test('openFolderController is exported and handles flat=true query param', async
         params: new URLSearchParams('path=#NONEXISTENT/test&flat=true'),
     };
 
-    // For a nonexistent serial anchor, flat=true calls findSubtreeLeafItems -> returns []
-    await openFolderController(mockReq, mockRes);
-    assert.equal(statusCode, 200);
-    assert.deepEqual(responseData, []);
+    // Non-root anchor with flat=true must NOT be flattened, should fall through to normal read and fail with notCached
+    await assert.rejects(
+        async () => {
+            await openFolderController(mockReq, mockRes);
+        },
+        (err) => err?.kind === 'notCached'
+    );
 });

@@ -586,8 +586,10 @@ const crumbs = computed(() => {
 });
 /** 平铺视图（Flat 模式）：跳过中间女优/父文件夹，单纯摊开所有子目录作品。限定根缓存目录开启。 */
 const isFlatView = ref(false);
-/** 仅在导航处于根目录（未下钻、非清单屏、且有有效路径）时允许开启 Flat 视图 */
-const canToggleFlat = computed(() => history.value.length === 1 && !playlistLevel.value && !!currentPath.value);
+/** 当前路径是否为缓存采集源头（顶层根目录） */
+const isCurrentCacheRoot = ref(false);
+/** 仅在导航处于根缓存目录（是采集源头、非清单屏、且有有效路径）时允许开启 Flat 视图 */
+const canToggleFlat = computed(() => isCurrentCacheRoot.value && !playlistLevel.value && !!currentPath.value);
 /** 折叠决策（保首尾）。`null` = 全显。规则在 `@/utils` 的 `foldCrumbList` 里，可单独验证。 */
 const crumbFold = computed(() => foldCrumbList(crumbs.value));
 /**
@@ -1056,9 +1058,8 @@ const enterScreen = (path: string, mode: OpenMode = 'cover', pl?: NavEntry['pl']
     // 新的一屏**从零开始**：选择器不继承上一屏的（它属于那一屏，不属于这一屏）
     // pl = 清单屏标记（2026-10-21）：与 path 上的 `@pl:<id>` 前缀同进同退
     history.value.push({ path, mode, pl, searchText: '', scrollY: 0, cursorKey: '' });
-    if (history.value.length > 1) {
-        isFlatView.value = false;
-    }
+    isFlatView.value = false;
+    isCurrentCacheRoot.value = false;
     // 进新的一屏不带上一屏的搜索词（原有行为，不动）
     searchText.value = '';
     /**
@@ -1369,6 +1370,19 @@ const fetchFolder = (path: string, mode: OpenMode, noCache?: boolean, flat?: boo
     loading.value = true;
     failKind.value = '';
     loadingBar.start();
+
+    // 纯内存异步查询当前目录是否为缓存采集源头（顶层根目录），非根目录自动复位 Flat 状态
+    getAction(`${API_BASE}/isCacheRoot?path=${encodeURIComponent(path)}`).then((res: { isRoot?: boolean }) => {
+        if (seq !== fetchSeq) return;
+        isCurrentCacheRoot.value = !!res?.isRoot;
+        if (!isCurrentCacheRoot.value && isFlatView.value) {
+            isFlatView.value = false;
+        }
+    }).catch(() => {
+        if (seq !== fetchSeq) return;
+        isCurrentCacheRoot.value = false;
+    });
+
     // path 必须编码：中文/空格/&/#/+ 会让 query 被截断或误解析
     let url = `${API_BASE}/openFolder?path=${encodeURIComponent(path)}&mode=${mode}`;
     if (noCache) url += '&noCache=true';
@@ -1669,6 +1683,7 @@ const onRefresh = () => {
  */
 const setRoot = (value: string) => {
     isFlatView.value = false;
+    isCurrentCacheRoot.value = false;
     if (!value) {
         dir.value = '';
         history.value = [];

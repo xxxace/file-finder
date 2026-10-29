@@ -728,6 +728,43 @@ export async function findSubtreeLeafItems(
 }
 
 /**
+ * 纯函数：判断指定路径是否为缓存采集源头（顶层根目录）。
+ * 判据：
+ * 1. 该目录在已缓存列表中（不区分大小写）；
+ * 2. 在缓存中拥有子目录（说明它是采集的源头，下辖演员/分类等子目录）；
+ * 3. 在缓存中自身没有更上层的父级目录（不是演员目录，也不是子孙目录）。
+ */
+export function checkIsCacheRoot(cachedPaths: string[], relPath: string): boolean {
+    const norm = (relPath || '').toLowerCase();
+    const prefix = norm ? `${norm}/` : '';
+    const normPaths = cachedPaths.map(p => (p || '').toLowerCase());
+
+    if (!normPaths.includes(norm)) return false;
+
+    const hasChildren = normPaths.some(p => p !== norm && p.startsWith(prefix));
+    if (!hasChildren) return false;
+
+    if (norm) {
+        const hasParent = normPaths.some(p => p !== norm && norm.startsWith(p ? `${p}/` : ''));
+        if (hasParent) return false;
+    }
+
+    return true;
+}
+
+/**
+ * 纯内存查询：判断指定盘符和相对路径是否为该盘的缓存采集源头（根目录）。
+ */
+export async function isCacheRoot(serial: string, relPath: string): Promise<boolean> {
+    if (!serial) return false;
+    assertUsable();
+    const rows = await new Promise<SearchCache[]>((resolve) => {
+        nedb.find({ serial, mode: 'cover' }, { relPath: 1 }, (err: Error | null, docs: unknown[]) => resolve((docs as SearchCache[]) || []));
+    });
+    return checkIsCacheRoot(rows.map(r => r.relPath), relPath);
+}
+
+/**
  * 重写数据文件，回收 append-only 累积的旧版本。
  *
  * nedb 每次 insert/update/remove 都是往文件**尾部追加**（persistence 的
