@@ -21,7 +21,7 @@ import type { DiskRegistry } from '../utils/driveIdentity';
 import { DIR_COVER_FILES, isDirCover } from './dirCover';
 import {
     BEFORE_RESTORE_PATH, CACHE_DB_PATH, CACHE_VERSION, beginRestore, cacheBackup, endRestore,
-    exportCompactSnapshot, exportSnapshotPlain, findCache, insertCache, loadMeta, loadSubtreeBytes,
+    exportCompactSnapshot, exportSnapshotPlain, findCache, findSubtreeLeafItems, insertCache, loadMeta, loadSubtreeBytes,
     migrateLegacyThumbs, readExternalCache, reloadFromDisk, removeCache,
 } from './nedb';
 import type { CacheMeta, OpenMode, SearchCache } from './nedb';
@@ -1044,11 +1044,12 @@ function sendJson(res: http.ServerResponse, body: unknown, status = 200) {
     res.end(text);
 }
 
-async function openFolderController(req: Req, res: http.ServerResponse) {
+export async function openFolderController(req: Req, res: http.ServerResponse) {
     const raw = req.params?.get('path');
     const mode = (req.params?.get('mode') || 'folder') as OpenMode;
     const noCache = req.params?.get('noCache') === 'true';
     const verifyRequested = req.params?.get('verify') === 'true';
+    const flat = req.params?.get('flat') === 'true';
 
     if (!raw) return sendJson(res, []);
 
@@ -1057,6 +1058,12 @@ async function openFolderController(req: Req, res: http.ServerResponse) {
     //    更不能让它流到下面任何一支去（那支会拿它当 UNC 去真读盘）。
     const anchor = parseAnchor(raw);
     if (anchor) {
+        // Flat 视图：纯内存收集该子树下的所有作品/封面条目，零读盘
+        if (flat) {
+            const items = await findSubtreeLeafItems(anchor.serial, anchor.relPath, mode);
+            return sendJson(res, await toAnchor(items, anchor.serial, anchor.relPath));
+        }
+
         // `noCache` 在这里没有意义：只读视图的"源"就是缓存，没有第二种读法。
         // 忽略它（而不是报错），前端的「刷新」在只读层上因此是个安全的空动作。
         const cached = await findCache(anchor.serial, anchor.relPath, mode);
@@ -1096,6 +1103,12 @@ async function openFolderController(req: Req, res: http.ServerResponse) {
 
     const { serial, drive } = disk;
     const relPath = parts.relPath;
+
+    // Flat 视图：纯内存收集该子树下的所有作品/封面条目，零读盘
+    if (flat) {
+        const items = await findSubtreeLeafItems(serial, relPath, mode);
+        return sendJson(res, await toWire(items, drive, serial, relPath));
+    }
 
     // 这里原来还有一句 `if (noCache) await removeCache(...)` —— 已删。
     // 它是多余的：noCache 时 cached 必为 null，下面必然走 scanAndCache，
@@ -2144,9 +2157,11 @@ app.on('error', function (err: NodeJS.ErrnoException) {
         console.error('[server] 本地服务启动失败:', err);
     }
 });
-whenBinReady().then(() => app.listen(3060, '127.0.0.1', function () {
-    console.log('Local Server: http://127.0.0.1:3060/');
-}));
+if (process.env.NODE_ENV !== 'test') {
+    whenBinReady().then(() => app.listen(3060, '127.0.0.1', function () {
+        console.log('Local Server: http://127.0.0.1:3060/');
+    }));
+}
 
 // 这里原来有一句「启动时清理旧格式缓存」（dropLegacyRecords）—— 已删除。
 // 它的判据是 `{ v: { $ne: 2 } }`，而 nedb 的 `$ne` 连"字段不存在"也匹配，
