@@ -1053,12 +1053,12 @@ const rememberCurrentScreen = () => {
  * ⚠️ 归零要**在取数之前**：新屏内容还没渲染时 `scrollTo` 会被 clamp（内容太短）
  * 或作用在旧内容上。等 `nextTick` 之后那一屏的格子已经在 DOM 里，才归得干净。
  */
-const enterScreen = (path: string, mode: OpenMode = 'cover', pl?: NavEntry['pl']) => {
+const enterScreen = (path: string, mode: OpenMode = 'cover', pl?: NavEntry['pl'], keepFlat?: boolean) => {
     rememberCurrentScreen();
     // 新的一屏**从零开始**：选择器不继承上一屏的（它属于那一屏，不属于这一屏）
     // pl = 清单屏标记（2026-10-21）：与 path 上的 `@pl:<id>` 前缀同进同退
     history.value.push({ path, mode, pl, searchText: '', scrollY: 0, cursorKey: '' });
-    isFlatView.value = false;
+    isFlatView.value = !!keepFlat;
     isCurrentCacheRoot.value = false;
     // 进新的一屏不带上一屏的搜索词（原有行为，不动）
     searchText.value = '';
@@ -1089,7 +1089,7 @@ const enterScreen = (path: string, mode: OpenMode = 'cover', pl?: NavEntry['pl']
 
     // 取数（内部会 `++fetchSeq`）⇒ **之后**才读序号，读到的才是"我这次"的号
     // 经 loadScreen 分派：目录屏 /openFolder，清单屏 /playlistItems（唯一出口，见那边注释）
-    const done = loadScreen(history.value[history.value.length - 1]);
+    const done = loadScreen(history.value[history.value.length - 1], isFlatView.value);
     const myFetchSeq = fetchSeq;
 
     /**
@@ -1457,9 +1457,9 @@ const fetchPlaylistItems = (id: string) => {
  * 责任收在唯一出口之后，第 7 个入口也忘不掉。
  * （onRefresh 有 playlistLevel 守卫、永不到清单屏；onDisksChanged 自己已按屏型分派。）
  */
-const loadScreen = (entry: NavEntry) => {
+const loadScreen = (entry: NavEntry, flat?: boolean) => {
     if (entry.pl) return fetchPlaylistItems(entry.pl.id);
-    return fetchFolder(entry.path, entry.mode);
+    return fetchFolder(entry.path, entry.mode, false, flat);
 };
 
 // const handleDirRootChange = (value: string) => {
@@ -1755,8 +1755,15 @@ const clearNav = () => setRoot('');
  * 不该决定"导航长什么样"。三条入口一律 `'cover'`。
  */
 const openHistory = (path: string) => {
-    jumpTo(path);
-}
+    const norm = (p: string) => (p || '').replace(/\\/g, '/').replace(/\/+$/, '').toLowerCase();
+    // 已经处于该目录：不重复处理/取数，直接保留当前展示
+    if (norm(currentPath.value) === norm(path)) {
+        return;
+    }
+    // 若当前为 flat 模式，从缓存记录打开另一根目录时沿用 flat 模式
+    const wasFlat = isFlatView.value;
+    enterScreen(path, 'cover', undefined, wasFlat);
+};
 
 /**
  * 批量扫描「这一片」（P1）。两个入口共用它，`rescan` 是唯一差别：
