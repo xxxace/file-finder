@@ -46,6 +46,7 @@ import crypto from 'node:crypto';
 import { net, nativeImage, session } from 'electron';
 import { getDrives } from '../../utils/driveIdentity';
 import { removeCache } from '../nedb';
+import type { OpenMode } from '../nedb';
 import { transcodeImage } from '../../utils/thumbnail';
 import { enqueue, hostOf } from './queue';
 import { appendTombstone } from './hits';
@@ -170,6 +171,7 @@ export async function runApply(
     job: Job<ApplyRow>,
     dataDir: string,
     picks?: string[],
+    scanAndCache?: (serial: string, drive: string, relPath: string, mode: OpenMode) => Promise<unknown>,
 ): Promise<void> {
     // 盘必须在线：写盘的路径从「卷序列号 → 当前盘符」现场反查。
     // 盘符不是身份、序列号才是 —— 拿缓存里冻过的盘符写盘等于往别的盘上写。
@@ -189,6 +191,7 @@ export async function runApply(
     }
 
     let written = 0;
+    const affectedDirs = new Set<string>();
     try {
         for (const g of groups) {
             if (job.cancelled) break;
@@ -312,8 +315,14 @@ export async function runApply(
                 written += 1;
                 // 文件形态：视频搬走 + 新文件夹长脸，都发生在**层目录**的缓存文档里；
                 // 目录形态：影片目录自己多了 cover.jpg，父目录的缓存里它长了脸 —— 两边都要失效。
-                removeCache(serial, g.layerDir, 'cover').catch(() => {});
-                if (g.kind === 'dir') removeCache(serial, dirOf(g.layerDir), 'cover').catch(() => {});
+                const targetDir = g.kind === 'dir' ? dirOf(g.layerDir) : g.layerDir;
+                if (scanAndCache) {
+                    affectedDirs.add(targetDir);
+                    if (g.layerDir) removeCache(serial, g.layerDir, 'cover').catch(() => {});
+                } else {
+                    removeCache(serial, g.layerDir, 'cover').catch(() => {});
+                }
+                if (!scanAndCache && g.kind === 'dir') removeCache(serial, dirOf(g.layerDir), 'cover').catch(() => {});
                 appendLog(dataDir, `${new Date().toISOString()}\t${serial}\t${g.coverWriteRel}\tok\t${notes.join('；')}`);
             } else {
                 appendLog(dataDir, `${new Date().toISOString()}\t${serial}\t${g.coverWriteRel}\tfail\t${why}\t${notes.join('；')}`);
@@ -327,6 +336,16 @@ export async function runApply(
                 message: ok ? notes.join('；') : `${notes.join('；')}；封面没写成：${why}`,
             });
             bumpProgress(job, { processed: job.progress.processed + 1, hits: written, current: '' });
+        }
+
+        if (scanAndCache && drive && affectedDirs.size) {
+            for (const dir of affectedDirs) {
+                try {
+                    await scanAndCache(serial, drive.drive, dir, 'cover');
+                } catch (e) {
+                    console.error('[apply] 写入后重建缓存失败:', dir, e);
+                }
+            }
         }
 
         const { processed, total } = job.progress;

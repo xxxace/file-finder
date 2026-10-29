@@ -2064,7 +2064,7 @@ route('/isCacheRoot', isCacheRootController);
 // 自动受 token 校验与统一错误兜底；sendJson/dataDir 以依赖注入传入，避免循环引用。
 // 深度重扫走 assistant 自己的实时清单（纯 readdir+stat，零抽帧、不写缓存），
 // 不需要从这儿注入 scanAndCache —— 缓存的写入入口保持唯一。
-for (const [assistantPath, assistantHandler] of createAssistantRoutes({ sendJson, dataDir: config.userBasePath })) {
+for (const [assistantPath, assistantHandler] of createAssistantRoutes({ sendJson, dataDir: config.userBasePath, scanAndCache })) {
     route(assistantPath, assistantHandler);
 }
 

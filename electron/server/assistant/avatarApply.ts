@@ -13,6 +13,7 @@ import * as fsasync from 'node:fs/promises';
 import path from 'node:path';
 import { getDrives } from '../../utils/driveIdentity';
 import { removeCache } from '../nedb';
+import type { OpenMode } from '../nedb';
 import { queueCacheWrite } from '../index';
 import { toJpeg, download } from './apply';
 import { GFRIENDS_MIRRORS } from './gfriends';
@@ -133,7 +134,8 @@ async function downloadBuffer(url: string, timeoutMs = 8000): Promise<Buffer | n
  */
 export async function fetchAndTranscode(
     url: string,
-    previewCache?: Map<string, { buf: Buffer; type: string | null }>
+    previewCache?: Map<string, { buf: Buffer; type: string | null }>,
+    scanAndCache?: (serial: string, drive: string, relPath: string, mode: OpenMode) => Promise<unknown>
 ): Promise<Buffer | null> {
     // 1. 命中预览内存缓存：直接复用，0 网络开销
     const cached = previewCache?.get(url);
@@ -167,7 +169,8 @@ export async function applyActressAvatars(
     serial: string,
     items: AvatarApplyItem[],
     dataDir: string,
-    previewCache?: Map<string, { buf: Buffer; type: string | null }>
+    previewCache?: Map<string, { buf: Buffer; type: string | null }>,
+    scanAndCache?: (serial: string, drive: string, relPath: string, mode: OpenMode) => Promise<unknown>
 ): Promise<AvatarApplyResult> {
     const result: AvatarApplyResult = {
         total: items.length,
@@ -247,6 +250,16 @@ export async function applyActressAvatars(
     await Promise.all(workers);
 
     // ── ③ 统一失效 NeDB 缓存（经由 queueCacheWrite 保证串行与缓存一致性） ──
+    if (scanAndCache && drive) {
+        for (const dir of invalidateDirs) {
+            try {
+                await scanAndCache(serial, drive.drive, dir, 'cover');
+            } catch (e) {
+                console.error('[avatarApply] 重建缓存失败:', dir, e);
+            }
+        }
+        return result;
+    }
     const cachePromises = [...invalidateDirs].map(dir => queueCacheWrite(serial, dir, 'cover', () => removeCache(serial, dir, 'cover')));
     await Promise.all(cachePromises);
 

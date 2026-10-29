@@ -44,6 +44,7 @@ import type { GrabRow } from './grab';
 import { bumpProgress, cancelJob, createJob, finishJob, getJob, listJobs, pauseJob, reopenJob, resumeJob, snapshotJob } from './jobs';
 import type { Job } from './jobs';
 import { loadMeta } from '../nedb';
+import type { OpenMode } from '../nedb';
 import { runApply, readWrittenDirs, download } from './apply';
 import type { ApplyRow } from './apply';
 import { scanMissingCovers, deepScanMissingCovers, collectFaces } from './scan';
@@ -62,6 +63,7 @@ export interface AssistantDeps {
     sendJson: SendJson;
     /** 数据目录（config.userBasePath，即 ~/.file-finder） */
     dataDir: string;
+    scanAndCache?: (serial: string, drive: string, relPath: string, mode: OpenMode) => Promise<unknown>;
 }
 
 export type AssistantRoute = [string, (req: ReqLike, res: http.ServerResponse) => unknown];
@@ -502,7 +504,7 @@ export function createAssistantRoutes(deps: AssistantDeps): AssistantRoute[] {
         }
 
         const job = createJob<ApplyRow>('apply', rows.length);
-        void runApply(body.serial, rows, job, dataDir, body.picks);
+        void runApply(body.serial, rows, job, dataDir, body.picks, deps.scanAndCache);
         sendJson(res, { code: 200, jobId: job.id, total: rows.length });
     }
 
@@ -750,7 +752,7 @@ export function createAssistantRoutes(deps: AssistantDeps): AssistantRoute[] {
             return;
         }
         try {
-            const result = await applyActressAvatars(serial, items as AvatarApplyItem[], dataDir, previewCache);
+            const result = await applyActressAvatars(serial, items as AvatarApplyItem[], dataDir, previewCache, deps.scanAndCache);
             sendJson(res, { code: 200, result });
         } catch (e) {
             sendJson(res, { code: 400, error: e instanceof Error ? e.message : String(e) }, 400);
