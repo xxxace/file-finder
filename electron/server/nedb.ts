@@ -670,6 +670,64 @@ export function mergeSubtreeBytes(
 }
 
 /**
+ * 纯函数：从一组缓存记录中归并提取指定子树内的全部叶子条目（非目录项）。
+ * 1. 路径边界：baseRel 为空表示盘根（包含所有该盘记录）；非空时匹配 relPath === baseRel 或 relPath.startsWith(baseRel + '/')
+ * 2. 过滤目录：it.type !== 'folder' && !it.isDirectory
+ * 3. 去重：按 `${it.dir}/${diskNameOf(it)}`（不区分大小写）
+ * 4. 排序：按 name 自然序升序（数字分段排序，如 SSNI-01 排在 SSNI-02 之前）
+ */
+export function mergeSubtreeLeafItems(
+    rows: SearchCache[],
+    serial: string,
+    baseRel: string,
+): FileInfo[] {
+    if (!serial) return [];
+    const prefix = baseRel ? `${baseRel.toLowerCase()}/` : '';
+    const baseLower = baseRel.toLowerCase();
+    const seen = new Set<string>();
+    const leaves: FileInfo[] = [];
+
+    for (const doc of rows) {
+        if (doc.serial !== serial) continue;
+        const curLower = (doc.relPath || '').toLowerCase();
+        const isSelf = curLower === baseLower;
+        const isChild = prefix ? curLower.startsWith(prefix) : true;
+        if (!isSelf && !isChild) continue;
+
+        if (Array.isArray(doc.data)) {
+            for (const it of doc.data) {
+                if (it.type === 'folder' || it.isDirectory) continue;
+                const diskName = it.ext ? `${it.name}.${it.ext}` : it.name;
+                const key = `${it.dir || ''}/${diskName}`.toLowerCase();
+                if (seen.has(key)) continue;
+                seen.add(key);
+                leaves.push(it);
+            }
+        }
+    }
+
+    leaves.sort((a, b) => a.name.localeCompare(b.name, 'zh-Hans-CN', { numeric: true, sensitivity: 'base' }));
+    return leaves;
+}
+
+/**
+ * 纯内存查询：提取指定盘符和基准路径下所有已缓存子树的叶子条目（作品封面/视频），
+ * 严格零读盘，不触发任何文件系统扫描。
+ */
+export async function findSubtreeLeafItems(
+    serial: string,
+    baseRel: string,
+    mode: OpenMode = 'cover',
+): Promise<FileInfo[]> {
+    if (!serial) return [];
+    assertUsable();
+    const rows = await new Promise<SearchCache[]>((resolve, reject) => {
+        nedb.find({ serial, mode }, (err: Error | null, docs: unknown[]) => (err ? reject(err) : resolve(docs as SearchCache[])));
+    });
+    return mergeSubtreeLeafItems(rows, serial, baseRel);
+}
+
+/**
  * 重写数据文件，回收 append-only 累积的旧版本。
  *
  * nedb 每次 insert/update/remove 都是往文件**尾部追加**（persistence 的
