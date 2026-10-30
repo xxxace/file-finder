@@ -103,6 +103,10 @@
                         <span class="suffix-icon">S</span>
                     </template>
                 </n-input>
+                <!-- 视图密度：与下面「平铺」同属视图类动作，紧挨着放。
+                     常驻（任何目录都能切），与 flat 互不影响 —— flat 决定"摊开哪些条目"，
+                     密度决定"一屏铺几列"，两者正交。 -->
+                <GridDensityMenu v-model="density" :menu-props="moreMenuProps" />
                 <!-- 平铺视图切换：仅在根缓存目录可用，跳过女优/父文件夹直接平铺全部作品 -->
                 <n-tooltip>
                     <template #trigger>
@@ -145,7 +149,9 @@
         <n-alert v-if="banner.text" :type="banner.type" style="margin-bottom: 4px">
             {{ banner.text }}
         </n-alert>
-        <div class="image-box" ref="imageBox">
+        <!-- `--ff-grid-cols` 是列数的唯一出口（值来自 `density.ts`）；
+             `data-density` 供紧凑档收缩标题/角标（见样式里那组 `--item-*` 变量）。 -->
+        <div class="image-box" ref="imageBox" :data-density="density" :style="{ '--ff-grid-cols': gridCols }">
             <!-- key 不能只用 item.name：封面条目的 name 取的是**封面图文件名**，
                  同一层的两个文件夹若都叫 cover.jpg，就会生成两个 key="cover"。
                  Vue 遇到重复 key 会复用错的组件实例，封面会串到别的格子里。
@@ -170,7 +176,7 @@
                 </div>
                 <!-- 「换封面」模式下单击格子 = 选中/取消（见 onItemClick）。
                      同时**关掉图片预览** —— 否则一下点下去既弹放大图、又切换选中，两个动作打架。
-                     判断"这张糊不糊"靠格子里的图本身（6 列下也有 200~320px），不靠点开大图。
+                     判断"这张糊不糊"靠格子里的图本身（宽松档 310px、紧凑档 147px），不靠点开大图。
                      ⚠️ 2026-10-04：预览层改由下面那个 `n-image-group` 统一渲染（它才拿得到
                      prev/next，见组节点的注释）。所以这里**不再传** preview-src /
                      previewed-img-props / render-toolbar，改成 preview-disabled —— 它是
@@ -211,12 +217,12 @@
                 <!-- 选中角标。⚠️ 用 `<i>` 而**不是** `<span>` —— `.image-box-item span` 那条
                      （1681 行）里有 `width:100%` + `height:38px !important`，会把角标拉成长条、
                      圆直接变形。换个元素最省事，也不用跟 `!important` 打架。
-                     ⚠️ 绝对定位、**不参与布局** —— 网格 6 列的宽度是"margin 撑间距 +
-                     `width:100%/6−10px` 补偿"算出来的，任何参与布局的新元素都会带偏它 -->
+                     ⚠️ 绝对定位、**不参与布局** —— 网格格子的宽度是"margin 撑间距 +
+                     `width:100%/N−gap` 补偿"算出来的，任何参与布局的新元素都会带偏它 -->
                 <i v-if="isPicked(item)" class="pick-badge" aria-hidden="true"></i>
                 <!-- 收录星标（2026-10-21 清单）：这张卡已进某个清单。
-                     ⚠️ 绝对定位、**不参与布局** —— 网格 6 列的宽度是"margin 撑间距 +
-                     `width:100%/6−10px` 补偿"算出来的，任何参与布局的新元素都会带偏它。
+                     ⚠️ 绝对定位、**不参与布局** —— 网格格子的宽度是"margin 撑间距 +
+                     `width:100%/N−gap` 补偿"算出来的，任何参与布局的新元素都会带偏它。
                      放左上角：pick-badge 在右上，两者不打架。 -->
                 <i v-if="plMember.has(keyOf(item))" class="pl-badge" aria-hidden="true"></i>
             </div>
@@ -325,6 +331,9 @@ import usePinYin from '@/hooks/usePinYin';
 import useNotify from '@/hooks/useNotify';
 import { usePreview } from './usePreview';
 import { useGridCursor } from './useGridCursor';
+import GridDensityMenu from './GridDensityMenu.vue';
+import { colsOf, loadDensity, saveDensity } from './density';
+import type { Density } from './density';
 import { decideOpen, isMultiFileCard } from './openDecision';
 import { Search, Refresh, ChevronDownOutline, AppsOutline } from '@vicons/ionicons5';
 import { NButton, NInput, NIcon, NImage, NImageGroup, NTag, NPopover, NSpin, NAlert, NTooltip, NDropdown, useLoadingBar, useDialog } from 'naive-ui';
@@ -335,7 +344,7 @@ import PlaylistPicker from './PlaylistPicker.vue';
 import { consumeTarget } from './target';
 import { useRouter } from 'vue-router';
 import { ipcRenderer } from 'electron';
-import { computed, nextTick, onActivated, onDeactivated, onMounted, onUnmounted, provide, ref } from 'vue';
+import { computed, nextTick, onActivated, onDeactivated, onMounted, onUnmounted, provide, ref, watch } from 'vue';
 import type { FileInfoFiles, WiredFileInfo } from '../../../electron/server/index';
 import type { OpenMode } from 'electron/server/nedb';
 /**
@@ -2184,6 +2193,20 @@ const onMoreSelect = (key: string) => {
 /** 是否处于"挑封面"模式 */
 const picking = ref(false);
 
+// ── 视图密度（网格列数）─────────────────────────────────────────────────────
+/**
+ * 三档：宽松 6 / 标准 8 / 紧凑 12（表在 `./density.ts`，那里是**唯一**的列数真相）。
+ *
+ * 本文件只做三件事：绑到 `.image-box` 的 `--ff-grid-cols`（CSS 唯一消费点）、
+ * 传给 `useGridCursor`（列数变 ⇒ 行结构必须失效）、把选择存住。
+ *
+ * ⚠️ 切换**只改一个 CSS 变量**：不重新取数、不读盘、无请求 —— 纯重排。
+ * ⚠️ 别在任何 CSS 里再写死 6/8/12：列数一变就会漏一处。
+ */
+const density = ref<Density>(loadDensity());
+const gridCols = computed(() => colsOf(density.value));
+watch(density, d => saveDensity(d));
+
 // ── 网格选择器域接线（方向键 / 回车）───────────────────────────────────────
 // ⚠️ **必须排在 `usePreview` 之前**：下面 `usePreview` 要拿本块的两个回调
 //（`focusCursor` 与 `syncCursor`）。而本块反过来需要 `previewOpen` ——
@@ -2203,6 +2226,8 @@ const {
     // ⚠️ 必须写成箭头函数：`openPreview` 在下面 `usePreview` 那一块才声明
     // （它要拿本块的 `focusCursor`）⇒ 裸引用 `onPreview: openPreview` 会在 setup 期间 TDZ 报错。
     onPreview: (item) => openPreview(item),
+    // 列数变 ⇒ 每行装几个变 ⇒ 行结构缓存必须作废（否则切档后方向键按旧列数跳）
+    cols: gridCols,
 });
 
 // ── 预览域接线 ───────────────────────────────────────────────────────────────
@@ -2811,7 +2836,7 @@ const onDisksChangedIpc = (_e: unknown, disks: { serial: string; drive: string }
 /*
  * 卡片状态：可选 / 已选 / 焦点。
  *
- * ⚠️ 约束没变：**状态一律不许新增参与布局的属性**（宽度是 `calc(100%/6 − gap)` + margin 算出来的）。
+ * ⚠️ 约束没变：**状态一律不许新增参与布局的属性**（宽度是 `calc(100%/N − gap)` + margin 算出来的）。
  * 所以只用 `outline` / `box-shadow` / `transform` —— 三者都不占位置。
  *
  * 圆角：2026-10-21 主人裁定改用 B 站那套 6px，值在 `--ff-radius-card`（想改回直角只改 token）。
@@ -2943,7 +2968,7 @@ const onDisksChangedIpc = (_e: unknown, disks: { serial: string; drive: string }
     }
 
     /* 收录星标（2026-10-21 清单）：这张卡已进某个清单。
-       纪律同 pick-badge：**绝对定位、不参与布局**（6 列网格的宽度是算出来的），
+       纪律同 pick-badge：**绝对定位、不参与布局**（网格宽度是算出来的），
        换到左上角与 pick-badge（右上）错开。★ 用 CSS 生成，不插 DOM 子节点。
        ⚠️ `z-index` 走契约的"卡片标记"层（同 pick-badge）：压过封面图。 */
     .pl-badge {
@@ -2978,9 +3003,33 @@ const onDisksChangedIpc = (_e: unknown, disks: { serial: string; drive: string }
     overflow: hidden auto;
     justify-content: flex-start;
     align-content: flex-start;
+    /* ── 卡片尺寸变量：**按密度档位在这里改，子元素只读** ──────────────────────────
+       为什么做成变量而不是给紧凑档另写一套 `.card-title` 规则：
+       标题高/字号/行高必须**一起**换（高换了字号没换 = 两行塞不下成省略号；
+       字号换了高没换 = 下方留一块空）。写成一组变量，档位就是一处覆盖。
+       ⚠️ 这一组值只允许在这里出现一次 —— 别在 `.card-title` 里再写死 40px。 */
+    --item-pad-b: 6px;
+    --item-title-h: 40px;
+    --item-title-fs: 14px;
+    --item-title-lh: 20px;
+    --item-badge-h: 18px;
+    --item-badge-fs: 12px;
+
+    /* 紧凑档（12 列，格宽 147px）：标题占封面的比例从 30% 降到 26%，
+       字号收到 12px —— 14px 在 147px 宽里一行只剩 10 个字，两行就是"半截标题"。 */
+    &[data-density='tight'] {
+        --item-pad-b: 4px;
+        --item-title-h: 34px;
+        --item-title-fs: 12px;
+        --item-title-lh: 17px;
+        --item-badge-h: 16px;
+        --item-badge-fs: 11px;
+    }
+
     /* ── 让网格左右贴边：首格 margin-left / 每行末格 margin-right 归零 ──────────────
        `.image-box-item` 是"**用 margin 撑间距、宽度再把它补偿回来**"的算法：
-       每格 `calc(100%/6 − 16px)` 宽 + 左右各 8px margin = **恰好占 100%/6** ⇒ 一行正好 6 个。
+       每格 `calc(100%/N − 16px)` 宽 + 左右各 8px margin = **恰好占 100%/N** ⇒ 一行正好 N 个。
+       N 由 `--ff-grid-cols` 给（`density.ts` → 本节点的 style），档位切换只改这一个数。
        代价是**容器左右边缘也各被吃掉 8px**（首格的 margin-left、每行末格的 margin-right），
        于是整片网格比头部内缩 8px —— 左右不齐，这就是"第一个/最后一个还留着 margin"的来源。
 
@@ -2988,15 +3037,14 @@ const onDisksChangedIpc = (_e: unknown, disks: { serial: string; drive: string }
        首格贴左、末格贴右，与头部对齐。
 
        ⚠️ 为什么**不用** `:nth-child(6n+1)` / `:nth-child(6n)` 去掉首尾 margin：
-       ① 那是补丁 —— 列数一变就失效（本项目刚刚从 6/5/3/2/1 断点改成**恒定 6 列**，
-          正好说明"把列数写死进选择器"迟早要再改一次）；
+       ① 那是补丁 —— 列数一变就失效（本项目从 6/5/3/2/1 断点改成恒定 6 列，
+          现在又变成用户可选 3 档，两次都证明"把列数写死进选择器"迟早要再改一次）；
        ② **在这里还会算错** —— 格子宽度是按"margin 会被补偿"设计的，只去掉首尾 margin
           而宽度不变 ⇒ 每行右端空出半个间隙，左右不对称，比现在更糟。
 
        ⚠️ 为什么**不换成** `gap`：方向是对的（边缘天然为 0），但换过去必须同步重算
-       `--item-width`（gap 不占格子宽度、margin 占）。列数恒定的现在，换 gap 在数学上可行、
-       **但没有收益**：这套 margin 算法已在 `probes/grid-cursor/` 与真机验过几何，
-       动它就得把列宽/贴边/方向键全部重验一遍。 */
+       `--item-width`（gap 不占格子宽度、margin 占）。这套 margin 算法已在
+       `probes/grid-cursor/` 与真机验过几何，动它就得把列宽/贴边/方向键全部重验一遍。 */
     margin-left: calc(var(--ff-grid-gap) / -2);
     margin-right: calc(var(--ff-grid-gap) / -2);
 }
@@ -3052,20 +3100,26 @@ const onDisksChangedIpc = (_e: unknown, disks: { serial: string; drive: string }
 /**
  * 网格卡片（B 站视频卡的骨架）。
  *
- * 高度**只由宽度决定**：封面 16:9 + 标题两行定高。
+ * 高度**只由宽度决定**：封面定比例 + 标题两行定高。
  * ⚠️ 这是 `gridGeometry.groupRows()` 的前提 —— 同行必须等高（它按 `offsetTop` 分行，
- *    一行里混进一个矮格子就会被劈成两行，方向键从此横着跳）。所以标题区写死 44px。
+ *    一行里混进一个矮格子就会被劈成两行，方向键从此横着跳）。所以标题区按档位定高
+ *    （`--item-title-h`），绝不由内容撑。
  *
- * ⚠️ 列数**恒定 6**（2026-10-21 主人裁定「无论放大缩小都 6 个」）：
- *    原来 5/3/2/1 的四档断点已删，`--item-width` 只剩这一个值。
+ * 列数**不在这里写死**：`--ff-grid-cols` 由密度档位给（`density.ts` → `.image-box` 的 style），
+ * 默认 6 兜底（`var(--ff-grid-cols, 6)`）只防"变量没绑上"这一种情况。
  */
 .image-box-item {
     --item-gap: var(--ff-grid-gap);
-    --item-width: calc(100% / 6);
+    --item-width: calc(100% / var(--ff-grid-cols, 6));
     flex: 0 0 auto;
     width: calc(var(--item-width) - var(--item-gap));
+    /* 窄窗下限：`width` 是首选值、这里是**硬下限** ⇒ 百分比算出的宽度不足 110px 时
+       格子被抬到 110px，`flex-wrap` 自然少放几个 = 自动降档（纯 CSS，不监听窗口）。
+       1024 窗（容器约 936px）下紧凑档会自己退到 7 列（936 ÷ (110+16) = 7.4），
+       不会出现一屏 62px 的糊片。 */
+    min-width: var(--ff-grid-min-cell, 110px);
     margin: 6px calc(var(--item-gap) / 2) 0;
-    padding: 0 0 6px;
+    padding: 0 0 var(--item-pad-b);
     display: flex;
     flex-direction: column;
     align-items: stretch;
@@ -3169,28 +3223,30 @@ const onDisksChangedIpc = (_e: unknown, disks: { serial: string; drive: string }
             text-overflow: ellipsis;
             white-space: nowrap;
             padding: 0 6px;
-            height: 18px;
-            line-height: 18px;
+            /* 尺寸随密度档位走（见 `.image-box` 的 `--item-badge-*`）：
+               `line-height` 必须同 `height` 一起换，否则文字会偏上/偏下。 */
+            height: var(--item-badge-h);
+            line-height: var(--item-badge-h);
             border-radius: var(--ff-radius-pill);
             background: var(--ff-mask);
             color: #fff;
-            font-size: 12px;
+            font-size: var(--item-badge-fs);
         }
     }
 
     /* 标题：永远两行高度（单行也留白）—— 见块头那条"同行等高"的约束。
-       ⚠️ 字号不跟着卡片宽度走（恒 6 列后卡片会随窗口变窄）：14px 是"1024 最窄窗下
-       仍放得下 8 个汉字"的那一档，再大长名字会只剩省略号。 */
+       ⚠️ 三个值（高/字号/行高）由密度档位给，成组变化；14px 是"宽松档 310px 卡片里
+       放得下 8 个汉字"的那一档，紧凑档另有一套（见 `.image-box[data-density='tight']`）。 */
     .card-title {
         margin-top: 6px;
-        height: 40px;
+        height: var(--item-title-h);
         display: -webkit-box;
         -webkit-box-orient: vertical;
         -webkit-line-clamp: 2;
         overflow: hidden;
         word-break: break-all;
-        font-size: 14px;
-        line-height: 20px;
+        font-size: var(--item-title-fs);
+        line-height: var(--item-title-lh);
         color: var(--ff-text-1);
         transition: color .15s ease;
     }

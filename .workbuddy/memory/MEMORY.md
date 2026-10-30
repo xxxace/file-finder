@@ -34,6 +34,7 @@
 - **没有测试框架** ⇒ 验证三件套：`typecheck` 0 error + `docs/probes/` 只读探针 + 真机目视（**别写 TDD 式假测试**）；探针证据**必须 `.txt`**。⚠️ `@media (max-width)` 看 **viewport** ⇒ 须 `win.setSize()`。**探针细则 → appendix-10-05 §一**。
 
 ## 五、当前状态（长清单全文 → `MEMORY-APPENDIX-2026-10-05.md` §二）
+- ⭐ **10-29 网格密度三档已落地**（宽松 6 / 标准 8 / 紧凑 12，下拉切换，localStorage 记住）：列数唯一真相源 `FileFinder/density.ts` → `.image-box` 的 `--ff-grid-cols`；窄窗降档靠 `min-width: var(--ff-grid-min-cell)` 纯 CSS；**切档必须失效 `useGridCursor` 的行结构缓存**（走 `deps.cols`，别在切档回调里手动清）⇒ **待重启 dev 目视**。设计 `docs/DESIGN-GRID-DENSITY-2026-10-29.md`。
 - ⭐ **10-22 补/换封面「暂停·终止·试跑中断」已落地**（`jobs.ts` 加 Gate + pause/resume/reopen；抓取/写盘在取下一条前等闸门；终止保留已抓到的行可写入；`dryrun` 接 abortOnClose；追加 jobId 不再丢命中行）⇒ **待重启 dev 目视**。详情 `docs/FIX-COVER-PAUSE-2026-10-22.md`，探针 `probes/jobs-pause/` 11/11。
 - ⭐ **10-22 webp/视频裂图已修**：根因＝**打包版**里 `@ffmpeg-installer` 的路径在 `app.asar` 内、`spawn` 不走 asar 补丁 ⇒ `ENOENT` ⇒ webp 转码与视频抽帧**全挂**（jpg/png 走 nativeImage 所以正常）；修 4 处：`thumbnail.ts` 加 `realBin()` 重写 + `probeDuration` 先查**视频流**时长 + `extractFrame` 校验产出非空 + 前端无 `thumb` 不渲染 `<img>` + `asarUnpack` 显式化。证据与验收 → `docs/FIX-WEBP-VIDEO-COVER-2026-10-22.md`（探针 `probes/webp-video/`）。**旧缓存失败条目要按 ↻ 才重扫**。
 - ⭐ **Q1 增量对账已落地**（`server/index.ts` 9 处 ~25 行；探针 13 PASS；闸门只在唯一读取点 `readFolder`）⇒ **待重启 dev 目视**。

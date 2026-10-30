@@ -9,7 +9,7 @@
  * ## 为什么状态只有`cursorKey` 一个
  *
  * 因为**坐标是布局的函数，而布局不是我们能存住的**：
- * 网格现在是恒定 6 列，但**坐标仍然不存**：位置是布局的函数 ——
+ * 网格的列数可选（6 / 8 / 12，见 `density.ts`），但**坐标仍然不存**：位置是布局的函数 ——
  * 搜索过滤后的残行、窗口尺寸变化都会让同一个 key 落在不同行列
  *（旧版 6/5/3/2/1 断点下更明显：同一个 key 在 6 列是 `(1,1)`、3 列是 `(2,1)`，探针 R7 断言过）。
  * 存坐标就得跟着这些同步 —— 那是会漏的同步代码。
@@ -103,8 +103,24 @@ export function useGridCursor(deps: {
      * ⇒ 裸引用会在 setup 期间 TDZ 报错。与 `isPreviewOpen` 只能收函数是同一条理由。
      */
     onPreview: (item: WiredFileInfo) => void;
+    /**
+     * 网格当前的列数（密度档位派生出来的那个数）。
+     *
+     * ## 为什么要传进来（这是**正确性**，不是优化）
+     *
+     * 列数变 ⇒ 每行装几个变 ⇒ 同一个 key 的行列坐标变 ⇒ `layoutCache.rows` 整块作废。
+     * 而缓存原本只有两个失效源：`fileList` 变、`window resize`。
+     * 切密度档位**两个都不触发**（只改一个 CSS 变量）⇒ 缓存里留着旧列数的行结构
+     * ⇒ 切到紧凑档后第一次按 →，会按 6 列的行去跳（撞边界 / 横跳一格），
+     * 与 2026-10-04 那次"前几行正常、第 4 行起全错"是同一族的症状。
+     *
+     * ⚠️ **不在调用方（切档回调里）手动调失效**：那样新增第二个切档入口
+     * （快捷键 / 菜单项）就会忘。失效由本模块订阅，结构上不可能漏。
+     * 可选参数：不传 = 行为与加这个功能之前完全一致。
+     */
+    cols?: ComputedRefLike<number>;
 }) {
-    const { fileList, keyOf, imageBox, isPreviewOpen, isActive, onConfirm, onPreview } = deps;
+    const { fileList, keyOf, imageBox, isPreviewOpen, isActive, onConfirm, onPreview, cols } = deps;
 
     // ── 状态：只有一个真相 ────────────────────────────────────────────────
     /**
@@ -249,7 +265,8 @@ export function useGridCursor(deps: {
 
     /**
      * 窗口变宽变窄 ⇒ 格子尺寸与换行位置都会变 ⇒ 缓存的布局作废。
-     * （列数恒定 6 也一样：行高变了，`rowTops` 就不是那批值了。）
+     * （列数不变时也一样：行高变了，`rowTops` 就不是那批值了。）
+     * ⚠️ 密度**档位**变化不走这里（没有 resize 事件），由 `deps.cols` 的 watch 管。
      *
      * 必须挂，也**必须摘**（`dispose`）—— 本项目已经因为全局监听没摘被坑过两次
      * （见 `usePreview` 的 `installWheelZoom` 与 `onViewportResize`）。
@@ -503,6 +520,9 @@ export function useGridCursor(deps: {
 
     // 列表变了 ⇒ 行结构作废（同一个 key 的坐标可能变了；条目增减也改变了行数）
     watch(() => fileList.value, invalidateLayout);
+
+    // 列数变了 ⇒ 行结构必然变 ⇒ 整块作废。与上面那条并列，理由见 deps.cols 的注释。
+    if (cols) watch(cols, invalidateLayout);
 
     /**
      * **这一屏刚加载完、之前等着焦点的人现在有地方站了** ⇒ 重新激活。
