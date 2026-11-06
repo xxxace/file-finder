@@ -133,8 +133,86 @@ const res5 = reconcileItemWithCache(itemImage, null, 'H:');
 test('Case 5: 目录未缓存时 missing 为 false', res5.missing === false);
 
 // Case 6: cacheRelOfItem 路径解析
-test('Case 6: image 的缓存层级为 parentRel', cacheRelOfItem(itemImage) === 'movies');
+test('Case 6: 代言卡 image 的缓存层级为 parentRel', cacheRelOfItem(itemImage) === 'movies');
 test('Case 6: video 的缓存层级为 relPath', cacheRelOfItem(itemVideo) === 'movies');
+
+// Case 7: 普通文件夹条目（type === 'folder'）
+const itemFolder = {
+    id: 'it_fld',
+    serial: 'DISK_1',
+    relPath: 'movies',
+    name: 'Action',
+    type: 'folder',
+    size: 0,
+    addedAt: 1000,
+};
+const parentCacheWithFolder = {
+    serial: 'DISK_1',
+    relPath: 'movies',
+    data: [
+        {
+            dir: 'movies',
+            name: 'Action',
+            isDirectory: true,
+            type: 'folder',
+            size: 0,
+        },
+    ],
+};
+test('Case 7: 普通文件夹的缓存层级为 relPath (movies)', cacheRelOfItem(itemFolder) === 'movies');
+const res7 = reconcileItemWithCache(itemFolder, parentCacheWithFolder, 'H:');
+test('Case 7: 普通文件夹不被误判为 missing', res7.missing === false);
+
+// Case 8: 普通单张图片（type === 'image' 但 !files）
+const itemPlainPic = {
+    id: 'it_pic',
+    serial: 'DISK_1',
+    relPath: 'photos',
+    name: 'wallpaper',
+    ext: 'jpg',
+    type: 'image',
+    size: 1024,
+    addedAt: 1000,
+};
+const parentCacheWithPic = {
+    serial: 'DISK_1',
+    relPath: 'photos',
+    data: [
+        {
+            dir: 'photos',
+            name: 'wallpaper',
+            ext: 'jpg',
+            isDirectory: false,
+            type: 'image',
+            size: 1024,
+        },
+    ],
+};
+test('Case 8: 普通单图的缓存层级为 relPath (photos)', cacheRelOfItem(itemPlainPic) === 'photos');
+const res8 = reconcileItemWithCache(itemPlainPic, parentCacheWithPic, 'H:');
+test('Case 8: 普通单图不被误判为 missing', res8.missing === false);
+
+// Case 9: 根目录下的独立文件（relPath === ''）
+const itemRootFile = {
+    id: 'it_root',
+    serial: 'DISK_1',
+    relPath: '',
+    name: 'second_file',
+    ext: 'txt',
+    type: 'file',
+    size: 50,
+    addedAt: 1000,
+};
+const rootCache = {
+    serial: 'DISK_1',
+    relPath: '',
+    data: [
+        { dir: '', name: 'first_file', ext: 'inf', type: 'file', size: 10 },
+        { dir: '', name: 'second_file', ext: 'txt', type: 'file', size: 50 },
+    ],
+};
+const res9 = reconcileItemWithCache(itemRootFile, rootCache, 'H:');
+test('Case 9: 根目录下文件不被误匹配为第 1 个无关文件', res9.item.name === 'second_file' && res9.missing === false);
 
 if (failures > 0) {
     process.exit(1);

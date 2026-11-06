@@ -258,13 +258,21 @@ export async function patchItemByLocation(
     const list = await loadPlaylists(dataDir);
     let matched = false;
 
+    // 清理 undefined 属性，避免无意抹掉原有快照字段
+    const cleanPatch: Partial<PlaylistItem> = {};
+    for (const [k, v] of Object.entries(patch)) {
+        if (v !== undefined) {
+            (cleanPatch as any)[k] = v;
+        }
+    }
+
     for (const pl of list) {
         for (let i = 0; i < pl.items.length; i++) {
             const it = pl.items[i];
             if (it.serial === serial && it.relPath === relPath && it.name === name) {
                 pl.items[i] = {
                     ...it,
-                    ...patch,
+                    ...cleanPatch,
                     updatedAt: Date.now(),
                 };
                 matched = true;

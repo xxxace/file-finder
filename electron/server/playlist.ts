@@ -90,15 +90,16 @@ export function keyOfItem(item: PlaylistItem, drive: string): string {
 
 /**
  * 确定条目在 NeDB 缓存中的挂载目录。
- * - 散落视频/文件：本身就存放在 item.relPath 层
- * - 封面代言卡（'image'）或普通文件夹（'folder'）：在 NeDB 中被索引在其父目录的 cache.data 中
+ * - 只有携带 files 的封面代言卡（一整个子目录被收敛为一张带脸卡片），其条目 relPath 才是该子目录路径，
+ *   其元数据保存在其父目录的缓存文档中，需向上取一层
+ * - 普通文件、普通单图、视频、普通文件夹，其条目本身就存在于 item.relPath 层
  */
 export function cacheRelOfItem(item: PlaylistItem): string {
-    if (item.type === 'video' || item.type === 'file') {
-        return item.relPath;
+    if (item.type === 'image' && Array.isArray(item.files)) {
+        const cut = item.relPath.lastIndexOf('/');
+        return cut === -1 ? '' : item.relPath.slice(0, cut);
     }
-    const cut = item.relPath.lastIndexOf('/');
-    return cut === -1 ? '' : item.relPath.slice(0, cut);
+    return item.relPath;
 }
 
 /**
@@ -121,7 +122,14 @@ export function reconcileItemWithCache(
     let matched = false;
 
     if (item.type === 'image') {
-        const hit = entries.find(e => e.dir === item.relPath || e.name === item.name);
+        const isCoverCard = Array.isArray(item.files);
+        const hit = entries.find(e => {
+            if (isCoverCard) {
+                return (item.relPath !== '' && e.dir === item.relPath) ||
+                    (e.name === item.name && e.type === 'image' && Array.isArray(e.files));
+            }
+            return e.name === item.name && (e.ext || '') === (item.ext || '');
+        });
         if (hit) {
             matched = true;
             const sigChanged = (hit.sig || undefined) !== item.sig;
@@ -301,7 +309,10 @@ export function createPlaylistRoutes(deps: PlaylistDeps): PlaylistRoute[] {
                 const drive = bySerial.get(it.serial) ?? '';
                 const res = reconcileItemWithCache(it, cache, drive);
                 if (res.changed) {
-                    pl.items[i] = res.item;
+                    pl.items[i] = {
+                        ...res.item,
+                        updatedAt: Date.now(),
+                    };
                     anyChanged = true;
                 }
                 missingMap.set(it.id, res.missing);

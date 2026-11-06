@@ -384,13 +384,16 @@ export async function syncPlaylistsAfterApply(
         if (g.kind === 'file') {
             const cache = await findCacheFn(serial, g.layerDir, 'cover');
             const hit = cache?.data?.find((e: any) => e.name === g.query && (e.type === 'image' || e.dir === g.folderRel));
-            await patchItemByLocation(dataDir, serial, g.layerDir, g.query, {
-                relPath: g.folderRel,
-                type: 'image',
-                sig: hit?.sig,
-                files: Array.isArray(hit?.files) ? hit.files : undefined,
-                size: typeof hit?.size === 'number' ? hit.size : undefined,
-            });
+            // 守卫：只有当真正确认生成了封面代言卡时，才触发条目迁移，避免任务失败时盲目改写
+            if (hit && (hit.type === 'image' || hit.sig)) {
+                await patchItemByLocation(dataDir, serial, g.layerDir, g.query, {
+                    relPath: g.folderRel,
+                    type: 'image',
+                    sig: hit.sig,
+                    files: Array.isArray(hit.files) ? hit.files : undefined,
+                    size: typeof hit.size === 'number' ? hit.size : undefined,
+                });
+            }
         } else if (g.kind === 'dir') {
             const parentDir = dirOf(g.layerDir);
             const cache = await findCacheFn(serial, parentDir, 'cover');
