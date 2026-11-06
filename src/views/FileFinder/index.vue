@@ -225,6 +225,8 @@
                      `width:100%/N−gap` 补偿"算出来的，任何参与布局的新元素都会带偏它。
                      放左上角：pick-badge 在右上，两者不打架。 -->
                 <i v-if="plMember.has(keyOf(item))" class="pl-badge" aria-hidden="true"></i>
+                <!-- 已失效徽标（2026-11-06）：收藏夹内所属盘在线但确认丢失的条目。绝对定位右上角。 -->
+                <i v-if="item.missing" class="pl-missing-badge">已失效</i>
             </div>
             <!-- 空状态：只有一行浅灰小字。不加边框、不加图标、不加按钮 —— 保持极简观感 -->
             <div v-if="emptyTip" class="empty-tip">{{ emptyTip }}</div>
@@ -969,6 +971,10 @@ const cardCenterOf = (item: WiredFileInfo) => {
 
 const handleOpen = (e: MouseEvent, item: WiredFileInfo) => {
     if (loading.value) return;
+    if (item.missing) {
+        notify('warning', '文件已失效', '该文件已不在原路径或已被删除');
+        return;
+    }
     if (item.type === 'folder') {
         // 目录的完整路径从 item.dir 拼。**不要用 dir.value** —— 它是"当前选中的根"，
         // 进到子目录之后它还是最初那个，用它会拼出 H:/x/子目录名 这种少一层的路径。
@@ -1011,6 +1017,9 @@ const onCursorConfirm = (item: WiredFileInfo) => {
     if (loading.value) return;
     const action = decideOpen(item, false);
     switch (action?.kind) {
+        case 'missing':
+            notify('warning', '文件已失效', '该文件已不在原路径或已被删除');
+            return;
         case 'drill':
             openFolderInCover(action.path);
             return;
@@ -2993,6 +3002,28 @@ const onDisksChangedIpc = (_e: unknown, disks: { serial: string; drive: string }
         &::before {
             content: '★';
         }
+    }
+
+    /* 已失效徽标（2026-11-06）：收藏夹内所属盘在线但确认丢失的条目。
+       绝对定位右上角，深红底色白字，小圆角胶囊形，不参与布局。 */
+    .pl-missing-badge {
+        position: absolute;
+        top: 3px;
+        right: 3px;
+        z-index: var(--z-card-mark);
+        display: block;
+        padding: 0 4px;
+        height: 16px;
+        line-height: 16px;
+        font-style: normal;
+        font-size: 10px;
+        font-weight: 500;
+        text-align: center;
+        border-radius: 3px;
+        color: #fff;
+        background-color: #d03050;
+        box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.25);
+        pointer-events: none;
     }
 }
 

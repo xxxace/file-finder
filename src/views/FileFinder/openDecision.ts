@@ -38,6 +38,7 @@ export interface FileEntry {
 export interface CardLike {
     type: string;
     files?: FileEntry[];
+    missing?: boolean;
 }
 
 /** 收敛卡片：`files` 非空 ⟺ 还有一个类型是 FileEntry[] 的东西。类型谓词，调用处能窄化。 */
@@ -76,7 +77,8 @@ export type OpenAction =
     | { kind: 'open-item' }                  // 打开这一格自己（系统程序）
     | { kind: 'open-inner'; name: string }   // 打开目录代言卡片里的某一个文件
     | { kind: 'pick-from-list' }             // 弹文件列表让用户选
-    | { kind: 'preview' };                   // 开内置预览
+    | { kind: 'preview' }                    // 开内置预览
+    | { kind: 'missing'; title: string };    // 已失效拦截
 
 /** `onCursorConfirm` 需要的额外信息（拼路径要用 `dir`）。 */
 export interface OpenTarget extends CardLike {
@@ -104,6 +106,7 @@ export interface OpenTarget extends CardLike {
  */
 export function decideOpen(item: OpenTarget, picking: boolean): OpenAction | null {
     if (picking) return null;
+    if (item.missing) return { kind: 'missing', title: item.name };
     if (item.type === 'folder') return { kind: 'drill', path: `${item.dir}/${item.name}` };
     if (isDirCard(item)) {
         // ⚠️ 这里**不自己取** `files[0]`：只含 1 个文件时也可能是图片而不是视频，
