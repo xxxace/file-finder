@@ -33,6 +33,7 @@ export interface PlaylistItem {
     /** 目录代言卡快照：丢了它，双击会把"一部片一个目录"错判成图片弹预览（见 openDecision） */
     files?: { name: string; size: number }[];
     addedAt: number;
+    updatedAt?: number;
 }
 
 export interface Playlist {
@@ -238,3 +239,68 @@ export async function removeItemById(dataDir: string, id: string, itemId: string
     await persist(dataDir, list);
     return true;
 }
+
+/**
+ * 按位置（盘序列号 + 相对路径 + 名称）精准定向修改条目快照。
+ * 供助手整理/换封面写盘完成后主动联动。
+ */
+export async function patchItemByLocation(
+    dataDir: string,
+    serial: string,
+    relPath: string,
+    name: string,
+    patch: Partial<PlaylistItem>,
+): Promise<boolean> {
+    const list = await loadPlaylists(dataDir);
+    let matched = false;
+
+    for (const pl of list) {
+        for (let i = 0; i < pl.items.length; i++) {
+            const it = pl.items[i];
+            if (it.serial === serial && it.relPath === relPath && it.name === name) {
+                pl.items[i] = {
+                    ...it,
+                    ...patch,
+                    updatedAt: Date.now(),
+                };
+                matched = true;
+            }
+        }
+    }
+
+    if (matched) {
+        await persist(dataDir, list);
+    }
+    return matched;
+}
+
+/**
+ * 遍历所有清单条目执行快照核对与对齐，若有条目变动则原子回写。
+ * @returns 实际被更新的条目数量
+ */
+export async function reconcileItemSnapshots(
+    dataDir: string,
+    reconciler: (item: PlaylistItem) => { changed: boolean; item: PlaylistItem },
+): Promise<number> {
+    const list = await loadPlaylists(dataDir);
+    let changedCount = 0;
+
+    for (const pl of list) {
+        for (let i = 0; i < pl.items.length; i++) {
+            const res = reconciler(pl.items[i]);
+            if (res.changed) {
+                pl.items[i] = {
+                    ...res.item,
+                    updatedAt: Date.now(),
+                };
+                changedCount++;
+            }
+        }
+    }
+
+    if (changedCount > 0) {
+        await persist(dataDir, list);
+    }
+    return changedCount;
+}
+
