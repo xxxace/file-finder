@@ -78,6 +78,10 @@ function persist(dataDir: string, list: Playlist[]): Promise<void> {
     return queueWrite(file, () => atomicWrite(file, JSON.stringify(list, null, 2)));
 }
 
+export function persistPlaylists(dataDir: string, list: Playlist[]): Promise<void> {
+    return persist(dataDir, list);
+}
+
 /**
  * 读清单（启动时 / 每次请求都走这里，命中内存态就直接返回）。
  * 没有「收藏」就补一个 —— 默认清单是功能的另一半：高频场景零成本，

@@ -666,6 +666,8 @@ export type WiredFileInfo = WiredBase & {
     preview?: string;
     /** 预览大图**此刻**是否已存在于本地（缺了就得靠 `p` 参数现场生成，见 /preview） */
     previewReady?: boolean;
+    /** 收藏夹条目专属：所属移动硬盘在线，但缓存与磁盘中已确认不存在（已失效） */
+    missing?: boolean;
 };
 
 type WiredBase = Omit<FileInfo, 'sig' | 'srcMtime' | 'srcBytes' | 'thumb' | 'avatar' | 'preview' | 'previewReady'>;

@@ -22,9 +22,10 @@
  */
 import type http from 'node:http';
 import {
-    addItems, createPlaylist, deletePlaylist, loadPlaylists, removeItemById, renamePlaylist,
+    addItems, createPlaylist, deletePlaylist, loadPlaylists, persistPlaylists, removeItemById, renamePlaylist,
 } from './playlistStore';
 import type { Playlist, PlaylistItem } from './playlistStore';
+import { findCache } from './nedb';
 import { hasBin, previewNameOf, sigOfThumbName, thumbNameOf } from '../utils/binStore';
 import { getDrives, serialOfDrive, splitPath, toFullPath } from '../utils/driveIdentity';
 import type { WiredFileInfo } from './index';
@@ -88,11 +89,115 @@ export function keyOfItem(item: PlaylistItem, drive: string): string {
 }
 
 /**
+ * 确定条目在 NeDB 缓存中的挂载目录。
+ * - 散落视频/文件：本身就存放在 item.relPath 层
+ * - 封面代言卡（'image'）或普通文件夹（'folder'）：在 NeDB 中被索引在其父目录的 cache.data 中
+ */
+export function cacheRelOfItem(item: PlaylistItem): string {
+    if (item.type === 'video' || item.type === 'file') {
+        return item.relPath;
+    }
+    const cut = item.relPath.lastIndexOf('/');
+    return cut === -1 ? '' : item.relPath.slice(0, cut);
+}
+
+/**
+ * 将条目与 NeDB 内存缓存进行对齐（纯函数，零 I/O）：
+ * 1. 同步最新封面指纹 sig、分卷列表 files、大小 size
+ * 2. 单视频若被整理收敛为同名文件夹封面代言卡，自动升级为 'image' 代言卡并调整路径
+ * 3. 盘在线（drive !== ''）且父目录已被缓存、但条目未找到时，标记 missing: true
+ */
+export function reconcileItemWithCache(
+    item: PlaylistItem,
+    cache: { data?: any[] } | null,
+    drive: string,
+): { item: PlaylistItem; changed: boolean; missing: boolean } {
+    if (!cache || !Array.isArray(cache.data)) {
+        return { item, changed: false, missing: false };
+    }
+
+    const entries = cache.data;
+    let updated: PlaylistItem | null = null;
+    let matched = false;
+
+    if (item.type === 'image') {
+        const hit = entries.find(e => e.dir === item.relPath || e.name === item.name);
+        if (hit) {
+            matched = true;
+            const sigChanged = (hit.sig || undefined) !== item.sig;
+            const sizeChanged = typeof hit.size === 'number' && hit.size !== item.size;
+            const filesChanged = Array.isArray(hit.files) && JSON.stringify(hit.files) !== JSON.stringify(item.files);
+            const nameChanged = hit.name && hit.name !== item.name;
+
+            if (sigChanged || sizeChanged || filesChanged || nameChanged) {
+                updated = {
+                    ...item,
+                    sig: hit.sig || item.sig,
+                    size: typeof hit.size === 'number' ? hit.size : item.size,
+                    files: Array.isArray(hit.files) ? hit.files : item.files,
+                    name: hit.name || item.name,
+                };
+            }
+        }
+    } else if (item.type === 'video' || item.type === 'file') {
+        const hitFile = entries.find(e => e.name === item.name && (e.ext || '') === (item.ext || ''));
+        if (hitFile) {
+            matched = true;
+            const sigChanged = (hitFile.sig || undefined) !== item.sig;
+            const sizeChanged = typeof hitFile.size === 'number' && hitFile.size !== item.size;
+            if (sigChanged || sizeChanged) {
+                updated = {
+                    ...item,
+                    sig: hitFile.sig || item.sig,
+                    size: typeof hitFile.size === 'number' ? hitFile.size : item.size,
+                };
+            }
+        } else {
+            // 检查是否被打包收敛为同名文件夹代言卡 (name 匹配且 type === 'image')
+            const hitFolderCover = entries.find(e => e.name === item.name && e.type === 'image' && Array.isArray(e.files));
+            if (hitFolderCover) {
+                matched = true;
+                const newRel = item.relPath ? `${item.relPath}/${item.name}` : item.name;
+                updated = {
+                    ...item,
+                    relPath: newRel,
+                    type: 'image',
+                    sig: hitFolderCover.sig || item.sig,
+                    size: typeof hitFolderCover.size === 'number' ? hitFolderCover.size : item.size,
+                    files: hitFolderCover.files,
+                };
+            }
+        }
+    } else if (item.type === 'folder') {
+        const hitFolder = entries.find(e => e.name === item.name && (e.type === 'folder' || e.isDirectory));
+        if (hitFolder) {
+            matched = true;
+            const sigChanged = (hitFolder.sig || undefined) !== item.sig;
+            const sizeChanged = typeof hitFolder.size === 'number' && hitFolder.size !== item.size;
+            if (sigChanged || sizeChanged) {
+                updated = {
+                    ...item,
+                    sig: hitFolder.sig || item.sig,
+                    size: typeof hitFolder.size === 'number' ? hitFolder.size : item.size,
+                };
+            }
+        }
+    }
+
+    const isMissing = Boolean(drive && !matched);
+    return {
+        item: updated ?? item,
+        changed: Boolean(updated),
+        missing: isMissing,
+    };
+}
+
+/**
  * 条目 → 下发态（WiredFileInfo 形状）。规则与 `wire()` 逐字同构：
  * thumb/avatar 共用 `t-<sig>`（在线才发），preview 只在"本地已有"或
  * "盘在线且是图片"时发。bin 仓里没有的名字一律不下发（免得网格里一排 404）。
  */
-export function wireItem(item: PlaylistItem, drive: string): WiredFileInfo {
+export function wireItem(item: PlaylistItem, drive: string, missing = false): WiredFileInfo {
     const tName = thumbNameOf(item.sig);
     const pName = previewNameOf(item.sig);
     const hasT = hasBin(tName);
@@ -110,6 +215,7 @@ export function wireItem(item: PlaylistItem, drive: string): WiredFileInfo {
         avatar: hasT && isFolder ? tName : undefined,
         preview: (hasP || (!!drive && item.type === 'image')) ? pName : undefined,
         previewReady: hasP,
+        missing: missing || undefined,
     };
 }
 
@@ -160,11 +266,60 @@ export function createPlaylistRoutes(deps: PlaylistDeps): PlaylistRoute[] {
 
     // ── 路由 ────────────────────────────────────────────────────────────────
 
+    /**
+     * 将目标清单中的条目与 NeDB 内存缓存对齐（更新封面指纹、大小、分卷列表、收敛文件夹转移），
+     * 并在盘在线但条目消失时收集 missing 标记。如有变更，异步原子回写。
+     */
+    async function reconcileItemsInPlaylists(
+        allPlaylists: Playlist[],
+        targetPlaylists: Playlist[],
+        bySerial: Map<string, string>,
+    ): Promise<Map<string, boolean>> {
+        const missingMap = new Map<string, boolean>();
+        const allItems: PlaylistItem[] = [];
+        for (const pl of targetPlaylists) {
+            allItems.push(...pl.items);
+        }
+        if (!allItems.length) return missingMap;
+
+        const needed = Array.from(new Set(allItems.map(it => `${it.serial}|${cacheRelOfItem(it)}`)));
+        const cacheMap = new Map<string, any>();
+        await Promise.all(needed.map(async (k) => {
+            const cut = k.indexOf('|');
+            const serial = k.slice(0, cut);
+            const relPath = k.slice(cut + 1);
+            const doc = await findCache(serial, relPath, 'cover');
+            cacheMap.set(k, doc);
+        }));
+
+        let anyChanged = false;
+        for (const pl of targetPlaylists) {
+            for (let i = 0; i < pl.items.length; i++) {
+                const it = pl.items[i];
+                const k = `${it.serial}|${cacheRelOfItem(it)}`;
+                const cache = cacheMap.get(k);
+                const drive = bySerial.get(it.serial) ?? '';
+                const res = reconcileItemWithCache(it, cache, drive);
+                if (res.changed) {
+                    pl.items[i] = res.item;
+                    anyChanged = true;
+                }
+                missingMap.set(it.id, res.missing);
+            }
+        }
+
+        if (anyChanged) {
+            void persistPlaylists(dataDir, allPlaylists).catch(() => undefined);
+        }
+        return missingMap;
+    }
+
     /** 收录索引：货架要的（封面/数量）+ 网格星标与选单 ✓ 要的（keys） */
     async function listPlaylists(_req: ReqLike, res: http.ServerResponse) {
         const list = await loadPlaylists(dataDir);
         const drives = await getDrives();
         const bySerial = new Map(drives.map(d => [d.serial, d.drive]));
+        await reconcileItemsInPlaylists(list, list, bySerial);
         const playlists = list.map(pl => ({
             id: pl.id,
             name: pl.name,
@@ -179,17 +334,19 @@ export function createPlaylistRoutes(deps: PlaylistDeps): PlaylistRoute[] {
     /** 详情：逐条装配成网格条目。盘在不在决定 dir 的形态，不进清单的过滤 */
     async function listItems(req: ReqLike, res: http.ServerResponse) {
         const id = req.params?.get('id') || '';
-        const pl = (await loadPlaylists(dataDir)).find(p => p.id === id);
+        const list = await loadPlaylists(dataDir);
+        const pl = list.find(p => p.id === id);
         if (!pl) {
             sendJson(res, { code: 404, error: '清单不存在（可能已被删除）' }, 404);
             return;
         }
         const drives = await getDrives();
         const bySerial = new Map(drives.map(d => [d.serial, d.drive]));
+        const missingMap = await reconcileItemsInPlaylists(list, [pl], bySerial);
         sendJson(res, {
             code: 200,
             playlist: { id: pl.id, name: pl.name, system: !!pl.system, count: pl.items.length },
-            items: pl.items.map(it => wireItem(it, bySerial.get(it.serial) ?? '')),
+            items: pl.items.map(it => wireItem(it, bySerial.get(it.serial) ?? '', missingMap.get(it.id) ?? false)),
         });
     }
 
