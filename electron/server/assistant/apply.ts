@@ -45,8 +45,9 @@ import os from 'node:os';
 import crypto from 'node:crypto';
 import { net, nativeImage, session } from 'electron';
 import { getDrives } from '../../utils/driveIdentity';
-import { removeCache } from '../nedb';
+import { findCache, removeCache } from '../nedb';
 import type { OpenMode } from '../nedb';
+import { patchItemByLocation } from '../playlistStore';
 import { transcodeImage } from '../../utils/thumbnail';
 import { enqueue, hostOf } from './queue';
 import { appendTombstone } from './hits';
@@ -348,6 +349,13 @@ export async function runApply(
             }
         }
 
+        // ── ⑤ 主动同步收藏夹（若涉及的条目被收藏，即刻更新路径与新封面） ──
+        try {
+            await syncPlaylistsAfterApply(dataDir, serial, groups, (s, r, m) => findCache(s, r, m));
+        } catch (e) {
+            console.error('[apply] 同步收藏夹失败:', e);
+        }
+
         const { processed, total } = job.progress;
         if (job.cancelled) {
             finishJob(job, 'cancelled', `已终止：写了 ${written} 组（处理到 ${processed}/${total}，剩 ${total - processed} 组没写）`);
@@ -357,6 +365,44 @@ export async function runApply(
         }
     } catch (e) {
         finishJob(job, 'error', e instanceof Error ? e.message : String(e));
+    }
+}
+
+/**
+ * 助手写盘完成后，主动同步收藏夹（playlists.json）：
+ * 1. 单视频被整理进同名文件夹（kind === 'file'）：将旧路径 (serial, layerDir, query)
+ *    更新为新文件夹代言卡路径 (serial, folderRel, query)，type 升级为 'image'，并同步新 sig 与 files
+ * 2. 换封面/补封面（kind === 'dir' 或 overwrite）：同步最新封面 sig
+ */
+export async function syncPlaylistsAfterApply(
+    dataDir: string,
+    serial: string,
+    groups: Array<{ kind: 'file' | 'dir'; query: string; layerDir: string; folderRel: string }>,
+    findCacheFn: (serial: string, relPath: string, mode: OpenMode) => Promise<any>,
+): Promise<void> {
+    for (const g of groups) {
+        if (g.kind === 'file') {
+            const cache = await findCacheFn(serial, g.layerDir, 'cover');
+            const hit = cache?.data?.find((e: any) => e.name === g.query && (e.type === 'image' || e.dir === g.folderRel));
+            await patchItemByLocation(dataDir, serial, g.layerDir, g.query, {
+                relPath: g.folderRel,
+                type: 'image',
+                sig: hit?.sig,
+                files: Array.isArray(hit?.files) ? hit.files : undefined,
+                size: typeof hit?.size === 'number' ? hit.size : undefined,
+            });
+        } else if (g.kind === 'dir') {
+            const parentDir = dirOf(g.layerDir);
+            const cache = await findCacheFn(serial, parentDir, 'cover');
+            const hit = cache?.data?.find((e: any) => e.name === g.query || e.dir === g.layerDir);
+            if (hit?.sig) {
+                await patchItemByLocation(dataDir, serial, g.layerDir, g.query, {
+                    sig: hit.sig,
+                    files: Array.isArray(hit.files) ? hit.files : undefined,
+                    size: typeof hit.size === 'number' ? hit.size : undefined,
+                });
+            }
+        }
     }
 }
 
