@@ -1,0 +1,72 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>theme transition probe</title>
+<!-- 真实样式，不复制：量到的就是产品在跑的那一套 -->
+<link rel="stylesheet" href="../../../src/styles/theme-transition.css">
+<style>
+  /* 复刻 tokens.css 里与「露底」相关的三条：html 无背景、body 有背景、两者都 100% 高 */
+  :root { color-scheme: light; --p-bg: #f1f2f3; --p-fg: #18191c; }
+  [data-theme='dark'] { color-scheme: dark; --p-bg: #18191c; --p-fg: #e3e5e7; }
+  html, body { margin: 0; height: 100%; }
+  body { background: var(--p-bg); color: var(--p-fg); }
+  /* 复刻真实外壳：Shell/index.vue 用的是 height:100vh（不是 100%），
+     非整数 DPR 下 100vh 会被取整成整数，与真实视口差 0.x px —— 探针必须照抄才能复现 */
+  .shell { height: 100vh; overflow: hidden; display: flex; background: var(--p-bg); }
+  .shell-body { flex: 1 1 auto; min-width: 0; display: flex; flex-direction: column; overflow: hidden; }
+  .rail {
+    flex: 0 0 64px; display: flex; align-items: flex-end; justify-content: center;
+    padding-bottom: 40px; box-sizing: border-box;
+  }
+  #tog { width: 44px; height: 44px; border: 0; border-radius: 8px; cursor: pointer; }
+  .grid { flex: 1 1 auto; overflow: auto; display: grid; grid-template-columns: repeat(6, 1fr); gap: 16px; padding: 16px; align-content: start; }
+  .cell { height: 110px; background: var(--p-fg); opacity: 0.16; border-radius: 6px; }
+  #mark { position: fixed; left: 900px; top: 600px; width: 6px; height: 6px; background: #ff0000; z-index: 99999; }
+</style>
+</head>
+<body>
+<div class="shell">
+  <div class="rail"><button id="tog" type="button">T</button></div>
+  <div class="shell-body"><div class="grid" id="grid"></div></div>
+  <!-- 追踪点：离缩放圆心(~32,798)约 900px。净变换若严格恒等，它必须一像素都不动 -->
+  <div id="mark"></div>
+</div>
+<script type="module">
+import { runThemeTransition } from './transition.js';
+
+let dark = false;
+const tog = document.getElementById('tog');
+tog.addEventListener('click', (event) => {
+  dark = !dark;
+  const next = dark;
+  window.__phase = 'start';
+  runThemeTransition(async () => {
+    document.documentElement.dataset.theme = next ? 'dark' : 'light';
+    await Promise.resolve();
+  }, event.currentTarget);
+});
+
+const grid = document.getElementById('grid');
+for (let i = 0; i < 36; i++) {
+  const cell = document.createElement('div');
+  cell.className = 'cell';
+  grid.appendChild(cell);
+}
+
+window.__env = () => {
+  const rect = document.documentElement.getBoundingClientRect();
+  return {
+    dpr: devicePixelRatio,
+    innerW: window.innerWidth,
+    innerH: window.innerHeight,
+    docRect: { w: rect.width, h: rect.height },
+    bodyRect: { w: document.body.getBoundingClientRect().width, h: document.body.getBoundingClientRect().height },
+    visual: { w: visualViewport.width, h: visualViewport.height, scale: visualViewport.scale },
+    supports: typeof document.startViewTransition === 'function',
+    reduced: matchMedia('(prefers-reduced-motion: reduce)').matches,
+  };
+};
+</script>
+</body>
+</html>

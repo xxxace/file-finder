@@ -1,0 +1,35 @@
+/**
+ * 圆形扩散主题切换 —— 只放静态部分。
+ * 圆心 / 半径 / 起始 clip-path 由 theme/transition.ts 注入（依赖点击坐标），这里不写几何。
+ *
+ * 全局只在 `html[data-theme-transition]` 存在时生效，切换结束由 JS 摘掉，平时零开销。
+ */
+
+/* 默认的 root 交叉淡入必须关掉，否则旧快照会盖在新快照上叠出一层灰雾 */
+html[data-theme-transition='soft-focus']::view-transition-group(*),
+html[data-theme-transition='soft-focus']::view-transition-old(*),
+html[data-theme-transition='soft-focus']::view-transition-new(*) {
+  animation: none;
+  mix-blend-mode: normal;
+}
+
+/* 过渡期间整页不可点（快照层本就挡着，显式写上免得将来别的伪元素漏网） */
+html[data-theme-transition='soft-focus']::view-transition {
+  pointer-events: none;
+}
+
+html[data-theme-transition='soft-focus']::view-transition-group(theme-outgoing) {
+  z-index: 1;
+}
+
+html[data-theme-transition='soft-focus']::view-transition-group(theme-incoming) {
+  z-index: 2;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  ::view-transition-group(*),
+  ::view-transition-old(*),
+  ::view-transition-new(*) {
+    animation: none !important;
+  }
+}

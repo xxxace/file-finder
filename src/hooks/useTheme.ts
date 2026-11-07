@@ -5,7 +5,8 @@
  * 落点：`<html data-theme="...">`，token 在 `styles/tokens.css` 里按这个属性切换。
  * 默认深色：这一轮改造的目标形态就是截图那一套。
  */
-import { computed, ref, watch } from 'vue';
+import { computed, nextTick, ref, watch } from 'vue';
+import { runThemeTransition } from '@/theme/transition';
 
 export type ThemeName = 'light' | 'dark';
 
@@ -40,8 +41,16 @@ export function useTheme() {
     return {
         theme,
         isDark: computed(() => theme.value === 'dark'),
-        toggleTheme: () => {
-            theme.value = theme.value === 'dark' ? 'light' : 'dark';
+        /**
+         * `source` = 触发切换的元素，圆形扩散的圆心取它的中心；不给就落在视口中心。
+         * naive-ui 的配色由 Vue 渲染出来，得等一次 tick 才进得了新快照 —— 所以 apply 是异步的。
+         */
+        toggleTheme: (source?: HTMLElement | null) => {
+            const next: ThemeName = theme.value === 'dark' ? 'light' : 'dark';
+            runThemeTransition(async () => {
+                theme.value = next;
+                await nextTick();
+            }, source);
         },
     };
 }

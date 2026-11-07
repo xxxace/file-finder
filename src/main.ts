@@ -2,6 +2,7 @@ import { createApp } from 'vue'
 import App from './App.vue'
 import { router } from './router'
 import './styles/tokens.css'
+import './styles/theme-transition.css'
 // vectors 已完全包含 classic（369 条规则里 368 条逐字相同，剩 1 条选择器是其子集），只引这一个。
 import 'file-icon-vectors/dist/file-icon-vectors.min.css';
 

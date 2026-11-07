@@ -1,0 +1,32 @@
+
+(electron) 'console-message' arguments are deprecated and will be removed. Please use Event<WebContentsConsoleMessageEventParams> object instead.
+══ 环境 ══
+  dpr: 1.25
+  innerW: 1426
+  innerH: 838
+  docRect: {"w":1426.4000244140625,"h":838.4000244140625}
+  bodyRect: {"w":1426.4000244140625,"h":838.4000244140625}
+  visual: {"w":1426.4000244140625,"h":838.4000244140625,"scale":1}
+  supports: true
+  reduced: false
+  窗口: 1440×900
+  真实视口(CSS): w=1426.4000244140625 h=838.4000244140625  ·  DPR=1.25
+  innerWidth/Height: 1426×838  ⇒ 取整损失 w=0.40 h=0.40
+  物理像素: 1783×1048
+
+── 第 1 轮 light → dark（期望主题 = dark）──
+  帧数 22 · 动画期(0~700ms) 帧数 21 · 平均帧间隔 32.3ms ≈ 31fps
+  红点 x: 1128.5 ~ 1128.5   y: 753.5 ~ 753.5  ⇒ 漂移 x 0.00 y 0.00 物理像素
+  红点 y 出现过的取值: 753.5
+  红点 x 出现过的取值: 1128.5
+
+── 第 2 轮 dark → light（期望主题 = light）──
+  帧数 22 · 动画期(0~700ms) 帧数 21 · 平均帧间隔 32.4ms ≈ 31fps
+  红点 x: 1128.5 ~ 1128.5   y: 753.5 ~ 753.5  ⇒ 漂移 x 0.00 y 0.00 物理像素
+  红点 y 出现过的取值: 753.5
+  红点 x 出现过的取值: 1128.5
+
+══ 结论 ══
+① light→dark：红点漂移 0.00 物理像素（0 = 画面完全静止） · 31fps
+② dark→light：红点漂移 0.00 物理像素 · 31fps
+③ 取整损失: w=0.40px h=0.40px · DPR=1.25
