@@ -5,6 +5,7 @@ import os from 'node:os';
 import config from '../config';
 import path from 'node:path';
 import { initBinStore, putBin } from '../utils/binStore';
+import { encryptLine, decryptLine } from '../utils/cacheCrypto';
 import dayjs from 'dayjs';
 import type { FileInfo } from './index';
 
@@ -104,59 +105,7 @@ export const CACHE_DB_PATH = cachePath;
  */
 export const BEFORE_RESTORE_PATH = path.join(config.userBasePath, 'searchCache-before-restore.db');
 
-/**
- * 缓存库的加密密钥。
- *
- * ⚠️ **这个常量一旦改动，所有已存在的缓存库都读不出来**（密文对不上 → 整库被判损坏）。
- * 所以它**写死在这里，不是配置项**。别做成可配的，也别"顺手换个 key" ——
- * 那正是"改口令 = 旧文件全废"那个契约；这里用「密钥永不更改」把它简化掉。
- *
- * 强度（**诚实版**）：**固定密钥 = 混淆级别**。
- * 它防的是"随手用记事本打开看一眼"，**不防有心人** —— 解包之后挖源码能拿到这个字符串。
- * 需求就是这个（用户原话「防打开记事本或者编辑器一眼就能看到内容」），**匹配**；
- * 但**不要对外宣称这是安全存储**，也不要把强度当成"改密钥"的理由。
- */
-const CACHE_KEY = crypto.createHash('sha256').update('file-finder-cache-v1-2026-09-24').digest();
-
-/**
- * 固定 IV。
- *
- * **必须确定性加密** —— 同一个 `relPath` 每次出来的密文必须一模一样，
- * 否则 nedb 的 `serial` 索引和 `findCache({ serial, relPath, mode })` 会全部失效：
- * 同一份数据每次加密结果不同，等于键在变，查不回来。
- * 固定 IV 会泄露"相同明文 → 相同密文"这一点，在"防随手打开"这个目标下无所谓。
- */
-const CACHE_IV = Buffer.alloc(16, 0);
-
-/**
- * 写盘前：一行明文 JSON → 一行 base64 密文。
- *
- * ⚠️ 输出**绝不能含 `\n`**（nedb 文档明说：含换行会导致数据丢失）。
- * 这也是选 base64 而不是裸二进制的原因 —— base64 字符集是 `A-Za-z0-9+/=`，天然没有换行。
- */
-function encryptLine(line: string): string {
-    const cipher = crypto.createCipheriv('aes-256-cbc', CACHE_KEY, CACHE_IV);
-    return Buffer.concat([cipher.update(line, 'utf8'), cipher.final()]).toString('base64');
-}
-
-/**
- * 读盘后：一行密文 → 一行明文 JSON。
- *
- * **兼容明文行 —— 这是旧库"零迁移代码"的关键。**
- * 明文行以 `{` 开头，而 base64 字符集里**没有 `{`**，所以这个判据不会误伤密文。
- * 只要这里放行明文，nedb 启动时那次整库重写（`persistence.js:339`，注释写明
- * "all data is persisted right away, which has the effect of compacting the database file"）
- * 就会把整库自动变成密文 —— 不需要写任何迁移代码、不需要手工转换。
- *
- * 解不开的密文**要抛错、不要吞**：nedb 会把该行算作 corrupt，超过阈值（默认 10%）
- * 就拒绝启动 —— 那正是我们要的"响亮失败"。吞掉它反而会让"密钥不对"
- * 变成一份**悄悄少了很多行的库**（那才是真正的静默丢数据）。
- */
-function decryptLine(line: string): string {
-    if (line.startsWith('{')) return line;
-    const decipher = crypto.createDecipheriv('aes-256-cbc', CACHE_KEY, CACHE_IV);
-    return Buffer.concat([decipher.update(Buffer.from(line, 'base64')), decipher.final()]).toString('utf8');
-}
+// 加密/解密统一走 utils/cacheCrypto（密钥与 IV 的唯一真相源）；别在这里再抄一份。
 
 const nedb = new Nedb<SearchCache>({
     filename: cachePath,

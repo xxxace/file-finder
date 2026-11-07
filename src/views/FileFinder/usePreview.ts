@@ -1,37 +1,8 @@
 /**
  * 预览层：上一条 / 下一条 + 定位到网格 + 缩略图渐进升级。
- *
- * ## 为什么是composable 而不是子组件
- *
- * 子组件（`PreviewLayer.vue`）需要双向 props + 事件来回传（`previewKey` 改回去、
- * `fileList` 传进来、`picking` 传进来……），而预览层要读网格里的真实 DOM
- * （`document.querySelector('.n-image-preview')` 量图、`'.n-image-preview-wrapper'`
- * 量可视区）—— 那些 DOM 由 naive-ui teleport 到 body、在父组件的模板之外，
- * 子组件拿不到，只能靠 ref 层层传，**props 链会比现在更长**。
- * composable 的边界正好落在"状态与计算"上，DOM 那一侧留少量查询进来即可。
- *
- * ## 契约：参数进、状态出，**不反向写参数**
- *
- * 入参全是 `Ref` / `ComputedRef`（只读用）与两个**回调**（`onLocate` / `syncCursor`），
- * 返回的 `openPreview` / `closePreview` / `locateInGrid` 是全部写入口。
- *
- * `previewKey`（"正在看哪一条"）是唯一真相，索引 / 显示哪张图 / 有没有升级成清晰版
- * 全部从它派生。列表一变（刷新 / 盘插拔 / 换目录 / 搜索），**不可能**留下"索引指向了
- * 别的条目"这种脱钩状态：条目没了 ⇒ 索引算出来是 -1 ⇒ 预览层自己关掉，**不需要任何同步代码**。
- *
- * ⚠️ **唯一的例外是"开不开"**：它不能从 `previewKey` 派生，必须是独立状态 ——
- * 关闭时 `previewKey` 是**故意留着**的，否则淡出动画期间 naive-ui 会拿到
- * `src=undefined`，屏幕上出现一个没有 src 的 `<img>`。见 `previewOpenState` 的完整注释。
- *
- * ## 与网格选择器的关系（2026-10-04）
- *
- * 网格选择器住在 `useGridCursor` 那边，本模块**不持有**它，只在三个口子上
- * **单向**同步过去（见 `syncCursor` / `onLocate` 的注释）。刻意不共用同一个状态：
- * `watch(previewKey)` 挂着"停住就升级清晰版"，那会去读移动硬盘上的原图 ——
- * 方向键每按一次就改一次 `previewKey` 的话，每按一次排一次读盘（第一约束）。
- *
- * 同族手法：`currentPath → crumbs`、`dataSource + searchText → fileList`、
- * `cursorKey → 行结构`（`useGridCursor`）。
+ * ⚠️ 参数进、状态出，不反向写参数：previewKey 是唯一真相，索引 / 图片 / 清晰版全从它派生，列表一变不会出现索引脱钩。
+ * ⚠️ 唯一例外是"开不开"必须独立状态：关闭时 previewKey 故意留着，否则淡出期 naive-ui 拿到 src=undefined 会出现空 <img>（见 previewOpenState）。
+ * ⚠️ 不共用网格选择器状态：watch(previewKey) 会触发读原图升级，方向键每按一次都改它就会每按一次排一次读盘。
  */
 import { computed, h, nextTick, onMounted, ref, watch } from 'vue';
 import { NIcon } from 'naive-ui';

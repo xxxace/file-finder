@@ -77,9 +77,6 @@
                     清空导航历史，回到选文件夹的界面（缓存不动）
                 </n-tooltip>
             </div>
-            <!-- <n-space>
-                <FolderSelector v-model="dirRoot" label="请选择文件夹2(D)" @change="handleDirRootChange" />
-            </n-space> -->
             <div class="toolbar">
                 <n-dropdown trigger="click" :options="moreOptions" :disabled="scanning" :menu-props="moreMenuProps"
                     @select="onMoreSelect">
@@ -383,23 +380,9 @@ export interface NavEntry {
     /** 离开这一屏时的滚动位置 —— 返回时恢复（原来是挂在 `openStack` 元素上的可选字段） */
     scrollY: number;
     /**
-     * 离开这一屏时**选择器停在哪一格**（`keyOf` 的值）—— 返回时恢复。
-     *
-     * ## 为什么必须存在（2026-10-04 业主真机报）
-     *
-     * 「进子目录 → 看中某格 → 返回」之后，选择器会跳回视口第一行。
-     * 而 `scrollY` **恢复得很好**（用户还在原来那一屏的中间）——
-     * 于是屏幕上一半是"原来的位置"、一半是"选择在第一行"，**自相矛盾**。
-     * 症状比"丢失"更糟：用户会以为程序随机跳格。
-     *
-     * ## 它是"这一屏的样子"的一部分，不是例外
-     *
-     * 滚动位置、搜索词、选择器三者同族：**都是"我坐在这一屏时看到了什么"**。
-     * 已有两个存在 `NavEntry` 上，选择器漏了。现在补齐 ⇒ 切来切去时整个视口状态完整回来。
-     *
-     * ⚠️ 存 **key** 不存坐标：坐标是布局的函数（列数随窗口宽度变，见 `gridGeometry` 的注释），
-     * 存坐标就得跟着窗口宽度同步，那是会漏的同步代码。
-     * 恢复时那个 key 若不在这一屏里，`cursorItem` 算出来是 `undefined` ⇒ **不画高亮**，
+     * 离开这一屏时选择器停在哪一格（keyOf 值）—— 返回时恢复。
+     * ⚠️ 存 key 不存坐标：坐标随布局 / 列数变，存坐标得跟着窗口宽度同步（会漏）。
+     * ⚠️ key 不在这一屏里 ⇒ cursorItem 为 undefined、不画高亮，
      * 下一��方向键自动重新激活 —— 这条派生链已经在了（`useGridCursor` 文件头）。
      */
     cursorKey: string;
@@ -502,7 +485,6 @@ const pageActive = ref(true);
 const router = useRouter();
 const assistantModal = ref<typeof AssistantCoverModal | null>(null)
 const showAvatarModal = ref(false);
-// const dirRoot = ref('');
 const popover = ref<{
     visible: boolean;
     x: number;
@@ -993,21 +975,8 @@ const handleOpen = (e: MouseEvent, item: WiredFileInfo) => {
 };
 
 /**
- * 网格里按 `Enter`：**只负责执行**，判据在 `openDecision.ts` 里。
- *
- * ## 为什么判据不在这里
- *
- * 判据是被真机报过bug 的地方（2026-10-04：「回车打开的是预览图不是文件」）。
- * 写在这里的话，探针只能**手抄**一份⇒ 回退真源码时探针依然全绿
- * （这个错当天已经犯过一次）。现在判据是 `openDecision.ts` 里的纯函数，
- * 探针与产品**跑同一份代码** —— 规则表与两条⚠️ 判据纪律都写在那个文件头上。
- *
- * 这里只做"把动作派发出去"，于是这一层没有一条业务判断。
- *
- * ⚠️ `open-item` 传的是 **item** 而不是 `item.files[0].name`：
- * `openFile` 的字符串分支靠 `popover.cover` 算父目录，而这里没开弹层
- * ⇒ `cover` 是上一次的残留 ⇒ 会打开错文件。item 分支里"在 files 里找视频"
- * 那段逻辑（注释就叫"双击封面 = 打开里面的视频"）本来就是为这个场景写的。
+ * 网格里按 Enter：只负责派发动作，判据在 openDecision.ts（纯函数，探针与产品共用）。
+ * ⚠️ open-item 必须传 item，不能传 item.files[0].name：openFile 字符串分支靠 popover.cover 算父目录，这里没开弹层 cover 是上次残留会开错文件；item 分支"双击封面=打开视频"正为此场景而写。
  */
 const onCursorConfirm = (item: WiredFileInfo) => {
     if (picking.value) {
@@ -1056,20 +1025,9 @@ const rememberCurrentScreen = () => {
 }
 
 /**
- * 进入某一屏。**所有导航动作都必须从这里过** —— 「记旧屏 → 压新屏 → 归零视口 → 取数 → 清搜索词」
- * 这五件事只写一遍；以后新增入口（前进 / 历史列表 / 多标签）也不会漏掉其中一件。
- *
- * ## ⚠️ 为什么必须显式**归零滚动**（业主 2026-10-04 真机报）
- *
- * 新压的 `NavEntry.scrollY` 是 0，但**那只是一个数字**—— 网格容器的 `scrollTop`
- * 从来没人归零过（`grep scrollTop` 只有"被记录"和"被恢复"两处，**没有写 0**）。
- * ⇒ 上一屏滚到第 4000px 时进新屏，容器**还停在4000px**；新屏内容够长的话
- * 用户看到的是"新目录opened 在半中间"，而面包屑说的是另一个地方 ⇒ **自相矛盾**。
- * 旧屏的 `scrollY` 记在旧屏的 entry 上（那是"离开时它什么样"），
- * **和"新屏该从哪儿开始"是两件事** —— 后者归零。
- *
- * ⚠️ 归零要**在取数之前**：新屏内容还没渲染时 `scrollTo` 会被 clamp（内容太短）
- * 或作用在旧内容上。等 `nextTick` 之后那一屏的格子已经在 DOM 里，才归得干净。
+ * 进入某一屏：所有导航动作都必须从这里过（记旧屏 → 压新屏 → 归零视口 → 取数 → 清搜索词只写一遍）。
+ * ⚠️ 必须显式归零滚动：NavEntry.scrollY=0 只是数字，容器 scrollTop 不会自己归零 ⇒ 进新屏会停在上一屏的偏移（与面包屑矛盾）。
+ * ⚠️ 归零要在取数之前（内容没渲染时 scrollTo 会被 clamp 或作用在旧内容上）。
  */
 const enterScreen = (path: string, mode: OpenMode = 'cover', pl?: NavEntry['pl'], keepFlat?: boolean) => {
     rememberCurrentScreen();
@@ -1270,31 +1228,12 @@ const openFile = async (item: WiredFileInfo | string) => {
 }
 
 /**
- * 右键卡片 → 在光标处弹极简菜单。
- *
- * `.prevent` 必须带上：Electron 默认右键会冒出原生菜单（开发期还带「重新加载 /
- * 检查元素」），不拦掉就和我们自己的菜单叠在一起。
- * 复制的是**磁盘文件名**（含扩展名，见 `fileNameOf`）—— 那是用户看到的那个名字，
- * 也是资源管理器里真能搜到的名字；封面条目还原成封面图文件名，目录还原成目录名。
- *
- * ⚠️ 2026-10-02：同时备好**去后缀**那一份。它不需要自己去找最后一个 `.` ——
- * 服务端本来就是把 `name` 与 `ext` 分开给的（`fileNameOf` 是 `${name}.${ext}`），
- * 所以 `item.name` 拆开之前的样子就是答案。少一次字符串处理，也少一处会算错的地方
- * （`xxx.tar.gz` 这种多后缀的名字，剥点剥不对）。
+ * 右键卡片 → 光标处弹极简菜单。复制磁盘文件名（含扩展名，见 fileNameOf）。
+ * ⚠️ .prevent 必须带，否则 Electron 原生右键菜单会叠加；去后缀那份用 item.name（服务端 name/ext 分开给），别自己找最后一个 . —— 多后缀 xxx.tar.gz 会剥错。
  */
 /**
- * 关掉右键菜单，**并把焦点收回 body**。
- *
- * ⚠️ 收回焦点是**必做项**（2026-10-04 code review 抓出，与 `closeFileList` 同一个坑）：
- * 用户点了菜单里的「复制文件名」，那个 `n-button` 就**拿到了焦点**；而菜单是
- * `:show` 驱动的（`n-popover` 走`v-show`）⇒ 菜单关掉后，那个按钮变成
- * `display:none`，可 `document.activeElement` **仍然停在它上面**。
- *
- * 后果：焦点停在一个不可见元素上 ⇒ 方向键的行为变得不可预期（事件 target 是那个
- * 隐藏按钮），用户看到的现象是"按方向键毫无反应 / 选择器在看不见的地方乱跑"，
- * 且**完全看不出原因** —— 这类 bug 最难定位。
- *
- * （注释里原本写"故意不给焦点 ⇒ 没有焦点要收回"：**漏了用户点按钮会给它焦点**这件事。）
+ * 关掉右键菜单，并把焦点收回 body。
+ * ⚠️ 必须主动 blur：菜单 :show / v-show 关掉后按钮 display:none，但 activeElement 仍停在它上面 ⇒ 方向键失效且难排查。
  */
 const closeCtxMenu = () => {
     ctxMenu.value.visible = false;
@@ -1360,26 +1299,12 @@ const copyNameStem = async () => {
 };
 
 /**
- * 只做一件事：把服务端给的完整列表取回来放进 dataSource。
- * 原来还会顺手清空搜索框 —— 取数的函数不该同时改别的状态，清空/恢复交给导航动作自己负责。
- *
- * 渲染层**没有**缓存：原来那个 `fetchCache` 按 `path+mode` 存整份列表，而盘符会被复用 ——
- * A 盘挂 H:/x 缓存住 → 拔 A 插 B → 返回时命中缓存、压根不请求服务端，用户看到的是A 的清单、
- * 双击打开的却是 B 盘上的路径。服务端那侧每次 stat 都复核"这个盘符现在的主人是谁"，
- * 渲染层这份缓存正好把那次复核整个绕过，而它换来的那点时间量不出来。
+ * 只取数放进 dataSource，不改别的状态（清空 / 恢复搜索词交给导航动作）。
+ * ⚠️ 渲染层别按 path+mode 缓存列表：盘符会复用，缓存会绕过服务端每次 stat 对"盘符现在主人"的复核。
  */
 /**
- * 请求序号。只有「最新一次」请求的响应才有资格写进 `dataSource`。
- *
- * 为什么需要：导航有 5 个入口（进目录 / 返回 / 换根目录 / 点面包屑 / 刷新），
- * 而 `loading` 守卫原来只有刷新那一处。两次请求同时在飞时，
- * `dataSource.value = data` 就是**谁后到谁覆盖** —— 慢目录（几十个视频要串行抽帧）
- * 后到，结果就是「面包屑已经切到 B，网格里还是 A 的内容」，两处状态来自不同时刻。
- *
- * 为什么不去给那 4 个入口各补一道 `if (loading.value) return`：那是补丁 ——
- * 防错的责任落在调用方，以后新增第 6 个入口忘了加，同样的错乱立刻复活；
- * 而且 `loading` 是全局粗粒度锁，慢目录加载期间会把整个导航一起冻住。
- * 把判断收到**唯一的写入点**之后，「过期响应写入」在结构上不可能发生。
+ * 请求序号：只有最新一次请求的响应能写进 dataSource。
+ * ⚠️ 判断放在唯一写入点，别在各导航入口各补 loading 守卫 —— 新增入口会漏、全局锁还会冻住整个导航。
  */
 let fetchSeq = 0;
 
@@ -1480,22 +1405,6 @@ const loadScreen = (entry: NavEntry, flat?: boolean) => {
     return fetchFolder(entry.path, entry.mode, false, flat);
 };
 
-// const handleDirRootChange = (value: string) => {
-//     if (!value) return
-//     const url = `http://localhost:3060/getFileTree?path=${value}`;
-//     fetch(url).then(res => {
-//         return res.json();
-//     }).then(async data => {
-//         // printTree(data, 0, 2, ``)
-//         // console.log(printTree(data, 0, 2, ``))
-//         console.log(encodeURIComponent(printTree(data, 0, 2, ``)))
-//         loadingBar.finish();
-//     }).catch(err => {
-//         loadingBar.error();
-//     }).finally(() => {
-//         loading.value = false;
-//     });
-// }
 
 const onBack = async () => {
     if (history.value.length <= 1) return;
@@ -1535,62 +1444,12 @@ const onBack = async () => {
     const myFetchSeq = fetchSeq;
     await done;
     /**
-     * 恢复滚动位置。
-     *
-     * ## ⚠️⚠️ 我第一版写错了：**回读确认骗了我自己**（业主 2026-10-04 五次报"没恢复"）
-     *
-     * 第一版是这样：
-     * ```ts
-     * await nextTick();// 只等一帧
-     * imageBox.value?.scrollTo(0, to.scrollY);
-     * ```
-     * 改成"回读确认 + 重试"也没用 —— 因为：
-     * `fetchFolder` 的 `then` 里只做了 `dataSource.value = data`（**改了数据，Vue 还没 patch**）
-     * ⇒ 那一刻 DOM 还是**旧屏** ⇒ **旧屏也足够长、也能滚到 `to.scrollY`**
-     * ⇒ `scrollTo` 成功 ⇒ **回读也一致** ⇒ 判据通过、提前 break
-     * ⇒ **在旧内容上就"恢复"完了**，新内容铺上来后一切白搭。
-     *
-     * ⚠️ **教训**：「回读确认」只能证明"滚动停在了要的位置"，
-     * **不能证明"滚动发生在正确的那个内容上"**。⚠️ 缺的是"**内容换了吗**"这个判据。
-     *
-     * ## 现在的判据：等 DOM 真的换成新屏
-     *
-     * 不用"等几帧"这种碰运气的写法 —— **直接量"当前列表的指纹"**：
-     * `fileList` 是 `computed(dataSource 过滤后)`，它一换新屏就换。
-     * 等到「**数据里的第一条**」与「**DOM 里的第一条**」是同一条，才说明新内容真的铺上去了。
-     *
-     * ⚠️⚠️ **我第一版只等 `fileList`** —— 而 `dataSource` 在 `fetchFolder` 的 then 里就换了
-     * ⇒ `waitFor...` 第一次检查就通过、**一帧都没等** ⇒ `scrollTo` 打在**旧屏的 DOM** 上。
-     * ⇒ 症状是**间歇性**的：
-     *   · `to.scrollY === 0`（没滚动过）⇒ 整个恢复分支被跳过 ⇒ **看起来是对的，其实没执行**
-     *   · `to.scrollY > 0`（滚动过）⇒ 进分支 ⇒ 在旧屏上滚 ⇒ **"A 返回后停在 B 的高度"**
-     * 主人原话：「没触发滚动就正常，滚动了再返回就不对」⇒ 与这个解释**逐条吻合**。
-     * 之后再 `scrollTo` + **回读确认**（这时回读才有意义）。
+     * 恢复滚动位置：必须等 DOM 真的换成新屏再 scrollTo。
+     * ⚠️ "回读确认"只证明滚到位置、不证明滚在正确内容上；只等 fileList 不够（dataSource 在 then 里就换、一帧没等 ⇒ 打在旧屏 DOM）。判据用列表指纹：数据第一条 === DOM 第一条时，才说明新内容铺好了。
      */
     /**
-     * 恢复滚动位置。**必须无条件恢复 —— 包括"恢复成 0"。**
-     *
-     * ## ⚠️⚠️ 2026-10-05 业主真机报，根因就是这里原来那句 `if (to.scrollY) { … }`
-     *
-     * 症状：「A→B 时返回 A 正常；但 B 里滚过 300px 再回 A，A 也停在 300」。
-     *
-     * 因为**这条路径上**没人归零：容器只在**前进**时被归零 —— `enterScreen` 里那两处
-     * `scrollTo(0, 0)`（取数前 + 取数落地后）。而 `onBack` **绕过 `enterScreen`**、
-     * 直接调 `fetchFolder` ⇒ 返回时容器的 `scrollTop` 原样留在身上
-     *（`fetchFolder` 换的是**数据**，容器元素没换）。
-     *
-     * ⇒ 目标屏记的位置是 0 时整段被跳过，容器就把**上一屏的偏移**一直带着。
-     * 为什么"B 没滚过就正常"：那时容器本来就是 0 ⇒ 跳过后**看起来是对的，其实没执行**
-     *（上面那段历史里已经记下这个现象，只是当时把它当成"间歇性"的解释，没当成 bug 本身）。
-     *
-     * ⚠️ **别写"全项目没有任何一处写 0"**（我第一版就这么写的，被 code review 当场纠正）：
-     * `enterScreen` 就是写 0 的地方。错在**取证方式** —— 用 `grep scrollTop` 枚举，
-     * 结构上就漏掉了 `scrollTo(0, 0)` 这种写法。判据是"**返回这条路上有没有人归零**"，
-     * 不是"全项目有没有 `= 0`"。
-     *
-     * ⚠️ 归零**不需要等 DOM**：`scrollTop = 0` 在任何内容上都成立，新内容铺上来之后仍是 0。
-     * 只有恢复**非 0** 才必须等 DOM 换新 —— 否则会在旧屏上"成功"滚到那个位置
-     *（回读也一致 ⇒ 判据抓不到），新内容铺上来后一切白搭。
+     * 恢复必须无条件执行，包括"恢复成 0"（onBack 绕过 enterScreen，容器偏移会一直带着上一屏的）。
+     * ⚠️ 归零不用等 DOM（scrollTop=0 任何内容都成立）；恢复非 0 才必须等 DOM，否则旧屏上滚成功、回读一致，新内容铺上来白搭。
      */
     const box = imageBox.value;
     if (!box) return;
@@ -1735,28 +1594,9 @@ const setRoot = (value: string) => {
 }
 
 /**
- * 栈底那一颗按钮：**清空导航历史，回到"还没选文件夹"的界面**。
- *
- * ## 为什么栈底也要有出口（业主 2026-10-05 原话）
- *
- * 「返回只在栈 > 1 时出现，可我在栈底也想能清空」——
- * 栈底时"返回"无事可做（`onBack` 第一行就 return），而那颗按钮是
- * 「离开当前这个文件夹」最顺手的位置 ⇒ 同一位置换成「清空」。
- *
- * ## ⚠️ 走既有出口 `setRoot('')`，不自己发明一套清栈逻辑
- *
- * `setRoot` 的定义上写着"**唯一**一个重新开始的入口" —— 保留这条。
- * 代价必须说清楚（已写进 tooltip）：**当前视图 + 整个导航历史 + 搜索词**一起重置，
- * 不可撤销，回去要重新选文件夹。
- *
- * ## ⚠️⚠️ 所以它**只**挂在这个显式按钮上，绝不挂 Backspace
- *
- * 这正是 `FolderSelector` 那条注释立过的规矩：「门槛 ∝ 不可逆 × 波及面」——
- * 那里曾经因为把"对话框取消"当成清空而触发 `setRoot('')`，被判为"最轻的动作造成
- * 最大范围且不可逆的后果，原则是反的"。⇒ 清空只归用户**主动点**（和 chip 上那个 × 同理）。
- * 误按退格就清视图的事故，靠"不绑快捷键"从结构上排除。
- *
- * ⚠️ 它**不删任何数据**：缓存 / 缩略图 / 扫描结果一个不动，只是导航态归零。
+ * 栈底按钮：清空导航历史，回到"还没选文件夹"的界面。
+ * ⚠️ 走既有出口 setRoot('')，别自己发明清栈逻辑；代价是当前视图 + 整个历史 + 搜索词一起重置、不可撤销。
+ * ⚠️ 只挂这个显式按钮，绝不绑 Backspace（门槛 ∝ 不可逆 × 波及面）；只重置导航态，不删缓存 / 缩略图 / 扫描结果。
  */
 const clearNav = () => setRoot('');
 
@@ -2078,52 +1918,13 @@ const onScanCancel = () => {
 }
 
 /**
- * 「更多」下拉的项。
- *
- * ⚠️ `disabled` 的条件与改造前那三个平铺按钮**逐条一致**，一条都没有放宽 ——
- * 搬家不该顺手改门槛。扫描中整组不可用，由触发按钮自己的 `:disabled="scanning"` 挡住
- * （下拉不弹出来 = 三项都点不到），与"忙碌时只置灰、不消失"是同一条铁律。
+ * 「更多」下拉的项：disabled 条件与改造前平铺按钮逐条一致，不放宽门槛。
+ * 扫描中整组不可用由触发按钮的 :disabled="scanning" 挡住（下拉不弹 = 三项都点不到）。
  */
 /**
- * 「更多」菜单的外观。**只走naive-ui 自己预留的 CSS 变量**，不覆盖任何选择器。
- *
- * ## 为什么是"按内容形态"而不是"全统一"（业主 2026-10-04 五次报明确裁决）
- *
- * 业主原话：「如果更多也要应该是上下，应该**根据实际布局来的，而不是全统一**」。
- * ⇒ 菜单**保持竖排**（4 个文字动作，Windows 资源管理器的「更多」也是竖排；
- *横排要为它另写一个浮层，与本项目"不新增界面"的立场冲突）。
- *
- * ## 那"丑"是什么 —— 是**它与本项目其他浮层不像**，不是它竖排
- *
- * 本项目浮层的既有语言（`.header-bar`、`.crumb`、输入框后缀图标）：
- * **4px 圆角** + 淡蓝灰交互色 + 14px 字号。
- * 而 `n-dropdown` 用的是naive-ui 默认值（圆角更大、悬停是灰底）⇒ 同一个界面里两种语言。
- *
- * ⚠️ 写法必须是 `style`，**不能扁平写在顶层**（实测三种写法逐一验过）
- *
- * `Dropdown.mjs:345` 那一行是关键：
- * ```js
- * style: [...style, this.cssVars]      // ← naive-ui 自己的变量在这里
- * h(DropdownMenu, mergeProps(this.$attrs, dropdownProps, menuNodeProps))
- * ```
- * ⇒ 顶层的 `--n-border-radius`（`menuNodeProps` 里那份）**同名输给** `dropdownProps.style`
- * 里的那份 ⇒ 传了等于没传。**实测：扁平写法算出来还是 `3px`（naive-ui 默认）。**
- *
- * ⚠️ `style` 用**字符串**而不是对象：`menu-props` 的返回类型是
- * `HTMLAttributes & Record<string, string|number|undefined>`，那个索引签名要求
- * `style` 是 `string` ⇒ 给对象会 TS2322（实测）。字符串同样生效（实测 `4px`）。
- *
- * ⚠️ 这条**读代码读不出来**：`mergeProps` 的覆盖关系要真跑一遍，
- * 且要读 `getComputedStyle` 的**计算值**（inline style 里有不代表被消费）。
- * 见 `docs/probes/menu-look/`。
- *
- * ## 为什么用 `menu-props` 传变量而不是写 CSS 覆盖
- *
- * ⚠️ `n-dropdown` 的样式**全部走 `var(--n-*)`**（实测 26 个变量）
- * ⇒ 它**预留了正规口子**。覆盖选择器要写 `.n-dropdown-menu {...}`，
- * 那是 (0,1,0) 对上 cssr **运行时注入**的同权重 ⇒ **先后顺序不可控**
- * （与预览层工具条那个教训同族，见本文件末尾那个非 scoped 块）。
- * ⇒ 传变量是"用它的机制表达外观"，不是"打它的补丁"。
+ * 「更多」菜单外观：只走 naive-ui 预留的 var(--n-*) 变量，不覆盖选择器。
+ * ⚠️ 变量必须放 style（字符串，menu-props 的索引签名要求 string），不能扁平写顶层 —— 会被 dropdownProps.style 同名覆盖而失效。
+ * ⚠️ 别写 CSS 选择器覆盖：与 cssr 运行时注入同权重、先后顺序不可控。依据见 docs/probes/menu-look/。
  */
 const moreMenuProps = () => ({
     style: [
@@ -2853,27 +2654,8 @@ const onDisksChangedIpc = (_e: unknown, disks: { serial: string; drive: string }
 .image-box-item {
     position: relative;
 
-    /* ────────────────────────────────────────────────────────────────
-     * 卡片内的**层序契约**（唯一真相源）——"谁盖住谁"写在这里，别在别处补数字。
-     *
-     * 病根（2026-10-22 主人报「换封面时勾选的 UI 被封面遮住」）：
-     * 封面图那层为了压住模糊底设了 `z-index: 1`，而卡片上其它浮层
-     * （右上角 ✓ 徽标 / 左上角 ★ 徽标 / 打开中的遮罩）都是绝对定位
-     * **没给 z-index**（= 层级 0）⇒ 层级 1 的图永远画在它们上面。
-     *
-     * ⚠️ 同一个病 2026-10-21 已经在"数量/大小"角标上犯过一次
-     * （`.card-badges` 那行 `z-index: 2` 就是当时的补丁）—— 当时只补了
-     * **那一个元素** ⇒ 换个元素又复发。所以这次定契约，不逐个补。
-     *
-     *   封面内部（.card-cover 自己是层叠上下文 ⇒ 内部互不干扰）：
-     *     0  模糊底     ::before
-     *     1  封面主体   图片 / 文件夹图标 / 文件图标
-     *     2  封面角标   数量 / 大小
-     *     3  已选绿圈   ::after
-     *   卡片外部：
-     *     2  卡片标记   ✓ 勾选圈 / ★ 收藏星标
-     *     3  临时遮罩   打开中（盖住上面所有）
-     * ──────────────────────────────────────────────────────────────── */
+    /* 卡片内层序契约（唯一真相源）——"谁盖住谁"只在这里定，别在别处补 z-index 数字。
+     * ⚠️ 封面图 z-index:1 会盖住没给层级的浮层；别逐个元素打补丁（换元素就复发），统一按下面 --z-* 变量定契约。 */
     --z-cover-img: 1;
     --z-cover-tag: 2;
     --z-cover-mark: 3;
@@ -3057,15 +2839,8 @@ const onDisksChangedIpc = (_e: unknown, disks: { serial: string; drive: string }
         --item-badge-fs: 11px;
     }
 
-    /* ── 让网格左右贴边：首格 margin-left / 每行末格 margin-right 归零 ──────────────
-       `.image-box-item` 是"**用 margin 撑间距、宽度再把它补偿回来**"的算法：
-       每格 `calc(100%/N − 16px)` 宽 + 左右各 8px margin = **恰好占 100%/N** ⇒ 一行正好 N 个。
-       N 由 `--ff-grid-cols` 给（`density.ts` → 本节点的 style），档位切换只改这一个数。
-       代价是**容器左右边缘也各被吃掉 8px**（首格的 margin-left、每行末格的 margin-right），
-       于是整片网格比头部内缩 8px —— 左右不齐，这就是"第一个/最后一个还留着 margin"的来源。
-
-       解法：把容器左右各外扩 8px（= margin 的一半），边缘那 8px 就正好落回容器外。
-       首格贴左、末格贴右，与头部对齐。
+    /* 让网格左右贴边：外扩 gap/2 抵消首/末格 margin，使网格与头部对齐。
+       ⚠️ 列宽是 calc(100%/N − gap) 与 margin 的补偿算法（N 由 --ff-grid-cols 给）；改宽度会让"一行 N 个"和贴边同时错，别动。
 
        ⚠️ 为什么**不用** `:nth-child(6n+1)` / `:nth-child(6n)` 去掉首尾 margin：
        ① 那是补丁 —— 列数一变就失效（本项目从 6/5/3/2/1 断点改成恒定 6 列，
@@ -3340,24 +3115,9 @@ const onDisksChangedIpc = (_e: unknown, disks: { serial: string; drive: string }
 }
 
 /**
- * 弹层条目 —— 「同一部作品的多个文件」，双击封面时弹出来问"打开哪一个"。
- *
- * ## ⚠️ 2026-10-05 重做（业主：「这个多文件弹出层好丑，想办法美化或者修正」）
- *
- * 原来长这样：84×84 的**空盒子** + 一行截断到约 9 个字符的文件名。
- * 而这一层的文件名**往往是同前缀的**（`[TST-593] … CD1 / CD2`）⇒
- * 4 个格子显示成**一模一样**的 `[TST-59…` —— 根本没法选。
- * 两个原因都不是"调参能救"的，是上面那次拆分的直接后果：
- *
- * | 症状 | 根因 |
- * |---|---|
- * | 每格上方一大块空白 | `.file-cover` 漏了 `fiv-cla fiv-icon-*`（网格那边写的是 `file-cover fiv-cla fiv-icon-${ext}`），只剩 `blank.svg` 又没尺寸 ⇒ **高 0，从来没画出来过** |
- * | 名字只剩前缀（选不了） | 继承了网格那条 `white-space:nowrap` + `height:38px!important` ⇒ 这里写的 `word-break` / 多行**全是死代码** |
- *
- * ⇒ 现在：类型图标 + **可换行**的文件名（最多 3 行，尾部才是区分点）+ 灰色大小。
- * ⚠️ 注意这里**一个 `!important` 都没有** —— 原来那 3 个 `!important` 全是在跟网格那条抢，
- * 拆分之后它们自然消失，这本身就是"拆对了"的证据。
- */
+ * 弹层条目：「同一作品的多个文件」，双击封面时问打开哪一个。
+ * ⚠️ 文件名往往同前缀、尾部才是区分点 ⇒ 必须可换行（最多 3 行）+ 类型图标 + 灰色大小，别用 nowrap / 定高截断。
+ * ⚠️ 这里不该出现 !important：若需要靠它压过网格样式，说明拆分没拆对。 */
 .file-item {
     width: 150px;
     height: 116px;

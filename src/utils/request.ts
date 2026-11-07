@@ -34,14 +34,8 @@ export function apiUrl(url: string): string {
 }
 
 /**
- * 后端出错时也返回 HTTP 200，只靠 body 里的 code 区分；
- * 这里不检查就会让调用方拿到 {code:500} 还提示"成功"。
- *
- * **所有 HTTP 出入都必须过这里**（下面三个 action 是唯一入口）。
- * 历史教训：`FileFinder` 和 `HistoryTable` 里曾经各自手写裸 `fetch(...).then(res => res.json())`，
- * 于是"检查响应"这件事被复制成三份，其中两份漏掉了 —— 出错的响应一路走到
- * `tableData.value = undefined`，界面上一点提示都没有。
- * 检查散落多少份，就会漏多少份；收成一个咽喉点才不会再漏。
+ * 后端出错也返回 HTTP 200，只靠 body 的 code 区分 —— 不检查会让调用方拿到 {code:500} 还提示"成功"。
+ * ⚠️ 所有 HTTP 出入必须过这个唯一咽喉点：检查散落几份就会漏几份，收成一处才不会再漏。
  */
 /**
  * 本地服务返回的业务错误。

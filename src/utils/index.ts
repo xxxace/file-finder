@@ -204,60 +204,9 @@ export function foldCrumbList(crumbs: PathCrumb[], max = 4): CrumbFold | null {
 }
 
 /**
- * 这次按键**不该**被网格的方向键 / 回车接管吗？
- *
- * ## 判据：焦点所在元素**会不会消费方向键**（白名单，不是黑名单）
- *
- * ⚠️⚠️ **这里换过一次判据对象**（2026-10-04，业主三次真机报"还是要点一下才生效"）。
- * 原来写的是 `target !== document.body` —— "焦点不在 body 上就归它"。**那是错的**：
- *
- * ### 为什么错的（业主自己诊断出来的，我核实后确认）
- *
- * 打开「缓存记录」弹层 ⇒ naive-ui 的 `VFocusTrap` 记住**打开它的那个按钮**；
- * 关闭弹层时 `returnFocusOnDeactivated`（**默认 true**）把焦点**还给那个按钮**
- * （vueuc `focus-trap/src/index.js:122-127`：`lastFocusedElement.focus()`）。
- * ⇒ **焦点永远回不到 body** ⇒ `target !== document.body` 恒为真 ⇒ **方向键永久被挡**。
- * 而"点一下网格"恰好把焦点变回 body ⇒ 这就是**"每次都要点一下"的确切机制**。
- *
- * ⇒ 判据必须问的是「**焦点在不在一个会吃方向键的东西上**」，
- * 而不是「焦点在不在 body 上」。**按钮不吃方向键**（它只吃 Enter / Space）⇒ 焦点在按钮上
- * 应当**放行**。
- *
- * ## 为什么用白名单（列出"要挡的"）而不是黑名单
- *
- * 黑名单要穷举"什么会吃方向键"，而这个列表是**开放的**（将来加个 slider、树选择、
- * 数字输入框…都会进来）⇒ 漏一个就是"那个控件里方向键失灵"这种**极难定位**的 bug。
- * 白名单只列**本项目真实存在的**三类（`input` / `select` / `contenteditable`）⇒ 稳。
- *
- * | 焦点在哪| 方向键被谁吃 | 放行？ |
- * |---|---|---|
- * | `body` / 网格卡片 | 没人（我们要接管） | ✅ |
- * | **按钮**（11 个 `n-button`）| **没人**（按钮只吃 Enter/Space）| ✅ ← 修的就是这条 |
- * | `<input>`（搜索框 / 弹层里的输入）| 输入法光标 | ❌ |
- * | `<textarea>` / `<select>` | 同上 | ❌ |
- * | `contenteditable` | 同上 | ❌ |
- * | **弹层内的可交互项**（`n-select` 的下拉等）| 弹层自己 | ❌ |
- *
- * ##⛔ 仍然**不能**用"弹层开没开"当判据
- *
- * 试过 `document.querySelector('.n-modal-mask, .n-popover')`，**行不通**：
- * `n-tooltip` 内部**就是** `n-popover`（naive-ui `Tooltip.mjs` 直接 import `Popover_default`），
- * 而 popover 关闭后 DOM **仍留在页面上**（走 `v-show` 不是 `v-if`）——
- * 工具条上 4 个 `n-tooltip` 只要被鼠标悬停过一次，方向键就**永久失灵**。
- * ⇒ **DOM 类名探测 = 猜状态。**
- *
- * ## 弹层里的情况怎么办（`n-select` 下拉这种"焦点在弹层内、但弹层自己在处理方向键"）
- *
- * 靠**焦点陷阱本身**：弹层开着时 `autoFocus` 把焦点打进弹层，
- * 而弹层内的输入框/选项**都在下面的白名单里** ⇒ 自动被挡。
- * 我们自己那个文件列表 popover 更直接：那一层用 `@keydown.stop`（事件到不了 window）
- * + 容器有 `tabindex="-1"`（焦点在它上面）。
- *
- * ## 探针记录（`docs/probes/grid-cursor-focus/`，真 Chromium）
- *
- * 这次换判据时补了**两条真机场景的断言**，它们是判据真正生效的原因：
- * - 「弹层关闭后焦点回到按钮 ⇒ 方向键仍可用」（改之前这里必 FAIL）
- * - 「焦点在搜索框 ⇒ 方向键被挡」
+ * 这次按键**不该**被网格的方向键 / 回车接管吗？判据：焦点所在元素会不会消费方向键（白名单，不是黑名单）。
+ * ⚠️ 别用 "target !== document.body"：焦点陷阱(VFocusTrap)关弹层会把焦点还给按钮 ⇒ 恒为真、方向键永久被挡；也别用 DOM 类名探"弹层开没开"（n-tooltip 即 n-popover，v-show 关闭后 DOM 仍在）。
+ * ⚠️ 只白名单本项目真实存在的 input / select / contenteditable（黑名单要穷举开放列表，漏一个就难定位）。探针记录 docs/probes/grid-cursor-focus/。
  */
 export function isGridKeyBlocked(e: KeyboardEvent): boolean {
     // ⚠️ 读 **`e.target`**（这次事件的接收者），而不是 `document.activeElement`：

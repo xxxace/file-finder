@@ -1322,15 +1322,9 @@ onUnmounted(() => ipcRenderer.off('ff-disks-changed', onDisksChangedIpc));
     flex-direction: column;
 }
 
-/* 表格这块的滚动交给 DataTable 自己（`:flex-height="true"`），**不是**这里 overflow:auto。
-   ⚠️ 这里踩过两次，实测数据在 docs/probes/table-scroll/out.log：
-   第一版把 `overflow:auto` 加在这一层 + 给 thead 加 `position:sticky` —— 没用。实测（真 Chromium 布局）：
-     卡片 `max-height:86vh` 时，**表格根本没被高度约束**（量到 4235px），
-     于是这一层变成了"整张表"的滚动容器，滚到底表头跑到了表格顶部之外 3562px（表头照样滚走）。
-   第二版（现在）：① 卡片给**确定高度** `height:86vh` —— 只有确定高度，下面的 `flex:1` 才有"剩余空间"可分，
-     `max-height` 只是封顶、容器仍是内容高度；② 这一层只做 `display:flex`，把高度让给 DataTable；
-     ③ `flex-height` 让 DataTable 把表头渲染成独立的一块，滚动只发生在它自己的 body 里。
-   实测结果：表格高 672（被约束住）、滚的是 DataTable 的 body、滚到底**表头仍在可视区内**。 */
+/* 表格滚动交给 DataTable 自己（:flex-height="true"），不是这一层 overflow:auto。
+   ⚠️ 卡片必须给确定高度 height:86vh（max-height 只是封顶、flex:1 没有剩余空间可分）；这一层只 display:flex 把高度让给 DataTable。
+   ⚠️ 别给这一层加 overflow:auto + thead sticky（没用，表头照样滚走）。实测数据在 docs/probes/table-scroll/out.log。 */
 .cache-panel .table-wrap {
     flex: 1 1 auto;
     min-height: 0;
@@ -1342,18 +1336,8 @@ onUnmounted(() => ipcRenderer.off('ff-disks-changed', onDisksChangedIpc));
     min-height: 0;
 }
 
-/* 表格行高（用户 2026-10-04：`--n-td-padding` 收到 2px，让一屏放得下更多行）。
- *
- * 取 `2px 12px` 而**不是**字面的 `2px` —— 这不是自作主张，是实测出来的：
- * 表头用的是另一个变量 `--n-th-padding`（仍是 12px）。若 td 四周都收成 2px，
- * 左对齐的列（盘 / 目录）**表头文字会比单元格文字右移 10px**。
- * 真 Chromium 实测（同一份内容）：
- *   td 12px → 行高 47px、表头与单元格错位 0px
- *   td 2px  → 行高 27px、错位 −10px
- *   td 2px 12px → 行高 27px、错位 0px   ← 采用
- * 也就是说"垂直 2px"拿满全部行高收益，水平留 12px 才能保住对齐。
- * （要更紧，得连 `--n-th-padding` 一起收，那属于另一个决定，没做。）
- *
+/* 表格行高：`--n-td-padding` 取 2px 12px 而非字面 2px —— 表头用 `--n-th-padding`(12px)，
+ * td 四周都收 2px 会让左对齐列的表头比单元格右移 10px；垂直 2px 拿满行高收益、水平留 12px 才保对齐。
  * ⚠️ `!important` 在这里是**必需**的，不是偷懒：
  * naive-ui 的主题变量是**内联**写在表格根节点上的 —— `App.vue` 的 `n-config-provider`
  * 没开 `inline-theme-disabled`，于是 `node_modules/naive-ui/es/data-table/src/DataTable.mjs:439`

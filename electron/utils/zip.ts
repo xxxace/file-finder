@@ -3,29 +3,9 @@ import * as fsasync from 'node:fs/promises';
 import { crc32, deflateRawSync, inflateRawSync } from 'node:zlib';
 
 /**
- * 极简 **store-only** ZIP —— 只做"把若干个文件装进一个文件"和"从中取出"。
- *
- * 为什么自己写而不是引依赖：仓库里没有任何 zip/tar 依赖（实测 `package.json`），
- * 而这个格式简单到不值得为它引一个包。
- *
- * 为什么**不压缩**：装进来的东西已经压不动了 —— 库是逐行 AES 密文、
- * `bin/` 里的图片是加密后的 JPEG 字节（实测 `gzip(JPEG)` ≈ 原大小，见
- * `docs/probes/thumb-tier/`）。store-only 因此不损失任何体积，还省掉一整条 inflate 路径。
- *
- * 为什么格式值得自己实现（而不是"随便存个 blob"）：ZIP 是 **Windows 资源管理器双击就能打开**
- * 的格式 —— 主人要的"导出只有一个文件、用户没有心理负担"就落在这一点上
- * （备份文件随时可以自己看一眼里面有什么，而不是一个只有本程序认识的魔数文件）。
- *
- * 压缩策略（2026-10-05 改）：**逐条目可选 deflate，默认仍 store**。
- *   - `bin/*.enc`（加密后的 JPEG，熵≈8bit/byte）压不动 —— 实测 50 个样本 gzip 后
- *     反而大 0.05% ⇒ 一律 store，省掉一整条 inflate 路径。
- *   - 库文件 `searchCache.db` 若**已是密文**同样压不动（base64 是伪随机串，实测只压 26%）。
- *     但**解密后**的明文 JSON 重复度极高（字段名、路径前缀），实测 **442 KB → 81 KB（压掉 74%）**
- *     ⇒ 所以入包的库**先在内存里解成明文、再用 deflateRaw 压**（见 server/index.ts 的打包/解包）。
- *   - 判据：`method` 逐条目决定，解包侧按 method 分派 ⇒ 两种条目能混在同一个包里。
- *
- * 局限（知情）：不写 ZIP64 ⇒ 单个文件与总大小都必须小于 4 GB；条目数小于 65535。
- * 我们的量级（库几 MB + 图片几百 MB）离得很远。超了会**明确抛错**，不会静默写坏。
+ * 极简 store-only ZIP：仓库无 zip 依赖且格式简单；入包内容多是 AES 密文/加密 JPEG，压不动（见 `docs/probes/thumb-tier/`）⇒ 默认 store，省掉 inflate 路径。
+ * 用 ZIP 而非自定义 blob：Windows 资源管理器可直接打开（导出单文件、用户可自查）；逐条目 `method` 可选 deflate，密文 store、明文 JSON 用 deflateRaw 压，解包按 method 分派。
+ * 局限：不写 ZIP64 ⇒ 单文件与总大小 < 4 GB、条目数 < 65535；超了明确抛错，不静默写坏。
  */
 
 const LOCAL_SIG = 0x04034b50;

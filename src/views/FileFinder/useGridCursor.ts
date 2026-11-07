@@ -197,47 +197,9 @@ export function useGridCursor(deps: {
 
     /**
      * 探测当前网格的行结构。
-     *
-     * ## ⚠️ 这里读的是 `offsetTop`（布局坐标），**不是** `getBoundingClientRect().top`
-     *
-     * 2026-10-04 三轮真机报障（"按右不一定动"/"上半部分正常"/"前三行正常第四行开始错"）
-     * 的**同一个根因**：`getBoundingClientRect()` 返回 **CSS transform 之后**的矩形，
-     * 而焦点格带 `transform: scale(1.012)`（"极轻抬升"，`index.vue` 的 `.cursor`）
-     * ⇒ 它的 `top` 比同排兄弟高 `(scale−1)/2 × 格高` = 主屏 **1.843px**
-     * > `groupRows` 的 `ROW_EPS = 1` ⇒ **那一格被单独判成一行**
-     * ⇒ 方向键的行列整体错位（按 → 撞边界不动、按 ↓ 横着跳）。
-     *
-     * 实测（三个无头 Electron 探针共 46 断言，`docs/probes/cursor-scale-row` 等）：
-     * - 用 `rect.top`：焦点在 `k5` ⇒ 行结构碎成 `5/1/6`；焦点在 `k2` ⇒ 碎成 `2/1/3`
-     * - 换成 `offsetTop`：对焦点格偏移 **0.0000px**、行结构恒定 `10×6`
-     * - 只换这一处、其它一字不改（含缓存逻辑）⇒ 长按 26 次按键 **0 步走错**
-     *
-     * "为什么前几行正常"：焦点跨出视口才滚动、才作废缓存、才重新探测。
-     * 主屏可视区 1145px ÷ 格高 307.2px = **3.73 行** ⇒ 第 4 行才第一次滚动
-     * ⇒ 那条线是**视口边界**，不是数据分界（**随窗口高度移动**，别当设计固化）。
-     * 完整分析：`docs/ANALYSIS-arrow-key-misalign-2026-10-04.md`
-     *
-     * ## 两种坐标的分工（**不能只用一个**，实测滚动 234px 后两者差 −234）
-     *
-     * | 用途 | 用哪个 | 为什么 |
-     * |---|---|---|
-     * | 分行（`rows`） | **`offsetTop`** | 布局坐标，**不含 transform** |
-     * | 判"这行在不在视口内"（`rowTops`） | **`getBoundingClientRect().top`** | 视口坐标，必须跟着滚动变 |
-     *
-     * ⚠️ **旧注释的错**（已实测推翻）：曾写「`.image-box-item` 自带 `position: relative`
-     * ⇒ `offsetParent` 是自己 ⇒ `offsetTop` 恒为 0」。**不成立**——
-     * `.image-box` 自己没有 `position`，`offsetParent` 一路回落到 **`BODY`**
-     * （实测第一格 `offsetTop` = 10 = 它的 `margin-top`，且行间取值数 = 行数）。
-     * `position: relative` 影响的是**它自己子元素**的 `offsetParent`，不是它自己。
-     *
-     * 顺序：模板里 `v-for` 直接铺 `fileList`，flex `row wrap` **保持 DOM 顺序**
-     * ⇒ 探测顺序就是视觉顺序（从上到下、从左到右），不需要额外排序。
-     *
+     * ⚠️ 分行用 offsetTop 不用 rect.top：焦点格 scale(1.012) 会抬高 top 被判成单独一行 ⇒ 方向键行列错位；判"行在不在视口"(rowTops) 才用 rect.top（视口坐标随滚动变）。依据 docs/probes/cursor-scale-row、docs/ANALYSIS-arrow-key-misalign-2026-10-04.md。
      * 不需要等图片加载：格子高度被 `height: var(--item-height) !important` 钉死
      * ⇒ 懒加载的图没到也不会改变行高（实测图片到达前后 `offsetTop` 漂移 **0.000px**）。
-     *
-     * ⚠️ `offsetTop` 会触发**强制同步布局**，比读 `rect` 贵 ⇒ 这也是缓存必须真的生效的原因。
-     * `rows` 只在 `fileList`/窗口变宽时重算，滚动**不**重算它（见 `invalidateRowTops`）。
      */
     const probeLayout = (): GridLayout => {
         // `rowTops` 空 ⇒ 滚动把它作废了（见 invalidateRowTops）⇒ 必须重新探测。
@@ -423,41 +385,16 @@ export function useGridCursor(deps: {
     };
 
     /**
-     * 网格的keydown。**只有方向键、回车与空格**。
-     *
-     * 为什么是 **keydown** 而不是 keyup：长按方向键要能连续移动，
-     * 那是 keydown 的自动重复（`event.repeat`）提供的，keyup 做不到。
-     * 现有的 `S` / `D` / `F5` / `Backspace` 仍走 `index.vue` 的 keyup ——
-     * 两种事件不互相吃掉（那条已记录在 `index.vue` 的 `onKeyup` 注释里）。
-     *
-     * ##⚠️ 方向键要 repeat，**回车绝对不能**
-     *
-     * 键盘的自动重复对两类键的意义完全相反：
-     * - **方向键**：长按 = 连续移动，**正是我们要的**
-     * - **回车**：长按 = **重复执行同一个动作**。实测（无头 Chromium）
-     *   按住回车 1 秒 = **33 次 keydown，其中 32 次带 `e.repeat === true`**
-     *   ⇒ 不挡就是"一次长按打开 33 次"。
-     *
-     * 而回车触发的每个动作都不便宜（`onConfirm` 一路走下去）：
-     * 目录 → 压栈 + 重新取数；视频/文件 → 一次 IPC 开外部程序；
-     * 图片 → 重排清晰版计时器（**可能真去读移动硬盘**，见 `scheduleSharpUpgrade`）。
-     * ⇒ 挡在**动作之前**（`onConfirm` 之前），不是靠"打开的文件太多"去补救。
-     *
-     * 这一条与 Windows / macOS 的行为一致（按住 Enter 不等于重复执行）。
-     * `index.vue` 的定位回车（keyup 侧）同样要挡，否则长按回车会反复"定位"。
+     * 网格的 keydown：只接方向键、回车与空格。
+     * ⚠️ 用 keydown 不用 keyup（长按连续移动靠 event.repeat）；S / D / F5 / Backspace 仍走 index.vue 的 keyup，两种事件不互相吃。
+     * ⚠️ 回车必须挡 e.repeat 且在 onConfirm 之前（长按 = 重复执行取数 / IPC 等动作）；index.vue 定位回车（keyup 侧）同样要挡。
      */
     const onGridKeydown = (e: KeyboardEvent) => {
         // 本页在后台（被 KeepAlive 缓存）⇒ 一个键都不接
         if (isActive && !isActive()) return;
         if (e.key === 'Enter') {
             if (isPreviewOpen()) return;              // ← 见上：预览层接管回车
-            // ⚠️⚠️ **守卫必须在这里也调一次**（2026-10-04 code review 抓出，阻断级）。
-            // 我原先只在方向键分支调，于是**焦点在搜索框里按回车会打开当前选中格**；
-            // 中文输入法选词（IME 上屏）同样触发 ⇒ 打中文时按回车会随机打开文件。
-            // 根因：naive-ui `Input.mjs:578` 的 `handleWrapperKeydown` 只
-            // `call(props.onKeydown, e)`（我们没绑）**不 stopPropagation**
-            // ⇒ 事件照常冒泡到 window；而下面那句 `e.preventDefault()`
-            // 还会顺手吞掉输入框自己的回车行为，让症状更隐蔽。
+            // ⚠️ Enter 分支也必须调 isGridKeyBlocked：否则焦点在搜索框、IME 上屏时按回车会打开当前选中格（事件冒泡到 window）。
             if (isGridKeyBlocked(e)) return;
             if (e.repeat) return;                      // ★ 长按只算一次，见上
             const item = cursorItem.value;
@@ -550,26 +487,8 @@ export function useGridCursor(deps: {
 
     /**
      * 列表换了一屏 ⇒ 若之前有人要焦点，现在给他。
-     *
-     * ## ⚠️ 判据为什么是「key 集合变了」而不是「长度从 0 变有」（业主 2026-10-04 二次报）
-     *
-     * 第一版写的是 `watch(() => fileList.value.length, (len, prev) => len > 0 && prev === 0)`，
-     * 看着像"一屏刚加载出来"。**它永远不成立** ——
-     * `dataSource` 是**整份替换**的（`fetchFolder` 成功后 `dataSource.value = data`），
-     * 加载期间**旧数据一直留在屏幕上**（那是刻意的：失败时列表不能被清空，见 `fetchFolder` 的注释）。
-     * ⇒ 进新屏时 `prev` 是**旧屏的条目数**（比如 8），不是 0 ⇒ 条件恒假 ⇒ **永远不落焦点**。
-     * 这就是"我加了初始化默认选中，还是要点一下"的根因（第一版那处`armed` 机制是对的，
-     * 只是**没人调用**它 —— 判据不成立）。
-     *
-     * ## 现在的判据：比较「key 集合」
-     *
-     * "换了一屏"的**事实**是"屏幕上这些条目已经不是同一批了"⇒ 比 key。
-     * - 换目录：key 全变（`keyOf` 含 `dir`）⇒ 触发
-     * - 刷新/重扫：key 不变⇒ **不触发**（用户在等它，不能把焦点从他手上抢走）
-     * - 搜索：key 变（筛掉了几个）⇒ 触发，但那种情况选择器多半还在屏内，`activateCursor` 幂等
-     *
-     * ⚠️ 用**第一个 key + 长度**做指纹就够了，不必每次都建全量Set：
-     * 判据是"变了没有"，不是"变了几个"；而目录切换时第一个 key 必变（它带 `dir`）。
+     * ⚠️ 判据用「key 集合变了」，不能用「长度 0→有」：dataSource 整份替换、加载期间旧数据仍在 ⇒ prev 永远不是 0 ⇒ 永不落焦点。
+     * ⚠️ 用第一个 key + 长度做指纹即可（目录切换首 key 带 dir 必变）；刷新/重扫 key 不变 ⇒ 不抢用户焦点。
      */
     const listFingerprint = () => {
         const l = fileList.value;

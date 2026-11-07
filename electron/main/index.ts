@@ -2,7 +2,8 @@ import { app, BrowserWindow, shell, ipcMain, dialog, clipboard, screen } from 'e
 import { release } from 'os'
 import { join, win32 } from 'path'
 import '../server';
-import '../utils/ffmpeg';
+// ⚠️ fluent-ffmpeg 的全局路径只能由 server → utils/thumbnail 的 realBin() 设置：
+// @ffmpeg-installer 给的路径在 app.asar 内，spawn 不走 asar 补丁 ⇒ 打包版 ENOENT。
 import { LOCAL_TOKEN } from '../server/token';
 import { destroyTrackedWindows } from '../server/assistant/queue';
 import { watchDiskChanges } from './diskWatch'
@@ -140,20 +141,8 @@ ipcMain.on('ff-token', function (e) {
 
 /**
  * 让用户选一个文件夹。
- *
- * 必须用异步版 `showOpenDialog`：主进程同时跑着 3060 上的本地服务，同步版在对话框
- * 开着的整段时间里会按住事件循环 —— 那期间渲染层任何 /openFolder、/thumb 都得不到
- * 响应，界面就是卡死的。这不是体验问题，是并发正确性问题。
- *
- * 取消时**仍然发 `undefined`**，但**渲染层不再把它当成"清空"** ——
- * 收到空值就什么都不做（取消 = 不改）；「清空」只由 chip 上的 × 负责。
- *
- * ⚠️ 2026-10-01 更正：这里原来写的是「取消时仍然发 `undefined`（渲染层靠
- * `value ? value[0] : ''` 清空输入框），语义与原来逐字一致」。
- * 那个"清空输入框"的语义**在当时只影响输入框**；后来它一路演变成主界面的
- * `setRoot('')` ⇒ 连**整个导航历史**（当年根本不存在的东西）一起清掉，
- * 后果被放大、而这句注释没跟着更新 —— **注释开始撒谎，就是这类 bug 的信号。**
- * 用"取消"去触发一个不可逆的大范围后果是不合理的（见 FolderSelector 里的注释）。
+ * 必须用异步版 `showOpenDialog`：同步版会按住事件循环，卡死渲染层的 /openFolder、/thumb。
+ * 取消时仍发 `undefined`，但渲染层收到空值什么都不做（清空只由 chip 上的 × 负责）。
  */
 ipcMain.on('openDirectory', async function () {
   const target = win;

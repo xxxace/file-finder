@@ -8,17 +8,7 @@ import path from 'node:path';
 import * as fsasync from 'node:fs/promises';
 import { spawn } from 'node:child_process';
 
-/**
- * ⚠️ **打包版（asar）里这两个 path 是死的，必须先重写。**
- *
- * `@ffmpeg-installer` 给的 path 是 `path.join(__dirname, 'ffmpeg.exe')`，打包后 `__dirname`
- * 在 `app.asar` 内部。Electron 只给 **fs 模块**打了 asar 补丁，`child_process.spawn`
- * 拿的是裸系统调用 ⇒ **ENOENT**。实测（release/1.0.0 的产物）：
- *   app.asar/.../ffmpeg.exe          → spawn error ENOENT
- *   app.asar.unpacked/.../ffmpeg.exe → exit 0
- * 后果不是"少一个功能"：**webp 转码、视频抽帧全部静默失败** ⇒ 卡片没有图 ⇒ 网格裂图。
- * 解包本身由 `electron-builder.json5` 的 `asarUnpack` 保证（显式写死，不靠自动检测）。
- */
+/** ⚠️ `@ffmpeg-installer` 给的路径在 `app.asar` 内，而 `spawn` 不走 asar 补丁 ⇒ ENOENT，必须先重写为 `app.asar.unpacked`（由 `asarUnpack` 保证）。 */
 const realBin = (p: string) => p.replace(/([\\/])app\.asar([\\/])/, '$1app.asar.unpacked$2');
 
 const FFMPEG_BIN = realBin(ffmpegPath);
@@ -28,22 +18,8 @@ ffmpeg.setFfmpegPath(FFMPEG_BIN);
 ffmpeg.setFfprobePath(FFPROBE_BIN);
 
 /**
- * 缩略图宽度（网格用）。
- *
- * 网格是 `calc(100% / 6)` + `flexible.ts` 的 rem 方案：
- *   1200px 窗口 → 每格约 180 x 144 px
- *   2048px 窗口 → 每格约 340 x 272 px
- *
- * ⚠️ 2026-10-04 由 480 / q82 下调到 **384 / q78**，依据是**用真库实测**（不是估的）：
- * `docs/probes/thumb-tier/`（Electron + 同一个 nativeImage 编码器，取样他自己库里
- * 1236 张真缩略图里的 400 张）：
- *   480/q82  均值 39 KB（存成 base64 就是 47~52 KB —— 主人说的"50 多 KB"）
- *   384/q78  均值 **23 KB**  ← 采用
- *   360/q75  均值 20 KB
- *   320/q72  均值 15 KB
- * 本机 dpr = 1.25（逻辑 2048×1280 / 物理 2560×1600）⇒ 网格一格约 422 设备像素，
- * 384 档是 **1.1 倍插值**（照片缩略图上看不出差别）。要"零插值"得 440px，但那样只能省 38%
- * 而不是 56% —— 权衡后选 384。**这个数随时可以调（改了只是重扫一层的成本）。**
+ * 缩略图宽度（网格用）。384/q78 由 `docs/probes/thumb-tier/` 真库取样定档：再大体积收益骤减、再小画质可见下降。
+ * ⚠️ 与 THUMB_QUALITY 成组，改这个数只触发一层重扫，可随时调。
  */
 export const THUMB_WIDTH = 384;
 
@@ -347,25 +323,8 @@ async function probeDuration(filepath: string): Promise<number | null> {
 }
 
 /**
- * 取一帧（视频缩略图用）。
- *
- * **为什么不能写 `timestamps: ['1%']`**（下一个人大概率想改回去，所以写在这儿）：
- * `'1%'` 是**百分比**形式，会命中 fluent-ffmpeg 的 `computeTimemarks`
- * （`recipes.js:169-211`）→ 它必须先 `self.ffprobe(...)` 拿到时长，才能把 `1%`
- * 换算成秒 → **命令里会多出一个我们自己够不着的 ffprobe 子进程**
- * （局部变量，见 `probeDuration` 的注释）。而 20 秒计时器从 `screenshots()`
- * 那一刻就起跑，所以**超时完全可能落在 ffprobe 窗口**：`cmd.kill()` 那时走的是
- * `logger.warn('No running ffmpeg process')` 分支，**一个进程都没杀掉** ——
- * 孤儿 ffprobe 继续攥着移动硬盘上源视频的句柄。
- * §13 实测：连续触发 5 次，存活数 1/2/3/4/5 **线性累积**。
- *
- * 现在改成"**先自己（带超时、手里有 pid、能杀）拿时长 → 传数字秒**"：
- * `computeTimemarks` 的判据是 `timemarks.some(t => /^[\d.]+%$/.test(t))`，
- * 收到数字时直接为假、跳过，**命令里只剩 ffmpeg** → `runFfmpeg` 的 20 秒超时
- * 就覆盖了整条链路（ffprobe 那一段由 `probeDuration` 自己覆盖）。
- *
- * ⚠️ 抽帧位置仍然是**时长的 1%**，不是固定秒数 —— 1% 是刻意选的，躲开片头黑场。
- * 取不到时长就返回 false，**不要**退化成固定时间点（那等于又去拍黑场）。
+ * 取一帧（视频缩略图用）。⚠️ 不能用 `timestamps: ['1%']`：百分比会触发 fluent-ffmpeg 内部再起一个够不着的 ffprobe 子进程，超时 kill 杀不到 ⇒ 孤儿进程攥着源视频句柄；须先自己带超时拿时长、传数字秒。
+ * ⚠️ 抽帧位置取时长 1% 躲片头黑场；取不到时长直接返回 false，别退化成固定时间点。
  */
 async function extractFrame(filepath: string, frame: string): Promise<boolean> {
     const duration = await probeDuration(filepath);
