@@ -196,6 +196,33 @@ export function usePreview(deps: {
     const onPreviewShowChange = (v: boolean) => { if (v) previewOpenState.value = true; else closePreview(); };
 
     /**
+     * 方向键连发节流（**只锁上限，不改交互**）。
+     *
+     * naive-ui 的 ImagePreview 在 `document` 的**冒泡**阶段直接切图（`ImagePreview.mjs:112`），
+     * 没有任何节流 ⇒ 按住方向键时就是 OS key repeat 的速率（约 30Hz）。
+     * 而清晰大图是「停住 0.3s 才升级」（见 `scheduleSharpUpgrade`，每次切图都会 cancelSharpTimer）
+     * ⇒ 掠过时**根本不发大图请求**，只靠已缓存的缩略图秒切。
+     * 于是观感会从「前几张在等图」断层到「缩略图全命中 = 瞬移」—— 锁上限就是把这个断层抹平。
+     *
+     * 在 `window` 的 **capture** 阶段拦：一定早于 document 上的冒泡监听，`stopPropagation`
+     * 就能让 naive 收不到这一下。只拦左右方向键、且只在预览层开着时拦。
+     */
+    const KEY_REPEAT_MIN_MS = 100;
+    let lastStepAt = 0;
+    const onStepKeyThrottle = (e: KeyboardEvent) => {
+        if (!previewOpen.value) return;
+        if (e.key !== 'ArrowLeft' && e.key !== 'ArrowRight') return;
+        const now = performance.now();
+        if (now - lastStepAt < KEY_REPEAT_MIN_MS) {
+            e.stopPropagation();
+            e.preventDefault();
+            return;
+        }
+        lastStepAt = now;
+    };
+    window.addEventListener('keydown', onStepKeyThrottle, true);
+
+    /**
      * `← →` 键或工具条上那两颗箭头：naive-ui 算好新索引后发回来，这里把它**落回 key**。
      * 刻意不存索引 —— 存索引就等于把"列表不变"当成前提了。
      *
@@ -526,6 +553,7 @@ export function usePreview(deps: {
         removeWheelZoom?.();
         // 与上面同一条纪律：全局监听不摘就是"看不见的残留"
         window.removeEventListener('resize', onViewportResize);
+        window.removeEventListener('keydown', onStepKeyThrottle, true);
     };
 
     return {

@@ -23,7 +23,7 @@
 1. **特性默认神圣**：他声明过的便捷设计不动；真有问题才**提交讨论**，通过才改。
 2. 其余问题：多视角交叉验证 + 确认没理解错 + 确认真要修 → **用正确的方式修，不许打补丁**（判据=同类场景会不会复发），**必须标证据等级**（静态/推理/实测）。
 3. `grep` 计数不能证"运行时渲染出一份"；**反向也成立**：`import.meta.glob` 会让"被引用"看起来成立 ⇒ 查死代码看**入口有没有人调**。⚠️「引用了但没人用」更隐蔽。
-4. ⚠️ **判「某机制有没有用」必须同查生产者 + 消费者**（`flexible.ts` 定义 `1rem`，被 `--item-height` 消费；只看消费者会反向，删了网格 192px→24px）。
+4. ⚠️ **判「某机制有没有用」必须同查生产者 + 消费者**（曾据 `flexible.ts` 定义 `1rem`、被 `--item-height` 消费这条反向踩坑；只看消费者会判错）。**11-07 已删 `flexible.ts`** —— 前提（`--item-height: 1rem`）在那次重构后消失，`rem`/`hairlines` 零消费，唯一隐式依赖 `body.fontSize=12×dpr` 已搬 `main.ts`。
 5. 不在 `n-space` 放**会增减**的子元素 ⇒ 用裸 flex `.hstack`。
 6. 缓存层**永不自动删**；`wire()` 唯一出口；`CACHE_VERSION=2` 非必要不升；`CACHE_KEY`/`CACHE_IV` **永不可改**。
 7. **脱敏仓库**（`github.com/xxxace/file-finder`）：入库文本不许出现真实番号/演员名/作品名/真机目录名/盘序列号/用户名。⚠️ **最易漏的是探针输出文件**（机器生成，带用户名与绝对路径）⇒ **改探针别打绝对路径，不是事后手改证据**。提交前扫三样（取动态值）+ 必须 `git status --porcelain -uall`。**清单与遗留项 → appendix-10-05 §三**（12 个历史文件待他定，不擅动别的会话文档）。
@@ -34,12 +34,12 @@
 - **没有测试框架** ⇒ 验证三件套：`typecheck` 0 error + `docs/probes/` 只读探针 + 真机目视（**别写 TDD 式假测试**）；探针证据**必须 `.txt`**。⚠️ `@media (max-width)` 看 **viewport** ⇒ 须 `win.setSize()`。**探针细则 → appendix-10-05 §一**。
 
 ## 五、当前状态（长清单全文 → `MEMORY-APPENDIX-2026-10-05.md` §二）
-- ⭐ **10-29 网格密度三档已落地**（宽松 6 / 标准 8 / 紧凑 12，下拉切换，localStorage 记住）：列数唯一真相源 `FileFinder/density.ts` → `.image-box` 的 `--ff-grid-cols`；窄窗降档靠 `min-width: var(--ff-grid-min-cell)` 纯 CSS；**切档必须失效 `useGridCursor` 的行结构缓存**（走 `deps.cols`，别在切档回调里手动清）⇒ **待重启 dev 目视**。设计 `docs/DESIGN-GRID-DENSITY-2026-10-29.md`。
+- ⭐ **10-29 网格密度三档已落地**（宽松 6 / 标准 8 / 紧凑 12，下拉切换，localStorage 记住）：列数唯一真相源 `FileFinder/density.ts` → `.image-box` 的 `--ff-grid-cols`；**11-07 起布局改 `grid` + `repeat(N, minmax(0,1fr))`**（原 flex+margin 补偿已删）：列数必须**精确 = N**（否则 `deps.cols` 判据永不触发、方向键错位），窄窗**不再降档**，`--ff-grid-min-cell` 已停用；**切档必须失效 `useGridCursor` 的行结构缓存**（走 `deps.cols`，别在切档回调里手动清）⇒ **待重启 dev 目视**。设计 `docs/DESIGN-GRID-DENSITY-2026-10-29.md`。
 - ⭐ **10-22 补/换封面「暂停·终止·试跑中断」已落地**（`jobs.ts` 加 Gate + pause/resume/reopen；抓取/写盘在取下一条前等闸门；终止保留已抓到的行可写入；`dryrun` 接 abortOnClose；追加 jobId 不再丢命中行）⇒ **待重启 dev 目视**。详情 `docs/FIX-COVER-PAUSE-2026-10-22.md`，探针 `probes/jobs-pause/` 11/11。
 - ⭐ **10-22 webp/视频裂图已修**：根因＝**打包版**里 `@ffmpeg-installer` 的路径在 `app.asar` 内、`spawn` 不走 asar 补丁 ⇒ `ENOENT` ⇒ webp 转码与视频抽帧**全挂**（jpg/png 走 nativeImage 所以正常）；修 4 处：`thumbnail.ts` 加 `realBin()` 重写 + `probeDuration` 先查**视频流**时长 + `extractFrame` 校验产出非空 + 前端无 `thumb` 不渲染 `<img>` + `asarUnpack` 显式化。证据与验收 → `docs/FIX-WEBP-VIDEO-COVER-2026-10-22.md`（探针 `probes/webp-video/`）。**旧缓存失败条目要按 ↻ 才重扫**。
 - ⭐ **Q1 增量对账已落地**（`server/index.ts` 9 处 ~25 行；探针 13 PASS；闸门只在唯一读取点 `readFolder`）⇒ **待重启 dev 目视**。
 - **唯一真缺口 = 全局搜索**：`index.vue:466` 只过滤当前层；`data[].name` 1471/1471 全在内存 ⇒ 纯前端可搜、零读盘（**只下发投影，绝不下发原始 `data[]`**，会冻界面）。
-- **伪缺口**：`create_at` 刷新年龄、抽帧失败率 0.5%、ffprobe 泄漏（已修）。**最高性价比漏项** = cover-blur A 档（真收益 113 个目录，非 116）。**该删 7 项**（撤回 `parseSize`）。❌ **`flexible.ts` 绝不能删**。
+- **伪缺口**：`create_at` 刷新年龄、抽帧失败率 0.5%、ffprobe 泄漏（已修）。**最高性价比漏项** = cover-blur A 档（真收益 113 个目录，非 116）。**该删 7 项**（撤回 `parseSize`）。`flexible.ts` **11-07 已删**（依据见 §三.4）。
 - 根目录 `searchCache.db` = **主人主动备份** ⇒ 保留；真库在 `%USERPROFILE%\.file-finder\`。基线 `5 盘 · 218 记录(216 cover) · 1471 条目`。视频扩展名单一真相源 `server/videoExt.ts`（改它要同步 `index.vue` 的 `VIDEO_EXT_RE` 并重启 dev）。
 - **已落地**（细节 → appendix §2.4/2.5）：面板 A/B/C · P0-P2 · 加密备份还原 · 离线只读 · 头部+导航 · 助手 P1-2A-5 · 盘条 chips · 预览导航 · 缓存出库 · 弹层重做（均含 10-04/10-05 各期）。
 - ⭐ **10-05 P3.1「站点规则编辑器」已落地**（三段式：入口/动作/抽取）：`docs/DESIGN-RULE-BUILDER-2026-10-05.md` + `PLAN-RULE-BUILDER-P3.1-2026-10-05.md`；后端 `runSteps`（动作**每步只跑一次**、`_blank` 同窗接管）+ `dryrun` 收草稿 + `/assistant/openPage`；前端 `AssistantRulesModal.vue`（入口在「更多」下拉）+ `rules/` 子组件；**P3.1.1** 加「显示窗口 / 打开页面看看」（他对"看不到过程 / 要自己开浏览器研究"的反馈）；**P3.2 已落地**：`urlTemplate.ts` 占位符管道（`{q|noDash|lower|num|raw}`，**URL 拼法不再写死**）+ 「用它做模板」**反推入口地址** + **「点选图片」**（`selectorGen.ts` 稳定性分级 +#id/meta/data-* 优先）+ **「录一遍」**（录制输入/点击，跨页不丢）；机制＝**页面写 sessionStorage + 主进程 400ms 轮询**（Promise 回传会被跳转掐死）；typecheck 0、探针 `probes/rule-builder/` **39/39**（**抓到并修掉 `{q|num}` 把 `FC2` 的 2 吃进去的真 bug**）⇒ **待重启 dev 真机验收**（详见 `docs/IMPLEMENT-RULE-BUILDER-P3.2-2026-10-05.md`；未做：多图组/导入导出/规则体检/多站 fallback）。

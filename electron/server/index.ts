@@ -1389,9 +1389,9 @@ async function listDisksController(req: Req, res: http.ServerResponse) {
              * （85 MB → 428 KB）而图片搬进了 `bin/`（几十 MB）—— 只报库的大小会让人
              * 以为"缓存只有几百 KB"，那是**严重低估**（实测真库：库 428 KB / 图片 55 MB）。
              *
-             * 代价：`binStats` 对每个图片文件做一次 `stat`。只在本接口里算一次
-             * （打开面板 / 点刷新），实测千级条目十几毫秒，且**只 stat 系统盘上的本地文件**，
-             * 不碰移动硬盘 —— 与"只汇总已有缓存、不读盘"那条硬约束一致。
+             * 代价：没有 —— `binStats` 现在**读内存**（总字节在启动时后台算一次，
+             * 之后由 `putBin`/`putBinEncrypted` 增量维护，见 `binStore.ts`）。
+             * 改之前这里是千级串行的 `stat`，挂在 `/getDisks` 上等于每次首屏白等约 270ms。
              */
             binCount: bin.count,
             binBytes: bin.bytes,

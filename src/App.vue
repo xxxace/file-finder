@@ -29,13 +29,3 @@ const dateLocale = ref<NDateLocale | null>(dateZhCN);
 
 const { isDark } = useTheme();
 </script>
-
-<style>
-#app {
-  font-family: -apple-system, 'Segoe UI', 'Microsoft YaHei', 'PingFang SC', system-ui, sans-serif;
-  -webkit-font-smoothing: antialiased;
-  -moz-osx-font-smoothing: grayscale;
-  color: var(--ff-text-1);
-  background: var(--ff-bg);
-}
-</style>

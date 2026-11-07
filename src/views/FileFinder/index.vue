@@ -92,7 +92,8 @@
                 <!-- 缓存记录 / 清单这两个入口（2026-10-21 迁走）：
                      它们现在住在左导航轨（页级），不再占工具条的位置。
                      ⚠️ 别再加回来 —— 这里只放**跟当前这一层数据绑定**的动作。 -->
-                <n-input ref="searchInput" v-model:value="searchText" placeholder="搜索" size="small" clearable>
+                <n-input ref="searchInput" v-model:value="searchText" placeholder="搜索" size="small" clearable
+                    @keydown.esc="blurSearch">
                     <template #prefix>
                         <n-icon :component="Search" />
                     </template>
@@ -123,7 +124,8 @@
                      只读层（盘不在）也禁掉：只读视图的源就是缓存，没有"重读"这回事。 -->
                 <n-tooltip>
                     <template #trigger>
-                        <n-button size="small" :disabled="scanning || readOnlyLevel || playlistLevel" @click="onRefresh">
+                        <n-button size="small" :disabled="scanning || readOnlyLevel || playlistLevel"
+                            @click="onRefresh">
                             <template #icon>
                                 <n-icon>
                                     <Refresh />
@@ -153,8 +155,14 @@
                  同一层的两个文件夹若都叫 cover.jpg，就会生成两个 key="cover"。
                  Vue 遇到重复 key 会复用错的组件实例，封面会串到别的格子里。
                  加上 dir 就唯一了（folder 模式下 dir 是父目录，同样唯一）。 -->
-            <div v-for="(item) in fileList" :key="item.dir + '/' + item.name" class="image-box-item"
-                :class="{
+            <!-- ⚠️ `v-memo`：532 项时每次方向键都会把**整列 vnode** patch 一遍（卡片不是子组件，
+                 所有状态都在同一渲染作用域）⇒ 长按发涩、滚动条一顿一顿。memo 里列的是
+                 **影响这一格渲染的全部值**，光标移动时只有旧/新两张的数组会变，其余 530 个直接跳过。
+                 ⚠️ 漏依赖的后果是"某处 UI 不跟着变" —— 以后给卡片加新状态时，必须同步加进这个数组。 -->
+            <div v-for="(item) in fileList" :key="item.dir + '/' + item.name" v-memo="[
+                item, picking && isPickable(item), isPicked(item),
+                cursorKey === keyOf(item), opening === keyOf(item), plMember.has(keyOf(item)),
+            ]" class="image-box-item" :class="{
                     pickable: picking && isPickable(item), picked: isPicked(item),
                     // 焦点（选择器）= 灰白；定位闪烁 = 蓝。三套颜色互不重叠，
                     // 理由与手法见 `docs/DESIGN-GRID-CURSOR-2026-10-04.md` §五。
@@ -162,11 +170,8 @@
                     // key 就成了野值，读派生量自动不画高亮，不需要任何同步代码去清它。
                     cursor: cursorItem !== undefined && cursorKey === keyOf(item),
                     opening: opening !== '' && opening === keyOf(item),
-                }"
-                :data-key="keyOf(item)"
-                @click="onItemClick(item)" @dblclick="handleOpen($event, item)"
-                @contextmenu.prevent="onContextMenu($event, item)"
-                :title="item.name + ' ' + getSize(item.size)">
+                }" :data-key="keyOf(item)" @click="onItemClick(item)" @dblclick="handleOpen($event, item)"
+                @contextmenu.prevent="onContextMenu($event, item)" :title="item.name + ' ' + getSize(item.size)">
                 <!-- `pointer-events:none` 保住连点两张；`v-if` 而非 `v-show`（只转零点几秒，不值得留 DOM） -->
                 <div v-if="opening !== '' && opening === keyOf(item)" class="opening-mask">
                     <n-spin :size="20" />
@@ -199,7 +204,9 @@
                     <img v-else-if="item.type === 'folder'" :src="folderIcon" :alt="item.dir || ''" class="folder-face">
                     <!-- 类名必须小写：`fiv-icon-*` 是**大小写敏感**的 CSS 类，
                          而盘上有大写扩展名的文件（实测库里有 `.MOV`）⇒ `fiv-icon-MOV` 匹配不到任何图标。 -->
-                    <div v-else :title="item.dir" :class="`file-cover fiv-cla fiv-icon-${(item.ext || '').toLowerCase()}`" class="file-face"></div>
+                    <div v-else :title="item.dir"
+                        :class="`file-cover fiv-cla fiv-icon-${(item.ext || '').toLowerCase()}`" class="file-face">
+                    </div>
                     <!-- 角标（B 站封面下沿那一排）：数量在左、大小在右。
                          `pointer-events:none` —— 它盖在封面上，但点它应该等于点封面。 -->
                     <div v-if="(item.files && item.files.length) || (item.size || 0) > 0" class="card-badges">
@@ -214,12 +221,12 @@
                 <!-- 选中角标。⚠️ 用 `<i>` 而**不是** `<span>` —— `.image-box-item span` 那条
                      （1681 行）里有 `width:100%` + `height:38px !important`，会把角标拉成长条、
                      圆直接变形。换个元素最省事，也不用跟 `!important` 打架。
-                     ⚠️ 绝对定位、**不参与布局** —— 网格格子的宽度是"margin 撑间距 +
-                     `width:100%/N−gap` 补偿"算出来的，任何参与布局的新元素都会带偏它 -->
+                     ⚠️ 绝对定位、**不参与布局** —— 格子宽高由 grid 的 `1fr` + 封面比例决定，同行必须等高
+                     （`groupRows` 按 `offsetTop` 分行），参与布局就会带偏行结构 -->
                 <i v-if="isPicked(item)" class="pick-badge" aria-hidden="true"></i>
                 <!-- 收录星标（2026-10-21 清单）：这张卡已进某个清单。
-                     ⚠️ 绝对定位、**不参与布局** —— 网格格子的宽度是"margin 撑间距 +
-                     `width:100%/N−gap` 补偿"算出来的，任何参与布局的新元素都会带偏它。
+                     ⚠️ 绝对定位、**不参与布局** —— 格子宽高由 grid 的 `1fr` + 封面比例决定，同行必须等高
+                     （`groupRows` 按 `offsetTop` 分行），参与布局就会带偏行结构。
                      放左上角：pick-badge 在右上，两者不打架。 -->
                 <i v-if="plMember.has(keyOf(item))" class="pl-badge" aria-hidden="true"></i>
                 <!-- 已失效徽标（2026-11-06）：收藏夹内所属盘在线但确认丢失的条目。绝对定位右上角。 -->
@@ -269,12 +276,9 @@
         <n-popover :show="popover.visible" :x="popover.x" :y="popover.y" trigger="manual" placement="bottom"
             @clickoutside="closeFileList">
             <!-- 同理换掉 n-space：这里 v-for 的是文件列表，个数天生会变 -->
-            <div class="hstack file-list" tabindex="-1" ref="fileListBox"
-                @keydown.stop="onFileListKeydown">
-                <div v-for="(f, i) in popover.files" class="file-item"
-                    :class="{ 'file-cursor': i === fileCursor }" :key="f.name"
-                    @dblclick="openFile(f.name)"
-                    :title="f.name + ` ${getSize(f.size) || ''}`">
+            <div class="hstack file-list" tabindex="-1" ref="fileListBox" @keydown.stop="onFileListKeydown">
+                <div v-for="(f, i) in popover.files" class="file-item" :class="{ 'file-cursor': i === fileCursor }"
+                    :key="f.name" @dblclick="openFile(f.name)" :title="f.name + ` ${getSize(f.size) || ''}`">
                     <!-- 类型图标（`.file-cover` + fiv）。**必须带上 `fiv-cla fiv-icon-*`** ——
                          漏掉后半截时它只剩 `blank.svg` 且没有尺寸 ⇒ 高 0、等于没画，
                          整个条目就变成"一大块空白 + 一行截断的名字"（2026-10-05 业主报的丑） -->
@@ -302,8 +306,8 @@
         <!-- 「加入收藏夹…」选单：右键菜单的第二级，原地展开在同一坐标（同 submenu 手势） -->
         <n-popover :show="plPicker.visible" :x="plPicker.x" :y="plPicker.y" trigger="manual" placement="bottom-start"
             @clickoutside="plPicker.visible = false">
-            <PlaylistPicker v-if="plPicker.card" :card="plPicker.card" :item-key="plPicker.key"
-                @added="onPickerAdded" @failed="onPickerFailed" />
+            <PlaylistPicker v-if="plPicker.card" :card="plPicker.card" :item-key="plPicker.key" @added="onPickerAdded"
+                @failed="onPickerFailed" />
         </n-popover>
         <n-image-group :src-list="previewSrcList" :current="previewIndex" :show="previewOpen"
             :render-toolbar="previewToolbar" @update:show="onPreviewShowChange"
@@ -540,6 +544,11 @@ const ctxMenu = ref<{
     item: null,
 });
 const searchText = ref('');
+
+/** 搜索框按 Esc：把焦点交还给网格（否则打字框会一直吃着方向键）。 */
+const blurSearch = (e: KeyboardEvent) => {
+    (e.target as HTMLElement | null)?.blur();
+};
 const imageBox = ref<HTMLDivElement | null>(null)
 const folderSelector = ref<typeof FolderSelector | null>(null);
 const searchInput = ref<typeof NInput | null>(null);
@@ -2051,6 +2060,9 @@ const {
 // ⚠️ `previewedImgProps` 必须由本组件 provide 进 `imageContextKey` —— 预览层由
 //    `n-image-group` 渲染，父链是 `ImagePreview ← ImageGroup ← 本组件`，
 //    而 naive-ui 没给 group 留 `previewed-img-props` 这个 prop。
+/** 「定位压暗」的计时器：600ms 后自动撤销（见下面的 onLocate） */
+let locateTimer = 0;
+
 const {
     openPreview, locateInGrid,
     previewSrcList, previewIndex, previewOpen,
@@ -2058,7 +2070,17 @@ const {
     previewToolbar, previewedImgProps, dispose: disposePreview,
 } = usePreview({
     fileList, keyOf, displaySrcOf, previewUrlOf, picking,
-    onLocate: (k) => focusCursor(k),
+    onLocate: (k) => {
+        focusCursor(k);
+        // 定位后短暂压暗其余格子：满屏几百格里，只靠 2px 蓝框根本找不到目标。
+        // 游戏机相册的通用手法是「压暗其余」，不是「把选中项做得更花」。
+        const box = imageBox.value;
+        if (box) {
+            box.classList.add('is-locating');
+            window.clearTimeout(locateTimer);
+            locateTimer = window.setTimeout(() => box.classList.remove('is-locating'), 600);
+        }
+    },
     syncCursor: setCursorKey,
 });
 
@@ -2288,8 +2310,28 @@ const onKeyup = (e: KeyboardEvent) => {
     }
 };
 
+/**
+ * 鼠标点过任何按钮后，把焦点从它身上摘掉。
+ *
+ * 不摘的后果（2026-11-07 真机）：焦点残留在按钮上，浏览器会把之后的回车当成
+ * "再点一次那个按钮" —— 现象就是「点过 flat 切换后按回车，又切了一次 flat」。
+ *
+ * 三条限定，只为解决这一个问题、不碰别的：
+ *  - `e.detail === 0` 跳过：那是键盘触发的 click（Tab + Enter），焦点必须留着，无障碍还要用；
+ *  - 只在目标是 `<button>` 时才摘：输入框、下拉触发器一概不碰；
+ *  - `setTimeout 0`：等这次 click 自己的处理跑完再摘，不打断控件逻辑。
+ *
+ * 成本：一次 `closest('button')` + 一次定时器，只在鼠标点击时发生（用户点击频率极低）。
+ */
+const onDocClickBlurButton = (e: MouseEvent) => {
+    if (e.detail === 0) return;
+    const btn = (e.target as HTMLElement | null)?.closest('button');
+    if (btn) window.setTimeout(() => (btn as HTMLElement).blur(), 0);
+};
+
 onMounted(() => {
     window.addEventListener('keyup', onKeyup);
+    document.addEventListener('click', onDocClickBlurButton, true);
     // 收录索引（2026-10-21 清单）：网格星标与「加入清单」选单 ✓ 的数据源。
     // 失败不打扰启动 —— 星标只是不显示，清单功能要等用户点进去才用得上。
     void refreshIndex().catch(() => undefined);
@@ -2302,6 +2344,7 @@ onMounted(() => {
 // HistoryTable 那边修过一次，这里是漏网的那处。
 onUnmounted(() => {
     window.removeEventListener('keyup', onKeyup);
+    document.removeEventListener('click', onDocClickBlurButton, true);
     ipcRenderer.off('ff-disks-changed', onDisksChangedIpc);
     // 预览层那个"停住 0.3s 才换清晰版"的挂起计时器：组件没了就别再起来
     disposePreview();
@@ -2555,7 +2598,7 @@ const onDisksChangedIpc = (_e: unknown, disks: { serial: string; drive: string }
         top: 50%;
         transform: translateY(-50%);
         line-height: 1;
-        color: #a1a1a1;
+        color: var(--ff-text-muted);
         pointer-events: none;
         /* 别挡住上一个 tag / chip 的点击 */
     }
@@ -2632,22 +2675,25 @@ const onDisksChangedIpc = (_e: unknown, disks: { serial: string; drive: string }
     gap: 12px;
     padding: 4px 4px 8px;
 
-    .scan-progress {
-        font-size: 12px;
-        color: var(--ff-text-3);
-    }
-
+    .scan-progress,
     .scan-hint {
         font-size: 12px;
         color: var(--ff-text-3);
     }
 }
 
+/* 定位后短暂压暗其余格子（600ms）：满屏几百张时，「只剩一张亮」比「给那张加框」好认得多。
+   只在 onLocate 那一刻加 class，不是常驻态；opacity 走合成层，不触发重排。 */
+.image-box.is-locating .image-box-item:not(.cursor) {
+    opacity: .3;
+    transition: opacity .12s ease;
+}
+
 /*
  * 卡片状态：可选 / 已选 / 焦点。
  *
- * ⚠️ 约束没变：**状态一律不许新增参与布局的属性**（宽度是 `calc(100%/N − gap)` + margin 算出来的）。
- * 所以只用 `outline` / `box-shadow` / `transform` —— 三者都不占位置。
+ * ⚠️ 约束没变：**状态一律不许新增参与布局的属性** —— 宽度由 grid 的 `1fr` 给，而高度必须同行等高
+ * （`groupRows` 按 `offsetTop` 分行，差一像素就劈行）。所以只用 `outline` / `box-shadow` / `transform`。
  *
  * 圆角：2026-10-21 主人裁定改用 B 站那套 6px，值在 `--ff-radius-card`（想改回直角只改 token）。
  */
@@ -2692,8 +2738,18 @@ const onDisksChangedIpc = (_e: unknown, disks: { serial: string; drive: string }
         z-index: 1;
 
         .card-cover {
-            outline: 2px solid var(--ff-blue);
-            outline-offset: 1px;
+            outline: 3.5px solid var(--ff-blue);
+            /* 环画在格子**外面**（0 间隙）。容器已让出 `--ff-grid-ring-room` 承接它，
+               所以最左/最右两列不会再被 `overflow: hidden` 裁掉。 */
+            outline-offset: 0;
+            box-shadow: 0 2px 12px 4px rgba(0, 0, 0, .32);
+        }
+
+        /* 标题也跟着变蓝加粗：光有封面上那圈框，几十张里还是要"找一下"——
+           文字变色是最容易被扫到的第二信号。只改颜色/字重，不碰行高（标题永远占两行）。 */
+        .card-title {
+            color: var(--ff-blue);
+            font-weight: 600;
         }
     }
 
@@ -2703,18 +2759,19 @@ const onDisksChangedIpc = (_e: unknown, disks: { serial: string; drive: string }
      * 「正在双击打开」—— 只读层解析锚点那一瞬。
      * ⚠️ 与 `.cursor` **不冲突**：`opening` 要点鼠标双击才会置位，方向键移动不会置位它，
      *   而 `opening` 那一格盖着深色遮罩 + 转圈，识别靠的是遮罩不是边框。
-     * 只改颜色/外发光，不碰盒模型（网格宽度是 margin 算出来的）。
+     * 只改颜色/外发光，不碰盒模型（盒模型一变，同行就不等高，分行算法会劈行）。
      */
     &.opening .card-cover {
         // 中性灰：这一态只出现在"只读层点开文件、等盘回来"的那一瞬，
         // 那一格已盖着深色遮罩 + 转圈（识别靠遮罩）⇒ 不需要抢颜色。
         outline: 2px solid var(--ff-text-3);
-        outline-offset: 1px;
+        /* 同 `.cursor`：靠容器的 `--ff-grid-ring-room` 承接，不用再往内画 */
+        outline-offset: 0;
     }
 
     /* 遮罩与转圈分开两层：`.opening-mask` 负责铺满，`.n-spin` 留在 naive-ui 自己的定位里
        （它的根是 `.n-spin-body`，自带 translate(-50%,-50%)；去戳它就得连 transform 一起清）。
-       绝对定位 ⇒ 尺寸跟卡片走、不参与布局（网格宽度是 margin 算出来的）。
+       绝对定位 ⇒ 尺寸跟卡片走、不参与布局（参与布局会改变行高，分行算法会劈行）。
        ⚠️ `z-index` 走契约的"临时遮罩"层：它要盖住封面图 + 角标 + 卡片标记
        （"正在双击打开"时整张卡都是这层画面），不给 z-index 就会被封面图盖住。 */
     .opening-mask {
@@ -2811,11 +2868,27 @@ const onDisksChangedIpc = (_e: unknown, disks: { serial: string; drive: string }
 
 .image-box {
     flex: 1;
-    display: flex;
-    flex-flow: row wrap;
+    /* 列数**必须精确等于密度档给的 N**，一个都不能少。
+       理由不是观感 —— `useGridCursor` 的 `deps.cols` 用"列数变了"来判定行结构缓存失效；
+       实际渲染 7 列而配置是 8 时，这个判据永远不触发，方向键会一直用旧的行结构 ⇒ 错位。
+       ⚠️ 不要用 `auto-fill` + `minmax(min-cell, 1fr)` 那套"窄窗少放几列"的写法：
+       它既是"某些宽度下右边留白"的来源，又会让实际列数 ≠ N。
+       窗口窄就格子小（12 列在 1024 窗下约 63px），这是固定列数的代价，不是 bug。
+       ⚠️ 行距 6px 来自原来 margin-top 的值，列距仍是 `--ff-grid-gap` —— 别把两者并成一个值。 */
+    display: grid;
+    grid-template-columns: repeat(var(--ff-grid-cols, 6), minmax(0, 1fr));
+    gap: 6px var(--ff-grid-gap);
+    align-content: start;
+    /* 焦点环让位量：环 3.5px 画在格子**外面**，焦点格还有 `transform: scale(1.012)`
+       （124px 宽上左右各多出约 0.8px）⇒ 实际外扩约 4.3px，6px 留余量。
+       ⚠️ 这同一个数**必须**同时给 `.image-box-item` 的 `scroll-margin-block`：
+       横向靠这里的 padding 兜住，纵向的 padding 滚动后就跑到视口外了 ⇒ 只能靠滚动余量。
+       两处共用一个变量，任意密度档（格宽/格高变化 ⇒ scale 外扩跟着变）都留得够。
+       `box-sizing: border-box` 必须写，否则 padding 会把网格撑出容器宽度。 */
+    --ff-grid-ring-room: 6px;
+    padding: var(--ff-grid-ring-room);
+    box-sizing: border-box;
     overflow: hidden auto;
-    justify-content: flex-start;
-    align-content: flex-start;
     /* ── 卡片尺寸变量：**按密度档位在这里改，子元素只读** ──────────────────────────
        为什么做成变量而不是给紧凑档另写一套 `.card-title` 规则：
        标题高/字号/行高必须**一起**换（高换了字号没换 = 两行塞不下成省略号；
@@ -2839,27 +2912,20 @@ const onDisksChangedIpc = (_e: unknown, disks: { serial: string; drive: string }
         --item-badge-fs: 11px;
     }
 
-    /* 让网格左右贴边：外扩 gap/2 抵消首/末格 margin，使网格与头部对齐。
-       ⚠️ 列宽是 calc(100%/N − gap) 与 margin 的补偿算法（N 由 --ff-grid-cols 给）；改宽度会让"一行 N 个"和贴边同时错，别动。
-
-       ⚠️ 为什么**不用** `:nth-child(6n+1)` / `:nth-child(6n)` 去掉首尾 margin：
-       ① 那是补丁 —— 列数一变就失效（本项目从 6/5/3/2/1 断点改成恒定 6 列，
-          现在又变成用户可选 3 档，两次都证明"把列数写死进选择器"迟早要再改一次）；
-       ② **在这里还会算错** —— 格子宽度是按"margin 会被补偿"设计的，只去掉首尾 margin
-          而宽度不变 ⇒ 每行右端空出半个间隙，左右不对称，比现在更糟。
-
-       ⚠️ 为什么**不换成** `gap`：方向是对的（边缘天然为 0），但换过去必须同步重算
-       `--item-width`（gap 不占格子宽度、margin 占）。这套 margin 算法已在
-       `probes/grid-cursor/` 与真机验过几何，动它就得把列宽/贴边/方向键全部重验一遍。 */
-    margin-left: calc(var(--ff-grid-gap) / -2);
-    margin-right: calc(var(--ff-grid-gap) / -2);
+    /* 2026-11-07 起改成 `grid` + `gap`（见上面 `grid-template-columns`）——
+       原来那套「`calc(100%/N − gap)` + 左右各 gap/2 margin + 容器外扩 gap/2」的补偿算法
+       已整段删除：它在 `min-width` 触发换行时会少放一格，而剩下的空间没人接
+       （现象就是"标准 8 / 紧凑 12 在某些宽度下右边留白"）。grid 下边缘天然为 0，不需要补偿。
+       ⚠️ `probes/grid-cursor/` 的几何数据是**旧布局**的，下次动列宽/贴边必须重跑那两个探针。 */
 }
 
 /* 空状态：一行小字，落在网格区的**视觉中间**。
-   ⚠️ 不用 `margin:auto`：`.image-box` 是 `flex-wrap` + `align-content:flex-start`，
-   行始终贴顶，纵向 auto margin 吸不到余量（实测会停在顶部）。
-   给这一行自己一个视口比例的高度 + flex 居中，就不依赖父容器的对齐规则。 */
+   ⚠️ 不用 `margin:auto`：`.image-box` 是 `align-content:start`，行始终贴顶，
+   纵向 auto margin 吸不到余量（实测会停在顶部）。给它自己一个视口比例的高度 + flex 居中，
+   就不依赖父容器的对齐规则。 */
 .empty-tip {
+    /* grid 下 `width:100%` 只是一列宽 ⟹ 必须跨满整行 */
+    grid-column: 1 / -1;
     width: 100%;
     min-height: 52vh;
     display: flex;
@@ -2915,16 +2981,14 @@ const onDisksChangedIpc = (_e: unknown, disks: { serial: string; drive: string }
  * 默认 6 兜底（`var(--ff-grid-cols, 6)`）只防"变量没绑上"这一种情况。
  */
 .image-box-item {
-    --item-gap: var(--ff-grid-gap);
-    --item-width: calc(100% / var(--ff-grid-cols, 6));
-    flex: 0 0 auto;
-    width: calc(var(--item-width) - var(--item-gap));
-    /* 窄窗下限：`width` 是首选值、这里是**硬下限** ⇒ 百分比算出的宽度不足 110px 时
-       格子被抬到 110px，`flex-wrap` 自然少放几个 = 自动降档（纯 CSS，不监听窗口）。
-       1024 窗（容器约 936px）下紧凑档会自己退到 7 列（936 ÷ (110+16) = 7.4），
-       不会出现一屏 62px 的糊片。 */
-    min-width: var(--ff-grid-min-cell, 110px);
-    margin: 6px calc(var(--item-gap) / 2) 0;
+    /* 宽度全部交给 grid 的 `1fr`（见 `.image-box`）。
+       `min-width: 0` 是 grid item 的必要项 —— 默认 `auto` 会被内容撑破列宽。 */
+    min-width: 0;
+    /* ⚠️ 别删：`scrollIntoView({ block: 'nearest' })` 只保证**边框盒**可见，而焦点环画在格子外。
+       容器横向 `overflow: hidden` 靠 padding 兜住，纵向的 padding 一滚动就出了视口
+       ⇒ 顶行/底行的环会被削掉。`scroll-margin` 让浏览器在判"看得见"时就把这圈余量算进去。
+       值来自 `.image-box`，与那边的 padding 共用 —— 改一处即可，别在这里写死数字。 */
+    scroll-margin-block: var(--ff-grid-ring-room);
     padding: 0 0 var(--item-pad-b);
     display: flex;
     flex-direction: column;
@@ -2932,7 +2996,9 @@ const onDisksChangedIpc = (_e: unknown, disks: { serial: string; drive: string }
     box-sizing: border-box;
     border: 0;
     user-select: none;
-    transition: transform .18s cubic-bezier(.2, .9, .3, 1.1);
+    /* ⚠️ 必须短于方向键连发间隔（usePreview 的 KEY_REPEAT_MIN_MS = 100ms）。
+       原来是 .18s，比间隔还长 ⇒ 每次过渡都跑不完就被下一次打断，快移时等于没有反馈。 */
+    transition: transform .08s ease-out;
 
     /* 封面：16:9 定比例 + 圆角 token。裁切交给这一层，图片自己只负责填满。
        `overflow:hidden` 在这里是**必须**的（圆角要裁图）；焦点环画在 `outline` 上，
@@ -3122,8 +3188,8 @@ const onDisksChangedIpc = (_e: unknown, disks: { serial: string; drive: string }
     width: 150px;
     height: 116px;
     padding: 10px 8px;
-    margin: 0;                     // 间距只由 `.hstack` 的 gap 提供 → 一处来源
-    justify-content: flex-start;   // 图标统一贴顶 ⇒ 一排卡片的图标对齐，好扫
+    margin: 0; // 间距只由 `.hstack` 的 gap 提供 → 一处来源
+    justify-content: flex-start; // 图标统一贴顶 ⇒ 一排卡片的图标对齐，好扫
     gap: 4px;
 
     /**
@@ -3149,9 +3215,9 @@ const onDisksChangedIpc = (_e: unknown, disks: { serial: string; drive: string }
            长名字是被**硬切**的，看不出"后面还有"。 */
         display: -webkit-box;
         -webkit-box-orient: vertical;
-        -webkit-line-clamp: 3;     // 与下面 `max-height` 同一个预算：3 行 × 15px
+        -webkit-line-clamp: 3; // 与下面 `max-height` 同一个预算：3 行 × 15px
         width: 100%;
-        max-height: 45px;          // ⚠️ 兜底：万一哪个版本不认 line-clamp，也不许把卡片撑破
+        max-height: 45px; // ⚠️ 兜底：万一哪个版本不认 line-clamp，也不许把卡片撑破
         line-height: 15px;
         font-size: 13px;
         color: #374151;
@@ -3236,14 +3302,14 @@ const onDisksChangedIpc = (_e: unknown, disks: { serial: string; drive: string }
 -->
 <style>
 /* ① 图：上/左/右各留 16px（和改之前一致），底部留 64px = 工具条 48 + 间隙 16。 */
-body > .n-image-preview-container .n-image-preview-wrapper {
+body>.n-image-preview-container .n-image-preview-wrapper {
     padding: 16px 16px 64px;
     box-sizing: border-box;
 }
 
 /* ② 工具条：从「居中胶囊」改成「贴底通栏」，并且去掉 `transform: translateX(-50%)`
       （那是居中定位的一部分，改成left:0/right:0 之后必须一起去掉，否则整条会左移半屏）。*/
-body > .n-image-preview-container .n-image-preview-toolbar {
+body>.n-image-preview-container .n-image-preview-toolbar {
     left: 0;
     right: 0;
     bottom: 0;
@@ -3260,11 +3326,11 @@ body > .n-image-preview-container .n-image-preview-toolbar {
 /* ③ 悬停反馈：通栏之后按钮散开了，"点了才知道点在哪" 不够 —— 加一档透明度变化。
       naive-ui 没给工具条图标写 hover（实测 `cssr/index.cssr.mjs:35-38` 只有
       padding/font-size/cursor + 一个 fade-in transition），所以这里补的是**它没有的东西**。*/
-body > .n-image-preview-container .n-image-preview-toolbar .n-base-icon {
+body>.n-image-preview-container .n-image-preview-toolbar .n-base-icon {
     transition: opacity .15s ease;
 }
 
-body > .n-image-preview-container .n-image-preview-toolbar .n-base-icon:hover {
+body>.n-image-preview-container .n-image-preview-toolbar .n-base-icon:hover {
     opacity: .65;
 }
 </style>

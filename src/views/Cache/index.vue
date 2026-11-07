@@ -1098,7 +1098,12 @@ onUnmounted(() => ipcRenderer.off('ff-disks-changed', onDisksChangedIpc));
     box-sizing: border-box;
 }
 
-.cache-panel {
+/* 纵向 flex 骨架：panel → n-spin → n-spin-container 三层都要「撑满 + 可收缩」，缺任一层就丢高度。
+   结构在 naive-ui `spin/src/Spin.mjs` 核对过：`.n-spin-container > .n-spin-content > slot`。
+   ⚠️ 卡片必须给确定高度 height:86vh —— max-height 只是封顶，flex:1 没有剩余空间可分。 */
+.cache-panel,
+.cache-panel > .n-spin,
+.cache-panel .n-spin-container {
     flex: 1 1 auto;
     min-height: 0;
     display: flex;
@@ -1118,14 +1123,6 @@ onUnmounted(() => ipcRenderer.off('ff-disks-changed', onDisksChangedIpc));
     font-size: 16px;
     font-weight: 500;
     color: var(--ff-text-1);
-}
-
-/* n-spin 的根要撑满，否则里面的表格拿不到确定高度、`flex-height` 失效 */
-.cache-panel > .n-spin {
-    flex: 1 1 auto;
-    min-height: 0;
-    display: flex;
-    flex-direction: column;
 }
 
 .cache-panel .g1-row {
@@ -1241,7 +1238,8 @@ onUnmounted(() => ipcRenderer.off('ff-disks-changed', onDisksChangedIpc));
 /* 状态点。在线那枚要"亮"到一眼看出设备活着 ——
    亮绿本身就是"设备在线"的通用色；再补一圈 2px 淡绿环（0 模糊，是实心环、不是发光），
    静态就把"在线"讲清楚，不用等动画。 */
-.cache-panel .disk-dot {
+.cache-panel .disk-dot,
+.disk-chip-tip .disk-dot {
     flex: 0 0 auto;
     width: 7px;
     height: 7px;
@@ -1277,13 +1275,6 @@ onUnmounted(() => ipcRenderer.off('ff-disks-changed', onDisksChangedIpc));
     margin-bottom: 5px;
 }
 
-.disk-chip-tip .disk-dot {
-    flex: 0 0 auto;
-    width: 7px;
-    height: 7px;
-    border-radius: 50%;
-}
-
 .disk-chip-tip .disk-dot.is-on {
     background: #22c55e;
 }
@@ -1309,18 +1300,6 @@ onUnmounted(() => ipcRenderer.off('ff-disks-changed', onDisksChangedIpc));
     opacity: .6;
 }
 
-
-/* ⚠️ 这一条不能省：n-spin 的根是 `.n-spin-container`，它是卡片内容的直接子节点。
-   不把它也变成"会长大的纵向 flex"，里面的 `.n-spin-content`（拿到了 contentStyle 的 flex:1）
-   就撑不开 —— 表格就拿不到剩余高度，滚动条又跑回整个弹窗上。
-   结构与类名已在 node_modules/naive-ui/es/spin/src/Spin.mjs 里核对过（不是猜的）：
-   `.n-spin-container > .n-spin-content > slot`。 */
-.cache-panel .n-spin-container {
-    flex: 1 1 auto;
-    min-height: 0;
-    display: flex;
-    flex-direction: column;
-}
 
 /* 表格滚动交给 DataTable 自己（:flex-height="true"），不是这一层 overflow:auto。
    ⚠️ 卡片必须给确定高度 height:86vh（max-height 只是封顶、flex:1 没有剩余空间可分）；这一层只 display:flex 把高度让给 DataTable。

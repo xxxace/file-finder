@@ -43,6 +43,7 @@ import { runGrab } from './grab';
 import type { GrabRow } from './grab';
 import { bumpProgress, cancelJob, createJob, finishJob, getJob, listJobs, pauseJob, reopenJob, resumeJob, snapshotJob } from './jobs';
 import type { Job } from './jobs';
+import { CappedPreviewCache } from './previewCache';
 import { loadMeta } from '../nedb';
 import type { OpenMode } from '../nedb';
 import { runApply, readWrittenDirs, download } from './apply';
@@ -621,9 +622,10 @@ export function createAssistantRoutes(deps: AssistantDeps): AssistantRoute[] {
      * 封面预览代理（GET，`?url=`）：渲染层直接 <img> 外站图片会被防盗链拦
      * （真机 2026-09-25），而写盘走的是带 session 的 Chromium 下载 —— 预览改走
      * **同一条通道**，预览能显示的就一定能写入，所见即所得。
-     * 带 100 条的 FIFO 内存缓存：面板重渲染时同一张图不重复出网。
+     * 带预算的 FIFO 内存缓存：面板重渲染时同一张图不重复出网。
+     * 64MB / 500 条：条数闸挡不住"一条一张原图"，字节预算才是真上限（见 previewCache.ts）。
      */
-    const previewCache = new Map<string, { buf: Buffer; type: string | null }>();
+    const previewCache = new CappedPreviewCache(64 * 1024 * 1024, 500);
 
     async function preview(req: ReqLike, res: http.ServerResponse) {
         const raw = req.params?.get('url') || '';
@@ -655,9 +657,6 @@ export function createAssistantRoutes(deps: AssistantDeps): AssistantRoute[] {
             }
             // 上游给的 content-type 可能带 charset 之类的尾巴，只留主类型
             const type = r.type?.split(';')[0]?.trim() || 'image/jpeg';
-            if (previewCache.size >= 500) {
-                previewCache.delete(previewCache.keys().next().value as string);
-            }
             previewCache.set(raw, { buf: r.buf, type });
             res.writeHead(200, { 'Content-Type': type, 'Content-Length': r.buf.length });
             res.end(r.buf);

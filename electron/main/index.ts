@@ -75,7 +75,6 @@ async function createWindow() {
       contextIsolation: false,
     },
   })
-
   if (app.isPackaged) {
     win.loadFile(indexHtml)
   } else {

@@ -12,9 +12,11 @@
  */
 import { createRouter, createWebHashHistory } from 'vue-router';
 import FilePage from '@/views/FileFinder/index.vue';
-import PlaylistsPage from '@/views/Playlists/index.vue';
-import CachePage from '@/views/Cache/index.vue';
-import SettingsPage from '@/views/Settings/index.vue';
+// 非首屏页懒加载：首屏不必解析 Cache(1460) / Settings(405) / Playlists(336) 三页。
+// 首屏页保持静态导入 —— 它是进入应用就要用的那一个。
+const PlaylistsPage = () => import('@/views/Playlists/index.vue');
+const CachePage = () => import('@/views/Cache/index.vue');
+const SettingsPage = () => import('@/views/Settings/index.vue');
 
 export const router = createRouter({
     history: createWebHashHistory(),

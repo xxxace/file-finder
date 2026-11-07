@@ -22,6 +22,8 @@
   --ff-text-1: #18191c;
   --ff-text-2: #61666d;
   --ff-text-3: #9499a0;
+  /* 助手弹层的次要说明文字（原为 6 处散落的 #a1a1a1）—— 比 text-3 略浅，同样"读得到、不抢眼" */
+  --ff-text-muted: #a1a1a1;
 
   /* 品牌 */
   --ff-pink: #fb7299;
@@ -41,9 +43,10 @@
   --ff-radius-pill: 4px;
 
   --ff-grid-gap: 16px;
-  /* 窄窗下每格的下限：格子宽度是百分比首选值 + 这个硬下限 ⇒ 窗口窄到算出的宽度
-     低于它时，`flex-wrap` 会自动少放几个（= 自动降档），不需要 JS 监听窗口。
-     110 是"12 列档在 1024 窗下仍看得清"的那一档。 */
+  /* ⚠️ 2026-11-07 起**不再使用**：网格改成 `repeat(N, minmax(0, 1fr))` —— 列数必须精确等于
+     密度档的 N（否则 `useGridCursor` 的"列数变了就失效行结构缓存"判据永远不触发，方向键会错位）。
+     原来"窄窗自动降档"的机制（`min-width` + `flex-wrap`）已连同 flex 布局一起删掉。
+     保留这个 token 只是留个记号，别再往 CSS 里引用。 */
   --ff-grid-min-cell: 110px;
   --ff-rail-w: 64px;
   /* 封面比例：实测本库缩略图多在 1.6 左右；先 16:10，主人看过觉得还能再高 ⇒ 3:2。
@@ -85,6 +88,10 @@ body {
 
 #app {
   height: 100%;
+  font-family: -apple-system, 'Segoe UI', 'Microsoft YaHei', 'PingFang SC', system-ui, sans-serif;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  color: var(--ff-text-1);
 }
 
 /* 滚动条（B 站是 6px 细条；这里留 8px，鼠标更好抓） */

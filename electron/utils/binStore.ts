@@ -54,6 +54,48 @@ const ready = (async () => {
     }
 })();
 
+/**
+ * 全部图片的总字节数 —— **启动后后台算一次，之后增量维护**。
+ *
+ * 以前 `binStats()` 每次调用都对每个文件 `await stat`（千级串行 ⇒ 约 300ms），
+ * 而它挂在 `/getDisks` 上 ⇒ 每次首屏都要白等一次。现在 readdir 之后在后台把总字节
+ * 算一遍（**不阻塞 listen**），`binStats` 直接读这个数。
+ *
+ * ⚠️ 增量维护的代价：**任何一条新增/删除路径漏记，这个数就永远偏到下次重启**。
+ * 所以名字与字节只能在 `registerBin` / `unregisterBin` 里改（见下），别在别处动 `names`。
+ */
+let totalBytes = 0;
+/** 后台扫描用的是**快照**：扫描期间写进来的新图不在 `sum` 里，先记在这里，最后一起并入 */
+let pendingBytes = 0;
+let scanDone = false;
+const bytesReady = ready.then(async () => {
+    const snapshot = [...names];
+    let sum = 0;
+    for (const name of snapshot) {
+        try { sum += (await fsasync.stat(path.join(BIN_DIR, name))).size; } catch { /* 文件可能刚被删 */ }
+    }
+    totalBytes = sum + pendingBytes;
+    scanDone = true;
+});
+
+/**
+ * 登记一个图片名 —— **字节数的唯一记账入口**（写入/还原都必须走它）。
+ * 已存在 ⇒ 同 sig 同内容被重写了一次，不能再累加，否则 totalBytes 会翻倍。
+ */
+function registerBin(name: string, size: number): void {
+    if (names.has(name)) return;
+    names.add(name);
+    if (scanDone) totalBytes += size; else pendingBytes += size;
+}
+
+/** 注销（读坏 / 确认不存在）—— 必须同步减账，否则面板永远多算一份 */
+function unregisterBin(name: string): void {
+    if (!names.delete(name)) return;
+    let size = 0;
+    try { size = fs.statSync(path.join(BIN_DIR, name)).size; } catch { /* 文件已不在 */ }
+    if (scanDone) totalBytes -= size; else pendingBytes -= size;
+}
+
 /** 等图片仓就绪（已就绪则立即 resolve）。**服务端的 listen 必须挂在它后面** */
 export function whenBinReady(): Promise<void> {
     return ready;
@@ -98,7 +140,7 @@ export function getBin(name: string): Buffer | null {
     } catch (e) {
         // 单个文件坏掉不该拖垮这一屏；删掉它的登记，下次扫描会重建
         console.error('[bin] 读取/解密失败:', name, e);
-        names.delete(name);
+        unregisterBin(name);
         return null;
     }
 }
@@ -114,9 +156,10 @@ export async function putBin(name: string, plain: Buffer): Promise<void> {
     const target = path.join(BIN_DIR, name);
     const tmp = `${target}.tmp-${process.pid}-${Date.now().toString(36)}`;
     try {
-        await fsasync.writeFile(tmp, encryptBlob(plain));
+        const encrypted = encryptBlob(plain);
+        await fsasync.writeFile(tmp, encrypted);
         await fsasync.rename(tmp, target);
-        names.add(name);
+        registerBin(name, encrypted.length);
     } catch (e) {
         console.error('[bin] 写入失败:', name, e);
         fsasync.unlink(tmp).catch(() => { });
@@ -139,20 +182,15 @@ export async function putBinEncrypted(name: string, encrypted: Buffer): Promise<
     try {
         await fsasync.writeFile(tmp, encrypted);
         await fsasync.rename(tmp, target);
-        names.add(name);
+        registerBin(name, encrypted.length);
     } catch (e) {
         console.error('[bin] 落盘失败（来自包）:', name, e);
         fsasync.unlink(tmp).catch(() => { });
     }
 }
 
-/** 仓库概况（面板/探针用）：条数与总字节。**只 stat，不读内容** */
+/** 仓库概况（面板/探针用）：条数与总字节。**全读内存，不碰磁盘** */
 export async function binStats(): Promise<{ count: number; bytes: number }> {
-    let bytes = 0;
-    try {
-        for (const name of names) {
-            try { bytes += (await fsasync.stat(path.join(BIN_DIR, name))).size; } catch { }
-        }
-    } catch { /* 忽略 */ }
-    return { count: names.size, bytes };
+    await bytesReady;
+    return { count: names.size, bytes: totalBytes };
 }

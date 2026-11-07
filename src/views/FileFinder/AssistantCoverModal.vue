@@ -923,7 +923,7 @@ defineExpose({ setShowModal });
 
 .ffassist-hint {
     font-size: 12px;
-    color: #a1a1a1;
+    color: var(--ff-text-muted);
 }
 
 .ffassist-list {
@@ -960,7 +960,7 @@ defineExpose({ setShowModal });
 
 .ffassist-item-path {
     font-size: 12px;
-    color: #a1a1a1;
+    color: var(--ff-text-muted);
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
@@ -969,7 +969,7 @@ defineExpose({ setShowModal });
 .ffassist-unmatched {
     margin: 8px;
     font-size: 12px;
-    color: #a1a1a1;
+    color: var(--ff-text-muted);
 
     summary {
         cursor: pointer;
@@ -1045,7 +1045,7 @@ defineExpose({ setShowModal });
 }
 
 .ffassist-result-msg {
-    color: #a1a1a1;
+    color: var(--ff-text-muted);
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
@@ -1093,6 +1093,6 @@ defineExpose({ setShowModal });
 
 .pick-tag {
     font-size: 12px;
-    color: #a1a1a1;
+    color: var(--ff-text-muted);
 }
 </style>

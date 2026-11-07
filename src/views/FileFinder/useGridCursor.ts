@@ -198,7 +198,7 @@ export function useGridCursor(deps: {
     /**
      * 探测当前网格的行结构。
      * ⚠️ 分行用 offsetTop 不用 rect.top：焦点格 scale(1.012) 会抬高 top 被判成单独一行 ⇒ 方向键行列错位；判"行在不在视口"(rowTops) 才用 rect.top（视口坐标随滚动变）。依据 docs/probes/cursor-scale-row、docs/ANALYSIS-arrow-key-misalign-2026-10-04.md。
-     * 不需要等图片加载：格子高度被 `height: var(--item-height) !important` 钉死
+     * 不需要等图片加载：格子高度固定（封面按 `--ff-cover-ratio` 定比例 + 标题固定占两行）
      * ⇒ 懒加载的图没到也不会改变行高（实测图片到达前后 `offsetTop` 漂移 **0.000px**）。
      */
     const probeLayout = (): GridLayout => {
@@ -209,18 +209,20 @@ export function useGridCursor(deps: {
         const box = imageBox.value;
         if (!box) return { rows: [], rowTops: [] };
 
-        // 一次遍历同时取两个坐标：**每格只做一次布局查询**（`offsetTop` 与 rect 分开读会多触发一次回流）
+        // 第一趟只读 `offsetTop`（分行用；同一容器内可比，且不建对象）
         const cells: CellBox[] = [];
-        const viewportTops = new Map<string, number>();
+        const elByKey = new Map<string, HTMLElement>();
         for (const el of Array.from(box.querySelectorAll<HTMLElement>('.image-box-item'))) {
             const key = el.dataset.key;
             if (!key) continue;                // 没有 data-key 的不是条目格（防御性，模板保证了）
             cells.push({ key, rowTop: el.offsetTop });
-            viewportTops.set(key, el.getBoundingClientRect().top);
+            elByKey.set(key, el);
         }
         const rows = groupRows(cells);
-        // 每行第一格的**视口** top：`firstVisibleKey` 判"这行在不在视口内"要用
-        const rowTops = rows.map(r => viewportTops.get(r[0]!) ?? Number.NaN);
+        // 第二趟只对**每行第一格**读视口坐标 —— `firstVisibleKey` 只用得到这些值。
+        // ⚠️ 原来对全部格子逐个 `getBoundingClientRect()`（每个调用都新建一个 DOMRect），
+        //    而滚动后重算时这一趟正是大头，其中 531 个结果从头到尾没人用。
+        const rowTops = rows.map(r => elByKey.get(r[0]!)?.getBoundingClientRect().top ?? Number.NaN);
         layoutCache = { rows, rowTops };
         return layoutCache;
     };
@@ -233,7 +235,11 @@ export function useGridCursor(deps: {
      * 必须挂，也**必须摘**（`dispose`）—— 本项目已经因为全局监听没摘被坑过两次
      * （见 `usePreview` 的 `installWheelZoom` 与 `onViewportResize`）。
      */
-    const onWindowResize = () => invalidateLayout();
+    const onWindowResize = () => {
+        invalidateLayout();
+        // 窗口一变，光标格可能已经被挤出视口 —— 布局稳定后把它滚回来
+        scheduleEnsureVisible();
+    };
 
     /**
      * 滚动宿主的**缓存引用**。
@@ -292,6 +298,24 @@ export function useGridCursor(deps: {
      * 所以"从预览层飞回来"和"用方向键走过去"走的是**同一条路** ——
      * 两个入口的行为差异被结构性地消掉了。
      */
+    /**
+     * 布局变了（窗口缩放 / 切密度档）之后，把光标格重新滚回视口。
+     *
+     * 为什么需要：光标位置只记在 `cursorKey` 里，它在文档里的坐标是**布局的产物** ——
+     * 窗口一缩、或列数一变，那一格可能已经被挤出视口，而**没有任何事件会提醒它**。
+     *
+     * 为什么防抖 150ms：`resize` 是 60Hz 的连续事件，每次都滚会互相打架；
+     * 150ms 也够布局稳定下来，让下面的 `probeLayout` 只重算一次。
+     */
+    let ensureVisibleTimer = 0;
+    const scheduleEnsureVisible = () => {
+        window.clearTimeout(ensureVisibleTimer);
+        ensureVisibleTimer = window.setTimeout(() => {
+            const k = cursorKey.value;
+            if (k) scrollIntoViewIfNeeded(k);
+        }, 150);
+    };
+
     const focusCursor = (key: string, opts: { scroll?: boolean } = {}) => {
         if (!key) return;
         cursorKey.value = key;
@@ -385,6 +409,17 @@ export function useGridCursor(deps: {
     };
 
     /**
+     * 长按连续移动的最小间隔（≈16 格/秒）。**单次按键不受影响** —— 只有 `e.repeat` 才节流。
+     *
+     * 为什么需要：光标每走一格都可能要重算行结构（滚动一次 `rowTops` 就作废，
+     * 而重算要对**每个格子**各做一次 `offsetTop` + `getBoundingClientRect`）。
+     * 30Hz 的长按速率下，光标一到视口边缘（每格都触发滚动 ⇒ 每格都重算）就发涩。
+     * 60ms 给每次重算留够预算，同时仍比人手连点快。
+     */
+    const MOVE_REPEAT_MIN_MS = 60;
+    let lastMoveAt = 0;
+
+    /**
      * 网格的 keydown：只接方向键、回车与空格。
      * ⚠️ 用 keydown 不用 keyup（长按连续移动靠 event.repeat）；S / D / F5 / Backspace 仍走 index.vue 的 keyup，两种事件不互相吃。
      * ⚠️ 回车必须挡 e.repeat 且在 onConfirm 之前（长按 = 重复执行取数 / IPC 等动作）；index.vue 定位回车（keyup 侧）同样要挡。
@@ -425,6 +460,12 @@ export function useGridCursor(deps: {
         if (isGridKeyBlocked(e)) return;              // 焦点在会吃方向键的控件上 ⇒ 键归它
         if (isPreviewOpen()) return;                  // 预览层开着：← → 翻页 / ↑ ↓ 缩放都是它的
         e.preventDefault();                           // 别让方向键滚页面
+        // 只拦长按重复：单击必须零延迟（这是"跟手"的底线）
+        if (e.repeat) {
+            const now = performance.now();
+            if (now - lastMoveAt < MOVE_REPEAT_MIN_MS) return;
+            lastMoveAt = now;
+        }
         moveCursor(dir);
     };
 
@@ -443,6 +484,7 @@ export function useGridCursor(deps: {
      * 与 `usePreview.dispose` 同一条纪律。
      */
     const dispose = () => {
+        window.clearTimeout(ensureVisibleTimer);
         window.removeEventListener('keydown', onGridKeydown);
         window.removeEventListener('resize', onWindowResize);
         // ⚠️ 这个监听挂在 `imageBox` 上（不是 window）⇒ 摘的必须是**同一个元素**。
@@ -459,7 +501,8 @@ export function useGridCursor(deps: {
     watch(() => fileList.value, invalidateLayout);
 
     // 列数变了 ⇒ 行结构必然变 ⇒ 整块作废。与上面那条并列，理由见 deps.cols 的注释。
-    if (cols) watch(cols, invalidateLayout);
+    // 切密度档同理：列数变 ⇒ 每行装几个变 ⇒ 除了失效缓存，还要把光标滚回视口
+    if (cols) watch(cols, () => { invalidateLayout(); scheduleEnsureVisible(); });
 
     /**
      * **这一屏刚加载完、之前等着焦点的人现在有地方站了** ⇒ 重新激活。
