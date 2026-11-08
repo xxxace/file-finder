@@ -205,7 +205,8 @@ const commitEdit = async (id: string) => {
     cursor: pointer;
 
     &:hover .pl-cover {
-        box-shadow: 0 8px 20px rgba(0, 0, 0, .35);
+        /* 抬升阴影走 token：深色大而虚，浅色小而淡（浅底上的深投影会变成脏灰） */
+        box-shadow: var(--ff-shadow-lift);
     }
 
     &:hover .pl-name {
@@ -317,8 +318,9 @@ const commitEdit = async (id: string) => {
     line-height: 16px;
     padding: 0 5px;
     border-radius: 4px;
-    background: var(--ff-pink-weak);
-    color: var(--ff-pink);
+    /* "系统"标记是**信息**不是交互 ⇒ 中性胶囊，不占高亮色 */
+    background: var(--ff-raised);
+    color: var(--ff-text-2);
 }
 
 .pl-empty {

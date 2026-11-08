@@ -30,31 +30,37 @@ export function usePreview(deps: {
     /** 「换封面」模式进行中？那时单击格子是选中，不弹预览 */
     picking: RefLike<boolean>;
     /**
-     * 「定位」时把网格选择器落到某一条。由 `useGridCursor.focusCursor` 提供。
-     *
-     * ## 为什么是注入而不是本模块自己改
-     *
-     * 选择器状态住在 `useGridCursor` 那边（它还管方向键移动）。若本模块直接写
-     * `cursorKey`，就出现**两个状态、两个写入口** —— 那正是"预览和网格高亮对不上"的来源。
-     * 只留一个写入口（`focusCursor`）之后，两条路（定位 / 方向键）天然一致。
-     */
-    onLocate: (key: string) => void;
-    /**
      * 把 `previewKey` 同步给网格选择器。**只同步，不滚动、不闪烁。**
      * 由 `useGridCursor` 提供（它持有 `cursorKey`）。
      *
-     * 调用的三个口子（也就是 `previewKey → cursorKey` 单向同步的**全部**出口）：
+     * 调用的口子（也就是 `previewKey → cursorKey` 单向同步的**全部**出口）：
      * ① `openPreview` —— 打开预览
      * ② `onPreviewCurrentChange` —— 预览里 `← →` 翻页
-     * ③ （定位那条走`onLocate`，因为它还要滚动 + 闪烁）
      *
      * ⚠️ 键盘 `Enter` 打开预览时**没有鼠标事件** ⇒ 单击图片那条"卡片 `@click`
      * 顺带移了选择器"的自动生效路径（`Image.mjs:99-101` 不阻止冒泡）在键盘下不存在
      * ⇒ 必须在这里显式同步，否则"打开预览后按 ←"会从错误的位置开始翻。
+     *
+     * ⚠️ ① ② 都在 `cursorKey` 上留了痕 ⇒ 只要预览开着，`cursorKey === previewKey` 恒成立。
+     * 「定位」正是吃这条不变式：它不另传 key，只调 `revealCursor`（见 `locateInGrid`）。
      */
     syncCursor: (key: string) => void;
+    /**
+     * 把网格选择器**滚回视口内**（`useGridCursor.focusCursor`，带 scroll）。
+     *
+     * ## 为什么关闭预览必须调它
+     *
+     * 预览里按 `← →` 只走 `syncCursor`（**故意不滚动**，否则每翻一张网格都在背后乱跳），
+     * 所以翻到第 40 张时，网格的高亮已经落在视口外了。此时按 Esc / 点遮罩回到网格，
+     * 看到的是一片没有高亮的画面 —— 而"我刚看的是哪一张"正是用户唯一还记得的线索。
+     * ⇒ 关闭时无条件把它请回视口（`block:'nearest'` 只在看不见时才滚，看得见就不动）。
+     *
+     * 它同时是「定位」的全部实现：`locateInGrid` = `closePreview()`，因为 `cursorKey`
+     * 已经被 `syncCursor` 同步成"正在看的那条"（见上一条不变式）⇒ 不需要再传 key 进来。
+     */
+    revealCursor: () => void;
 }) {
-    const { fileList, keyOf, displaySrcOf, previewUrlOf, picking, onLocate, syncCursor } = deps;
+    const { fileList, keyOf, displaySrcOf, previewUrlOf, picking, syncCursor, revealCursor } = deps;
 
     // ── 状态 ────────────────────────────────────────────────────────────────
     /** 正在看哪一条（`keyOf` 的值）。空串 = 没在看。**唯一真相**：索引、图、清晰版全从它派生。 */
@@ -62,7 +68,7 @@ export function usePreview(deps: {
     /** 已经升级成清晰版的那一条。空串 = 没有 */
     const sharpKey = ref('');
     // ⚠️ `locatedKey` 已移走：定位高亮与它的闪烁现在归`useGridCursor` 管。
-    // 两个模块各留一份"哪一格在闪"就是两个写入口 ⇒ 高亮迟早对不上（见 deps 的 onLocate）。
+    // 两个模块各留一份"哪一格在闪"就是两个写入口 ⇒ 高亮迟早对不上（见 deps 的 revealCursor）。
 
     /**
      * 「停住就升级成大图」的待办计时器。
@@ -190,6 +196,8 @@ export function usePreview(deps: {
         // 已经排好的"升级大图"要掐掉：那个请求可能要读移动硬盘上的原图，
         // 预览都关了还去读就是白读（见 cancelSharpTimer 的注释）。
         cancelSharpTimer();
+        // 翻页只同步不滚动 ⇒ 关掉时高亮可能停在视口外。这里把它请回来（幂等：看得见就不动）。
+        revealCursor();
     };
 
     /** naive-ui 的 ✕ / Esc / 点遮罩都会发这个事件 —— 统一落回 closePreview，不各写一遍 */
@@ -264,6 +272,10 @@ export function usePreview(deps: {
     /**
      * 「定位」：关预览 → 把网格的选择器落到那一格（滚进视口 + 闪一下）。
      *
+     * ⚠️ 这里**只调 `closePreview`**，不额外传 key：`closePreview` 里的 `revealCursor`
+     * 已经把 `cursorKey`（= 正在看的那条，见 `syncCursor` 的不变式）滚进视口并闪一下。
+     * 曾经这里是 `closePreview()` + `onLocate(k)` 两句 ⇒ 同一格被滚两遍、闪两遍。
+     *
      * ## 为什么"找格子 + 滚动"搬走了
      *
      * 那是**选择器的本职**（`useGridCursor.focusCursor`）。留在这里会出现两个
@@ -274,13 +286,7 @@ export function usePreview(deps: {
      * 它每次翻页都会回填 `previewKey` ⇒ 关掉预览时 `previewKey` 已是"最后看的那一条"
      * ⇒ 定位落点是**当前正在看的那条**，不是打开时那条。这是现有行为，不改。
      */
-    const locateInGrid = () => {
-        const k = previewKey.value;
-        // ⚠️ 先关再定位：留着遮罩的话，滚动结果被盖住，等于没定位。
-        // `closePreview` **不清** `previewKey`（见它的注释），所以这里还读得到。
-        closePreview();
-        if (k) onLocate(k);
-    };
+    const locateInGrid = () => { closePreview(); };
 
     watch(previewKey, scheduleSharpUpgrade);
 

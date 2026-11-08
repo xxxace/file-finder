@@ -80,13 +80,15 @@
             <div class="toolbar">
                 <n-dropdown trigger="click" :options="moreOptions" :disabled="scanning" :menu-props="moreMenuProps"
                     @select="onMoreSelect">
-                    <n-button size="small" :disabled="scanning">
+                    <!-- 只有图标，**不再带"更多"两个字**（主人 2026-11-08：不要两者并用）。
+                       三点是跨平台的"更多"惯例，图标本身就够；带文字只是把工具条撑宽。
+                       `aria-label` 补无障碍名字（没有文字时读屏会念不出来）。 -->
+                    <n-button size="small" :disabled="scanning" aria-label="更多">
                         <template #icon>
                             <n-icon>
-                                <ChevronDownOutline />
+                                <EllipsisHorizontalOutline />
                             </n-icon>
                         </template>
-                        更多
                     </n-button>
                 </n-dropdown>
                 <!-- 缓存记录 / 清单这两个入口（2026-10-21 迁走）：
@@ -95,10 +97,13 @@
                 <n-input ref="searchInput" v-model:value="searchText" placeholder="搜索" size="small" clearable
                     @keydown.esc="blurSearch">
                     <template #prefix>
-                        <n-icon :component="Search" />
+                        <n-icon :component="SearchOutline" />
                     </template>
                     <template #suffix>
-                        <span class="suffix-icon">S</span>
+                        <!-- 键名是 `S`（本产品进搜索的全局键，见 onKeydown）—— 不要改它，
+                             只借 kbd 的**形态**（规格参考 LeiBox site-search.tsx:262）。
+                             单字符时 6+6 的左右内边距 + 16 行高 ≈ 19×20，正好是方键帽的比例。 -->
+                        <kbd class="suffix-key">S</kbd>
                     </template>
                 </n-input>
                 <!-- 视图密度：与下面「平铺」同属视图类动作，紧挨着放。
@@ -108,9 +113,18 @@
                 <!-- 平铺视图切换：仅在根缓存目录可用，跳过女优/父文件夹直接平铺全部作品 -->
                 <n-tooltip>
                     <template #trigger>
-                        <n-button size="small" :type="isFlatView ? 'primary' : 'default'"
+                        <!-- 激活态见样式 `.toolbar .is-on`（灰底 + text-1）。
+                             **不用 `type="primary"`**：那会让一个视图开关变成整条工具栏最响的东西
+                             （2026-11-07 截图里那块白方块就是它）。 -->
+                        <n-button size="small" :class="{ 'is-on': isFlatView }"
                             :disabled="scanning || !canToggleFlat" @click="toggleFlatView">
                             <template #icon>
+                                <!-- 九宫格 = "一格一格铺满" ⇒ 这就是「平铺」本身（tile/flat）。
+                                     ⚠️ 2026-11-08 换过一版 `Layers`（想表达"把层摊平"），
+                                     主人当场否掉："要比较贴近 flat、平铺这种意思的" ——
+                                     `Layers` 画的是"层"，是**被摊的对象**，不是摊完的样子。
+                                     旁边密度那颗仍是 `Grid`（2×2），与这里同为方格 ——
+                                     那是主人的裁决（"原先的已经很好了"），不要为消重再动它。 -->
                                 <n-icon :component="AppsOutline" />
                             </template>
                         </n-button>
@@ -128,7 +142,7 @@
                             @click="onRefresh">
                             <template #icon>
                                 <n-icon>
-                                    <Refresh />
+                                    <RefreshOutline />
                                 </n-icon>
                             </template>
                         </n-button>
@@ -145,7 +159,9 @@
              不做 closable：它的寿命由取数结果管（下一次成功就自动消失）——
              手动关掉只会让"我读不到"这个事实重新变回一片空白，那是在骗人。
              文案来自服务端给的 kind（ApiError.kind），不是 match 错误文本。 -->
-        <n-alert v-if="banner.text" :type="banner.type" style="margin-bottom: 4px">
+        <!-- 横幅在**文档流里**（顶栏不再是浮层 ⇒ 不用再替它让出 `--ff-header-h`），
+             左右缩进与顶栏、网格共用同一个算式。 -->
+        <n-alert v-if="banner.text" :type="banner.type" style="margin: 8px var(--ff-content-inset) 4px">
             {{ banner.text }}
         </n-alert>
         <!-- `--ff-grid-cols` 是列数的唯一出口（值来自 `density.ts`）；
@@ -250,13 +266,26 @@
                  "绝不消失、绝不换形、一个字都不随状态变"，所以模式态的信号只能住在这里。
                  两者不会同时出现（进模式前会等扫描结束）。 -->
             <template v-if="!scanning">
-                <span class="scan-progress">换封面：点有封面的格子选中 · 已选 {{ pickedCount }} 处</span>
-                <n-button size="small" :disabled="!pickedCount" @click="clearPicked">清空</n-button>
-                <n-button size="small" @click="exitPick">退出</n-button>
-                <n-button size="small" type="primary" :disabled="!pickedCount" @click="openFaces">
-                    换封面…
-                </n-button>
-                <span class="scan-hint">没有封面的格子选不了 —— 那是「补封面」管的事</span>
+                <!-- 三段式：模式标签 → 状态 → 动作（右对齐）。
+                     原来的形态是「一句 20 字说明 + 3 个按钮 + 一句帮助文案」全挤在一行，
+                     没有主次、也没有留白，读起来像说明书。
+                     帮助文案只在**一处都还没选**时出现 —— 选过了就不需要教了。 -->
+                <span class="pick-badge">换封面</span>
+                <span class="pick-count">已选 <b>{{ pickedCount }}</b> 处</span>
+                <span v-if="!pickedCount" class="scan-hint">点有封面的格子；没有封面的那是「补封面」管的事</span>
+                <span class="pick-spacer"></span>
+                <!-- 动作分**两档**：可逆的次要动作（清空 / 退出）与主操作（换封面）。
+                     三个按钮等距平铺时读成同一档，主操作喊不出来 —— 组内 8、组间 16。
+                     ⚠️ 0 选中时「清空」和「换封面」确实该禁用；它们与可点的「退出」必须**看得出差别**，
+                     那条差异由主题层给（`naive-theme.ts` 的 Button.textColor / textColorDisabled），
+                     不在这里写局部覆盖。 -->
+                <div class="pick-acts">
+                    <n-button size="small" :disabled="!pickedCount" @click="clearPicked">清空</n-button>
+                    <n-button size="small" @click="exitPick">退出</n-button>
+                    <n-button class="pick-go" size="small" type="primary" :disabled="!pickedCount" @click="openFaces">
+                        换封面
+                    </n-button>
+                </div>
             </template>
             <template v-else>
                 <span class="scan-progress">已扫 {{ scanDone }} / 待扫 {{ scanPending }}</span>
@@ -338,7 +367,7 @@ import GridDensityMenu from './GridDensityMenu.vue';
 import { colsOf, loadDensity, saveDensity } from './density';
 import type { Density } from './density';
 import { decideOpen, isMultiFileCard } from './openDecision';
-import { Search, Refresh, ChevronDownOutline, AppsOutline } from '@vicons/ionicons5';
+import { SearchOutline, RefreshOutline, EllipsisHorizontalOutline, AppsOutline } from '@vicons/ionicons5';
 import { NButton, NInput, NIcon, NImage, NImageGroup, NTag, NPopover, NSpin, NAlert, NTooltip, NDropdown, useLoadingBar, useDialog } from 'naive-ui';
 import FolderSelector from '@/components/FolderSelector/index.vue';
 import AssistantCoverModal from './AssistantCoverModal.vue';
@@ -1937,12 +1966,13 @@ const onScanCancel = () => {
  */
 const moreMenuProps = () => ({
     style: [
-        '--n-border-radius: 4px',        // 与 `.header-bar` / `.crumb` 同一档
-        '--n-font-size: 14px',            // 与面包屑、输入框后缀文字一致
-        '--n-option-height: 32px',        // 默认 34px 对 14px 字号偏挤
-        // 悬停/选中底色用项目自己的蓝灰（与网格 hover 同一个色相 family）
-        '--n-option-color-hover: rgba(110, 123, 173, .16)',
-        '--n-option-color-active: rgba(110, 123, 173, .16)',
+        '--n-border-radius: 8px',         // 与控件同一档（原 4px，三种圆角并存的老问题）
+        '--n-font-size: 13px',            // 对齐字阶，与面包屑/输入框一致
+        '--n-option-height: 32px',        // 默认 34px 对 13px 字号偏挤
+        // 悬停＝实打实的灰，选中＝高亮淡底。"悬停"和"已选"是两件事，不该同色。
+        // ⚠️ 之前是 #f6f7f8 / #eceef1，两者差不到 3% 明度 ⇒ 主人反馈"悬浮背景色过淡"。
+        '--n-option-color-hover: var(--ff-menu-hover)',
+        '--n-option-color-active: var(--ff-menu-hover)',
     ].join('; '),
 });
 
@@ -2053,15 +2083,36 @@ const {
 // 整块搬进 ./usePreview.ts：它是本文件里最独立的一个域（只靠几个依赖进来，
 // 不反向写任何外部状态），后续给预览加花样有个自己的家。
 //
-// ⚠️ `onLocate` / `syncCursor` 指向上面那块：网格选择器归 `useGridCursor` 管，
+// ⚠️ `syncCursor` / `revealCursor` 指向上面那块：网格选择器归 `useGridCursor` 管，
 //    本模块只**单向**同步过去，不持有 `cursorKey`（理由见 usePreview 文件头）。
 // ⚠️ 渲染落点仍在组件里：模板里那个空的 `n-image-group`，以及末尾那个**非 scoped** 的
 //    style 块（工具条与图都被 naive-ui teleport 到 body，`<style scoped>` 够不到它们）。
 // ⚠️ `previewedImgProps` 必须由本组件 provide 进 `imageContextKey` —— 预览层由
 //    `n-image-group` 渲染，父链是 `ImagePreview ← ImageGroup ← 本组件`，
 //    而 naive-ui 没给 group 留 `previewed-img-props` 这个 prop。
-/** 「定位压暗」的计时器：600ms 后自动撤销（见下面的 onLocate） */
+/** 「定位压暗」的计时器：600ms 后自动撤销（见下面的 revealAndFlash） */
 let locateTimer = 0;
+
+/**
+ * 把选择器落到某一条，并**短暂压暗其余格子**。
+ *
+ * ⚠️ 这是「把注意力拽到某一张」的**唯一实现 + 唯一入口**：关预览（Esc / ✕ / 遮罩）
+ * 和「定位」走的是同一次调用 —— `locateInGrid` 只调 `closePreview`，而 `closePreview`
+ * 调 `revealCursor`。两条路径各自实现一份的话，迟早一条有蒙层、一条没有（这正是主人
+ * 这次问的 "为什么没有那个特殊效果"：关预览时只 `focusCursor`，漏了蒙层）；
+ * 反过来，两条路径都调一次也会让同一格滚两遍、闪两遍。
+ *
+ * 为什么是「压暗其余」而不是「把选中项做得更花」：满屏几百格里，加深选中项只会让
+ * 它和封面抢眼；压暗其余才是游戏机相册那套通用手法。
+ */
+const revealAndFlash = (key: string) => {
+    focusCursor(key);
+    const box = imageBox.value;
+    if (!box) return;
+    box.classList.add('is-locating');
+    window.clearTimeout(locateTimer);
+    locateTimer = window.setTimeout(() => box.classList.remove('is-locating'), 600);
+};
 
 const {
     openPreview, locateInGrid,
@@ -2070,18 +2121,10 @@ const {
     previewToolbar, previewedImgProps, dispose: disposePreview,
 } = usePreview({
     fileList, keyOf, displaySrcOf, previewUrlOf, picking,
-    onLocate: (k) => {
-        focusCursor(k);
-        // 定位后短暂压暗其余格子：满屏几百格里，只靠 2px 蓝框根本找不到目标。
-        // 游戏机相册的通用手法是「压暗其余」，不是「把选中项做得更花」。
-        const box = imageBox.value;
-        if (box) {
-            box.classList.add('is-locating');
-            window.clearTimeout(locateTimer);
-            locateTimer = window.setTimeout(() => box.classList.remove('is-locating'), 600);
-        }
-    },
     syncCursor: setCursorKey,
+    // 关预览（Esc / ✕ / 点遮罩）：翻页只同步不滚动 ⇒ 高亮可能在视口外，
+    // 所以既要滚回来，也要用同一份蒙层告诉用户"回到这里了"。
+    revealCursor: () => { if (cursorKey.value) revealAndFlash(cursorKey.value); },
 });
 
 provide(imageContextKey, { previewedImgPropsRef: previewedImgProps });
@@ -2459,24 +2502,57 @@ const onDisksChangedIpc = (_e: unknown, disks: { serial: string; drive: string }
 .file-finder {
     display: flex;
     flex-flow: column;
-    /* 外壳已经把左轨让出来了，这里只留内容内边距（B 站是左 31 / 右 30，取 24 对齐） */
-    padding: 8px 12px 0;
+    /* ⚠️ 这一层**不带内边距**：顶栏要通栏贴边（Windows 那套方正的框），
+       而"内容缩进"是顶栏与网格**各自**的事 —— 凭一个共享算式算出来，见 `--ff-content-inset`。
+       2026-11-08 之前顶栏是 absolute、网格靠 `padding-top: 44+10px` 让位、顶栏再手写
+       `padding: 0 18px` 补容器的 12px —— 同一件事在三个地方各写一遍，
+       改一个页边距要同步三处，且高度成了"魔法补偿数"而不是布局自己算出来的。 */
+    padding: 0;
     height: 100%;
     flex: 1 1 auto;
     min-height: 0;
     box-sizing: border-box;
+    /* 内容左/右边缘 = 页边距 12 + 焦点环让位 6 = 18。
+       ⚠️ 必须提到这一层：环让位原本是 `.image-box` 的局部变量，顶栏读不到就只能再写一个
+       18px 的魔法数 —— 那正是"顶栏和第一列封面对不齐"复发的方式。 */
+    --ff-grid-ring-room: 6px;
+    --ff-content-inset: calc(var(--ff-sp-3) + var(--ff-grid-ring-room));
 
     .header-bar {
         display: flex;
-        /* ⚠️ 头部定高 44，两个子区谁装不下都不能换行 ——
+        /* ⚠️ 头部定高，两个子区谁装不下都不能换行 ——
            换行就等于"头部高度成了路径长度/层级数的函数"（2026-09-24 事故的形态）。 */
         flex-wrap: nowrap;
         align-items: center;
-        flex: 0 0 44px;
+        height: var(--ff-header-h);
+        /* 横向 padding 不影响 44 这个高度，但显式写 border-box 是给"哪天补回 1px 底边线"
+           留的保险：不写的话总高会变成 45、与 `--ff-header-h` 名不副实（踩过）。 */
+        box-sizing: border-box;
         gap: 12px;
-        padding: 0;
+        /* 顶栏是**文档流里的第一行**，与网格同级（2026-11-08 主人要求）：
+           高度由布局分给它的 `height` 决定，不再需要 `position: absolute` 脱离文档流、
+           也不再需要网格用 `padding-top` 替它让位。
+           代价只有一条：内容不会再从它背后滚过去 —— 而毛玻璃已于 2026-11-08 裁决
+           改回纯色（"工具类界面的顶栏是固定的框，不是浮在内容上的层"），所以零损失。 */
+        flex: 0 0 auto;
+        /* **通栏直角**，不做悬浮胶囊（2026-11-08 主人："用回 windows 方方正正的那种效果"）。
+           通栏贴边才让它"仍是页面的一部分"；悬浮胶囊反而像一块贴上去的板。
+           纯色就够，**不画底边线**（2026-11-08 裁决）：chrome 底色比画布亮一档，
+           明度差已经把它和网格分开了，再补一条线只是多一个要同步维护的值。 */
+        background: var(--ff-chrome-bg);
+        /* 与网格共用同一个左边缘算式（容器不带内边距了，这里自己给） */
+        padding: 0 var(--ff-content-inset);
         margin: 0;
         justify-content: space-between;
+
+        /* 图标与文字统一取 chrome 的图标色（#ebebeb / #171717）：
+           naive 的按钮默认吃 `--n-text-color`（次要灰），在深色里会显得没上电。 */
+        .n-button {
+            --n-text-color: var(--ff-chrome-icon) !important;
+            --n-text-color-hover: var(--ff-chrome-icon) !important;
+            --n-text-color-pressed: var(--ff-chrome-icon) !important;
+            --n-text-color-focus: var(--ff-chrome-icon) !important;
+        }
 
         .n-input {
             /* ⚠️ 这一行不能删。n-input 天生 `width: 100%`（为表单布局设计的），
@@ -2491,17 +2567,29 @@ const onDisksChangedIpc = (_e: unknown, disks: { serial: string; drive: string }
                 padding-top: 1px;
                 padding-right: 6px;
 
-                .n-input__suffix {
-                    .suffix-icon {
-                        display: inline-block;
-                        box-sizing: border-box;
-                        padding: 7px;
-                        height: 22px;
-                        line-height: 8px;
-                        border: 1px solid var(--ff-line);
-                        border-radius: 4px;
-                        color: var(--ff-text-3);
-                    }
+                /* 快捷键胶囊（kbd）。规格对齐 LeiBox `site-search.tsx:262`：
+                   11px 字 + 水平 6 垂直 2 + 1px 发丝边 + 6 圆角；总高 16+2+2 = 20，
+                   在 28 高的输入框里垂直居中，四边留白对称。
+                   ⚠️ 原实现是 `padding: 7px` 四边 + 写死 height 22 + line-height 8 ——
+                   三个数互相打架，胶囊被撑成方块、字被挤在中间。**kbd 的尺寸只由
+                   "字号 + 上下内边距 + 边框"算出来**，不要同时再给 height。 */
+                .suffix-key {
+                    display: inline-block;
+                    box-sizing: border-box;
+                    padding: 1px 6px;
+                    /* 用 strong 档：kbd 只有 1px 边一条线索，`--ff-line`(8%) 叠在深色输入框上
+                       几乎看不见 —— 提示元素弱可以，但"看不见"就不算提示了。 */
+                    border: 1px solid var(--ff-line-strong);
+                    border-radius: var(--ff-r-pill);
+                    color: var(--ff-text-2);
+                    font-family: inherit;
+                    font-size: 11px;
+                    line-height: 16px;
+                    /* 中文字体下的字母容易偏宽，锁住字距让它像个键帽 */
+                    letter-spacing: 0.02em;
+                    /* 键帽不可选、不可点 —— 它只是标签 */
+                    user-select: none;
+                    pointer-events: none;
                 }
             }
         }
@@ -2564,6 +2652,24 @@ const onDisksChangedIpc = (_e: unknown, disks: { serial: string; drive: string }
         max-width: 160px;
         cursor: pointer;
 
+        /* ⚠️ 2026-11-08 重设计：**去掉方块，只留文字**。
+           它原来是 n-tag 的默认描边胶囊 —— 一排方框挤在一起，既像按钮又像标签，
+           而它本质是"路径文字"（Windows 资源管理器 / GitHub / Linear 都是纯文字 + 分隔符）。
+           去边框写 `transparent` 而不是 `none`：保留 1px 占位，hover 时不会跳 2px。
+           naive 的颜色变量是运行时注入的，覆盖必须 `!important`。 */
+        --n-color: transparent !important;
+        --n-color-hover: transparent !important;
+        --n-border: 1px solid transparent !important;
+        --n-border-hover: 1px solid transparent !important;
+        --n-text-color: var(--ff-text-2) !important;
+        --n-text-color-hover: var(--ff-text-1) !important;
+        padding: 0 2px;
+
+        &:hover .crumb-text {
+            text-decoration: underline;
+            text-underline-offset: 3px;
+        }
+
         /* 文本真的收窄之后 `text-overflow` 才会出现 —— 同理，这一层也要 `min-width: 0` */
         :deep(.n-tag__content) {
             min-width: 0;
@@ -2606,9 +2712,9 @@ const onDisksChangedIpc = (_e: unknown, disks: { serial: string; drive: string }
     /* 当前层**永不被压掉**：它是"我在哪"的唯一答案，比任何历史段都重要 */
     .crumb-current {
         flex: 0 0 auto;
-        /* 与网格里条目名的字重一致（`.image-box-item span` 也是 bold）：
-           一眼看出"哪个是我现在在的地方" */
-        font-weight: bold;
+        /* 字重 500（原来写 bold=700，中文在 700 下会糊；全站只用 400/500） */
+        --n-text-color: var(--ff-text-1) !important;
+        font-weight: 500;
     }
 
     /* 当前段的条目数角标 —— 原来是工具条里那个飘着的 `n-badge`，
@@ -2621,21 +2727,36 @@ const onDisksChangedIpc = (_e: unknown, disks: { serial: string; drive: string }
           不在那个裁剪盒里。
        属性为空时不画：`:data-count="null"` 时 Vue 根本不渲染这个属性，整条选择器不命中 ——
        等价于原来的 `v-if="fileList.length"`，不需要再写判空。 */
+    /* 计数徽章 —— 恢复为红底白字胶囊（2026-11-08 主人："要原来的 badge"）。
+       ⚠️ 为什么不是 `align-self: baseline`：它给不了"与路径文字共基线"，
+       而是**自成 baseline 组** —— 容器里没有第二个 baseline 项时，它会贴到内容区顶部
+       （实测就是这样飞到右上角的）。共基线必须容器 `align-items: baseline`，
+       而 n-tag 是 `inline-flex` + `center`，改它会影响 tag 内所有子项。
+       ⇒ 保留 `center`，用一次**实测偏移**补掉"块按行盒居中、文字墨迹偏低"的差。
+       实测（截图 151×55 @DPR1.25）：胶囊中心 27.5、文字 x-height 带中心 31 ⇒ 差 3.5 物理
+       = **2.8 逻辑px**。这个数不是估的；它约等于半个下伸部（descender 空白）。
+       标记为"仅视觉位移"：`transform` 不改布局，tag 高度仍由 `.crumb-text` 的行盒决定。 */
     .crumb-current[data-count]::after {
         content: attr(data-count);
         flex: 0 0 auto;
+        align-self: center;
+        transform: translateY(2.8px);
         margin-left: 6px;
-        padding: 0 6px;
+        height: 18px;
         min-width: 18px;
+        padding: 0 6px;
         box-sizing: border-box;
         border-radius: 9px;
-        background: #d03050;
-        /* naive-ui 的 error 红，与原 n-badge 同色 */
-        color: #fff;
+        /* 2026-11-08 主人要求用回红色（那是"这一层有多少东西"的信号，值得被看见）。
+           ⚠️ 这是**唯一**允许的彩色非交互元素：它不参与"能点哪"，只报数字。 */
+        background: var(--ff-danger-badge);
+        color: var(--ff-on-danger);
         font-size: 12px;
         line-height: 18px;
-        font-weight: normal;
-        /* 当前段是 bold，角标不该跟着粗 */
+        font-weight: 500;
+        /* 数字等宽：35 → 128 时这一行不跟着抖 */
+        font-variant-numeric: tabular-nums;
+        /* 当前段是 500，角标不该比它更粗 */
         text-align: center;
     }
 
@@ -2666,24 +2787,91 @@ const onDisksChangedIpc = (_e: unknown, disks: { serial: string; drive: string }
     flex-wrap: nowrap;
     align-items: center;
     gap: 12px;
+
+    /* 开关类按钮的激活态：**灰底 + text-1**，与左轨同一套语言（不带颜色）。
+       ⚠️ naive 的颜色变量是运行时注入的，覆盖必须 `!important`（项目既有结论）。
+       为什么不用实心主按钮：一个"视图开关"不该比主操作还响。
+       ⚠️ 底色用 `--ff-ctl-on` 而不是 `--ff-fill-strong`(=raised-hover)：那一档在深色下
+       比悬停更**暗**，"选中"反而更不起眼。`--ff-ctl-on` 两个主题方向一致
+       —— 浅色更深（#e3e5e8）、深色更亮（#3a3a3a），都比"悬停"再离底色远一档。 */
+    .is-on {
+        --n-color: var(--ff-ctl-on) !important;
+        --n-color-hover: var(--ff-ctl-on) !important;
+        --n-color-pressed: var(--ff-ctl-on) !important;
+        --n-text-color: var(--ff-text-1) !important;
+        --n-text-color-hover: var(--ff-text-1) !important;
+        --n-text-color-pressed: var(--ff-text-1) !important;
+    }
 }
 
 /* 扫描状态条：贴着网格下方一条，整条随 scanning 出现/消失 */
 .scan-bar {
     display: flex;
     align-items: center;
-    gap: 12px;
-    padding: 4px 4px 8px;
+    /* 元素间距统一 8（§4.4）；组的切分交给 `.pick-acts` 内部再分一档 */
+    gap: 8px;
+    /* 定高：模式条出现/消失时网格不该跟着上下跳 */
+    min-height: 40px;
+    padding: 2px var(--ff-content-inset) 8px;
 
     .scan-progress,
     .scan-hint {
         font-size: 12px;
-        color: var(--ff-text-3);
+        color: var(--ff-text-2);
+    }
+
+    /* 模式标签：只用一处淡高亮，说明"你现在在一个模式里"。
+       不给整条加深色底 —— 它贴在网格上方，加深底会和封面抢注意力。 */
+    .pick-badge {
+        flex: none;
+        font-size: 11px;
+        font-weight: 500;
+        line-height: 18px;
+        padding: 0 8px;
+        border-radius: var(--ff-r-pill);
+        /* 中性胶囊，不占高亮色 —— 高亮色只留给「卡片选中 / 悬浮 / 输入框焦点」三处。
+           模式的存在感由这条状态条本身 + 右端那颗实心主按钮承担。
+           ⚠️ 底色用 `--ff-chrome-active`（左轨选中同一个灰）：原来是 `--ff-raised`，
+           它贴白面板只差 5 级，一块"我在某个模式里"的标签淡到看不出边界。 */
+        color: var(--ff-text-1);
+        background: var(--ff-chrome-active);
+    }
+
+    /* 计数是**状态**不是句子：数字单独加亮，单位退后 */
+    .pick-count {
+        flex: none;
+        font-size: 13px;
+        color: var(--ff-text-2);
+
+        b {
+            font-weight: 500;
+            color: var(--ff-text-1);
+            /* 数字等宽：选到 10 个时行宽不跳 */
+            font-variant-numeric: tabular-nums;
+        }
+    }
+
+    /* 把动作整体推到右端：主操作要落在**手习惯去的那一头** */
+    .pick-spacer {
+        flex: 1 1 auto;
+    }
+
+    /* 动作组：组内 8，主操作再让 8（合计 16）—— 间距分级就是这里唯一的"层级"手段，
+       颜色那边不许再造一套（高亮色只有三处用途，见 tokens.css）。 */
+    .pick-acts {
+        flex: none;
+        display: flex;
+        align-items: center;
+        gap: 8px;
+
+        .pick-go {
+            margin-left: 8px;
+        }
     }
 }
 
 /* 定位后短暂压暗其余格子（600ms）：满屏几百张时，「只剩一张亮」比「给那张加框」好认得多。
-   只在 onLocate 那一刻加 class，不是常驻态；opacity 走合成层，不触发重排。 */
+   只在 revealAndFlash 那一刻加 class，不是常驻态；opacity 走合成层，不触发重排。 */
 .image-box.is-locating .image-box-item:not(.cursor) {
     opacity: .3;
     transition: opacity .12s ease;
@@ -2738,18 +2926,30 @@ const onDisksChangedIpc = (_e: unknown, disks: { serial: string; drive: string }
         z-index: 1;
 
         .card-cover {
-            outline: 3.5px solid var(--ff-blue);
-            /* 环画在格子**外面**（0 间隙）。容器已让出 `--ff-grid-ring-room` 承接它，
-               所以最左/最右两列不会再被 `overflow: hidden` 裁掉。 */
-            outline-offset: 0;
-            box-shadow: 0 2px 12px 4px rgba(0, 0, 0, .32);
+            /* ⚠️ 2026-11-08 关键改动：**环必须离开照片 2px**（`outline-offset: 2`）。
+               为什么：封面的颜色是不可控输入。环贴在图像边缘时，它是在跟"照片"比对比度 ——
+               碰上同色系（蓝调 / 大面积高亮）封面就瞎了，而**加粗不解决对比度问题，只放大噪音**。
+               留出 2px 间隙后，环的内侧和外侧**都只面对网格底色**（深 #141414 / 浅 #f1f2f3），
+               它于是站在"背景"上，而不是站在"照片"上 ⇒ 任何封面下都稳定可读。
+               业界同款：Figma 的选择框、VS Code 的文件焦点、macOS 焦点环都是"留缝"派；
+               Photoshop 更进一步用黑白交替的蚂蚁线 —— 本质都是"别让环和内容直接接触"。
+               2px 是下限：再细会被封面边缘的像素噪声吃掉。
+               ⚠️ 环仍画在格子外面，由容器的 `--ff-grid-ring-room`（6px）承接，
+                  `3 + 2 = 5px < 6px` ⇒ 最左/最右两列不会被 `overflow:hidden` 裁掉。
+               ⚠️ 3px 是主人定的（2026-11-08）：留缝之后环可以放心加粗，因为它已经不跟照片抢对比度了。 */
+            outline: 3px solid var(--ff-highlight);
+            outline-offset: 2px;
+            /* 抬升阴影走 token：深色下大而虚（只为"这张在最前"），浅色下小而淡
+               —— 浅底上那圈 4px 扩散的深阴影会变成一圈脏灰，主人 2026-11-07 的原话是"好丑"。 */
+            box-shadow: var(--ff-shadow-lift);
         }
 
-        /* 标题也跟着变蓝加粗：光有封面上那圈框，几十张里还是要"找一下"——
-           文字变色是最容易被扫到的第二信号。只改颜色/字重，不碰行高（标题永远占两行）。 */
+        /* 标题也跟着变蓝：光有封面上那圈框，几十张里还是要"找一下"——
+           文字变色是最容易被扫到的第二信号。
+           ⚠️ 这里**不再改字重**：500 已经是默认（见 `.card-title`），焦点态若再加就
+           得靠 600 才看得出变化，而全站禁 600/700。状态只靠"颜色 + 环"两层表达。 */
         .card-title {
-            color: var(--ff-blue);
-            font-weight: 600;
+            color: var(--ff-highlight);
         }
     }
 
@@ -2879,14 +3079,15 @@ const onDisksChangedIpc = (_e: unknown, disks: { serial: string; drive: string }
     grid-template-columns: repeat(var(--ff-grid-cols, 6), minmax(0, 1fr));
     gap: 6px var(--ff-grid-gap);
     align-content: start;
-    /* 焦点环让位量：环 3.5px 画在格子**外面**，焦点格还有 `transform: scale(1.012)`
-       （124px 宽上左右各多出约 0.8px）⇒ 实际外扩约 4.3px，6px 留余量。
-       ⚠️ 这同一个数**必须**同时给 `.image-box-item` 的 `scroll-margin-block`：
-       横向靠这里的 padding 兜住，纵向的 padding 滚动后就跑到视口外了 ⇒ 只能靠滚动余量。
-       两处共用一个变量，任意密度档（格宽/格高变化 ⇒ scale 外扩跟着变）都留得够。
-       `box-sizing: border-box` 必须写，否则 padding 会把网格撑出容器宽度。 */
-    --ff-grid-ring-room: 6px;
-    padding: var(--ff-grid-ring-room);
+    /* 焦点环让位量（6）定义在 `.file-finder`：顶栏也要用它算左边缘，放这里顶栏读不到。
+       环画在格子**外面**，横向靠这里的 padding 兜住；
+       纵向的 padding 滚动后就跑到视口外了 ⇒ 还要靠 `.image-box-item` 的 `scroll-margin-block`。
+       上 / 左 / 右三边共用 `--ff-content-inset`（= 页边距 12 + 环让位 6 = 18）：顶栏、状态条、
+       网格的缩进必须是**同一个算式**，否则"顶栏和第一列封面对不齐"会复发。
+       ⚠️ 底边那 6px **单独给**，不是同一个算式：它是环让位而不是页边距 ——
+       环 3 + 缝 2 = 5px 画在格子外面，滚到底时最后一行贴着 `overflow` 的裁剪边
+       ⇒ 少这 6px 就会把环切掉半圈。 */
+    padding: var(--ff-content-inset) var(--ff-content-inset) var(--ff-grid-ring-room);
     box-sizing: border-box;
     overflow: hidden auto;
     /* ── 卡片尺寸变量：**按密度档位在这里改，子元素只读** ──────────────────────────
@@ -2896,7 +3097,9 @@ const onDisksChangedIpc = (_e: unknown, disks: { serial: string; drive: string }
        ⚠️ 这一组值只允许在这里出现一次 —— 别在 `.card-title` 里再写死 40px。 */
     --item-pad-b: 6px;
     --item-title-h: 40px;
-    --item-title-fs: 14px;
+    /* 15 / 20：字高比 1.33。原来是 14 —— 换字体后 MiSans 的中宫比雅黑略收，
+       同样 14px 看起来更小，所以抬到 15。行高不动 ⇒ 两行仍是 40，网格行高零变化。 */
+    --item-title-fs: 15px;
     --item-title-lh: 20px;
     --item-badge-h: 18px;
     --item-badge-fs: 12px;
@@ -2959,13 +3162,13 @@ const onDisksChangedIpc = (_e: unknown, disks: { serial: string; drive: string }
     user-select: none;
 
     &:hover {
-        border-color: #7a8da9;
-        background-color: rgba(110, 123, 173, .12);
+        border-color: var(--ff-highlight-line);
+        background-color: var(--ff-highlight-weak);
     }
 
     &:active {
-        border-color: #525e72;
-        background-color: rgba(75, 83, 116, 0.16);
+        border-color: var(--ff-highlight);
+        background-color: var(--ff-highlight-weak);
     }
 }
 
@@ -3018,6 +3221,11 @@ const onDisksChangedIpc = (_e: unknown, disks: { serial: string; drive: string }
         overflow: hidden;
         border-radius: var(--ff-radius-card);
         background: var(--ff-fill);
+        /* 浅色下白封面贴在白卡片上没有边界，靠一圈发丝线定形；
+           深色下 `--ff-card-outline` 是 transparent（靠明度差就够，加线只会脏）。
+           `outline` 不参与布局、也不会被自己的 `overflow:hidden` 裁掉。 */
+        outline: 1px solid var(--ff-card-outline);
+        outline-offset: -1px;
 
         /* 模糊底（见 `coverBackdrop()` 的注释）：把同一张图放大、模糊、压暗铺满整框。
            `inset:0` + `scale(1.15)`：blur 会吃掉边缘像素，放大一点才不会有透明边。
@@ -3119,18 +3327,22 @@ const onDisksChangedIpc = (_e: unknown, disks: { serial: string; drive: string }
         word-break: break-all;
         font-size: var(--item-title-fs);
         line-height: var(--item-title-lh);
+        /* 标题默认 500（2026-11-08 主人定）。全站只有 400 / 500 两档，**禁 600/700**：
+           700 的中文在 13~14px 会发糊，而 500 在深色底上已经足够从正文里"跳出来"。
+           加粗不改行高 ⇒ 两行截断的高度仍是 `--item-title-h`，不影响下方留白。 */
+        font-weight: 500;
         color: var(--ff-text-1);
         transition: color .15s ease;
     }
 
-    /* hover：B 站那套 —— 图轻微放大 + 标题变蓝，**不加边框不加底色** */
+    /* hover：图轻微放大 + 标题变蓝，**不加边框不加底色** */
     &:hover {
         :deep(.n-image img) {
             transform: scale(1.03);
         }
 
         .card-title {
-            color: var(--ff-blue);
+            color: var(--ff-highlight);
         }
     }
 
@@ -3269,9 +3481,9 @@ const onDisksChangedIpc = (_e: unknown, disks: { serial: string; drive: string }
      * 这一层与网格不共处一屏，但"我在哪"的手感必须一致 —— 一致靠**同一份值**，不靠注释。
      */
     &.file-cursor {
-        border-color: #2080f0;
+        border-color: var(--ff-highlight);
         // 与 `.image-box-item.cursor` **逐条相同**（边框 + 淡底，不碰盒模型、不加阴影）
-        background-color: rgba(110, 123, 173, .10);
+        background-color: var(--ff-highlight-weak);
     }
 }
 
@@ -3317,10 +3529,16 @@ body>.n-image-preview-container .n-image-preview-toolbar {
     height: 48px;
     padding: 0 16px;
     border-radius: 0;
-    /* 半透明白字在通栏底板上不够清楚（原来是浮在图上的一小块）⇒ 加实一点，
-       再用一条 1px 上边线把「工具条」和「图」分开，不靠阴影（阴影在贴底时会糊成一片）。*/
-    background: rgba(0, 0, 0, .62);
-    box-shadow: inset 0 1px 0 rgba(255, 255, 255, .08);
+    /* 2026-11-08：改成**磨砂玻璃**（原来是一层半透明黑，滚到亮照片上会看不清）。
+       预览层的底色永远是"照片"，所以这组值**不随主题**，见 tokens 里的 `--ff-media-*`。 */
+    background: var(--ff-media-bar-bg);
+    backdrop-filter: blur(20px) saturate(140%);
+    box-shadow: inset 0 1px 0 var(--ff-media-bar-line);
+    /* ⚠️ 图标与文字必须显式给浅色：naive 的 `--n-icon-color` 会继承 `common.iconColor`
+       （我们把它设成了次要灰 text-2），直接落到这条工具条上就成了"灰图标压在暗底"。 */
+    color: var(--ff-media-icon);
+    --n-icon-color: var(--ff-media-icon);
+    --n-icon-color-hover: var(--ff-media-icon-hover);
 }
 
 /* ③ 悬停反馈：通栏之后按钮散开了，"点了才知道点在哪" 不够 —— 加一档透明度变化。

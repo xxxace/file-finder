@@ -57,7 +57,10 @@ defineProps<{
     overflow: hidden;
     border-radius: 999px;
     background: var(--ff-tip-bg);
+    /* 磨砂：滑到页面内容上时不会被身后的同色块吃掉（深色主题才开，浅色主题是实心墨块） */
+    backdrop-filter: var(--ff-tip-backdrop);
     color: var(--ff-tip-text);
+    /* 深色主题里这圈 1px 发丝内描边就是"边框"本身 —— 任何背景上都能画出边缘 */
     box-shadow: var(--ff-tip-shadow);
     pointer-events: none;
     opacity: 0;

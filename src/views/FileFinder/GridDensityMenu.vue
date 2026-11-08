@@ -6,6 +6,10 @@
     <n-dropdown trigger="click" :options="options" :menu-props="menuProps" @select="onSelect">
         <n-button size="small" :title="`视图密度：${currentLabel}（点击切换）`">
             <template #icon>
+                <!-- `Grid`（2×2 方格）＝ 布局 / 一屏铺几列。主人 2026-11-08 裁决：
+                     这颗"原先的已经很好了"，换 `Resize` 那版被否。
+                     ⇒ 与「平铺」的 `Apps`（3×3 九宫格）确实同为方格，但两颗**都有文字/位置区分**
+                     （密度带"宽松/标准/紧凑"，平铺在它右边且带 tooltip），不必为消重而改。 -->
                 <n-icon :component="GridOutline" />
             </template>
             {{ currentLabel }}

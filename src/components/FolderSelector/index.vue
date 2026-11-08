@@ -11,6 +11,8 @@
                 <template #trigger>
                     <n-button class="fs-pick" size="small" @click="handleClick">
                         <template #icon>
+                            <!-- 2026-11-08 主人要求换回原来的彩色文件夹图：它是"文件夹"的通用符号，
+                                 纯灰描边反而认不出来。 -->
                             <img class="fs-pick-icon" :src="folderPng" alt="" />
                         </template>
                     </n-button>
@@ -37,9 +39,9 @@
 </template>
 
 <script lang="ts">
-import FolderPng from '@/assets/folder.png';
 import { foldPath } from '@/utils';
 import { computed, defineComponent, ref } from 'vue';
+import FolderPng from '@/assets/folder.png';
 import { NButton, NTag, NAvatar, NSpace, NTooltip } from 'naive-ui';
 import { ipcRenderer } from 'electron';
 
@@ -70,8 +72,6 @@ export default defineComponent({
             emit('change', value);
         }
 
-        const folderPng: string = FolderPng;
-
         /** 显示用：层级深度被 `foldPath` 收成有界字符串（全路径仍在 `title` 里） */
         const shownPath = computed(() => foldPath(props.modelValue || ''));
 
@@ -91,6 +91,8 @@ export default defineComponent({
             }
             setValue(value[0]);
         });
+
+        const folderPng: string = FolderPng;
 
         return {
             onClear,

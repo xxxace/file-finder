@@ -5,7 +5,7 @@
                 class="rail-item" :class="{ 'is-active': active === it.key }" :aria-label="it.label"
                 @click="$emit('select', it.key)" @pointerenter="onEnter($event, i)" @pointerleave="leave"
                 @focus="onEnter($event, i)" @blur="leave">
-                <n-icon :size="22" :component="it.icon" />
+                <n-icon :size="20" :component="it.icon" />
             </button>
         </div>
 
@@ -14,7 +14,7 @@
                 :class="{ 'is-active': active === 'settings' }" aria-label="设置" @click="$emit('select', 'settings')"
                 @pointerenter="onEnter($event, SETTINGS_INDEX)" @pointerleave="leave"
                 @focus="onEnter($event, SETTINGS_INDEX)" @blur="leave">
-                <n-icon :size="21" :component="SettingsOutline" />
+                <n-icon :size="20" :component="SettingsOutline" />
             </button>
 
             <button :ref="(el) => setButton(THEME_INDEX, el)" type="button" class="rail-item"
@@ -95,7 +95,10 @@ const onToggleTheme = (event: MouseEvent) =>
     align-items: center;
     padding: 14px 0;
     box-sizing: border-box;
-    background: var(--ff-surface);
+    background: var(--ff-chrome-bg);
+    /* 与顶栏共用同一个 chrome 底色，**不画右边线**（2026-11-08 裁决）：
+       底色比画布亮一档，明度差已经把"轨道"和"内容"分开了。
+       `box-sizing: border-box` 已设 ⇒ 哪天要补回 1px，它含在 64 的宽度里，不额外挤网格。 */
 }
 
 .rail-group {
@@ -112,21 +115,23 @@ const onToggleTheme = (event: MouseEvent) =>
     place-items: center;
     border: 0;
     padding: 0;
-    border-radius: var(--ff-radius-ctl);
+    border-radius: var(--ff-r-card);
+    /* 常态**没有底色**，但图标是亮的 —— 这是 WorkBuddy 侧栏最容易被忽略的一条：
+       它的图标从来不是灰的，灰的是"未启用"，不是"未选中"。
+       （2026-11-08 主人两次指着截图问"图标颜色真的学到精髓了？"就是这一条。） */
     background: transparent;
-    color: var(--ff-text-2);
+    color: var(--ff-chrome-icon);
     cursor: pointer;
-    transition: background-color 0.15s ease, color 0.15s ease;
+    transition: background-color 0.15s ease;
 
+    /* 悬停与选中**同一个值**（主人 2026-11-08 给定：深 #313131 / 浅 #ebebeb）。
+       两者不是"分不出"，而是：悬停是"路过就亮"，选中是"一直亮着"。 */
     &:hover {
-        background: var(--ff-fill);
-        color: var(--ff-text-1);
+        background: var(--ff-chrome-active);
     }
 
-    /* 选中 = 粉色图标 + 极淡粉底（B 站只用颜色表达位置，不做整块高亮） */
     &.is-active {
-        background: var(--ff-pink-weak);
-        color: var(--ff-pink);
+        background: var(--ff-chrome-active);
     }
 }
 </style>

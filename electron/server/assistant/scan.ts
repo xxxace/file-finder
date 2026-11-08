@@ -468,7 +468,7 @@ function diskNameOf(name: string, ext?: string): string {
 /**
  * 决定"该拿什么词去站点搜"。
  *
- * ⚠️ **为什么必须有它**（用户真机实测：点了「换封面…」，弹窗里什么都没发生）：
+ * ⚠️ **为什么必须有它**（用户真机实测：点了「换封面」，弹窗里什么都没发生）：
  * 封面卡条目的 `name` 来自 `handleCover` 的 `info.name = getFilename(file)` ——
  * 是**封面图文件名**，可能是 `cover` / `1` / `poster` 这类；拿它去 `parseTitle`
  * 必然认不出番号，于是抓取端一律记成 `no-id` 静默跳过。

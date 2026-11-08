@@ -1,0 +1,15 @@
+/* 西文 / 数字：Geist Variable（Vercel，SIL OFL 1.1）。
+ * 许可全文：./Geist-OFL.txt（OFL 要求随字体一起分发版权声明 + 许可全文，不能只写在这里）。
+ *
+ * ⚠️ 单独成一个文件、不并进 `misans.css`：那个文件是按 `unicode-range` 切片的生成产物，
+ * 手改会被下次重新切片覆盖。
+ * ⚠️ `font-weight: 100 900` 是**可变字重区间**，不是"随便写"：写死 400 会让 500 失效
+ * （浏览器只能合成，不会取用可变轴）。
+ */
+@font-face {
+  font-family: 'Geist';
+  font-style: normal;
+  font-weight: 100 900;
+  font-display: swap;
+  src: url('./Geist-Variable.woff2') format('woff2');
+}
