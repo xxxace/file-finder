@@ -209,92 +209,114 @@
         </n-alert>
         <!-- `--ff-grid-cols` 是列数的唯一出口（值来自 `density.ts`）；
              `data-density` 供紧凑档收缩标题/角标（见样式里那组 `--item-*` 变量）。 -->
-        <div class="image-box" ref="imageBox" :data-density="density" :style="{ '--ff-grid-cols': gridCols }">
-            <!-- key 不能只用 item.name：封面条目的 name 取的是**封面图文件名**，
-                 同一层的两个文件夹若都叫 cover.jpg，就会生成两个 key="cover"。
-                 Vue 遇到重复 key 会复用错的组件实例，封面会串到别的格子里。
-                 加上 dir 就唯一了（folder 模式下 dir 是父目录，同样唯一）。 -->
-            <!-- ⚠️ `v-memo`：532 项时每次方向键都会把**整列 vnode** patch 一遍（卡片不是子组件，
-                 所有状态都在同一渲染作用域）⇒ 长按发涩、滚动条一顿一顿。memo 里列的是
-                 **影响这一格渲染的全部值**，光标移动时只有旧/新两张的数组会变，其余 530 个直接跳过。
-                 ⚠️ 漏依赖的后果是"某处 UI 不跟着变" —— 以后给卡片加新状态时，必须同步加进这个数组。 -->
-            <div v-for="(item) in fileList" :key="item.dir + '/' + item.name" v-memo="[
-                item, picking && isPickable(item), isPicked(item),
-                cursorKey === keyOf(item), opening === keyOf(item), plMember.has(keyOf(item)),
-            ]" class="image-box-item" :class="{
-                    pickable: picking && isPickable(item), picked: isPicked(item),
-                    // 焦点（选择器）= 灰白；定位闪烁 = 蓝。三套颜色互不重叠，
-                    // 理由与手法见 `docs/DESIGN-GRID-CURSOR-2026-10-04.md` §五。
-                    // ⚠️ 判据读 `cursorItem`（派生）而不是 `cursorKey` —— `fileList` 一变
-                    // key 就成了野值，读派生量自动不画高亮，不需要任何同步代码去清它。
-                    cursor: cursorItem !== undefined && cursorKey === keyOf(item),
-                    opening: opening !== '' && opening === keyOf(item),
-                }" :data-key="keyOf(item)" @click="onItemClick(item)" @dblclick="handleOpen($event, item)"
-                @contextmenu.prevent="onContextMenu($event, item)" :title="item.name + ' ' + getSize(item.size)">
-                <!-- `pointer-events:none` 保住连点两张；`v-if` 而非 `v-show`（只转零点几秒，不值得留 DOM） -->
-                <div v-if="opening !== '' && opening === keyOf(item)" class="opening-mask">
-                    <n-spin :size="20" />
-                </div>
-                <!-- 「换封面」模式下单击格子 = 选中/取消（见 onItemClick）。
-                     同时**关掉图片预览** —— 否则一下点下去既弹放大图、又切换选中，两个动作打架。
-                     判断"这张糊不糊"靠格子里的图本身（宽松档 310px、紧凑档 147px），不靠点开大图。
-                     ⚠️ 2026-10-04：预览层改由下面那个 `n-image-group` 统一渲染（它才拿得到
-                     prev/next，见组节点的注释）。所以这里**不再传** preview-src /
-                     previewed-img-props / render-toolbar，改成 preview-disabled —— 它是
-                     srcList 模式下**必须**的（有 n-image 子节点就会 throwError）。
-                     "点图才开"的语义靠 `img-props.onClick` 原样保留：n-image 的
-                     `onImgClick` 会先 showPreview()（被 preview-disabled 挡住），再转给 imgProps.onClick
-                     （naive-ui `Image.mjs:99-102`）⇒ 不会双开、也不是 CSS 藏节点。 -->
-                <!-- 封面块：16:9 定比例、圆角走 `--ff-radius-card`（换回直角只改 token）。
-                     比例定死 ⇒ 同一行所有格子等高 —— 这是 `gridGeometry` 分行算法的前提，
-                     ⚠️ 绝不能换成"由内容撑高"。 -->
-                <div class="card-cover" :style="coverBackdrop(item)">
-                    <!-- ⚠️ 必须同时判 `thumb`：`thumbUrl(undefined)` 是空串，而 `<img src="">`
-                         会被浏览器当成"当前页面地址"去加载 HTML ⇒ 失败 ⇒ **裂开的图标**。
-                         这正是 webp / 抽帧失败的视频在界面上暴露出来的样子，
-                         缺图不是这张卡的问题，它应该退到下面的类型图标。 -->
-                    <n-image v-if="(item.type === 'image' || item.type === 'video') && !!item.thumb" class="can-preview"
-                        :src="thumbUrl(item.thumb)" :img-props="{ onClick: () => openPreview(item) }" :alt="item.dir"
-                        :lazy="true" objectFit="contain" preview-disabled />
-                    <!-- 目录的脸：不挑封面时缩到 70%（密网格里 100% 太抢眼），
-                         「换封面」模式下放到 100% 才看得清。缩放走 `.card-avatar` 的
-                         `transform`（不是内联宽高）—— 理由见样式里那段注释：
-                         这是**布局动画 vs 合成动画**的区别，一屏几百个目录时差一整条街。 -->
-                    <n-image v-else-if="!!item.avatar" class="card-avatar" :src="thumbUrl(item.avatar)"
-                        :alt="item.dir || ''" :lazy="true" objectFit="contain" preview-disabled />
-                    <img v-else-if="item.type === 'folder'" :src="folderIcon" :alt="item.dir || ''" class="folder-face">
-                    <!-- 类名必须小写：`fiv-icon-*` 是**大小写敏感**的 CSS 类，
-                         而盘上有大写扩展名的文件（实测库里有 `.MOV`）⇒ `fiv-icon-MOV` 匹配不到任何图标。 -->
-                    <div v-else :title="item.dir"
-                        :class="`file-cover fiv-cla fiv-icon-${(item.ext || '').toLowerCase()}`" class="file-face">
+        <!-- 只包一层：给扫描动效一个"铺满网格可视区"的定位祖先。
+             动效必须只作用于这一块（不是整窗），而下面的 `.image-box` 自己是滚动容器，
+             把遮罩放它里面会跟着内容一起滚走。 -->
+        <div class="image-box-wrap">
+            <div
+                class="image-box"
+                :class="{ 'is-glowing': !!glow }"
+                ref="imageBox"
+                :data-density="density"
+                :style="{ '--ff-grid-cols': gridCols }"
+            >
+                <!-- key 不能只用 item.name：封面条目的 name 取的是**封面图文件名**，
+                     同一层的两个文件夹若都叫 cover.jpg，就会生成两个 key="cover"。
+                     Vue 遇到重复 key 会复用错的组件实例，封面会串到别的格子里。
+                     加上 dir 就唯一了（folder 模式下 dir 是父目录，同样唯一）。 -->
+                <!-- ⚠️ `v-memo`：532 项时每次方向键都会把**整列 vnode** patch 一遍（卡片不是子组件，
+                     所有状态都在同一渲染作用域）⇒ 长按发涩、滚动条一顿一顿。memo 里列的是
+                     **影响这一格渲染的全部值**，光标移动时只有旧/新两张的数组会变，其余 530 个直接跳过。
+                     ⚠️ 漏依赖的后果是"某处 UI 不跟着变" —— 以后给卡片加新状态时，必须同步加进这个数组。 -->
+                <div v-for="(item) in fileList" :key="item.dir + '/' + item.name" v-memo="[
+                    item, picking && isPickable(item), isPicked(item),
+                    cursorKey === keyOf(item), opening === keyOf(item), plMember.has(keyOf(item)),
+                ]" class="image-box-item" :class="{
+                        pickable: picking && isPickable(item), picked: isPicked(item),
+                        // 焦点（选择器）= 灰白；定位闪烁 = 蓝。三套颜色互不重叠，
+                        // 理由与手法见 `docs/DESIGN-GRID-CURSOR-2026-10-04.md` §五。
+                        // ⚠️ 判据读 `cursorItem`（派生）而不是 `cursorKey` —— `fileList` 一变
+                        // key 就成了野值，读派生量自动不画高亮，不需要任何同步代码去清它。
+                        cursor: cursorItem !== undefined && cursorKey === keyOf(item),
+                        opening: opening !== '' && opening === keyOf(item),
+                    }" :data-key="keyOf(item)" @click="onItemClick(item)" @dblclick="handleOpen($event, item)"
+                    @contextmenu.prevent="onContextMenu($event, item)" :title="item.name + ' ' + getSize(item.size)">
+                    <!-- `pointer-events:none` 保住连点两张；`v-if` 而非 `v-show`（只转零点几秒，不值得留 DOM） -->
+                    <div v-if="opening !== '' && opening === keyOf(item)" class="opening-mask">
+                        <n-spin :size="20" />
                     </div>
-                    <!-- 角标（B 站封面下沿那一排）：数量在左、大小在右。
-                         `pointer-events:none` —— 它盖在封面上，但点它应该等于点封面。 -->
-                    <div v-if="(item.files && item.files.length) || (item.size || 0) > 0" class="card-badges">
-                        <span v-if="item.files && item.files.length" class="badge">{{ item.files.length }} 个文件</span>
-                        <span v-if="(item.size || 0) > 0" class="badge">{{ getSize(item.size) }}</span>
+                    <!-- 「换封面」模式下单击格子 = 选中/取消（见 onItemClick）。
+                         同时**关掉图片预览** —— 否则一下点下去既弹放大图、又切换选中，两个动作打架。
+                         判断"这张糊不糊"靠格子里的图本身（宽松档 310px、紧凑档 147px），不靠点开大图。
+                         ⚠️ 2026-10-04：预览层改由下面那个 `n-image-group` 统一渲染（它才拿得到
+                         prev/next，见组节点的注释）。所以这里**不再传** preview-src /
+                         previewed-img-props / render-toolbar，改成 preview-disabled —— 它是
+                         srcList 模式下**必须**的（有 n-image 子节点就会 throwError）。
+                         "点图才开"的语义靠 `img-props.onClick` 原样保留：n-image 的
+                         `onImgClick` 会先 showPreview()（被 preview-disabled 挡住），再转给 imgProps.onClick
+                         （naive-ui `Image.mjs:99-102`）⇒ 不会双开、也不是 CSS 藏节点。 -->
+                    <!-- 封面块：16:9 定比例、圆角走 `--ff-radius-card`（换回直角只改 token）。
+                         比例定死 ⇒ 同一行所有格子等高 —— 这是 `gridGeometry` 分行算法的前提，
+                         ⚠️ 绝不能换成"由内容撑高"。 -->
+                    <div class="card-cover" :style="coverBackdrop(item)">
+                        <!-- ⚠️ 必须同时判 `thumb`：`thumbUrl(undefined)` 是空串，而 `<img src="">`
+                             会被浏览器当成"当前页面地址"去加载 HTML ⇒ 失败 ⇒ **裂开的图标**。
+                             这正是 webp / 抽帧失败的视频在界面上暴露出来的样子，
+                             缺图不是这张卡的问题，它应该退到下面的类型图标。 -->
+                        <n-image v-if="(item.type === 'image' || item.type === 'video') && !!item.thumb" class="can-preview"
+                            :src="thumbUrl(item.thumb)" :img-props="{ onClick: () => openPreview(item) }" :alt="item.dir"
+                            :lazy="true" objectFit="contain" preview-disabled />
+                        <!-- 目录的脸：不挑封面时缩到 70%（密网格里 100% 太抢眼），
+                             「换封面」模式下放到 100% 才看得清。缩放走 `.card-avatar` 的
+                             `transform`（不是内联宽高）—— 理由见样式里那段注释：
+                             这是**布局动画 vs 合成动画**的区别，一屏几百个目录时差一整条街。 -->
+                        <n-image v-else-if="!!item.avatar" class="card-avatar" :src="thumbUrl(item.avatar)"
+                            :alt="item.dir || ''" :lazy="true" objectFit="contain" preview-disabled />
+                        <img v-else-if="item.type === 'folder'" :src="folderIcon" :alt="item.dir || ''" class="folder-face">
+                        <!-- 类名必须小写：`fiv-icon-*` 是**大小写敏感**的 CSS 类，
+                             而盘上有大写扩展名的文件（实测库里有 `.MOV`）⇒ `fiv-icon-MOV` 匹配不到任何图标。 -->
+                        <div v-else :title="item.dir"
+                            :class="`file-cover fiv-cla fiv-icon-${(item.ext || '').toLowerCase()}`" class="file-face">
+                        </div>
+                        <!-- 角标（B 站封面下沿那一排）：数量在左、大小在右。
+                             `pointer-events:none` —— 它盖在封面上，但点它应该等于点封面。 -->
+                        <div v-if="(item.files && item.files.length) || (item.size || 0) > 0" class="card-badges">
+                            <span v-if="item.files && item.files.length" class="badge">{{ item.files.length }} 个文件</span>
+                            <span v-if="(item.size || 0) > 0" class="badge">{{ getSize(item.size) }}</span>
+                        </div>
                     </div>
+                    <!-- 标题：**永远占两行的高度**（单行也留白）。
+                         理由同上 —— 行高成了内容的函数，一行两行的格子就会矮一截，
+                         `groupRows` 会把它单独判成一行，方向键从此横着跳。 -->
+                    <div class="card-title" :title="item.name">{{ item.name }}</div>
+                    <!-- 选中角标。⚠️ 用 `<i>` 而**不是** `<span>` —— `.image-box-item span` 那条
+                         （1681 行）里有 `width:100%` + `height:38px !important`，会把角标拉成长条、
+                         圆直接变形。换个元素最省事，也不用跟 `!important` 打架。
+                         ⚠️ 绝对定位、**不参与布局** —— 格子宽高由 grid 的 `1fr` + 封面比例决定，同行必须等高
+                         （`groupRows` 按 `offsetTop` 分行），参与布局就会带偏行结构 -->
+                    <i v-if="isPicked(item)" class="pick-badge" aria-hidden="true"></i>
+                    <!-- 收录星标（2026-10-21 清单）：这张卡已进某个清单。
+                         ⚠️ 绝对定位、**不参与布局** —— 格子宽高由 grid 的 `1fr` + 封面比例决定，同行必须等高
+                         （`groupRows` 按 `offsetTop` 分行），参与布局就会带偏行结构。
+                         放左上角：pick-badge 在右上，两者不打架。 -->
+                    <i v-if="plMember.has(keyOf(item))" class="pl-badge" aria-hidden="true"></i>
+                    <!-- 已失效徽标（2026-11-06）：收藏夹内所属盘在线但确认丢失的条目。绝对定位右上角。 -->
+                    <i v-if="item.missing" class="pl-missing-badge">已失效</i>
                 </div>
-                <!-- 标题：**永远占两行的高度**（单行也留白）。
-                     理由同上 —— 行高成了内容的函数，一行两行的格子就会矮一截，
-                     `groupRows` 会把它单独判成一行，方向键从此横着跳。 -->
-                <div class="card-title" :title="item.name">{{ item.name }}</div>
-                <!-- 选中角标。⚠️ 用 `<i>` 而**不是** `<span>` —— `.image-box-item span` 那条
-                     （1681 行）里有 `width:100%` + `height:38px !important`，会把角标拉成长条、
-                     圆直接变形。换个元素最省事，也不用跟 `!important` 打架。
-                     ⚠️ 绝对定位、**不参与布局** —— 格子宽高由 grid 的 `1fr` + 封面比例决定，同行必须等高
-                     （`groupRows` 按 `offsetTop` 分行），参与布局就会带偏行结构 -->
-                <i v-if="isPicked(item)" class="pick-badge" aria-hidden="true"></i>
-                <!-- 收录星标（2026-10-21 清单）：这张卡已进某个清单。
-                     ⚠️ 绝对定位、**不参与布局** —— 格子宽高由 grid 的 `1fr` + 封面比例决定，同行必须等高
-                     （`groupRows` 按 `offsetTop` 分行），参与布局就会带偏行结构。
-                     放左上角：pick-badge 在右上，两者不打架。 -->
-                <i v-if="plMember.has(keyOf(item))" class="pl-badge" aria-hidden="true"></i>
-                <!-- 已失效徽标（2026-11-06）：收藏夹内所属盘在线但确认丢失的条目。绝对定位右上角。 -->
-                <i v-if="item.missing" class="pl-missing-badge">已失效</i>
+                <!-- 空状态：只有一行浅灰小字。不加边框、不加图标、不加按钮 —— 保持极简观感 -->
+                <div v-if="emptyTip" class="empty-tip">{{ emptyTip }}</div>
             </div>
-            <!-- 空状态：只有一行浅灰小字。不加边框、不加图标、不加按钮 —— 保持极简观感 -->
-            <div v-if="emptyTip" class="empty-tip">{{ emptyTip }}</div>
+            <ScanGlow
+                v-if="glow"
+                :key="glowKey"
+                :kind="glow"
+                :running="scanning"
+                :cancelling="cancelling"
+                :done="scanDone"
+                :pending="scanPending"
+                @cancel="onScanCancel"
+                @closed="glow = ''"
+            />
         </div>
         <!-- 扫描状态条。PC 文件管理器的做法：**进度和「取消」成对待在独立的一条里**，
              不挤进工具条、不顶掉任何按钮（工具条那边只把动作置灰）。
@@ -319,8 +341,14 @@
                    只有非 visible 才归 0。
              ⚠️ 扫描条和挑选条**共用**这一条（同一个元素），动画自然也是同一份：
              它们不会同时出现（进模式前会等扫描结束）。 -->
+        <!-- ⚠️ glow 期间**不出这一条**（2026-11-08 主人定位）：
+             它在文档流里，挂上时靠 `grid-template-rows: 1fr→0fr` 从 0 长到 40px，
+             而这 40px 是**从网格里扣的** ⇒ `.image-box-wrap` 变矮、里面的遮罩与 canvas
+             被自下而上压扁，同时这条自己向下展开 —— 合起来就是"先上后下"。
+             它的两条信息（已扫/待扫、取消）已经搬进光雾面板，功能没有丢。
+             `picking` 那条与 glow 不会同时出现（进模式前会等扫描结束）。 -->
         <Transition name="fx-bar">
-            <div v-if="scanning || picking" class="scan-bar-slot">
+            <div v-if="(!glow && scanning) || picking" class="scan-bar-slot">
                 <div class="scan-bar">
                     <!-- 「换封面」的挑选中。复用这一条而不动工具条 —— 工具条那条铁律是
                          "绝不消失、绝不换形、一个字都不随状态变"，所以模式态的信号只能住在这里。
@@ -437,6 +465,7 @@ import { MoreVertical28Filled } from '@/components/icons/fluent';
 import { FlatCards24 } from '@/components/icons/grid';
 import { NButton, NInput, NIcon, NImage, NImageGroup, NTag, NPopover, NSpin, NAlert, NTooltip, NDropdown, useLoadingBar, useDialog } from 'naive-ui';
 import FolderSelector from '@/components/FolderSelector/index.vue';
+import ScanGlow from './ScanGlow.vue';
 import AssistantCoverModal from './AssistantCoverModal.vue';
 import AssistantAvatarModal from './AssistantAvatarModal.vue';
 import PlaylistPicker from './PlaylistPicker.vue';
@@ -1982,6 +2011,8 @@ const startScan = async (rescan: boolean) => {
     scanCancelled = false;
     cancelling.value = false;
     scanDone.value = 0;
+    glow.value = rescan ? 'rescan' : 'fill';
+    glowKey.value += 1;
 
     // 深度优先。队列里放**完整路径** —— 服务端要的就是这个（它自己会拆成盘内相对路径）
     const queue: string[] = [root];
@@ -2171,7 +2202,7 @@ const moreOptions = computed(() => [
     { label: '补全这一片', key: 'fill', disabled: scanning.value || picking.value || !history.value.length || readOnlyLevel.value },
     { label: '重读这一片', key: 'rescan', disabled: scanning.value || picking.value || !history.value.length || readOnlyLevel.value },
     { label: '补封面', key: 'cover', disabled: scanning.value },
-    { label: '女优头像回收', key: 'avatar-recovery', disabled: scanning.value || picking.value || !history.value.length || readOnlyLevel.value },
+    { label: '头像回收', key: 'avatar-recovery', disabled: scanning.value || picking.value || !history.value.length || readOnlyLevel.value },
     // 「站点规则」= 抓取规则的编辑器（入口 / 动作 / 抽取三段）。它是**系统盘上的配置**，
     // 与移动硬盘无关 ⇒ 离线只读层里也允许打开（不禁用）。
     { label: '站点规则', key: 'rules' },
@@ -2190,6 +2221,15 @@ const moreOptions = computed(() => [
  * 而 `DESIGN-UIUX` §4.1 之所以选 popconfirm，理由是"高频动作弹窗会警报疲劳"，
  * 重读恰恰是低频动作 ⇒ 那条理由在这里不成立。门槛本身一点没降。
  */
+/**
+ * 扫描动效（移植自 LeiBox `transfer-glow`）。**它跟随真实扫描**：
+ * `startScan` 一开就把 `glow` 置成模式名，扫描结束（scanning 变 false）后
+ * 由组件自己播完退场并回调 `closed` 清掉。
+ * `glowKey` 每次扫描 +1 ⇒ 上一次的退场还没播完就又点了，也是重新起一个实例。
+ */
+const glow = ref<'' | 'fill' | 'rescan'>('');
+const glowKey = ref(0);
+
 const onMoreSelect = (key: string) => {
     if (key === 'fill') {
         startScan(false);
@@ -2271,7 +2311,9 @@ const {
 } = useGridCursor({
     fileList, keyOf, imageBox,
     isPreviewOpen: () => previewOpen.value,
-    isActive: () => pageActive.value,
+    // 扫描动效期间连方向键也让出去：遮罩底下那层网格是糊的，
+    // 这时候还能用方向键挪光标、滚列表，只会让画面更乱。
+    isActive: () => pageActive.value && !glow.value,
     onConfirm: onCursorConfirm,
     // ⚠️ 必须写成箭头函数：`openPreview` 在下面 `usePreview` 那一块才声明
     // （它要拿本块的 `focusCursor`）⇒ 裸引用 `onPreview: openPreview` 会在 setup 期间 TDZ 报错。
@@ -2465,6 +2507,8 @@ const onKeyup = (e: KeyboardEvent) => {
     // ⚠️ 本页被 KeepAlive 缓存、退到后台时，window 上的监听仍然挂着。
     // 少了这一行，在清单页按 S / F5 / D 会去改**文件页**的搜索词、甚至重读盘。
     if (!pageActive.value) return;
+    // 扫描动效（5 秒）期间不接单键：那时按 F5 / S / D 打的都是遮罩背后那一屏
+    if (glow.value) return;
 
     // ⚠️ 用共用的 `isGridKeyBlocked` 而不是原来那句 `e.target !== document.body`：
     // 它是后者的**超集**（多一条 `contenteditable`）。方向键那边也用同一个函数，
@@ -3539,6 +3583,32 @@ const onDisksChangedIpc = (_e: unknown, disks: { serial: string; drive: string }
     }
 }
 
+/* 只为给 ScanGlow 一个定位祖先：动效覆盖的是"网格可视区"，不是整窗。
+   这一层不参与任何其它职责 —— 里面那层仍是原来的滚动容器。 */
+.image-box-wrap {
+    position: relative;
+    flex: 1;
+    min-height: 0;
+    display: flex;
+    flex-direction: column;
+}
+
+/* 扫描动效期间网格整体失焦（transfer-glow 的第一步：内容先退到后面去）。
+   ⚠️ `filter: blur()` 会整层重新栅格化，面积大就有掉帧风险（STUDY-MOTION §五 的警告）——
+   这里刻意把半径压到 7px、时长 420ms，且只在动效期间存在，动效结束立刻移除。 */
+.image-box.is-glowing {
+    filter: blur(7px) saturate(0.92);
+    opacity: 0.72;
+    pointer-events: none;
+}
+
+@media (prefers-reduced-motion: reduce) {
+    .image-box.is-glowing {
+        filter: none;
+        opacity: 0.5;
+    }
+}
+
 .image-box {
     flex: 1;
     /* 列数**必须精确等于密度档给的 N**，一个都不能少。
@@ -3563,6 +3633,7 @@ const onDisksChangedIpc = (_e: unknown, disks: { serial: string; drive: string }
     padding: var(--ff-content-inset) var(--ff-content-inset) var(--ff-grid-ring-room);
     box-sizing: border-box;
     overflow: hidden auto;
+    transition: filter 420ms ease, opacity 420ms ease;
     /* ── 卡片尺寸变量：**按密度档位在这里改，子元素只读** ──────────────────────────
        为什么做成变量而不是给紧凑档另写一套 `.card-title` 规则：
        标题高/字号/行高必须**一起**换（高换了字号没换 = 两行塞不下成省略号；

@@ -1,14 +1,14 @@
-# 女优头像回收 · JavBus 官方高清数据源升级设计方案
+# 头像回收 · JavBus 官方高清数据源升级设计方案
 
 ## 1. 背景与目标
 
-当前女优头像回收功能依赖社区整理的 Gfriends 开源仓库。用户反馈：
+当前头像回收功能依赖社区整理的 Gfriends 开源仓库。用户反馈：
 > "获取头像的数据源我不认可，很多头像都很随便，还不如人家那些jav数据库网站的好，能不能切换升级？"
 > "先以javbus吧"
 
 社区库存在较多粉丝二创、日常自拍照或截取图，规格与质感参差不齐。而 JavBus 收录的均为 DMM / SOD / S1 摄影棚出品的**官方标准正脸大头照**，具备统一白底/影棚背景、极高清晰度与标准化构图。
 
-本方案将女优头像回收的数据源升级为 **JavBus 官方高清大头照**，同时保留 Gfriends 作为备选兜底，实现：
+本方案将头像回收的数据源升级为 **JavBus 官方高清大头照**，同时保留 Gfriends 作为备选兜底，实现：
 1. **官方品质**：优先提取 JavBus 官方演员大头照（`pics/actress/{id}.jpg`）；
 2. **简繁/日文汉字自动归一化**：自动通过现有汉字与别名映射表将简体中文文件夹名转换为 JavBus 日文官方名进行搜索；
 3. **本地缓存（0ms 重复命中）**：检索过的演员头像映射持久化至本地 `~/.file-finder/javbus-actresses.json`，二次扫描无需网络请求；
@@ -91,3 +91,17 @@
 2. **完整扫描与落盘探针**：
    - 验证 `applyActressAvatars` 配合 JavBus 头像 URL 正常落盘并备份。
 3. **TypeScript 静态检查**：`npm run typecheck` 0 错误。
+
+---
+
+> **⚠️ 2026-11-08 修订（已实现，取代本文中与下面冲突的描述）**
+> 头像回收改成「工作台 + 任务」形态后，接口契约有三处变化：
+> 1. **扫描不再内置匹配**：`/assistant/avatar/scan` 只返回候选（`relDir / folderName / cleanName`），
+>    毫秒级。原来那段「5 个 Worker 并发查 JavBus」被拿掉了 —— 整批塞在一个同步 POST 里，
+>    48 个目录要跑 1~2 分钟且无进度、不能暂停，一条失败全等。
+> 2. **匹配改由前端逐条推进**：仍走同一个 `/assistant/avatar/match`，并发 4（≤ 原来的 5，
+>    反爬限流的前提不变），换来真进度、可暂停/继续/终止、单条可重试。
+> 3. **写入改任务化**：`POST /assistant/avatar/apply`（一次性）**已删除**，
+>    改为 `POST /assistant/jobs {kind:'avatar'}` → 返回 jobId，进度/暂停/终止走 `/assistant/jobs`。
+>    `applyActressAvatars()` → `runAvatarApplyJob()`（闸门、逐条进度、结果行都在 job 里）。
+> 设计依据与取舍见 `docs/DESIGN-ASSISTANT-WORKBENCH-2026-11-08.md`。

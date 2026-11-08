@@ -23,7 +23,7 @@ const EXEMPT = new Set([
 ]);
 
 /** 迁移基线：只许降，不许升。全部改造完成后改成 0。 */
-const BASELINE = 59;
+const BASELINE = 53;
 
 const HEX = /#[0-9a-fA-F]{3,8}\b/g;
 const FUNC = /\brgba?\s*\(/g;

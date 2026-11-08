@@ -2,240 +2,185 @@
     <n-modal
         :show="show"
         preset="card"
-        :title="'女优头像回收（' + (activeSource === 'javbus' ? 'JavBus 官方高清' : 'Gfriends 社区精选') + '）'"
-        :mask-closable="!applying"
-        :close-on-esc="!applying"
-        style="width: 90vw; max-width: 1080px; height: 85vh"
-        content-style="display: flex; flex-direction: column; overflow: hidden; padding: 16px 20px"
-        @update:show="onClose"
+        :closable="false"
+        :mask-closable="!busy"
+        :close-on-esc="!busy"
+        style="width: 100vw; height: 100vh"
+        content-style="padding: 0; height: 100%"
+        @update:show="onShowChange"
     >
-        <!-- 离线提示 -->
-        <div v-if="!activeIsOnline" style="margin-bottom: 14px">
-            <n-alert type="warning" title="磁盘处于离线状态" :bordered="false">
-                当前目录所在磁盘处于离线（未挂载）状态，仅可查看缓存。如需写入头像及更新缓存，请先将移动硬盘连接至电脑。
-            </n-alert>
-        </div>
+        <AssistantShell title="头像回收" :busy="busy" @close="onShowChange(false)">
+            <template #meta>
+                目标 <b :title="scopeLabel">{{ scopeLabel }}</b>
+                <i />
+                待处理 <b>{{ counts.total }}</b>
+                <i />
+                已匹配 <b>{{ counts.matched }}</b>
+                <i />
+                选中 <b>{{ counts.selected }}</b>
+            </template>
 
-        <!-- 顶部信息与操作栏 -->
-        <div class="avatar-modal-header">
-            <div class="avatar-modal-path">
-                <span class="avatar-label">目标范围：</span>
-                <span class="avatar-path-text">{{ currentPathDisplay }}</span>
-                <span class="avatar-hint">（仅扫描该目录下一级的直属子文件夹）</span>
-            </div>
-            <div class="avatar-modal-actions">
-                <span class="avatar-label" style="font-size: 12px">数据源：</span>
+            <template #tools>
                 <n-select
-                    v-model:value="activeSource"
-                    size="small"
-                    style="width: 175px"
-                    :disabled="applying || scanning"
+                    class="ffw-select"
+                    :value="activeSource"
                     :options="sourceOptions"
-                />
-                <n-button
-                    v-if="activeSource === 'gfriends'"
+                    :theme-overrides="TOOLBAR_SELECT"
                     size="small"
-                    tertiary
-                    :loading="updatingIndex"
-                    :disabled="applying || scanning"
+                    style="width: 168px"
+                    :disabled="busy"
+                    @update:value="onSourceChange"
+                />
+                <button
+                    v-if="activeSource === 'gfriends'"
+                    type="button"
+                    class="ffw-btn ffw-btn--ghost"
+                    :disabled="busy"
                     @click="updateIndex"
                 >
-                    更新索引
-                </n-button>
-                <n-button
-                    size="small"
-                    type="primary"
-                    :loading="scanning"
-                    :disabled="!activeIsOnline || applying || updatingIndex"
-                    @click="runScan"
-                >
-                    扫描直属目录
-                </n-button>
-            </div>
-        </div>
+                    {{ updatingIndex ? '更新中…' : '更新索引' }}
+                </button>
+                <button type="button" class="ffw-btn ffw-btn--ghost" :disabled="busy || !activeIsOnline" @click="rescan">
+                    <n-icon :component="RefreshOutline" :size="13" />
+                    扫描
+                </button>
+            </template>
 
-        <!-- 主体区域：表格或空态 -->
-        <div class="avatar-modal-body">
-            <div v-if="scanning" class="avatar-modal-center">
-                <n-spin
-                    size="medium"
-                    :description="activeSource === 'javbus' ? '正在读取目录并通过 JavBus 检索官方大头照...' : '正在读取目录并匹配 Gfriends 索引...'"
+            <div v-if="!activeIsOnline" class="ffw-notice">
+                <n-icon :component="CloudOfflineOutline" :size="14" />
+                磁盘离线，只能查看缓存；写入前请先接上移动硬盘
+            </div>
+
+            <SkeletonList v-if="scanning" variant="row" :count="10" />
+
+            <div v-else-if="!rows.length" class="ffw-empty">
+                <div>
+                    <b>{{ hasScanned ? '这一层没有缺头像的人物目录' : '还没开始查' }}</b>
+                    <template v-if="hasScanned">
+                        已自动排除已有头像的目录，以及能识别为影片番号的目录
+                    </template>
+                    <template v-else>点右上角「扫描」列出这一层缺头像的人物目录</template>
+                </div>
+            </div>
+
+            <div v-else class="ffw-rows">
+                <AvatarRowItem
+                    v-for="(row, i) in rows"
+                    :key="row.relDir"
+                    :row="row"
+                    :index="i"
+                    :avatar-src="row.avatarUrl ? previewSrc(row.avatarUrl) : ''"
+                    :locked="rowLocked"
+                    @toggle="toggleRow(row)"
+                    @rename="onRename(row, $event)"
+                    @recheck="recheck(row)"
+                    @manual-input="onManualInput(row, $event)"
+                    @manual-apply="applyManual(row)"
                 />
             </div>
 
-            <div v-else-if="!candidates.length && hasScanned" class="avatar-modal-center avatar-empty">
-                <p>当前目录下没有找到缺少头像的女优子目录</p>
-                <span class="avatar-hint">（已自动排除已有头像的文件夹及影片番号目录）</span>
-            </div>
-
-            <div v-else-if="!hasScanned" class="avatar-modal-center avatar-empty">
-                <p>请点击右上角「扫描直属目录」开始检索缺少头像的女优文件夹</p>
-            </div>
-
-            <!-- 候选表格 -->
-            <div v-else class="avatar-table-wrap">
-                <div class="avatar-toolbar">
-                    <div class="avatar-toolbar-left">
-                        <n-button size="tiny" tertiary :disabled="applying" @click="selectAll(true)">全选</n-button>
-                        <n-button size="tiny" tertiary :disabled="applying" @click="selectAll(false)">取消全选</n-button>
-                        <n-button size="tiny" tertiary :disabled="applying" @click="selectMatchedOnly">仅选已匹配</n-button>
-                        <span class="avatar-count-info">
-                            共发现 {{ candidates.length }} 个待处理目录 · 已匹配 {{ matchedCount }} · 选中 {{ selectedCount }}
-                        </span>
-                    </div>
-                </div>
-
-                <div class="avatar-list-scroll">
-                    <table class="avatar-custom-table">
-                        <thead>
-                            <tr>
-                                <th style="width: 44px; text-align: center">
-                                    <input
-                                        type="checkbox"
-                                        :checked="isAllSelected"
-                                        :indeterminate="isIndeterminate"
-                                        :disabled="applying"
-                                        @change="toggleSelectAll"
-                                    />
-                                </th>
-                                <th style="width: 64px; text-align: center">头像</th>
-                                <th style="width: 240px">原始文件夹名</th>
-                                <th style="width: 180px">识别女优名</th>
-                                <th style="width: 140px">状态</th>
-                                <th>操作</th>
-                            </tr>
-                        </thead>
-                        <tbody>
-                            <tr v-for="row in candidates" :key="row.relDir">
-                                <td style="text-align: center">
-                                    <input type="checkbox" v-model="row.selected" :disabled="applying" />
-                                </td>
-                                <td style="text-align: center">
-                                    <div class="avatar-preview-box">
-                                        <n-image
-                                            v-if="row.avatarUrl"
-                                            :src="previewSrc(row.avatarUrl)"
-                                            :preview-src="previewSrc(row.avatarUrl)"
-                                            width="44"
-                                            height="44"
-                                            object-fit="cover"
-                                            style="border-radius: 4px; display: block"
-                                            :img-props="{ style: 'cursor: zoom-in' }"
-                                            show-toolbar-tooltip
-                                        />
-                                        <div v-else class="avatar-no-img">无图</div>
-                                    </div>
-                                </td>
-                                <td>
-                                    <div class="avatar-name-cell" :title="row.folderName">
-                                        {{ row.folderName }}
-                                    </div>
-                                </td>
-                                <td>
-                                    <n-input
-                                        v-model:value="row.cleanName"
-                                        size="small"
-                                        placeholder="女优名"
-                                        style="max-width: 150px"
-                                        :disabled="applying"
-                                        @blur="recheckName(row)"
-                                        @keydown.enter="recheckName(row)"
-                                    />
-                                </td>
-                                <td>
-                                    <template v-if="row.status === 'matched'">
-                                        <n-tag size="small" type="success" :bordered="false">
-                                            {{ row.matchedName || '已匹配' }}
-                                        </n-tag>
-                                        <n-tag v-if="row.source === 'javbus'" size="tiny" type="info" :bordered="false" style="margin-left: 4px">
-                                            JavBus
-                                        </n-tag>
-                                        <n-tag v-else-if="row.source === 'gfriends'" size="tiny" :bordered="false" style="margin-left: 4px">
-                                            Gfriends
-                                        </n-tag>
-                                    </template>
-                                    <n-tag v-else size="small" type="warning" :bordered="false">
-                                        未找到
-                                    </n-tag>
-                                </td>
-                                <td>
-                                    <n-popover trigger="click" placement="bottom">
-                                        <template #trigger>
-                                            <n-button size="tiny" tertiary :disabled="applying">手动填 URL</n-button>
-                                        </template>
-                                        <div style="padding: 6px; width: 280px">
-                                            <div style="font-size: 12px; margin-bottom: 6px; color: var(--n-text-color)">
-                                                输入图片直接下载链接：
-                                            </div>
-                                            <n-input
-                                                v-model:value="row.manualUrl"
-                                                size="small"
-                                                placeholder="https://..."
-                                                style="margin-bottom: 8px"
-                                            />
-                                            <div style="display: flex; justify-content: flex-end; gap: 8px">
-                                                <n-button size="tiny" type="primary" @click="applyManualUrl(row)">
-                                                    应用此链接
-                                                </n-button>
-                                            </div>
-                                        </div>
-                                    </n-popover>
-                                </td>
-                            </tr>
-                        </tbody>
-                    </table>
-                </div>
-            </div>
-        </div>
-
-        <!-- 底部状态与应用确认栏 -->
-        <div class="avatar-modal-footer">
-            <div class="avatar-footer-status">
-                <span v-if="applying" class="avatar-applying-status">
-                    <n-spin :size="14" />
-                    <span>正在批量写入头像并更新缓存，请稍候...</span>
-                </span>
-                <span v-else-if="applyResult" class="avatar-result-text">
-                    处理完毕：成功 {{ applyResult.succeeded }} 个 · 失败 {{ applyResult.failed }} 个
-                </span>
-            </div>
-            <div class="avatar-footer-btns">
-                <n-button size="small" :disabled="applying" @click="onClose">
-                    {{ applyResult ? '关闭' : '取消' }}
-                </n-button>
-                <n-popconfirm
-                    v-model:show="showConfirmPop"
-                    positive-text="确定写入"
-                    negative-text="取消"
-                    @positive-click="handleConfirmApply"
+            <template #dock>
+                <TaskDock
+                    :phase="task.phase"
+                    :ratio="task.ratio"
+                    :status="task.status"
+                    :detail="task.detail"
+                    :celebrate="celebrate"
                 >
-                    <template #trigger>
-                        <n-button
-                            size="small"
-                            type="primary"
-                            :loading="applying"
-                            :disabled="!activeIsOnline || selectedCount === 0 || applying"
-                        >
-                            写入选中头像 ({{ selectedCount }})
-                        </n-button>
+                    <template #actions>
+                        <template v-if="task.mode === 'match'">
+                            <button type="button" class="ffw-btn" @click="matcher.pause()">
+                                <n-icon :component="PauseOutline" :size="13" /> 暂停
+                            </button>
+                            <button type="button" class="ffw-btn ffw-btn--danger" @click="matcher.stop()">
+                                <n-icon :component="StopOutline" :size="13" /> 终止
+                            </button>
+                        </template>
+
+                        <template v-else-if="task.mode === 'match-pause'">
+                            <button type="button" class="ffw-btn ffw-btn--primary" @click="matcher.resume()">
+                                <n-icon :component="PlayOutline" :size="13" /> 继续
+                            </button>
+                            <button type="button" class="ffw-btn ffw-btn--danger" @click="matcher.stop()">
+                                <n-icon :component="StopOutline" :size="13" /> 终止
+                            </button>
+                        </template>
+
+                        <template v-else-if="task.mode === 'apply'">
+                            <button type="button" class="ffw-btn ffw-btn--danger" :disabled="!!applyActing" @click="stopApply">
+                                <n-icon :component="StopOutline" :size="13" /> 终止
+                            </button>
+                        </template>
+
+                        <template v-else-if="task.mode === 'apply-done'">
+                            <button type="button" class="ffw-btn ffw-btn--ghost" @click="rescan">扫描</button>
+                            <button type="button" class="ffw-btn ffw-btn--primary" @click="onShowChange(false)">完成</button>
+                        </template>
+
+                        <template v-else-if="!matchStarted">
+                            <button type="button" class="ffw-btn ffw-btn--primary" :disabled="!rows.length" @click="startMatch">
+                                开始匹配 {{ rows.length }} 个
+                                <n-icon :component="ArrowForwardOutline" :size="13" />
+                            </button>
+                        </template>
+
+                        <template v-else>
+                            <button type="button" class="ffw-btn ffw-btn--ghost" :disabled="rowLocked" @click="toggleSelectAll">
+                                {{ allSelected ? '取消全选' : '全选' }}
+                            </button>
+                            <button type="button" class="ffw-btn ffw-btn--ghost" :disabled="!matchedCount || rowLocked" @click="selectMatchedOnly">
+                                仅选已匹配
+                            </button>
+                            <n-popconfirm @positive-click="startApply">
+                                <template #trigger>
+                                    <button
+                                        type="button"
+                                        class="ffw-btn ffw-btn--primary"
+                                        :disabled="!counts.selected || !activeIsOnline"
+                                    >
+                                        写入 {{ counts.selected }} 个头像
+                                        <n-icon :component="ArrowForwardOutline" :size="13" />
+                                    </button>
+                                </template>
+                                为这 {{ counts.selected }} 个目录下载并写入 avatar.jpg，已有旧头像会先备份。确定吗？
+                            </n-popconfirm>
+                        </template>
                     </template>
-                    即将为选中的 {{ selectedCount }} 个女优目录下载并写入头像（avatar.jpg），已有旧头像会自动备份。确定执行吗？
-                </n-popconfirm>
-            </div>
-        </div>
+                </TaskDock>
+            </template>
+        </AssistantShell>
     </n-modal>
 </template>
 
 <script setup lang="ts">
-import { ref, computed, watch } from 'vue';
+import { computed, ref, watch } from 'vue';
+import { NModal, NPopconfirm, NSelect, NIcon } from 'naive-ui';
 import {
-    NModal, NAlert, NButton, NSpin, NImage, NTag, NInput, NPopover, NPopconfirm, NSelect, useMessage
-} from 'naive-ui';
-import { apiUrl, getAction, postAction } from '@/utils/request';
+    ArrowForwardOutline,
+    CloudOfflineOutline,
+    PauseOutline,
+    PlayOutline,
+    RefreshOutline,
+    StopOutline,
+} from '@vicons/ionicons5';
+import { apiUrl, postAction } from '@/utils/request';
+import useNotify from '@/hooks/useNotify';
+import AssistantShell from './assistant/AssistantShell.vue';
+import TaskDock from './assistant/TaskDock.vue';
+import AvatarRowItem from './assistant/AvatarRow.vue';
+import SkeletonList from './assistant/SkeletonList.vue';
+import { buildAvatarTask, countRows, selectedWithImage } from './assistant/avatarModel';
+import type { AvatarRow } from './assistant/avatarModel';
+import { TOOLBAR_SELECT } from './assistant/toolbarSelect';
+import { holdScanBeat } from './assistant/scanBeat';
+import { resolveDriveContext } from './assistant/driveContext';
+import type { JobSnapshot } from './assistant/jobTypes';
+import { isLiveJob } from './assistant/jobTypes';
+import { useAssistantJob } from './assistant/useAssistantJob';
+import { useAvatarMatcher } from './assistant/useAvatarMatcher';
 
 const API_BASE = 'http://127.0.0.1:3060';
-const previewSrc = (url?: string | null) =>
-    url ? apiUrl(`${API_BASE}/assistant/preview?url=${encodeURIComponent(url)}`) : '';
+const previewSrc = (url: string) => apiUrl(`${API_BASE}/assistant/preview?url=${encodeURIComponent(url)}`);
 
 const props = withDefaults(
     defineProps<{
@@ -245,499 +190,255 @@ const props = withDefaults(
         relPath?: string;
         isOnline?: boolean;
     }>(),
-    {
-        currentPath: '',
-        serial: '',
-        relPath: '',
-        isOnline: true,
-    }
+    { currentPath: '', serial: '', relPath: '', isOnline: true },
 );
 
-const emit = defineEmits<{
-    (e: 'update:show', val: boolean): void;
-    (e: 'applied'): void;
-}>();
-
-const message = useMessage();
-
-interface AvatarRow {
-    relDir: string;
-    folderName: string;
-    cleanName: string;
-    matchedName: string | null;
-    avatarUrl: string | null;
-    status: 'matched' | 'unmatched';
-    selected: boolean;
-    manualUrl?: string;
-    source?: 'javbus' | 'gfriends';
-}
+const emit = defineEmits<{ (e: 'update:show', v: boolean): void; (e: 'applied'): void }>();
+const notify = useNotify();
 
 const activeSource = ref<'javbus' | 'gfriends'>('javbus');
+/**
+ * ⚠️ 标签要短：168px、12px 字号下，11 个汉字就会被 naive 折成 "（…）"，
+ * 而截断的下拉在工具条里更像"坏了"。（"推荐"不再标注 —— 它本来就是默认值。）
+ */
 const sourceOptions = [
-    { label: 'JavBus 官方写真 (推荐)', value: 'javbus' },
+    { label: 'JavBus 官方写真', value: 'javbus' },
     { label: 'Gfriends 社区库', value: 'gfriends' },
 ];
 
+const rows = ref<AvatarRow[]>([]);
 const scanning = ref(false);
-const applying = ref(false);
-const updatingIndex = ref(false);
 const hasScanned = ref(false);
-const showConfirmPop = ref(false);
-const candidates = ref<AvatarRow[]>([]);
-const applyResult = ref<{ succeeded: number; failed: number } | null>(null);
+const updatingIndex = ref(false);
+const celebrate = ref(false);
 
 const activeSerial = ref('');
 const activeRelPath = ref('');
 const activeIsOnline = ref(true);
 
-const currentPathDisplay = computed(() => {
-    return props.currentPath || (activeRelPath.value ? `${activeSerial.value}/${activeRelPath.value}` : '当前目录');
+const matcher = useAvatarMatcher();
+const { job: applyJob, acting: applyActing, track: trackApply, stop: stopApply, detach: detachApply } =
+    useAssistantJob(onApplySettled, msg => notify('error', '操作没生效', msg));
+
+const busy = computed(() =>
+    scanning.value || matcher.live.value || applyJob.value?.status === 'running' || applyJob.value?.status === 'paused');
+
+const counts = computed(() => countRows(rows.value));
+const scopeLabel = computed(() => {
+    if (props.currentPath) return props.currentPath;
+    const rel = activeRelPath.value ? `/${activeRelPath.value}` : '';
+    return activeSerial.value ? `${activeSerial.value}${rel}` : '当前目录';
 });
+const allSelected = computed(() => rows.value.length > 0 && rows.value.every(r => r.selected));
+/** 匹配是否跑过（决定底栏是"开始匹配"还是"写入"） */
+const matchStarted = computed(() => matcher.total.value > 0);
+const matchedCount = computed(() => rows.value.filter(r => r.state === 'matched').length);
+const task = computed(() => buildAvatarTask(
+    { live: matcher.live.value, paused: matcher.paused.value, stopped: matcher.stopped.value, done: matcher.done.value, total: matcher.total.value },
+    applyJob.value ? { status: applyJob.value.status, processed: applyJob.value.progress.processed, total: applyJob.value.progress.total } : null,
+    counts.value,
+));
 
-const matchedCount = computed(() => {
-    return candidates.value.filter(c => c.status === 'matched').length;
-});
+// ── 行操作 ──────────────────────────────────────────────────
+/** 匹配/写入进行中 ⇒ 锁住勾选（匹配会自己勾，写入队列也已经发出去了） */
+const rowLocked = computed(() => matcher.live.value || isLiveJob(applyJob.value));
 
-const selectedCount = computed(() => {
-    return candidates.value.filter(c => c.selected && c.avatarUrl).length;
-});
-
-const isAllSelected = computed(() => {
-    const actionable = candidates.value.filter(c => !!c.avatarUrl);
-    return actionable.length > 0 && actionable.every(c => c.selected);
-});
-
-const isIndeterminate = computed(() => {
-    const actionable = candidates.value.filter(c => !!c.avatarUrl);
-    const count = actionable.filter(c => c.selected).length;
-    return count > 0 && count < actionable.length;
-});
-
-function onClose() {
-    emit('update:show', false);
-}
-
-function selectAll(val: boolean) {
-    candidates.value.forEach(c => (c.selected = val && !!c.avatarUrl));
-}
-
-function selectMatchedOnly() {
-    candidates.value.forEach(c => {
-        c.selected = c.status === 'matched' && !!c.avatarUrl;
-    });
-}
-
-function toggleSelectAll(e: Event) {
-    const checked = (e.target as HTMLInputElement).checked;
-    selectAll(checked);
-}
-
-async function resolveDriveContext() {
-    activeSerial.value = '';
-    activeRelPath.value = '';
-    activeIsOnline.value = false;
-
-    if (props.serial) {
-        activeSerial.value = props.serial;
-        activeRelPath.value = props.relPath || '';
-        activeIsOnline.value = props.isOnline ?? true;
+const toggleRow = (row: AvatarRow) => {
+    if (rowLocked.value) return;
+    // 没有图就没东西可写：勾上只会让"写入 N 个"和实际动作对不上
+    if (!row.avatarUrl) {
+        notify('info', '这一行没有图', '先匹配或手动填一张，才能勾选写入');
         return;
     }
-    const pathStr = props.currentPath || '';
-    if (!pathStr) {
-        activeSerial.value = '';
-        activeRelPath.value = '';
-        activeIsOnline.value = false;
-        return;
-    }
+    row.selected = !row.selected;
+};
 
-    if (pathStr.startsWith('#')) {
-        // 离线只读锚点: #SERIAL/rel/path
-        const rest = pathStr.slice(1);
-        const cut = rest.indexOf('/');
-        activeSerial.value = cut === -1 ? rest : rest.slice(0, cut);
-        activeRelPath.value = cut === -1 ? '' : rest.slice(cut + 1);
-        activeIsOnline.value = false;
-        return;
-    }
+const onRename = (row: AvatarRow, name: string) => {
+    row.cleanName = name.trim();
+};
 
-    // 在线盘符: H:/...
-    const match = pathStr.match(/^([A-Za-z]):[\\/]?/);
-    if (match) {
-        const letter = match[1].toUpperCase();
-        activeRelPath.value = pathStr
-            .replace(/^[A-Za-z]:[\\/]?/, '')
-            .replace(/\\/g, '/')
-            .replace(/^\/+/, '')
-            .replace(/\/+$/, '');
-        try {
-            let res = (await getAction(`${API_BASE}/getDisks`)) as {
-                disks?: { serial: string; drive: string; online?: boolean }[];
-            };
-            let disk = (res.disks || []).find(d => d.drive?.toUpperCase() === letter);
-            // 若内存缓存盘表中未找到，加 refresh=true 重新探测系统挂载盘符
-            if (!disk || !disk.serial) {
-                res = (await getAction(`${API_BASE}/getDisks?refresh=true`)) as {
-                    disks?: { serial: string; drive: string; online?: boolean }[];
-                };
-                disk = (res.disks || []).find(d => d.drive?.toUpperCase() === letter);
-            }
-            if (disk && disk.serial) {
-                activeSerial.value = disk.serial;
-                activeIsOnline.value = disk.online !== false;
-            } else {
-                activeIsOnline.value = false;
-            }
-        } catch {
-            activeIsOnline.value = false;
-        }
-    }
-}
+const onManualInput = (row: AvatarRow, url: string) => {
+    row.manualUrl = url;
+};
 
-async function runScan() {
-    if (!activeSerial.value || !activeIsOnline.value) return;
-    scanning.value = true;
-    hasScanned.value = true;
-    applyResult.value = null;
+const selectMatchedOnly = () => {
+    if (rowLocked.value) return;
+    for (const row of rows.value) row.selected = row.state === 'matched';
+};
 
-    try {
-        const res = (await postAction(`${API_BASE}/assistant/avatar/scan`, {
-            serial: activeSerial.value,
-            relPath: activeRelPath.value,
-            source: activeSource.value,
-        })) as {
-            code: number;
-            candidates: {
-                relDir: string;
-                folderName: string;
-                cleanName: string;
-                matchedName: string | null;
-                avatarUrl: string | null;
-                status: 'matched' | 'unmatched';
-                source?: 'javbus' | 'gfriends';
-            }[];
-            error?: string;
-        };
+const toggleSelectAll = () => {
+    if (rowLocked.value) return;
+    const next = !allSelected.value;
+    for (const row of rows.value) row.selected = next && !!row.avatarUrl;
+};
 
-        if (res.code === 200 && Array.isArray(res.candidates)) {
-            candidates.value = res.candidates.map((c) => ({
-                ...c,
-                selected: c.status === 'matched', // 默认全选已匹配的
-                manualUrl: '',
-            }));
-            if (candidates.value.length === 0) {
-                message.info('当前目录下未发现缺少头像的女优子目录');
-            }
-        } else {
-            message.error(res.error || '扫描失败');
-        }
-    } catch (e) {
-        message.error(`扫描请求出错: ${e instanceof Error ? e.message : e}`);
-    } finally {
-        scanning.value = false;
-    }
-}
+/** 显式触发匹配（不跟扫描绑在一起：这一步联网，得由用户决定什么时候开始） */
+const startMatch = () => {
+    if (!rows.value.length || matcher.live.value) return;
+    void matcher.run(rows.value, activeSource.value);
+};
 
-async function recheckName(row: AvatarRow) {
-    const name = row.cleanName.trim();
-    if (!name) return;
+/** 改了名字就重查这一个（Enter / 失焦触发） */
+const recheck = async (row: AvatarRow) => {
+    if (!row.cleanName) return;
+    row.state = 'matching';
+    const outcome = await matcher.rematch(row, activeSource.value);
+    if (outcome === 'matched') notify('success', '已匹配', row.matchedName || row.cleanName);
+    else notify('info', '没找到', `${row.cleanName}：可以改个写法，或手动填图`);
+};
 
-    try {
-        const res = (await postAction(`${API_BASE}/assistant/avatar/match`, {
-            name,
-            source: activeSource.value,
-        })) as {
-            code: number;
-            matched: boolean;
-            matchedName?: string;
-            avatarUrl?: string;
-            source?: 'javbus' | 'gfriends';
-        };
-
-        if (res.code === 200 && res.matched && res.avatarUrl) {
-            row.status = 'matched';
-            row.matchedName = res.matchedName || name;
-            row.avatarUrl = res.avatarUrl;
-            row.source = res.source;
-            row.selected = true;
-        } else {
-            row.status = 'unmatched';
-            row.matchedName = null;
-            row.avatarUrl = null;
-            row.source = undefined;
-            row.selected = false;
-        }
-    } catch {
-        // 静默处理单条匹配错误
-    }
-}
-
-function applyManualUrl(row: AvatarRow) {
-    const url = row.manualUrl?.trim();
+const applyManual = (row: AvatarRow) => {
+    const url = row.manualUrl.trim();
     if (!url) {
-        message.warning('请输入有效的图片链接');
+        notify('warning', '请输入图片直链');
         return;
     }
     row.avatarUrl = url;
-    row.status = 'matched';
+    row.state = 'matched';
     row.matchedName = row.cleanName || '自定义头像';
+    row.message = '';
     row.selected = true;
-    message.success('已指定头像图片地址');
-}
+};
 
-function handleConfirmApply() {
-    showConfirmPop.value = false;
-    runApply();
-}
-
-async function runApply() {
-    showConfirmPop.value = false;
-    const selectedItems = candidates.value
-        .filter(c => c.selected && c.avatarUrl)
-        .map(c => ({
-            relDir: c.relDir,
-            avatarUrl: c.avatarUrl!,
-        }));
-
-    if (!selectedItems.length) {
-        message.warning('没有可写入的有效条目');
-        return;
-    }
-
-    applying.value = true;
+// ── 扫描 / 匹配 ─────────────────────────────────────────────
+const rescan = async () => {
+    if (!activeSerial.value || !activeIsOnline.value) return;
+    matcher.reset();
+    detachApply();
+    const startedAt = performance.now();
+    scanning.value = true;
+    hasScanned.value = true;
     try {
-        const res = (await postAction(`${API_BASE}/assistant/avatar/apply`, {
+        const res = await postAction(`${API_BASE}/assistant/avatar/scan`, {
             serial: activeSerial.value,
-            items: selectedItems,
-        })) as {
-            code: number;
-            result: {
-                total: number;
-                succeeded: number;
-                failed: number;
-                logs: { relDir: string; status: 'ok' | 'error'; message?: string }[];
-            };
-            error?: string;
-        };
-
-        if (res.code === 200 && res.result) {
-            applyResult.value = {
-                succeeded: res.result.succeeded,
-                failed: res.result.failed,
-            };
-            if (res.result.succeeded > 0) {
-                const okDirs = new Set(res.result.logs.filter((l: any) => l.status === 'ok').map((l: any) => l.relDir));
-                candidates.value = candidates.value.filter(c => !okDirs.has(c.relDir));
-                message.success(`成功写入 ${res.result.succeeded} 个目录头像${res.result.failed > 0 ? `，${res.result.failed} 个失败` : ''}`);
-                emit('applied'); // 触发主网格刷新
-            } else {
-                message.error(`所有 ${res.result.failed} 个头像写入均失败，请检查网络或日志`);
-            }
-        } else {
-            message.error(res.error || '写入失败');
+            relPath: activeRelPath.value,
+        });
+        if (res.code !== 200) {
+            notify('error', '扫描失败', res.error || '');
+            return;
         }
+        rows.value = ((res.candidates ?? []) as { relDir: string; folderName: string; cleanName: string }[])
+            .map(c => ({
+                relDir: c.relDir,
+                folderName: c.folderName,
+                cleanName: c.cleanName,
+                matchedName: null,
+                avatarUrl: null,
+                state: 'pending' as const,
+                selected: false,
+                manualUrl: '',
+                message: '',
+            }));
     } catch (e) {
-        message.error(`写入请求失败: ${e instanceof Error ? e.message : e}`);
+        notify('error', '扫描请求出错', String(e));
     } finally {
-        applying.value = false;
+        // 骨架留满一拍再换行：否则扫盘 30ms 返回，骨架闪一帧就没了（见 scanBeat.ts）
+        await holdScanBeat(startedAt);
+        scanning.value = false;
     }
-}
+};
 
-async function updateIndex() {
+const updateIndex = async () => {
     updatingIndex.value = true;
     try {
-        const res = (await postAction(`${API_BASE}/assistant/avatar/index-update`, {})) as {
-            code: number;
-            actorCount?: number;
-            error?: string;
-        };
+        const res = await postAction(`${API_BASE}/assistant/avatar/index-update`, {});
         if (res.code === 200) {
-            message.success(`Gfriends 索引已更新，收录女优 ${res.actorCount || 0} 位`);
-            if (candidates.value.length > 0) {
-                runScan();
-            }
+            notify('success', '索引已更新', `收录 ${res.actorCount || 0} 位`);
+            if (rows.value.length) await rescan();
         } else {
-            message.error(res.error || '更新索引失败');
+            notify('error', '更新索引失败', res.error || '');
         }
     } catch (e) {
-        message.error(`更新索引出错: ${e instanceof Error ? e.message : e}`);
+        notify('error', '更新索引出错', String(e));
     } finally {
         updatingIndex.value = false;
     }
-}
+};
 
-// 弹窗打开时自动解析盘符并尝试扫描
-watch(
-    () => props.show,
-    async (showVal) => {
-        if (showVal) {
-            hasScanned.value = false;
-            candidates.value = [];
-            applyResult.value = null;
-            await resolveDriveContext();
-            if (activeIsOnline.value && activeSerial.value) {
-                runScan();
-            }
-        }
+const onSourceChange = (value: 'javbus' | 'gfriends') => {
+    activeSource.value = value;
+    if (hasScanned.value && activeSerial.value) void rescan();
+};
+
+// ── 写入 ────────────────────────────────────────────────────
+const startApply = async () => {
+    const items = selectedWithImage(rows.value).map(r => ({ relDir: r.relDir, avatarUrl: r.avatarUrl! }));
+    if (!items.length) {
+        notify('warning', '没有可写入的头像');
+        return;
     }
+    try {
+        const res = await postAction(`${API_BASE}/assistant/jobs`, {
+            kind: 'avatar',
+            serial: activeSerial.value,
+            items,
+        });
+        if (!res.jobId) {
+            notify('info', '没有可写入的头像', res.message || '');
+            return;
+        }
+        if (res.reused) notify('info', '写入', res.message || '上一次写入还没结束');
+        trackApply(res.jobId);
+    } catch (e) {
+        notify('error', '写入启动失败', String(e));
+    }
+};
+
+/** 每拍把 job 的行贴回对应的界面行：绿一个是一个，不等到整批结束 */
+watch(
+    () => applyJob.value?.rows,
+    (list) => {
+        if (!list?.length) return;
+        const byRel = new Map(rows.value.map(r => [r.relDir, r]));
+        for (const r of list as { relDir: string; ok: boolean; message: string }[]) {
+            const row = byRel.get(r.relDir);
+            if (!row) continue;
+            row.state = r.ok ? 'written' : 'writefail';
+            row.message = r.message;
+            if (r.ok) row.selected = false;
+        }
+    },
 );
 
-// 切换数据源时若已扫描过则自动重新扫描
-watch(activeSource, () => {
-    if (activeIsOnline.value && activeSerial.value && hasScanned.value) {
-        runScan();
+function onApplySettled(job: JobSnapshot): void {
+    emit('applied');
+    if (job.status === 'done') {
+        celebrate.value = true;
+        setTimeout(() => (celebrate.value = false), 680);
     }
-});
-</script>
+    if (job.status === 'error') notify('error', '写入失败', job.message);
+    else if (job.status === 'cancelled') notify('info', '写入已终止', job.message);
+    else notify('success', '写入完成', job.message);
+}
 
-<style scoped>
-.avatar-modal-header {
-    display: flex;
-    justify-content: space-between;
-    align-items: center;
-    padding-bottom: 12px;
-    border-bottom: 1px solid var(--n-border-color);
-    margin-bottom: 12px;
-}
-.avatar-modal-path {
-    display: flex;
-    align-items: center;
-    gap: 6px;
-    font-size: 13px;
-    min-width: 0;
-    flex: 1;
-}
-.avatar-modal-actions {
-    display: flex;
-    align-items: center;
-    gap: 8px;
-    flex-shrink: 0;
-}
-.avatar-label {
-    color: var(--n-text-color-3);
-}
-.avatar-path-text {
-    font-weight: 500;
-    color: var(--n-text-color);
-}
-.avatar-hint {
-    color: var(--n-text-color-3);
-    font-size: 12px;
-}
-.avatar-modal-body {
-    flex: 1;
-    display: flex;
-    flex-direction: column;
-    overflow: hidden;
-    position: relative;
-}
-.avatar-modal-center {
-    flex: 1;
-    display: flex;
-    flex-direction: column;
-    align-items: center;
-    justify-content: center;
-}
-.avatar-empty p {
-    font-size: 14px;
-    color: var(--n-text-color-2);
-    margin-bottom: 6px;
-}
-.avatar-table-wrap {
-    flex: 1;
-    display: flex;
-    flex-direction: column;
-    overflow: hidden;
-}
-.avatar-toolbar {
-    display: flex;
-    justify-content: space-between;
-    align-items: center;
-    margin-bottom: 8px;
-}
-.avatar-toolbar-left {
-    display: flex;
-    align-items: center;
-    gap: 8px;
-}
-.avatar-count-info {
-    font-size: 12px;
-    color: var(--n-text-color-3);
-    margin-left: 8px;
-}
-.avatar-list-scroll {
-    flex: 1;
-    overflow-y: auto;
-    border: 1px solid var(--n-border-color);
-    border-radius: 4px;
-}
-.avatar-custom-table {
-    width: 100%;
-    border-collapse: collapse;
-    font-size: 13px;
-}
-.avatar-custom-table th {
-    background-color: var(--n-card-color);
-    padding: 8px 12px;
-    font-weight: 500;
-    text-align: left;
-    border-bottom: 1px solid var(--n-border-color);
-    position: sticky;
-    top: 0;
-    z-index: 2;
-}
-.avatar-custom-table td {
-    padding: 8px 12px;
-    border-bottom: 1px solid var(--n-border-color);
-    vertical-align: middle;
-}
-.avatar-custom-table tr:hover {
-    background-color: var(--n-hover-color);
-}
-.avatar-preview-box {
-    width: 44px;
-    height: 44px;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    background-color: var(--n-color-embedded);
-    border-radius: 4px;
-    overflow: hidden;
-    cursor: pointer;
-}
-.avatar-no-img {
-    font-size: 11px;
-    color: var(--n-text-color-3);
-}
-.avatar-name-cell {
-    max-width: 220px;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-}
-.avatar-modal-footer {
-    display: flex;
-    justify-content: space-between;
-    align-items: center;
-    padding-top: 14px;
-    border-top: 1px solid var(--n-border-color);
-    margin-top: 12px;
-}
-.avatar-applying-status {
-    display: flex;
-    align-items: center;
-    gap: 8px;
-    font-size: 13px;
-    color: var(--n-text-color-2);
-}
-.avatar-result-text {
-    font-size: 13px;
-    color: var(--n-primary-color);
-    font-weight: 500;
-}
-.avatar-footer-btns {
-    display: flex;
-    gap: 10px;
-    align-items: center;
-}
-</style>
+// ── 开关 ────────────────────────────────────────────────────
+const onShowChange = (v: boolean) => {
+    emit('update:show', v);
+};
+
+watch(
+    () => props.show,
+    async (open) => {
+        if (!open) {
+            matcher.reset();
+            detachApply();
+            return;
+        }
+        hasScanned.value = false;
+        rows.value = [];
+        matcher.reset();
+        const ctx = await resolveDriveContext({
+            serial: props.serial || undefined,
+            relPath: props.relPath,
+            isOnline: props.isOnline,
+            currentPath: props.currentPath,
+        });
+        activeSerial.value = ctx.serial;
+        activeRelPath.value = ctx.relPath;
+        activeIsOnline.value = ctx.online;
+        // ⚠️ **不在打开时自动查**（2026-11-08 主人要求）：
+        // 打开面板只解析盘上下文，扫描与匹配都由「扫描 / 开始匹配」显式触发 ——
+        // 这一步会联网，不该在他只是看一眼的时候偷偷跑。
+    },
+);
+</script>

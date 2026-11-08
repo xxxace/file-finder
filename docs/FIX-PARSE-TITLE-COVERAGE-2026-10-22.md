@@ -98,7 +98,7 @@
 ## 七、验收
 
 变的是**主进程**（`electron/server/assistant/match.ts`）⇒ **必须重启 dev**，
-再重开「补封面」弹窗重新扫描才会看到 21（原来是 23）。
+再重开「补封面」弹窗扫描才会看到 21（原来是 23）。
 
 - 解析回归：`node docs/probes/parse-title/run.mjs` → **32/32**
 - scan 回归：`node docs/probes/scan-rules/run.mjs` → 3/3

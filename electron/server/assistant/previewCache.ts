@@ -5,7 +5,7 @@
  * 一张原图可达数百 KB，且 `avatarApply` 批量换头像时直接 `set` 会**绕过**条数闸。
  * 预算放在 Map 内部 ⇒ 任何写入方都受约束，调用点不必各自加守卫。
  *
- * 继承 `Map` 是为了让调用方签名零改动：`applyActressAvatars(..., previewCache)` 收的就是 Map。
+ * 继承 `Map` 是为了让调用方签名零改动：`runAvatarApplyJob(..., { previewCache })` 收的就是 Map。
  */
 
 export type PreviewEntry = { buf: Buffer; type: string | null };

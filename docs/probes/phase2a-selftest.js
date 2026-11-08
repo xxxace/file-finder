@@ -23,7 +23,7 @@
     console.log('① 查在线的盘（会重扫一下盘符，稍等）…');
     const { disks = [] } = await get('/getDisks');
     const online = disks.filter(d => d.online);
-    if (!online.length) return console.warn('没有在线的盘。插上移动盘、在主界面点一下重新扫描，再跑这段。');
+    if (!online.length) return console.warn('没有在线的盘。插上移动盘、在主界面点一下扫描，再跑这段。');
 
     const pick = online.sort((a, b) => (b.covers || 0) - (a.covers || 0))[0];
     console.log(

@@ -2,7 +2,7 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** 为 file-finder 新增独立的「女优头像回收」功能：零读盘定位当前浏览目录下的直属无头像女优子文件夹，自动通过 Gfriends 开源头像库与多 CDN 镜像进行秒级名称匹配，在独立弹窗中提供可视化预览与手动修正，并在确认后对在线盘安全写入 `avatar.jpg` 并使缓存即时生效长脸。
+**Goal:** 为 file-finder 新增独立的「头像回收」功能：零读盘定位当前浏览目录下的直属无头像女优子文件夹，自动通过 Gfriends 开源头像库与多 CDN 镜像进行秒级名称匹配，在独立弹窗中提供可视化预览与手动修正，并在确认后对在线盘安全写入 `avatar.jpg` 并使缓存即时生效长脸。
 
 **Architecture:** 
 - 后端在 `electron/server/assistant/` 下扩展三个轻量独立模块：`gfriends.ts`（Gfriends 索引拉取/缓存与简繁别名归一）、`avatarScan.ts`（直属子目录筛选与番号目录自动剔除）、`avatarApply.ts`（在线盘强校验、受控下载、备份、原子写盘与缓存失效）。
@@ -291,7 +291,7 @@ git commit -m "feat(ui): add AssistantAvatarModal component"
 
 在工具栏操作菜单 options 中新增：
 ```ts
-{ label: '女优头像回收', key: 'avatar-recovery', icon: ... }
+{ label: '头像回收', key: 'avatar-recovery', icon: ... }
 ```
 在操作处理函数中：
 - 绑定点击事件，将 `showAvatarModal` 置为 `true`；

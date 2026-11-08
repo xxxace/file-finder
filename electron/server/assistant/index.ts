@@ -52,10 +52,10 @@ import { scanMissingCovers, deepScanMissingCovers, collectFaces } from './scan';
 import type { ScanTarget, FacePick } from './scan';
 import { getDrives } from '../../utils/driveIdentity';
 import { ensureGfriendsIndex, matchGfriends, getAvatarUrl } from './gfriends';
-import { scanActressFolders } from './avatarScan';
+import { scanActorFolders } from './avatarScan';
 import { searchJavBusActress } from './javbus';
-import { applyActressAvatars } from './avatarApply';
-import type { AvatarApplyItem } from './avatarApply';
+import { runAvatarApplyJob } from './avatarApply';
+import type { AvatarApplyItem, AvatarApplyRow } from './avatarApply';
 
 type ReqLike = http.IncomingMessage & { params?: URLSearchParams; body?: any };
 type SendJson = (res: http.ServerResponse, body: unknown, status?: number) => void;
@@ -391,10 +391,13 @@ export function createAssistantRoutes(deps: AssistantDeps): AssistantRoute[] {
             force?: boolean;
             /** 只对 `kind:'grab'` 有意义：把这一批追加到已有 job（重抓失败项用） */
             jobId?: string;
+            /** 只对 `kind:'avatar'` 有意义：要写入头像的目录与图片地址 */
+            items?: AvatarApplyItem[];
         };
 
         if (body.kind === 'challenge') return startChallenge(body, res);
         if (body.kind === 'apply') return startApply(body, res);
+        if (body.kind === 'avatar') return startAvatarApply(body, res);
         if (body.kind !== 'grab') {
             sendJson(res, { code: 400, error: `未知任务类型：${body.kind ?? '(空)'}` });
             return;
@@ -507,6 +510,42 @@ export function createAssistantRoutes(deps: AssistantDeps): AssistantRoute[] {
         const job = createJob<ApplyRow>('apply', rows.length);
         void runApply(body.serial, rows, job, dataDir, body.picks, deps.scanAndCache);
         sendJson(res, { code: 200, jobId: job.id, total: rows.length });
+    }
+
+    /**
+     * 头像批量写入。与 `startApply` 同一套形状：先建 job、立刻返回 id，再异步跑。
+     * 已有同类任务在跑/暂停 ⇒ 直接把那个还给前端（它自己会挂上去），
+     * 因为界面上写入按钮在任务活着时本来就是禁用的，走到这里说明是重开面板那条路。
+     */
+    async function startAvatarApply(
+        body: { serial?: string; items?: AvatarApplyItem[] },
+        res: http.ServerResponse,
+    ) {
+        if (!body.serial) {
+            sendJson(res, { code: 400, error: '缺少 serial' });
+            return;
+        }
+        const items = (body.items ?? []).filter(i => i?.relDir && i?.avatarUrl);
+        if (!items.length) {
+            sendJson(res, { code: 200, jobId: null, total: 0, message: '没有可写入的头像（这一批没有有效匹配）' });
+            return;
+        }
+
+        const running = listJobs().find(j =>
+            j.kind === 'avatar' && (j.status === 'running' || j.status === 'paused'));
+        if (running) {
+            sendJson(res, {
+                code: 200, jobId: running.id, total: running.progress.total, reused: true,
+                message: '上一次写入还没结束，先继续或终止它',
+            });
+            return;
+        }
+
+        const job = createJob<AvatarApplyRow>('avatar', items.length);
+        void runAvatarApplyJob(body.serial, items, job, {
+            dataDir, previewCache, scanAndCache: deps.scanAndCache,
+        });
+        sendJson(res, { code: 200, jobId: job.id, total: items.length });
     }
 
     async function startChallenge(body: { url?: string; siteId?: string }, res: http.ServerResponse) {
@@ -692,13 +731,13 @@ export function createAssistantRoutes(deps: AssistantDeps): AssistantRoute[] {
     }
 
     async function avatarScan(req: ReqLike, res: http.ServerResponse) {
-        const { serial, relPath, source } = req.body || {};
+        const { serial, relPath } = req.body || {};
         if (!serial) {
             sendJson(res, { code: 400, error: '缺少 serial' });
             return;
         }
         try {
-            const candidates = await scanActressFolders(serial, relPath || '', dataDir, source || 'javbus');
+            const candidates = await scanActorFolders(serial, relPath || '');
             sendJson(res, { code: 200, candidates });
         } catch (e) {
             sendJson(res, { code: 500, error: String(e) });
@@ -741,20 +780,6 @@ export function createAssistantRoutes(deps: AssistantDeps): AssistantRoute[] {
             }
         } catch (e) {
             sendJson(res, { code: 500, error: String(e) });
-        }
-    }
-
-    async function avatarApply(req: ReqLike, res: http.ServerResponse) {
-        const { serial, items } = req.body || {};
-        if (!serial || !Array.isArray(items)) {
-            sendJson(res, { code: 400, error: '缺少 serial 或 items' }, 400);
-            return;
-        }
-        try {
-            const result = await applyActressAvatars(serial, items as AvatarApplyItem[], dataDir, previewCache, deps.scanAndCache);
-            sendJson(res, { code: 200, result });
-        } catch (e) {
-            sendJson(res, { code: 400, error: e instanceof Error ? e.message : String(e) }, 400);
         }
     }
 
@@ -833,10 +858,6 @@ export function createAssistantRoutes(deps: AssistantDeps): AssistantRoute[] {
         }],
         ['/assistant/avatar/match', (req, res) => {
             if (req.method?.toUpperCase() === 'POST') return avatarMatch(req, res);
-            return sendJson(res, { code: 405, error: 'method not allowed' }, 405);
-        }],
-        ['/assistant/avatar/apply', (req, res) => {
-            if (req.method?.toUpperCase() === 'POST') return avatarApply(req, res);
             return sendJson(res, { code: 405, error: 'method not allowed' }, 405);
         }],
         ['/assistant/jobs', (req, res) => {

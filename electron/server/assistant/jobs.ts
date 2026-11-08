@@ -23,7 +23,12 @@
  */
 import { randomUUID } from 'node:crypto';
 
-export type JobKind = 'grab' | 'challenge' | 'apply';
+/**
+ * `avatar` = 女优头像批量写入（2026-11-08 从一次性 POST 改成任务）。
+ * 与 `apply` 分开而不是复用：两者的行形状、并发度、缓存失效口径都不同，
+ * 塞进一个 kind 只会让下游到处 `if`。
+ */
+export type JobKind = 'grab' | 'challenge' | 'apply' | 'avatar';
 export type JobStatus = 'running' | 'paused' | 'done' | 'cancelled' | 'error';
 
 export interface JobProgress {
@@ -142,6 +147,11 @@ export function pauseJob(id: string): boolean {
     if (!job || job.status !== 'running') return false;
     job.status = 'paused';
     job.gate.pause();
+    /**
+     * 暂停 = **不再发新的**。已经在飞的那几条**不掐断** —— 请求已经打出去了，
+     * 让它跑完并如实记入结果，比掐掉重发更省也更诚实（2026-11-08 主人确认的语义：
+     * 「应该暂停的是继续匹配，原先已经在匹配的已经发生了，不影响他们」）。
+     */
     job.progress.current = '';
     return true;
 }
@@ -151,6 +161,8 @@ export function resumeJob(id: string): boolean {
     const job = JOBS.get(id);
     if (!job || job.status !== 'paused') return false;
     job.status = 'running';
+    // ⚠️ 不要在这里换 `controller`：在飞的下载还握着旧的 signal，
+    // 换掉之后 `cancelJob` 就再也 abort 不到它们了。
     job.gate.resume();
     return true;
 }

@@ -1,0 +1,900 @@
+/**
+ * 管理助手工作台 · 共用皮肤（.ffw-* = file-finder workspace）
+ *
+ * 两个面板（补封面 / 头像回收）共用**同一份**视觉实现 —— 不是"长得像"，
+ * 是同一套类。想改一处，两个面板一起变。
+ *
+ * 三条不许破：
+ *   ① 颜色/圆角/字号/时长一律取 `tokens.css`，本文件不出现色值字面量；
+ *   ② 字重只用 400 / 500（中文没有 600 的字形，写了也是假层级）；
+ *   ③ hover 只允许变色与图片微放大，**不允许位移/抬升** —— 密集清单里会抖。
+ */
+
+/**
+ * ⚠️ 这条是**根因修复**，不是补丁，别删。
+ *
+ * 原型是 `*{box-sizing:border-box}` 起手的，我们把皮肤搬过来时漏了它 ——
+ * 于是 `.ffw-field`（`width:100%` + 左右 padding 8 + 1px 边框）比所在栅格列**宽 18px**，
+ * 越界压到右边那列「待匹配」上（2026-11-08 主人：「状态和输入框重叠部分区域」，
+ * 实测输入框右边缘 1055 / 状态起点 1049 ⇒ 重叠 6px）。
+ *
+ * 只作用于 `.ffw-*` 工作台：主界面那套从没做过 border-box 改造，
+ * 全局加会把所有「宽度 + 内边距」的元素改小一圈。
+ * `.ffw-field` 单独列出来是因为 `n-popover` 里的输入框被 teleport 到 body，不在 `.ffw-shell` 里。
+ */
+.ffw-shell,
+.ffw-shell *,
+.ffw-shell *::before,
+.ffw-shell *::after,
+.ffw-field {
+    box-sizing: border-box;
+}
+
+/* ───────── 壳 ───────── */
+.ffw-shell {
+    display: flex;
+    flex-direction: column;
+    height: 100%;
+    min-height: 0;
+    background: var(--ff-canvas);
+    color: var(--ff-text-1);
+    font-size: var(--ff-fs-body);
+}
+
+.ffw-bar {
+    flex: none;
+    height: var(--ff-header-h);
+    display: flex;
+    align-items: center;
+    gap: var(--ff-sp-2);
+    padding: 0 12px;
+    background: var(--ff-chrome-bg);
+    border-bottom: 1px solid var(--ff-line);
+}
+
+.ffw-title {
+    font-size: var(--ff-fs-body);
+    font-weight: 500;
+    white-space: nowrap;
+}
+
+.ffw-sep {
+    width: 1px;
+    height: 16px;
+    background: var(--ff-line-strong);
+    margin: 0 4px;
+    flex: none;
+}
+
+.ffw-meta {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    font-size: var(--ff-fs-eyebrow);
+    color: var(--ff-text-2);
+    white-space: nowrap;
+    overflow: hidden;
+}
+
+.ffw-meta b {
+    font-weight: 500;
+    color: var(--ff-text-1);
+    font-variant-numeric: tabular-nums;
+}
+
+.ffw-meta i {
+    width: 2px;
+    height: 2px;
+    border-radius: 50%;
+    background: var(--ff-text-2);
+    opacity: 0.55;
+}
+
+.ffw-spacer {
+    flex: 1;
+}
+
+.ffw-tools {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+}
+
+/* naive 下拉的触发器把**底色画在子节点 `.n-base-selection-label` 上**，
+   外层 `.n-base-selection` 自己是透明的 —— 悬停规则必须落在 label 上才有效果。
+   ⚠️ 悬停用 `--ff-ctl-on` 不 `--ff-ctl-hover`：深色下后者 == `--ff-field`（同一个 #313131），
+   压在常驻底色上等于没反应。 */
+.ffw-select .n-base-selection:hover .n-base-selection-label {
+    background-color: var(--ff-ctl-on);
+}
+
+/* ⚠️ 入场只做一次（元素插入时）。Vue 就地打补丁不会重插，所以状态更新不会让整表重播 —— 
+   这也是"建一次 DOM + 打补丁"这条纪律的直接收益。 */
+@keyframes ffw-enter-up {
+    from {
+        opacity: 0;
+        transform: translateY(6px);
+    }
+
+    to {
+        opacity: 1;
+        transform: none;
+    }
+}
+
+/* ───────── 控件（三种形态，全站一致） ───────── */
+.ffw-btn {
+    flex: none;
+    height: var(--ff-h-ctl);
+    padding: 0 10px;
+    border: 0;
+    border-radius: var(--ff-r-ctl);
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    font-size: var(--ff-fs-meta);
+    font-weight: 500;
+    color: var(--ff-text-1);
+    background: var(--ff-raised);
+    cursor: pointer;
+    transition: background-color var(--ff-dur-hover) ease, opacity var(--ff-dur-hover) ease;
+}
+
+.ffw-btn:hover {
+    background: var(--ff-raised-hover);
+}
+
+.ffw-btn:focus-visible {
+    outline: 2px solid var(--ff-highlight);
+    outline-offset: 2px;
+}
+
+.ffw-btn:disabled {
+    opacity: 0.4;
+    pointer-events: none;
+}
+
+.ffw-btn--primary {
+    background: var(--ff-action);
+    color: var(--ff-on-action);
+}
+
+.ffw-btn--primary:hover {
+    background: var(--ff-action-hover);
+}
+
+.ffw-btn--ghost {
+    background: transparent;
+}
+
+.ffw-btn--ghost:hover {
+    background: var(--ff-ctl-hover);
+}
+
+.ffw-btn--danger {
+    background: transparent;
+    color: var(--ff-danger);
+}
+
+.ffw-btn--danger:hover {
+    background: var(--ff-raised);
+}
+
+.ffw-icon-btn {
+    flex: none;
+    width: var(--ff-h-ctl);
+    height: var(--ff-h-ctl);
+    /* ⚠️ 必须显式写 0：`<button>` 的 UA 默认是 `padding: 1px 6px`，
+       配上 `width:18px` 之后内容盒只剩 4px，`place-items:center` 再也居中不了 ——
+       勾会整体右偏 3.5px（实测，2026-11-08 主人指出"勾不居中"）。 */
+    padding: 0;
+    border: 0;
+    border-radius: var(--ff-r-ctl);
+    display: grid;
+    place-items: center;
+    color: var(--ff-text-1);
+    background: transparent;
+    cursor: pointer;
+    transition: background-color var(--ff-dur-hover) ease, opacity var(--ff-dur-hover) ease;
+}
+
+.ffw-icon-btn:hover {
+    background: var(--ff-ctl-hover);
+}
+
+.ffw-icon-btn:disabled {
+    opacity: 0.35;
+    pointer-events: none;
+}
+
+.ffw-field {
+    width: 100%;
+    height: var(--ff-h-ctl);
+    padding: 0 8px;
+    border: 1px solid transparent;
+    border-radius: var(--ff-r-ctl);
+    background: var(--ff-field);
+    color: var(--ff-text-1);
+    font-size: var(--ff-fs-meta);
+    transition: border-color var(--ff-dur-hover) ease;
+}
+
+.ffw-field:focus {
+    outline: none;
+    border-color: var(--ff-highlight);
+    background: var(--ff-raised-hover);
+}
+
+/* 悬停只换底色、不描边：描边是"我正在编辑"的信号，不该被鼠标借走 */
+.ffw-field:hover:not(:focus) {
+    background: var(--ff-raised-hover);
+}
+
+/* ───────── 主区 ───────── */
+.ffw-stage {
+    flex: 1;
+    min-height: 0;
+    overflow: hidden auto;
+    padding: 20px 24px 24px;
+    scrollbar-gutter: stable;
+}
+
+.ffw-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(184px, 1fr));
+    gap: var(--ff-sp-4);
+}
+
+/* ───────── 封面卡 ───────── */
+.ffw-card {
+    position: relative;
+    padding: 6px 6px 8px;
+    border-radius: var(--ff-r-card);
+    background: var(--ff-panel);
+    outline: 2px solid transparent;
+    transition: background-color var(--ff-dur-hover) ease, outline-color var(--ff-dur-hover) ease;
+    animation: ffw-enter-up var(--ff-dur-move) var(--ff-ease-move) both;
+}
+
+.ffw-card:hover {
+    background: var(--ff-raised);
+}
+
+.ffw-card.is-sel {
+    outline-color: var(--ff-highlight);
+}
+
+.ffw-card.is-sel:hover {
+    background: var(--ff-highlight-weak);
+}
+
+.ffw-card__media {
+    position: relative;
+    aspect-ratio: var(--ff-cover-ratio);
+    border-radius: 8px;
+    overflow: hidden;
+    background: var(--ff-field);
+    display: grid;
+    place-items: center;
+}
+
+.ffw-card__ph,
+.ffw-card__art {
+    position: absolute;
+    inset: 0;
+    display: grid;
+    place-items: center;
+    font-size: var(--ff-fs-eyebrow);
+    letter-spacing: 0.14em;
+}
+
+.ffw-card__ph {
+    color: var(--ff-text-2);
+    background: linear-gradient(135deg, var(--ff-raised), var(--ff-panel));
+    transition: opacity var(--ff-dur-move) var(--ff-ease-exit);
+}
+
+.ffw-card__art {
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+    opacity: 0;
+    filter: blur(8px);
+    transform: scale(1.03);
+    transition:
+        opacity var(--ff-dur-move) var(--ff-fade-in-delay),
+        filter var(--ff-dur-move) var(--ff-ease-move),
+        transform var(--ff-dur-move) var(--ff-ease-move);
+}
+
+.ffw-card[data-state='ok'] .ffw-card__art,
+.ffw-card[data-state='written'] .ffw-card__art {
+    opacity: 1;
+    filter: none;
+    transform: none;
+}
+
+.ffw-card[data-state='ok'] .ffw-card__ph,
+.ffw-card[data-state='written'] .ffw-card__ph {
+    opacity: 0;
+}
+
+/* 抓取中：占位**整块让位**给像素点阵。
+   以前留 0.3 透明度的标题，字从点阵里透出来 = 两层图案打架，正是"看着难受"的一半原因；
+   标题在卡下方的 `.ffw-card__cap` 已经有一份，这里不需要再挂一个更淡的。 */
+.ffw-card[data-state='pending'] .ffw-card__ph {
+    opacity: 0;
+}
+
+.ffw-card[data-state='blocked'],
+.ffw-card[data-state='miss'],
+.ffw-card[data-state='noid'] {
+    outline-color: var(--ff-warn);
+}
+
+.ffw-card[data-state='error'],
+.ffw-card[data-state='writefail'] {
+    outline-color: var(--ff-danger);
+}
+
+.ffw-card__badge {
+    position: absolute;
+    left: 6px;
+    bottom: 6px;
+    height: 20px;
+    padding: 0 6px;
+    border-radius: var(--ff-r-pill);
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    font-size: var(--ff-fs-eyebrow);
+    font-weight: 500;
+    color: var(--ff-text-1);
+    background: var(--ff-popover);
+    box-shadow: var(--ff-shadow-lift);
+}
+
+.ffw-card__check {
+    position: absolute;
+    left: 6px;
+    top: 6px;
+    width: 20px;
+    height: 20px;
+    /* UA 默认 `padding: 1px 6px` 会把勾推偏（同 .ffw-icon-btn 那条注释） */
+    padding: 0;
+    border-radius: var(--ff-r-pill);
+    border: 1px solid var(--ff-line-strong);
+    background: var(--ff-popover);
+    color: transparent;
+    display: grid;
+    place-items: center;
+    cursor: pointer;
+    transition:
+        background-color var(--ff-dur-hover) ease,
+        border-color var(--ff-dur-hover) ease,
+        color var(--ff-dur-hover) ease;
+}
+
+.ffw-card__check:hover:not(:disabled) {
+    border-color: var(--ff-text-2);
+}
+
+/* 任务进行中：勾选禁用（点了没效果的事，不如不让点） */
+.ffw-card__check:disabled,
+.ffw-row__check:disabled {
+    opacity: 0.4;
+    cursor: default;
+}
+
+.ffw-card.is-sel .ffw-card__check {
+    background: var(--ff-highlight);
+    border-color: var(--ff-highlight);
+    color: var(--ff-on-highlight);
+}
+
+.ffw-card__cap {
+    display: flex;
+    align-items: baseline;
+    gap: 6px;
+    padding: 8px 4px 0;
+}
+
+.ffw-card__name {
+    min-width: 0;
+    font-size: var(--ff-fs-meta);
+    font-weight: 500;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.ffw-card__kind {
+    margin-left: auto;
+    flex: none;
+    font-size: var(--ff-fs-eyebrow);
+    color: var(--ff-text-2);
+}
+
+.ffw-card__path {
+    padding: 2px 4px 0;
+    min-width: 0;
+    font-size: var(--ff-fs-eyebrow);
+    color: var(--ff-text-2);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+/* ───────── 行卡片 ───────── */
+.ffw-rows {
+    display: flex;
+    flex-direction: column;
+    gap: var(--ff-sp-2);
+}
+
+.ffw-row {
+    display: grid;
+    /* 状态列给它量够的位置：「已匹配 · JavBus」实测 103px，100px 会顶到「换图」 */
+    grid-template-columns: 18px 48px minmax(0, 1.4fr) minmax(0, 1fr) 116px 76px;
+    align-items: center;
+    gap: var(--ff-sp-3);
+    padding: 8px 12px;
+    border-radius: var(--ff-r-ctl);
+    background: var(--ff-panel);
+    outline: 1px solid transparent;
+    transition: background-color var(--ff-dur-hover) ease, outline-color var(--ff-dur-hover) ease;
+    animation: ffw-enter-up var(--ff-dur-move) var(--ff-ease-move) both;
+}
+
+.ffw-row:hover,
+.ffw-row:focus-within {
+    background: var(--ff-raised);
+}
+
+/**
+ * 选中**不铺底色**，只留描边 + 勾选框。
+ *
+ * 原因：匹配成功会自动勾上（让「写入 N 个」直接可用）。若选中同时铺蓝底，
+ * 一批跑完整屏就是一片蓝 —— 「已匹配」的绿字绿勾全被盖掉，看起来像"匹配=变蓝"
+ * （2026-11-08 主人：「匹配到应该是绿色不是蓝色」）。
+ * 「选中」用描边表达、「匹配结果」用状态色表达，两条通道互不抢。
+ */
+.ffw-row.is-sel {
+    outline-color: var(--ff-highlight-line);
+}
+
+.ffw-row__check {
+    width: 18px;
+    height: 18px;
+    /* UA 默认 `padding: 1px 6px` 会把勾推偏（同 .ffw-icon-btn 那条注释） */
+    padding: 0;
+    border: 1px solid var(--ff-line-strong);
+    border-radius: 5px;
+    background: transparent;
+    color: transparent;
+    display: grid;
+    place-items: center;
+    cursor: pointer;
+    transition:
+        background-color var(--ff-dur-hover) ease,
+        border-color var(--ff-dur-hover) ease,
+        color var(--ff-dur-hover) ease;
+}
+
+.ffw-row.is-sel .ffw-row__check {
+    background: var(--ff-highlight);
+    border-color: var(--ff-highlight);
+    color: var(--ff-on-highlight);
+}
+
+.ffw-row__check:hover:not(:disabled) {
+    border-color: var(--ff-text-2);
+}
+
+/* 行内动作按钮比工具条矮一档：它跟着 48px 的头像对齐，28 会显得压不住行高 */
+.ffw-row__act .ffw-btn {
+    height: 24px;
+    padding: 0 8px;
+}
+
+.ffw-row__face {
+    position: relative;
+    width: 48px;
+    height: 48px;
+    border-radius: 50%;
+    overflow: hidden;
+    display: grid;
+    place-items: center;
+    background: var(--ff-field);
+    outline: 1px solid var(--ff-line);
+    color: var(--ff-text-2);
+}
+
+.ffw-row[data-state='miss'] .ffw-row__face {
+    outline: 1px dashed var(--ff-warn);
+}
+
+.ffw-row__avatar {
+    position: absolute;
+    inset: 0;
+    width: 100%;
+    height: 100%;
+    display: block;
+    opacity: 0;
+    filter: blur(6px);
+    transform: scale(1.04);
+    transition:
+        opacity var(--ff-dur-move) var(--ff-fade-in-delay),
+        filter var(--ff-dur-move) var(--ff-ease-move),
+        transform var(--ff-dur-move) var(--ff-ease-move);
+}
+
+.ffw-row[data-state='matched'] .ffw-row__avatar,
+.ffw-row[data-state='written'] .ffw-row__avatar {
+    opacity: 1;
+    filter: none;
+    transform: none;
+}
+
+.ffw-row__text {
+    min-width: 0;
+}
+
+.ffw-row__name {
+    font-size: var(--ff-fs-body);
+    font-weight: 500;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.ffw-row__path {
+    font-size: var(--ff-fs-eyebrow);
+    color: var(--ff-text-2);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.ffw-row[data-state='miss'] .ffw-field {
+    /* 原型是 42% 的告警色：实色描边会把"没找到"喊成"出错了"，而它只是个没命中 */
+    border-color: color-mix(in srgb, var(--ff-warn) 45%, transparent);
+}
+
+/* 状态列：允许被压缩，长文案自己省略 —— 宁可省略，也**不许越界压到隔壁**（2026-11-08） */
+.ffw-row__state {
+    min-width: 0;
+}
+
+.ffw-state {
+    display: flex;
+    align-items: center;
+    gap: 5px;
+    min-width: 0;
+    font-size: var(--ff-fs-eyebrow);
+    color: var(--ff-text-2);
+    white-space: nowrap;
+}
+
+.ffw-state > .n-icon {
+    flex: none;
+}
+
+.ffw-state__text {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+/* 来源跟着状态一起上色（已匹配 → 绿），只是不允许被压缩 */
+.ffw-state__src {
+    flex: none;
+}
+
+.ffw-state.is-ok {
+    color: var(--ff-ok);
+}
+
+.ffw-state.is-warn {
+    color: var(--ff-warn);
+}
+
+.ffw-state.is-err {
+    color: var(--ff-danger);
+}
+
+/* ───────── 底栏 ───────── */
+.ffw-dock {
+    position: relative;
+    flex: none;
+    height: 52px;
+    display: flex;
+    align-items: center;
+    gap: var(--ff-sp-3);
+    padding: 0 16px;
+    background: var(--ff-panel);
+    border-top: 1px solid var(--ff-line);
+}
+
+/* 进度线画在底栏上边缘：0 布局占用，两个阶段共用同一条 */
+.ffw-dock__rail {
+    position: absolute;
+    left: 0;
+    right: 0;
+    top: -1px;
+    height: 2px;
+    overflow: hidden;
+    pointer-events: none;
+    opacity: 0;
+    transition: opacity var(--ff-dur-move) ease;
+}
+
+.ffw-dock.is-live .ffw-dock__rail {
+    opacity: 1;
+}
+
+.ffw-dock__rail i {
+    display: block;
+    height: 100%;
+    width: 100%;
+    transform-origin: left center;
+    background: var(--ff-highlight);
+    /* 进度不用缓动：缓动会骗人（前快后慢看着像卡住） */
+    transition: transform var(--ff-dur-move) linear, background-color var(--ff-dur-move) ease;
+}
+
+.ffw-dock[data-phase='pause'] .ffw-dock__rail i {
+    background: var(--ff-text-2);
+}
+
+.ffw-dock[data-phase='done'] .ffw-dock__rail i {
+    background: var(--ff-ok);
+}
+
+/* 完成时的一次性光雾：只此一处、只此一瞬、纯白不引入彩色 */
+.ffw-dock__glow {
+    position: absolute;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    height: 150px;
+    opacity: 0;
+    pointer-events: none;
+    transition: opacity 620ms ease;
+    background: radial-gradient(115% 100% at 50% 118%, var(--ff-glow), transparent 68%);
+}
+
+.ffw-dock.is-celebrate .ffw-dock__glow {
+    opacity: 1;
+}
+
+/* 文字形变：旧字上移淡出、新字下移淡入（同节点，位置不动） */
+.ffw-dock__line {
+    position: relative;
+    flex: 1;
+    display: grid;
+    align-items: center;
+    min-width: 0;
+}
+
+.ffw-dock__line > * {
+    grid-area: 1 / 1;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    min-width: 0;
+}
+
+.ffw-announce-enter-from {
+    opacity: 0;
+    transform: translateY(6px);
+}
+
+.ffw-announce-enter-active {
+    transition:
+        opacity var(--ff-fade-in) var(--ff-fade-in-delay),
+        transform var(--ff-dur-move) var(--ff-ease-move);
+}
+
+.ffw-announce-leave-to {
+    opacity: 0;
+    transform: translateY(-6px);
+}
+
+.ffw-announce-leave-active {
+    transition:
+        opacity var(--ff-dur-exit) linear,
+        transform var(--ff-dur-exit) var(--ff-ease-exit);
+}
+
+.ffw-dock__status {
+    font-size: var(--ff-fs-meta);
+    font-weight: 500;
+    white-space: nowrap;
+}
+
+.ffw-dock__status em {
+    font-style: normal;
+    font-variant-numeric: tabular-nums;
+}
+
+.ffw-dock__detail {
+    min-width: 0;
+    font-size: var(--ff-fs-eyebrow);
+    color: var(--ff-text-2);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.ffw-dock__pulse {
+    flex: none;
+    width: 6px;
+    height: 6px;
+    border-radius: 50%;
+    background: var(--ff-highlight);
+    animation: ffw-pulse 1.6s ease-in-out infinite;
+}
+
+.ffw-dock[data-phase='pause'] .ffw-dock__pulse {
+    background: var(--ff-warn);
+    animation: none;
+}
+
+.ffw-dock[data-phase='done'] .ffw-dock__pulse {
+    background: var(--ff-ok);
+    animation: none;
+}
+
+@keyframes ffw-pulse {
+    0%,
+    100% {
+        opacity: 1;
+        transform: scale(1);
+    }
+
+    50% {
+        opacity: 0.3;
+        transform: scale(0.8);
+    }
+}
+
+.ffw-dock__actions {
+    flex: none;
+    min-width: 236px;
+    display: flex;
+    justify-content: flex-end;
+    gap: var(--ff-sp-2);
+}
+
+/* ───────── 骨架 ───────── */
+.ffw-skel {
+    padding: 6px 6px 8px;
+    border-radius: var(--ff-r-card);
+    background: var(--ff-panel);
+    animation: ffw-breathe 1.6s ease-in-out infinite;
+}
+
+.ffw-skel__media {
+    aspect-ratio: var(--ff-cover-ratio);
+    border-radius: 8px;
+    background: var(--ff-raised);
+}
+
+.ffw-skel__line {
+    height: 9px;
+    margin: 10px 4px 0;
+    border-radius: 4px;
+    background: var(--ff-raised);
+}
+
+.ffw-skel__line.is-short {
+    width: 56%;
+    margin-top: 6px;
+}
+
+.ffw-skel-row {
+    display: flex;
+    align-items: center;
+    gap: var(--ff-sp-3);
+    padding: 8px 12px;
+    border-radius: var(--ff-r-ctl);
+    background: var(--ff-panel);
+    animation: ffw-breathe 1.6s ease-in-out infinite;
+}
+
+.ffw-skel-row__face {
+    flex: none;
+    width: 48px;
+    height: 48px;
+    border-radius: 50%;
+    background: var(--ff-raised);
+}
+
+.ffw-skel-row__text {
+    flex: 1;
+}
+
+.ffw-skel:nth-child(2n),
+.ffw-skel-row:nth-child(2n) {
+    animation-delay: 0.18s;
+}
+
+.ffw-skel:nth-child(3n),
+.ffw-skel-row:nth-child(3n) {
+    animation-delay: 0.32s;
+}
+
+@keyframes ffw-breathe {
+    0%,
+    100% {
+        opacity: 0.55;
+    }
+
+    50% {
+        opacity: 1;
+    }
+}
+
+/* ───────── 说明性明细（认不出番号那类"只报不算"的清单） ───────── */
+.ffw-details {
+    margin-top: var(--ff-sp-4);
+    padding: 10px 12px;
+    border-radius: var(--ff-r-ctl);
+    background: var(--ff-panel);
+    font-size: var(--ff-fs-eyebrow);
+    color: var(--ff-text-2);
+}
+
+.ffw-details summary {
+    cursor: pointer;
+}
+
+.ffw-details__row {
+    padding: 2px 0 2px 16px;
+}
+
+/* ───────── 提示条 / 空态 ───────── */
+.ffw-notice {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin-bottom: var(--ff-sp-4);
+    padding: 8px 12px;
+    border-radius: var(--ff-r-ctl);
+    background: var(--ff-raised);
+    outline: 1px solid var(--ff-warn);
+    font-size: var(--ff-fs-meta);
+    color: var(--ff-text-1);
+}
+
+.ffw-empty {
+    height: 100%;
+    display: grid;
+    place-items: center;
+    text-align: center;
+    font-size: var(--ff-fs-meta);
+    line-height: 1.7;
+    color: var(--ff-text-2);
+}
+
+.ffw-empty b {
+    display: block;
+    margin-bottom: 4px;
+    font-weight: 500;
+    color: var(--ff-text-1);
+}
+
+@media (prefers-reduced-motion: reduce) {
+    .ffw-skel,
+    .ffw-skel-row,
+    .ffw-dock__pulse {
+        animation: none;
+    }
+
+    /* 入场位移也去掉：留 opacity 就够表达"东西来了" */
+    .ffw-card,
+    .ffw-row {
+        animation: none;
+    }
+}

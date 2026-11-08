@@ -2,7 +2,7 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** 将女优头像回收功能的数据源升级为 JavBus 官方正规摄影棚大头照，支持简繁日汉字自动归一化搜索、本地持久化缓存（0ms 重复命中）、防盗链自动穿透，以及前端界面在 JavBus 与 Gfriends 之间无缝切换。
+**Goal:** 将头像回收功能的数据源升级为 JavBus 官方正规摄影棚大头照，支持简繁日汉字自动归一化搜索、本地持久化缓存（0ms 重复命中）、防盗链自动穿透，以及前端界面在 JavBus 与 Gfriends 之间无缝切换。
 
 **Architecture:** 新建 `electron/server/assistant/javbus.ts` 演员检索与解析模块，结合 `siteFetch` / `net.request` 与持久化本地 JSON 缓存；在 `apply.ts` 的 `download` 通道中注入 JavBus Referer 避免 403；在 `avatarScan.ts` 与路由中支持 `source: 'javbus' | 'gfriends'`；在 `AssistantAvatarModal.vue` 中提供数据源切换与来源标识。
 

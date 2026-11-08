@@ -189,7 +189,8 @@ function evaluateDocs(
                     continue;
                 }
 
-                if (!parseTitle(e.name).id) {
+                const parsedId = parseTitle(e.name).id;
+                if (!parsedId) {
                     unmatched.push({ dir, name: e.name });
                     continue;
                 }
@@ -203,6 +204,9 @@ function evaluateDocs(
                     writeRel,
                     // 源视频完整路径（含扩展名）—— 文件夹化搬迁用
                     srcRel: joinRel(dir, e.ext ? `${e.name}.${e.ext}` : e.name),
+                    // 番号一并下发：界面要按「一部片一张卡」把分卷收拢，
+                    // 拿不到番号就只能拿文件名当键 ⇒ 8 个分卷显示成 8 张卡。
+                    query: parsedId,
                 });
                 continue;
             }
