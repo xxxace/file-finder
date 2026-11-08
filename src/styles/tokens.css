@@ -1,11 +1,20 @@
 /**
- * Design token —— 深浅两套，只在这里改颜色/圆角/间距。
+ * 设计系统 · **唯一的值来源**（Design Tokens v2，2026-11-07）
  *
- * 为什么前缀是 `--ff-`：本项目里 naive-ui 只提供 `--n-*`，
- * 自定义的 `--color-*` 从来就不存在（2026-10-21 曾因此让 hover/虚线边框整条静默失效）。
- * 自建 token 必须自带命名空间，才不会被误当成"naive 应该给的那个变量"。
+ * 三层结构，单向依赖：
+ *   L1 原始值  —— 只有数值，没有用途；**只允许本文件使用**
+ *   L2 语义    —— 组件与 naive 映射只认这一层
+ *   L3 落地    —— `naive-theme.ts`（读 L2 喂 naive）+ `ui.css`（语义类）
  *
- * 圆角是 token（`--ff-radius-card`）：换回直角只改这一个值，不动任何组件。
+ * 三条不许破：
+ *   ① 业务 `.vue` 里禁止出现 `#hex` / `rgba(`（护栏：`docs/probes/tokens/no-raw-color.mjs`）
+ *   ② naive 的颜色/圆角只走 `naive-theme.ts`，不在 scoped CSS 里 `!important`
+ *   ③ 同一个值不许写两遍
+ *
+ * ⚠️ 无彩是**当前裁决**，不是永久裁决：将来换回品牌色只改 `--ff-accent` / `--ff-on-accent` 两行。
+ * ⚠️ 旧名字（`--ff-bg` `--ff-pink` `--ff-text-3` …）暂留为**别名**，逐屏替换完在 Task 8 删除。
+ * ⚠️ 前缀必须是 `--ff-`：naive-ui 只提供 `--n-*`，自定义 `--color-*` 在本项目**从来不存在**
+ *    （2026-10-21 曾因此让 hover / 虚线边框整条静默失效）。
  */
 
 :root {
@@ -13,87 +22,301 @@
   /* ⚠️ 必须显式给 html 一个背景。不设就是 UA 的**纯白**：
      `.shell` 用的是 `height: 100vh`，而 100vh 在非整数 DPR（本机 1.25）下会被取整成整数、
      比真实视口小 0.x px，那圈就露出 html ⇒ 主题切换时底部/右边闪白边（2026-11-07 实测定位）。 */
-  background: var(--ff-bg);
+  background: var(--ff-canvas);
 
-  /* 面 */
-  --ff-bg: #f1f2f3;
-  --ff-surface: #ffffff;
-  --ff-fill: #f6f7f8;
-  --ff-fill-strong: #eceef1;
-  --ff-line: #e3e5e7;
+  /* ════════ L1 原始值 · 尺度（与主题无关） ════════ */
+  --ff-raw-card: 10px;
+  --ff-raw-ctl: 8px;
+  --ff-raw-pill: 6px;
+  --ff-raw-fs-title: 15px;
+  --ff-raw-fs-body: 13px;
+  --ff-raw-fs-meta: 12px;
+  --ff-raw-fs-eyebrow: 11px;
+  --ff-raw-sp-1: 4px;
+  --ff-raw-sp-2: 8px;
+  --ff-raw-sp-3: 12px;
+  --ff-raw-sp-4: 16px;
+  --ff-raw-sp-6: 24px;
 
-  /* 字 */
-  --ff-text-1: #18191c;
-  --ff-text-2: #61666d;
-  --ff-text-3: #9499a0;
-  /* 助手弹层的次要说明文字（原为 6 处散落的 #a1a1a1）—— 比 text-3 略浅，同样"读得到、不抢眼" */
-  --ff-text-muted: #a1a1a1;
+  /* ════════ L1 原始值 · 颜色（浅色主题） ════════ */
+  /* ⚠️ 2026-11-07 第二版：原来的 #f7f7f8 太浅，白卡片贴上去几乎没有边界（Δ明度约 3%），
+     整个界面像"蒙了一层雾"。拉回到 #f1f2f3 才让"白卡片浮在灰底上"成立。 */
+  --ff-raw-n0: #f1f2f3;
+  --ff-raw-n1: #ffffff;
+  /* ⚠️ 2026-11-08：原来是 #f6f7f8 / #eceef1 —— 在纯白面板上只差 2%~3%，hover 和输入框
+     几乎看不出来，叠在一起就像"蒙了层脏灰"。浅色主题的抬升必须比深色更狠一点才看得见。 */
+  --ff-raw-n2: #eef0f2;
+  --ff-raw-n3: #e3e5e8;
+  --ff-raw-t1: #18191c;
+  --ff-raw-t2: #61666d;
+  --ff-raw-line: rgba(0, 0, 0, 0.09);
+  --ff-raw-line-strong: rgba(0, 0, 0, 0.16);
 
-  /* 品牌 */
-  --ff-pink: #fb7299;
-  --ff-pink-deep: #e85b83;
-  --ff-pink-weak: rgba(251, 114, 153, 0.12);
-  --ff-blue: #00aeec;
-  --ff-blue-deep: #0095cc;
-  --ff-blue-weak: rgba(0, 174, 236, 0.12);
+  /* ════════ L2 语义 · 面（三档，靠明度差分区） ════════ */
+  --ff-canvas: var(--ff-raw-n0);
+  --ff-panel: var(--ff-raw-n1);
+  --ff-raised: var(--ff-raw-n2);
+  --ff-raised-hover: var(--ff-raw-n3);
+  /* ════════ L2 语义 · 输入框底（**不是** `--ff-raised`） ════════
+     判据：输入框必须"一眼看出这里可以打字"。它靠**底色与所在面的明度差**成立，
+     而 `--ff-raised` 在深色下贴 #1f1f1f 面板只差 5 级 —— 框和背景糊在一起
+     （2026-11-08 主人："过滤框的颜色太浅了"）。
+     参考 WorkBuddy 搜索框实测：画布 #141414 / 框 #262626，明度差 **18**，无描边。
+     面板 31 + 18 = 49 = #313131，取同量级。浅色下 #eef0f2 贴白面板差 17，本来就够。 */
+  --ff-field: var(--ff-raised);
+  /* ════════ L2 语义 · 界面外框（左轨 + 顶部操作栏，2026-11-08 主人给定值） ════════
+     这两块是同一类东西（chrome），所以共用同一组 token —— 改一处两边一起变。
+     ⚠️ 顶栏试过毛玻璃，2026-11-08 主人裁定改回**纯色**：工具类界面的顶栏是"固定的框"，
+     不是"浮在内容上的层"，玻璃会让滚动的封面在路径文字下面闪动。 */
+  --ff-chrome-bg: var(--ff-panel);
+  --ff-chrome-line: #e6e6e6;
+  --ff-chrome-icon: #171717;
+  --ff-chrome-active: #ebebeb;
+  --ff-header-h: 44px;
+  /* ════════ L2 语义 · 控件反馈两档（按钮 / 开关 / 模式标签共用） ════════
+     「悬停」直接取左轨那个值 ⇒ 鼠标扫过左轨和扫过工具条是**同一个灰**（主人 2026-11-08：
+     "按钮或者模式的悬浮或者选中背景色要和左边的菜单栏统一"）。
+     「选中 / 按下」再离底色远一档，这样"悬停"和"选中"不再同色（原来两者都吃
+     `--ff-raised-hover`，指着已选中的按钮时看不出它是不是开着）。
 
-  /* 结构 */
+     ⚠️ 选中色**不能**拿 `--ff-raised-hover` 顶：深色下它是 #2a2a2a，比 `--ff-chrome-active`
+     (#313131) 更暗 —— 深色主题的"选中"该比"悬停"更亮（VS Code 就是这么分的），
+     用现成那档会让两个主题的明暗方向反过来。所以深色单独给一个 #3a3a3a。 */
+  --ff-ctl-hover: var(--ff-chrome-active);
+  --ff-ctl-on: var(--ff-raw-n3);
+  --ff-line: var(--ff-raw-line);
+  --ff-line-strong: var(--ff-raw-line-strong);
+  /* 卡片描边：浅色下靠它给白卡片定边界；深色下设为 transparent（靠明度差就够，加线反而脏） */
+  --ff-card-outline: rgba(0, 0, 0, 0.06);
+
+  /* ════════ L2 语义 · 字体 ════════
+     ⚠️ **这是全站唯一的字体栈**（`naive-theme.ts` 也读它，不许再写第二份）。
+     Geist = 西文/数字，MiSans VF = 中文，两者都在 `public/fonts/` 里自托管、**都是可变字体**
+     ⇒ `font-weight: 500` 现在**真实生效**（400 与 500 是两个真实字形，不是同一个）。
+
+     ⚠️ 历史坑（2026-11-08 上午实测）：在这之前字体栈只有系统字体，而
+     `Segoe UI` 命中 `SegUIVar.ttf`（可变）但 `Microsoft YaHei` 只有 msyh/msyhbd/msyhl 三档（300/400/700）。
+     CSS 字重匹配规则：请求 500 而字体缺 500 ⇒ 向下取 400 ⇒ **中文的 500 等于 400，零变化**。
+     现在的 `'MiSans VF'`（`font-weight: 1 999`）修掉了这件事；但它按 `unicode-range` 分片，
+     **只覆盖常用汉字 + 拉丁，一个假名都没有**（实测 `U+3040~30FF` 零命中）。
+     本项目文件名里假名极多 ⇒ 假名会掉到下一个字体，那一行的汉字和假名就不是同一个字族。
+     所以 `'Noto Sans SC'` 插在 MiSans 之后：汉字已被 MiSans 接住，只有假名落到它身上
+     （它含假名，也是可变字体）。发行版机器若没装 Noto 就继续回退雅黑 —— 回退链不能砍，
+     砍了缺字就是豆腐块。 */
+  --ff-font: 'Geist', 'MiSans VF', 'Noto Sans SC', -apple-system, 'Segoe UI', 'Microsoft YaHei', 'PingFang SC', system-ui, sans-serif;
+
+  /* ════════ L2 语义 · 字（**只有两档**） ════════ */
+  --ff-text-1: var(--ff-raw-t1);
+  --ff-text-2: var(--ff-raw-t2);
+  /* ════════ L2 语义 · 高亮（唯一彩色） ════════
+     2026-11-07 第二版裁决：**高亮色只用在三处** —— 卡片选中、悬浮、输入框焦点。
+     其余一切（按钮、导航、文字、边框）保持 WorkBuddy / Codex 那套中性灰。
+     ⇒ 所以它叫 `--ff-highlight` 而不是 accent：名字要说真话，避免有人拿它去涂按钮。
+     ⚠️ 想换色相只改这 5 行。 */
+  --ff-highlight: #049eff;
+  --ff-highlight-hover: #33b1ff;
+  --ff-highlight-pressed: #0086db;
+  --ff-highlight-weak: rgba(4, 158, 255, 0.12);
+  --ff-highlight-line: rgba(4, 158, 255, 0.7);
+
+  /* ════════ L2 语义 · 顶部进度条（2026-11-08 · 照搬 galaxy-effort-slider 的轨道） ════════
+     ⚠️ **这是对「无彩」的唯一例外**：主人 2026-11-08 裁决「全抄人家的，并且也用紫色，
+     那个大脑图标不要」。它是一次性状态指示器、不可点，与 `--ff-danger-badge` 同性质。
+     ⚠️ 这组**不随主题变**：参考的深靛底在浅色下对比更强，别为浅色再调一版。
+     ⚠️ 点阵必须**多排**才像 galaxy —— 4px 高只有一排、本质就是虚线（2026-11-08 第一版翻车处）。
+     排数与格子由**代码按高度换算**（`draw.ts`：每 8px 一排，格子 = 高度 / 排数），与参考的
+     「40px 高 / 8px 格 / 5 排」同密度。当前 12px ⇒ 2 排 × 6px 格。
+     ⚠️ 只改这一个值不用同步改别处，但光晕大小与画布高度会跟着变（`pad = h*3`）。 */
+  --ff-bar-h: 12px;
+  /* 轨道底只画在「已填充」那一段上 ⇒ 它的宽度本身就是进度 */
+  --ff-bar-base: linear-gradient(90deg, #10091d, #25123f);
+  /* 点阵六色：**原样照抄**参考的 palette（2026-11-08 主人：「完全抄人家的」） */
+  --ff-bar-px-1: #80d5d8;
+  --ff-bar-px-2: #dc8cd5;
+  --ff-bar-px-3: #b3a3e8;
+  --ff-bar-px-4: #7061b5;
+  --ff-bar-px-5: #f4c1eb;
+  --ff-bar-px-6: #6656a0;
+  /* 前缘光晕三色（替代大脑图标那两层 drop-shadow）。参考源码里的值是 #8351ff 与 #7543fc70。
+     ⚠️ **必须有 `--ff-bar-glow-core` 这一档偏白的亮心**：原版光晕的中心是被大脑图标自己
+     顶亮的，图标去掉后只画一圈紫 = 一坨"死紫"（2026-11-08 主人原话）。 */
+  --ff-bar-glow-core: #d9ccff;
+  --ff-bar-glow: #8351ff;
+  --ff-bar-glow-soft: #7543fc;
+
+  /* ════════ L2 语义 · 动作（主按钮 = 反色，不引入色相） ════════ */
+  --ff-action: var(--ff-text-1);
+  --ff-action-hover: #000000;
+  --ff-action-pressed: #333333;
+  --ff-on-action: #ffffff;
+  /* ════════ L2 语义 · 媒体浮层（图片预览的工具条） ════════
+     ⚠️ 这组**不随主题变**：预览层永远压在照片上，背景永远是"照片"，
+     所以它必须始终是深色 chrome + 浅色字。浅色主题下用白底反而看不清。
+     2026-11-08 主人：字体/图标色有问题、背景要毛玻璃或半透明，不要全透明。 */
+  --ff-media-bar-bg: rgba(16, 16, 16, 0.55);
+  --ff-media-bar-line: rgba(255, 255, 255, 0.10);
+  --ff-media-icon: #f2f2f2;
+  --ff-media-icon-hover: #ffffff;
+
+  /* 计数角标专用红（2026-11-08 主人要求用回红 badge）。
+     它是**唯一**允许的彩色非交互元素 —— 只报数字，不参与"能点哪"。
+     ⚠️ 别拿 `--ff-danger` 替它：那个只做文字与 1px 描边，而这个要撑色块。 */
+  --ff-danger-badge: #d03050;
+  --ff-on-danger: #ffffff;
+  /* 语义色只做**文字与 1px 描边**，不做色块（见 SPEC §六.1） */
+  --ff-danger: #b93a32;
+  --ff-warn: #8a6a12;
+  --ff-ok: #3f7a4f;
+
+  /* ════════ L2 语义 · 圆角 / 字号 / 行高 / 间距 ════════ */
+  --ff-r-card: var(--ff-raw-card);
+  --ff-r-ctl: var(--ff-raw-ctl);
+  --ff-r-pill: var(--ff-raw-pill);
+  --ff-fs-title: var(--ff-raw-fs-title);
+  --ff-fs-body: var(--ff-raw-fs-body);
+  --ff-fs-meta: var(--ff-raw-fs-meta);
+  --ff-fs-eyebrow: var(--ff-raw-fs-eyebrow);
+  --ff-sp-1: var(--ff-raw-sp-1);
+  --ff-sp-2: var(--ff-raw-sp-2);
+  --ff-sp-3: var(--ff-raw-sp-3);
+  --ff-sp-4: var(--ff-raw-sp-4);
+  --ff-sp-6: var(--ff-raw-sp-6);
+  --ff-h-nav: 48px;
+  --ff-h-list: 34px;
+  --ff-h-table: 36px;
+  --ff-h-head: 32px;
+  --ff-h-ctl: 28px;
+
+  /* 结构常量 */
   --ff-scroll: #c9cdd4;
   --ff-mask: rgba(0, 0, 0, 0.45);
+  --ff-rail-w: 64px;
+  --ff-grid-gap: 16px;
+  /* ⚠️ 2026-11-07 起**不再使用**：网格是 `repeat(N, minmax(0,1fr))`，列数必须精确等于密度档的 N
+     （否则 `useGridCursor` 的「列数变了就失效行结构缓存」判据永不触发，方向键会错位）。保留作记号。 */
+  --ff-grid-min-cell: 110px;
+  /* 封面比例：改这一个值就能整体换比例（16/10、4/3 都行） */
+  --ff-cover-ratio: 3 / 2;
+
+  /* 浮层（下拉/弹层）与菜单悬停。
+     ⚠️ 2026-11-07 主人反馈"菜单悬浮背景色过淡"：原来浮层底＝raised(#f6f7f8)、悬停＝#eceef1，
+     两者差不到 3% 明度，等于没反馈。改成「浮层用最亮的白、悬停用实打实的灰」。 */
+  --ff-popover: var(--ff-panel);
+  --ff-menu-hover: rgba(0, 0, 0, 0.10);
+
+  /* 卡片抬升阴影。深色下大而虚（不靠阴影分区，只为"这一张在最前面"）；
+     浅色下必须小而淡 —— 浅底上的深阴影会变成一圈脏灰，就是主人说的"好丑"。 */
+  --ff-shadow-lift: 0 2px 10px rgba(0, 0, 0, 0.1);
+
+
+  /* 提示胶囊：**浅色下不走玻璃**。
+     ⚠️ 2026-11-08 主人反馈"浅色下看起来很脏"：玻璃会吸到身后封面图的颜色（截图里那抹蓝就是透出来的），
+     白底上再叠一层深投影就是一圈灰雾。浅色的正确答案是「不透明白 + 1px 发丝 + 极轻投影」，
+     干净靠边界，不靠透光。深色相反 —— 深色下必须玻璃，见下面那段注释。 */
+  --ff-tip-bg: var(--ff-panel);
+  --ff-tip-text: var(--ff-text-1);
+  --ff-tip-shadow: 0 4px 12px rgba(0, 0, 0, 0.08), inset 0 0 0 1px rgba(0, 0, 0, 0.08);
+  --ff-tip-backdrop: none;
+
+  /* naive Tooltip 的小气泡 —— **不是**上面那组。
+     `--ff-tip-*` 只服务左轨那颗自绘浮标（44px 按钮旁边、要磨砂、要发丝边）。
+     naive 的 tooltip 是「一行字 + 箭头」的纯信息气泡，白底在这个界面里没有边界可依，
+     所以它走反色：浅色下深片白字。 */
+  --ff-tooltip-bg: rgba(0, 0, 0, 0.86);
+  --ff-tooltip-text: #ffffff;
+
+  /* ════════ 兼容别名（Task 8 删除） ════════ */
+  --ff-bg: var(--ff-canvas);
+  --ff-surface: var(--ff-panel);
+  --ff-fill: var(--ff-raised);
+  --ff-fill-strong: var(--ff-raised-hover);
+  --ff-text-3: var(--ff-text-2);
+  --ff-text-muted: var(--ff-text-2);
+  --ff-pink: var(--ff-highlight);
+  --ff-pink-deep: var(--ff-highlight);
+  --ff-pink-weak: var(--ff-highlight-weak);
+  --ff-blue: var(--ff-highlight);
+  --ff-blue-deep: var(--ff-highlight);
+  --ff-blue-weak: var(--ff-highlight-weak);
   --ff-shadow-1: 0 2px 10px rgba(0, 0, 0, 0.08);
 
-  /* 左轨提示胶囊。两套都**只用调色板里已有的颜色**，不发明新色：
-     浅色主题 = 反色墨块（#18191c = --ff-text-1），和 n-tooltip 一样是"反色浮层"；
-     深色主题 = 抬一档的实心面（#2f3134 = --ff-fill-strong）—— 近黑底上再往下压只会像挖了个洞。 */
-  --ff-tip-bg: #18191c;
-  --ff-tip-text: #ffffff;
-  /* 白底上要一点投影才浮得起来；半径收小、透明度压低（LeiBox 只有 7%，别按常规 20%+ 来） */
-  --ff-tip-shadow: 0 4px 14px rgba(0, 0, 0, 0.16);
+  /* 旧尺度别名 */
+  --ff-radius-card: var(--ff-r-card);
+  --ff-radius-ctl: var(--ff-r-ctl);
+  --ff-radius-pill: var(--ff-r-pill);
 
-  --ff-radius-card: 6px;
-  --ff-radius-ctl: 8px;
-  --ff-radius-pill: 4px;
-
-  --ff-grid-gap: 16px;
-  /* ⚠️ 2026-11-07 起**不再使用**：网格改成 `repeat(N, minmax(0, 1fr))` —— 列数必须精确等于
-     密度档的 N（否则 `useGridCursor` 的"列数变了就失效行结构缓存"判据永远不触发，方向键会错位）。
-     原来"窄窗自动降档"的机制（`min-width` + `flex-wrap`）已连同 flex 布局一起删掉。
-     保留这个 token 只是留个记号，别再往 CSS 里引用。 */
-  --ff-grid-min-cell: 110px;
-  --ff-rail-w: 64px;
-  /* 封面比例：实测本库缩略图多在 1.6 左右；先 16:10，主人看过觉得还能再高 ⇒ 3:2。
-     改这一个值就能整体换比例（16/10、4/3 都行）。 */
-  --ff-cover-ratio: 3 / 2;
+  /* naive-ui 圆角小档在若干处按 4px 硬编码，保留一个记号位 */
+  --ff-radius-xs: 4px;
 }
 
 [data-theme='dark'] {
   color-scheme: dark;
 
-  --ff-bg: #18191c;
-  --ff-surface: #1f2022;
-  --ff-fill: #242527;
-  --ff-fill-strong: #2f3134;
-  --ff-line: #2f3134;
+  /* L1 · 颜色（深色主题，值取自 WorkBuddy 实测：画布 #141414 / 面板 #1f1f1f） */
+  --ff-raw-n0: #141414;
+  --ff-raw-n1: #1f1f1f;
+  --ff-raw-n2: #242424;
+  --ff-raw-n3: #2a2a2a;
+  --ff-raw-t1: #ededed;
+  --ff-raw-t2: #8f8f8f;
+  --ff-raw-line: rgba(255, 255, 255, 0.08);
+  --ff-raw-line-strong: rgba(255, 255, 255, 0.14);
+  --ff-chrome-bg: #1f1f1f;
+  --ff-chrome-line: #262626;
+  --ff-chrome-icon: #ebebeb;
+  --ff-chrome-active: #313131;
+  /* `--ff-ctl-hover` 不用重写：它指向 `--ff-chrome-active`，到这里自动变成 #313131。
+     选中态必须显式给值 —— 深色的"抬一档"是**更亮**，而 `--ff-raw-n4` 这个槽位不存在，
+     所以直接写值（#3a3a3a 在 #313131 之上再亮 9 级，指着已选中的按钮时一眼能分）。 */
+  --ff-ctl-on: #3a3a3a;
+  /* 深色下输入框要再亮一档：面板 31 + 18（WorkBuddy 实测的明度差）= 49 = #313131。
+     ⚠️ 这不是"又一个灰"：`--ff-raised`(#242424) 在深色面板上只差 5，等于没画框。 */
+  --ff-field: #313131;
 
-  --ff-text-1: #e3e5e7;
-  --ff-text-2: #9499a0;
-  --ff-text-3: #61666d;
+  --ff-danger: #e0655e;
+  --ff-warn: #d3a03a;
+  --ff-ok: #6aa87c;
 
-  --ff-pink-weak: rgba(251, 114, 153, 0.16);
-  --ff-blue-weak: rgba(0, 174, 236, 0.16);
+  /* 高亮：深色下同一个 #049eff 直接可用（在 #141414 上足够亮），只把淡底加一档 */
+  --ff-highlight: #049eff;
+  --ff-highlight-hover: #33b1ff;
+  --ff-highlight-pressed: #0086db;
+  --ff-highlight-weak: rgba(4, 158, 255, 0.16);
+  --ff-highlight-line: rgba(4, 158, 255, 0.55);
 
-  --ff-scroll: #4a4b4d;
+  /* 主按钮＝反色：深色下白底黑字 */
+  --ff-action: var(--ff-text-1);
+  --ff-action-hover: #ffffff;
+  --ff-action-pressed: #d8d8d8;
+  --ff-on-action: #141414;
+
+  /* 深色不加卡片描边：靠明度差分区，加线只会脏 */
+  --ff-card-outline: transparent;
+
+  --ff-scroll: #3f3f3f;
   --ff-mask: rgba(0, 0, 0, 0.55);
-  --ff-shadow-1: 0 2px 10px rgba(0, 0, 0, 0.4);
 
-  /* ⚠️ 深色主题的浮层方向要**反过来**：底色本来就 #1f2022，再往下压（上一版写了 #08090a）
-     就是"挖了个洞"—— 实测周围被黑影糊成 #101012 的渐变，既不像浮层也不属于这套调色板。
-     抬到 --ff-fill-strong 的档位才是这个主题里"更高一层"的表达。
-     ⚠️ **深色下不要投影**：底色本身就黑，任何 rgba(0,0,0,α) 都只会把周围糊成一层灰雾（主人原话"很脏"）。
-     这里靠 #2f3134 与 #1f2022 的色阶（≈LeiBox 的 #1e1e23/#35363a 同样是 23 级）把边缘交代清楚就够了。 */
-  --ff-tip-bg: #2f3134;
-  --ff-tip-text: #e3e5e7;
-  --ff-tip-shadow: none;
+  /* 浮层：深色下浮层要比面板再抬一档（#242424），悬停用 8% 白 —— 比"抬一档灰"更容易看见 */
+  --ff-popover: var(--ff-raised);
+  --ff-menu-hover: rgba(255, 255, 255, 0.12);
+
+  --ff-shadow-lift: 0 2px 12px 4px rgba(0, 0, 0, 0.32);
+
+  /* ⚠️ 深色下不要**外投影**：底色本身就黑，任何 rgba(0,0,0,α) 只会把周围糊成灰雾（主人原话"很脏"）。
+     但也**不能只靠色阶** —— 胶囊会滑到内容上，撞上同色系就糊掉。
+     所以「磨砂玻璃 + 1px 发丝内描边」：描边负责任何背景下都画出边缘，玻璃负责品质感。 */
+  --ff-tip-bg: rgba(42, 42, 42, 0.82);
+  --ff-tip-text: var(--ff-text-1);
+  --ff-tip-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.1);
+  --ff-tip-backdrop: blur(14px) saturate(160%);
+
+  /* naive Tooltip（深色）：底比浮层(#242424)再抬一档，文字**必须**到 text-1。
+     原值 `textColor: textColor2` ⇒ #8f8f8f 压 #242424，12px 下像"被禁用"（主人 2026-11-08："太浅了"）。
+     实测对比度：原 4.8:1 → 现在 #ededed on #2f2f2f ≈ 11.4:1。 */
+  --ff-tooltip-bg: #2f2f2f;
+  --ff-tooltip-text: var(--ff-text-1);
+
+  --ff-shadow-1: 0 2px 10px rgba(0, 0, 0, 0.4);
 }
 
 /* 根节点：原来 body 带着 UA 的 8px margin，与 `100vh` 的页面叠在一起会溢出 */
@@ -104,12 +327,12 @@ body {
 }
 
 body {
-  background: var(--ff-bg);
+  background: var(--ff-canvas);
 }
 
 #app {
   height: 100%;
-  font-family: -apple-system, 'Segoe UI', 'Microsoft YaHei', 'PingFang SC', system-ui, sans-serif;
+  font-family: var(--ff-font);
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
   color: var(--ff-text-1);
@@ -131,7 +354,7 @@ body {
 }
 
 ::-webkit-scrollbar-thumb:hover {
-  background: var(--ff-text-3);
+  background: var(--ff-text-2);
 }
 
 ::-webkit-scrollbar-corner {
