@@ -158,16 +158,17 @@
                         <!-- 激活态见样式 `.toolbar :deep(.is-on)`（灰底 + text-1）。
                              **不用 `type="primary"`**：那会让一个视图开关变成整条工具栏最响的东西
                              （2026-11-07 截图里那块白方块就是它）。 -->
-                        <n-button size="small" :class="{ 'is-on': isFlatView }"
+                        <n-button class="icon-lg" size="small" :class="{ 'is-on': isFlatView }"
                             :disabled="scanning || !canToggleFlat" @click="toggleFlatView">
                             <template #icon>
-                                <!-- 九宫格 = "一格一格铺满" ⇒ 这就是「平铺」本身（tile/flat）。
-                                     ⚠️ 2026-11-08 换过一版 `Layers`（想表达"把层摊平"），
-                                     主人当场否掉："要比较贴近 flat、平铺这种意思的" ——
-                                     `Layers` 画的是"层"，是**被摊的对象**，不是摊完的样子。
-                                     旁边密度那颗仍是 `Grid`（2×2），与这里同为方格 ——
-                                     那是主人的裁决（"原先的已经很好了"），不要为消重再动它。 -->
-                                <n-icon :component="AppsOutline" />
+                                <!-- 2 列 × 3 行的**横向卡片** ⇒ "作品摊开成一片"，这就是平铺本身。
+                                     ⚠️ 换过四版才有定论：`Layers` 画的是"层"、是**被摊的对象**而不是
+                                     摊完的样子，当场被否；Fluent `GridDots` 是 3×3 **实心点**，与密度
+                                     那颗的方格读起来像同一档。现在改为自绘、且刻意用**宽高比 1.65 的
+                                     卡片**而不是正方形 —— 形状语言与密度三档（方格阵）分开，并排也
+                                     不会再被读成"第四档密度"。画法与尺寸见 `components/icons/grid.ts`。
+                                     旁边密度那颗也一并换成自绘方块阵（`GridDensityMenu.vue`）。 -->
+                                <n-icon :component="FlatCards24" />
                             </template>
                         </n-button>
                     </template>
@@ -179,11 +180,14 @@
                     <!-- 只有图标，**不再带"更多"两个字**（主人 2026-11-08：不要两者并用）。
                        三点是跨平台的"更多"惯例，图标本身就够；带文字只是把工具条撑宽。
                        `aria-label` 补无障碍名字（没有文字时读屏会念不出来）。
-                       ⚠️ 位置固定在**最右**（2026-11-08）：兜底入口永远排末端。 -->
-                    <n-button size="small" :disabled="scanning" aria-label="更多">
+                       ⚠️ 位置固定在**最右**（2026-11-08）：兜底入口永远排末端。
+                       ⚠️ 同日换竖三点（Fluent `MoreVertical28Filled`）：竖的在最右端锚定更稳、不会
+                       往外"流"。它纵向墨迹只占 76.8%（原横三点 81%）⇒ 与上面那颗共用
+                       `.icon-lg` 的 20px 一起补回，别在这里单独写尺寸。 -->
+                    <n-button class="icon-lg" size="small" :disabled="scanning" aria-label="更多">
                         <template #icon>
                             <n-icon>
-                                <EllipsisHorizontalOutline />
+                                <MoreVertical28Filled />
                             </n-icon>
                         </template>
                     </n-button>
@@ -428,7 +432,9 @@ import type { Density } from './density';
 import { buildCrumbLayout } from './crumbRows';
 import { dissolveGrid } from './gridDissolve';
 import { decideOpen, isMultiFileCard } from './openDecision';
-import { SearchOutline, RefreshOutline, EllipsisHorizontalOutline, AppsOutline, ArrowBackOutline, CloseOutline } from '@vicons/ionicons5';
+import { SearchOutline, RefreshOutline, ArrowBackOutline, CloseOutline } from '@vicons/ionicons5';
+import { MoreVertical28Filled } from '@/components/icons/fluent';
+import { FlatCards24 } from '@/components/icons/grid';
 import { NButton, NInput, NIcon, NImage, NImageGroup, NTag, NPopover, NSpin, NAlert, NTooltip, NDropdown, useLoadingBar, useDialog } from 'naive-ui';
 import FolderSelector from '@/components/FolderSelector/index.vue';
 import AssistantCoverModal from './AssistantCoverModal.vue';
@@ -2765,6 +2771,17 @@ const onDisksChangedIpc = (_e: unknown, disks: { serial: string; drive: string }
             justify-content: center;
         }
 
+        /* 平铺、密度、更多这三颗单独放到 20px（2026-11-08）。
+           为什么同样 18px 盒子它们看着比邻居小：这三颗的墨迹只占 viewBox 的 75~77%
+           （自绘方块阵 / Fluent 竖三点），而**同一排的搜索、刷新、返回**是 ionicons 的
+           1.1px 空心描边、外轮廓吃到 81.25% —— 差的是"锐度 + 感知面积"，不是尺寸。
+           ⚠️ 必须 `:deep()`：密度那颗的按钮在 `GridDensityMenu` 内部，拿不到本文件的 data-v。
+           ⚠️ `--n-icon-size` 是 Button 内联写在根节点上的，必须 `!important` 才盖得住。
+           嫌小/嫌大就改这一个数，三颗一起变。 */
+        :deep(.icon-lg) {
+            --n-icon-size: 20px !important;
+        }
+
         /* 搜索槽：一颗 28px 图标 ⇄ 一个 220px 输入框（2026-11-08 顶栏升级）。
            ⚠️ `width` 仍然**必须显式给**，不能删：n-input 天生 `width: 100%`，
               一旦直系父级不是定宽盒，它就会撑满整行、把工具条顶到多行
@@ -3123,9 +3140,12 @@ const onDisksChangedIpc = (_e: unknown, disks: { serial: string; drive: string }
     /* 搜索槽：收起 28px（一颗图标）⇄ 展开 220px（输入框）。
        宽度的目的不是动画本身，而是**让位**：地址槽是 `flex: 1`，它一收/一放，
        面包屑那边自动跟着变 —— 所以 `.nav-zone` 一个 transition 都不用写。
-       节奏照 tokens 的「拍内分带」（和面包屑同一拍 200ms）：
-         展开 → 宽度先走满 75% 拍，输入框延迟 25% 才显形（先落位、后显形）；
-         收起 → 内容先在前 45% 消失，宽度延迟到那一刻之后才收（先消失、后收摊）。
+       节奏和面包屑同一拍 200ms，但**展开方向不走「拍内分带」**（2026-11-08 修）：
+         展开 → 宽度满拍 + 输入框同起跑（内容 0→100ms 显形）。
+                别套"先落位、后显形"：宽度不是位移，它的"落位"就是一块**空白**，
+                内容一推迟，眼睛看到的就只是空格子猛然撑开。
+         收起 → 保留"先消失、后收摊"：内容前 45% 淡出，宽度延迟到之后才收 ——
+                这个方向空白是在**变小**，不刺眼，且收窄时不该看到内容被挤。
        ⚠️ 两个方向必须分别写在两端：`.is-open` 里的规则只在"去往 is-open"时生效，
           基础规则只在"回到基础态"时生效。写在一处就只有一个方向有曲线。 */
     .search-slot {
@@ -3133,11 +3153,18 @@ const onDisksChangedIpc = (_e: unknown, disks: { serial: string; drive: string }
         flex: 0 0 auto;
         width: 28px;
         height: 28px;
-        transition: width calc(var(--ff-dur-move) * 0.55) var(--ff-ease-exit) var(--ff-dur-exit);
+        /* 曲线用 `--ff-ease-size` 而不是 `--ff-ease-move`（2026-11-08）：
+           后者初始斜率 5.26，在 192px 的宽度上等于"空白猛弹开"（峰值 6733px/s，
+           面包屑只有 1578px/s）。详见 tokens.css 那条注释。 */
+        transition: width calc(var(--ff-dur-move) * 0.55) var(--ff-ease-size) var(--ff-dur-exit);
 
         &.is-open {
             width: 220px;
-            transition: width calc(var(--ff-dur-move) * 0.75) var(--ff-ease-move);
+            /* 展开**拉满一拍**，不再用 0.75 拍。
+               原来那 25% 是留给"先落位、后显形"的，但宽度不是位移 ——
+               它的"落位"就是一块**空白**，内容被推迟到落位之后 ⇒ 眼睛看到的是
+               "空格子先弹开、输入框才浮现"。内容已改成同起跑，这一拍就该用满。 */
+            transition: width var(--ff-dur-move) var(--ff-ease-size);
         }
 
         /* 收起态的输入框**留在 DOM 里**（只关可见与命中）：`v-if` 会让它没有"上一帧"，
@@ -3151,7 +3178,10 @@ const onDisksChangedIpc = (_e: unknown, disks: { serial: string; drive: string }
         &.is-open .n-input {
             opacity: 1;
             pointer-events: auto;
-            transition: opacity var(--ff-fade-in) linear var(--ff-fade-in-delay);
+            /* ⚠️ **不带** `--ff-fade-in-delay`（2026-11-08）：那个 25% 拍 = 50ms，
+               恰是旧宽度曲线冲完 92% 的时间 ⇒ 前 50ms 观众只看得到空白在撑开。
+               现在宽度同拍走 200ms，内容 0→100ms 同步显形，边在长的过程里内容一直在。 */
+            transition: opacity var(--ff-fade-in) linear;
         }
     }
 
