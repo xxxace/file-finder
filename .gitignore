@@ -13,6 +13,8 @@ dist
 dist-ssr
 *.local
 *.db
+# tsc/vue-tsc 的增量构建缓存（`build` 脚本走 `--noEmit`，这两个文件只有手跑 `tsc -b` 才会生成）
+*.tsbuildinfo
 
 # Editor directories and files
 .idea
