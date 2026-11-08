@@ -1,85 +1,88 @@
 # file-finder 备忘（索引）
 
-> ⚠️ 2026-10-05：本文件曾 **18.7KB 被注入截断**，现压到 ~10KB（+45%→-45%）；**新增细节写 `docs/`，此处最多加一行**。
-> 附录：`MEMORY-APPENDIX-2026-10-03.md`（§九/§十一/§十二）· `-10-04.md`（§十三）· `-10-05.md`（探针细则 / 脱敏清单 / 各期产出 / 当前状态长清单）。
+> 本文件是**索引**：细节一律写 `docs/`，这里最多一行指针。曾 18.7KB 被注入截断两次 ⇒ **上限 ~9KB，新增内容先问「能不能只加一行」**。
+> 附录：`MEMORY-APPENDIX-2026-{10-03,10-04,10-05}.md`（§九/§十一/§十二 · §十三 · 探针细则/脱敏清单/长清单）。
 
 ## 一、最高优先级
 **减少对移动硬盘的读写**，冲突时以此为准；涉及扫盘的方案必须附**读盘清单**。
-- 「零读盘」= 读盘有代价（寻道/耗电/寿命）⇒ **尽可能少读**，**不是"绝对禁止写盘"**（2026-10-03 澄清）。按「读盘代价」逐条标注，别读成一刀切禁令。
+「零读盘」= 读盘有代价（寻道/耗电/寿命）⇒ **尽可能少读**，**不是"绝对禁止写盘"**。
 
 ## 二、协作（他 ADHD + 阅读障碍）
 - 正文 **≤10 行** + 优先**一张图** + 需他做的动作一行；过程/根因/数据落 `docs/`
 - 问「还有哪些没做」→ **只给剩余清单**，不复盘
 - 问「X 能不能/有没有/怎么用」= **认知需求**（讲机制 + 给可自跑实验），结尾**不许**加"要我执行吗"
-- ⚠️ **不许拿"确认"当严谨**（10-03 犯两次）：他**转述的事实**与**做出的裁决** ⇒ 直接采信/接受；**只有我自己的技术主张才需探针证明**。
-- 有**成本梯度**时先摆**成本阶梯**让他选，别替他把最完整那版做完
-- 改主进程 ⇒ **重启 dev**；改扫描逻辑 ⇒ 按**刷新（↻）**重建那条缓存
-- ⚠️ **UI 验证先让他 30 秒目视**（刷新窗口 + 截图 + 控制台红字），**别动不动搭无头探针**（10-21 被当场叫停：搭了 20 分钟还没截到图）。探针只在「静态全对、症状仍在」时用一次；他说「复现」才跑。
+- ⚠️ **不许拿"确认"当严谨**：他**转述的事实**与**做出的裁决** ⇒ 直接采信；**只有我自己的技术主张才需探针证明**
+- 有**成本梯度**时先摆**成本阶梯**让他选
+- 改主进程 ⇒ **重启 dev**；改扫描逻辑 ⇒ 按**刷新（↻）**重建缓存
+- ⚠️ **UI 验证先让他 30 秒目视**，**别动不动搭无头探针**（10-21 被叫停）。探针只在「静态全对、症状仍在」时用一次
 
 ## 三、铁律
-0. **subagent 的「结论」不采信，只采信它指出的位置**（判断自己重算）；压缩/二进制格式**先看真实结构**。
-0.1 **「零引用」≠「该删」**：先问「当初为什么留着」；**判据必须用对字段**（曾拿 base64 长度当"图片大小"，真判据是 **JPEG 宽**）；**`文件:行号` 一律实测核过**（曾照抄 `scan.ts:238`，真实 `:263`/`:472`）。
+0. **subagent 的「结论」不采信，只采信它指出的位置**；压缩/二进制格式**先看真实结构**
+0.1 **「零引用」≠「该删」**：先问「当初为什么留着」；**判据必须用对字段**；**`文件:行号` 一律实测核过**
 0.2 **不许说"这版是终版"**；说"已穷尽"前先问：是我设计的验证，还是只复现了别人的命令？
-1. **特性默认神圣**：他声明过的便捷设计不动；真有问题才**提交讨论**，通过才改。
-2. 其余问题：多视角交叉验证 + 确认没理解错 + 确认真要修 → **用正确的方式修，不许打补丁**（判据=同类场景会不会复发），**必须标证据等级**（静态/推理/实测）。
-3. `grep` 计数不能证"运行时渲染出一份"；**反向也成立**：`import.meta.glob` 会让"被引用"看起来成立 ⇒ 查死代码看**入口有没有人调**。⚠️「引用了但没人用」更隐蔽。
-4. ⚠️ **判「某机制有没有用」必须同查生产者 + 消费者**（曾据 `flexible.ts` 定义 `1rem`、被 `--item-height` 消费这条反向踩坑；只看消费者会判错）。**11-07 已删 `flexible.ts`** —— 前提（`--item-height: 1rem`）在那次重构后消失，`rem`/`hairlines` 零消费，唯一隐式依赖 `body.fontSize=12×dpr` 已搬 `main.ts`。
-5. 不在 `n-space` 放**会增减**的子元素 ⇒ 用裸 flex `.hstack`。
-6. 缓存层**永不自动删**；`wire()` 唯一出口；`CACHE_VERSION=2` 非必要不升；`CACHE_KEY`/`CACHE_IV` **永不可改**。
-7. **脱敏仓库**（`github.com/xxxace/file-finder`）：入库文本不许出现真实番号/演员名/作品名/真机目录名/盘序列号/用户名。⚠️ **最易漏的是探针输出文件**（机器生成，带用户名与绝对路径）⇒ **改探针别打绝对路径，不是事后手改证据**。提交前扫三样（取动态值）+ 必须 `git status --porcelain -uall`。**清单与遗留项 → appendix-10-05 §三**（12 个历史文件待他定，不擅动别的会话文档）。
+1. **特性默认神圣**：他声明过的便捷设计不动；真有问题才**提交讨论**，通过才改
+2. 其余问题：多视角交叉验证 + 确认没理解错 → **用正确的方式修，不许打补丁**（判据=同类场景会不会复发），**必须标证据等级**（静态/推理/实测）
+3. `grep` 计数不能证"运行时渲染出一份"；反向也成立（`import.meta.glob`）⇒ 查死代码看**入口有没有人调**
+4. ⚠️ 判「某机制有没有用」必须**同查生产者 + 消费者**。**11-07 已删 `flexible.ts`**（前提消失、`rem` 零消费；`body.fontSize=12×dpr` 已搬 `main.ts`）
+5. 不在 `n-space` 放**会增减**的子元素 ⇒ 用裸 flex `.hstack`
+6. 缓存层**永不自动删**；`wire()` 唯一出口；`CACHE_VERSION=2` 非必要不升；`CACHE_KEY`/`CACHE_IV` **永不可改**
+7. **脱敏仓库**：入库文本不许出现真实番号/演员名/作品名/真机目录名/盘序列号/用户名。⚠️ 最易漏**探针输出文件** ⇒ **改探针别打绝对路径**。提交前扫三样 + `git status --porcelain -uall`（遗留 12 文件 → appendix-10-05 §三）
 
 ## 四、文档索引
-- ⚠️ **`docs/` 结论可能是错的**（含标着"真根因（静态证据）"的）⇒ 引用前先问「有没有被后来的实测推翻过」。**权威 = `VERDICT-2026-10-03.md`（第四版）**。**各期文档清单 → appendix-10-05 §四**。
-- **开工先读**：`PROJECT-MEMO-2026-09-24.md` · `DESIGN-CONVERGED-2026-09-24.md` §六 · `UX-DESIGN-INPUT-2026-09-24.md`（**§二事实不许推翻／§四神圣清单**）。
-- **没有测试框架** ⇒ 验证三件套：`typecheck` 0 error + `docs/probes/` 只读探针 + 真机目视（**别写 TDD 式假测试**）；探针证据**必须 `.txt`**。⚠️ `@media (max-width)` 看 **viewport** ⇒ 须 `win.setSize()`。**探针细则 → appendix-10-05 §一**。
+- ⚠️ **`docs/` 结论可能是错的**（含标"真根因"的）⇒ 引用前问「有没有被后来的实测推翻过」。**权威 = `VERDICT-2026-10-03.md`（第四版）**
+- **开工先读**：`PROJECT-MEMO-2026-09-24.md` · `DESIGN-CONVERGED-2026-09-24.md` §六 · `UX-DESIGN-INPUT-2026-09-24.md`（**§二事实不许推翻／§四神圣清单**）
+- **没有测试框架** ⇒ 验证三件套：`typecheck` 0 error + `docs/probes/` 只读探针 + 真机目视（**别写 TDD 式假测试**）；证据**必须 `.txt`**；`@media (max-width)` 看 viewport ⇒ 须 `win.setSize()`
 
-## 五、当前状态（长清单全文 → `MEMORY-APPENDIX-2026-10-05.md` §二）
-- ⭐ **11-08 顶部进度条 = galaxy 轨道（Canvas 逐格照抄 `LeiBox/motion-core/galaxy-effort-slider.js` 的 `drawPixels` + `drawSparks`）**：`components/GalaxyLoadingBar/{draw.ts,index.vue}`（**不接管进度**：每帧读 `.n-loading-bar` 的 rect.width + 容器 opacity，naive 仍是唯一真相源； ResizeObserver 启停 RAF ⇒ 空闲零帧）+ `tokens.css` 的 `--ff-bar-*` + `naive-theme.ts` 的 `LoadingBar`。⚠️ **死因判据：galaxy 的特征是「空格 + 明暗不一 + 左稀右密」，CSS 每格一样永远不像 —— 前两版（4px 渐变 / 14px CSS 点阵）都因此被否**。⚠️ **抄光要抄亮度层次不是色值**：光晕必须三层且亮心偏白（`--ff-bar-glow-core`），否则是"死紫"。紫色是「无彩」的**唯一例外**（他明确改判「全抄，用紫色」）。几何随 `--ff-bar-h` 自动换算（每 8px 一排）。探针 `docs/probes/galaxy-bar/pattern.mjs`（假 ctx，无需浏览器）。全文 `docs/FIX-LOADING-BAR-GALAXY-2026-11-08.md`。
-- ⭐ **10-29 网格密度三档已落地**（宽松 6 / 标准 8 / 紧凑 12，下拉切换，localStorage 记住）：列数唯一真相源 `FileFinder/density.ts` → `.image-box` 的 `--ff-grid-cols`；**11-07 起布局改 `grid` + `repeat(N, minmax(0,1fr))`**（原 flex+margin 补偿已删）：列数必须**精确 = N**（否则 `deps.cols` 判据永不触发、方向键错位），窄窗**不再降档**，`--ff-grid-min-cell` 已停用；**切档必须失效 `useGridCursor` 的行结构缓存**（走 `deps.cols`，别在切档回调里手动清）⇒ **待重启 dev 目视**。设计 `docs/DESIGN-GRID-DENSITY-2026-10-29.md`。
-- ⭐ **10-22 补/换封面「暂停·终止·试跑中断」已落地**（`jobs.ts` 加 Gate + pause/resume/reopen；抓取/写盘在取下一条前等闸门；终止保留已抓到的行可写入；`dryrun` 接 abortOnClose；追加 jobId 不再丢命中行）⇒ **待重启 dev 目视**。详情 `docs/FIX-COVER-PAUSE-2026-10-22.md`，探针 `probes/jobs-pause/` 11/11。
-- ⭐ **10-22 webp/视频裂图已修**：根因＝**打包版**里 `@ffmpeg-installer` 的路径在 `app.asar` 内、`spawn` 不走 asar 补丁 ⇒ `ENOENT` ⇒ webp 转码与视频抽帧**全挂**（jpg/png 走 nativeImage 所以正常）；修 4 处：`thumbnail.ts` 加 `realBin()` 重写 + `probeDuration` 先查**视频流**时长 + `extractFrame` 校验产出非空 + 前端无 `thumb` 不渲染 `<img>` + `asarUnpack` 显式化。证据与验收 → `docs/FIX-WEBP-VIDEO-COVER-2026-10-22.md`（探针 `probes/webp-video/`）。**旧缓存失败条目要按 ↻ 才重扫**。
-- ⭐ **Q1 增量对账已落地**（`server/index.ts` 9 处 ~25 行；探针 13 PASS；闸门只在唯一读取点 `readFolder`）⇒ **待重启 dev 目视**。
-- **唯一真缺口 = 全局搜索**：`index.vue:466` 只过滤当前层；`data[].name` 1471/1471 全在内存 ⇒ 纯前端可搜、零读盘（**只下发投影，绝不下发原始 `data[]`**，会冻界面）。
-- **伪缺口**：`create_at` 刷新年龄、抽帧失败率 0.5%、ffprobe 泄漏（已修）。**最高性价比漏项** = cover-blur A 档（真收益 113 个目录，非 116）。**该删 7 项**（撤回 `parseSize`）。`flexible.ts` **11-07 已删**（依据见 §三.4）。
-- 根目录 `searchCache.db` = **主人主动备份** ⇒ 保留；真库在 `%USERPROFILE%\.file-finder\`。基线 `5 盘 · 218 记录(216 cover) · 1471 条目`。视频扩展名单一真相源 `server/videoExt.ts`（改它要同步 `index.vue` 的 `VIDEO_EXT_RE` 并重启 dev）。
-- **已落地**（细节 → appendix §2.4/2.5）：面板 A/B/C · P0-P2 · 加密备份还原 · 离线只读 · 头部+导航 · 助手 P1-2A-5 · 盘条 chips · 预览导航 · 缓存出库 · 弹层重做（均含 10-04/10-05 各期）。
-- ⭐ **10-05 P3.1「站点规则编辑器」已落地**（三段式：入口/动作/抽取）：`docs/DESIGN-RULE-BUILDER-2026-10-05.md` + `PLAN-RULE-BUILDER-P3.1-2026-10-05.md`；后端 `runSteps`（动作**每步只跑一次**、`_blank` 同窗接管）+ `dryrun` 收草稿 + `/assistant/openPage`；前端 `AssistantRulesModal.vue`（入口在「更多」下拉）+ `rules/` 子组件；**P3.1.1** 加「显示窗口 / 打开页面看看」（他对"看不到过程 / 要自己开浏览器研究"的反馈）；**P3.2 已落地**：`urlTemplate.ts` 占位符管道（`{q|noDash|lower|num|raw}`，**URL 拼法不再写死**）+ 「用它做模板」**反推入口地址** + **「点选图片」**（`selectorGen.ts` 稳定性分级 +#id/meta/data-* 优先）+ **「录一遍」**（录制输入/点击，跨页不丢）；机制＝**页面写 sessionStorage + 主进程 400ms 轮询**（Promise 回传会被跳转掐死）；typecheck 0、探针 `probes/rule-builder/` **39/39**（**抓到并修掉 `{q|num}` 把 `FC2` 的 2 吃进去的真 bug**）⇒ **待重启 dev 真机验收**（详见 `docs/IMPLEMENT-RULE-BUILDER-P3.2-2026-10-05.md`；未做：多图组/导入导出/规则体检/多站 fallback）。
-- **待重启 dev 目视**：文件夹 size · 预览抢点击 · 四条（窗口/右键去后缀/角标/标题）· 盘条 chip 提示 · 预览层定位排版 · 网格 384 观感/停住换清晰/离线看大图/zip 还原。
-- n-space 重复 key 已修；`.toolbar{flex-wrap:nowrap}` + `.header-bar .n-input{width:200px}` **两条不许删**。
+## 五、当前状态（长清单 → appendix-10-05 §二）
+- **galaxy 进度层（11-08 二轮已从窗口顶部搬进地址槽 `.nav-zone`、铺满整盒；顶部 `n-loading-bar` 保留只加 `visibility:hidden` —— ⚠️ **不能用 display:none／height:0**，否则 `rect` 全归零、进度比例读不到）**：`components/GalaxyLoadingBar/`（Canvas 照抄 `drawPixels`+`drawSparks`；**不接管进度**，每帧读 `.n-loading-bar` 的 rect.width，naive 仍是唯一真相源；ResizeObserver 启停 RAF）+ `tokens.css` 的 `--ff-bar-*`。判据：**空格 + 明暗不一 + 左稀右密**，CSS 每格一样永远不像（前两版 4px 渐变 / 14px 点阵都被否）；光晕必须三层且亮心偏白，否则"死紫"。探针 `probes/galaxy-bar/pattern.mjs`。全文 `docs/FIX-LOADING-BAR-GALAXY-2026-11-08.md`
+- **11-08 面包屑换层"零位移"+ 节奏统一**（八轮，全部探针实测）：详见 `docs/FIX-CRUMB-MOTION-2026-11-08.md`（**万字，改头部件必读**）。要点：角标槽上移 `.nav-zone` 常驻 48px · 退场抄 rect 钉 absolute 再线性淡出 · 当前段删 `n-spin`（顶文字 7px）· `.scan-bar` 挂卸用 `grid-template-rows: minmax(0,1fr)↔minmax(0,0fr)` · 一拍 **200ms + `cubic-bezier(0.19,1,0.22,1)`**（不过冲）+ 拍内分带 · 目录脸用 `transform: scale(.7↔1)` 不用改宽高 · 网格换内容=只动 opacity（`gridDissolve.ts`，绝不碰几何）· 筛选刻意不做 · 帧级探针用 `nextTick` 同步读 `getComputedStyle`（rAF 会丢帧）· 方向键边界滚动单次 smooth/长按瞬时（`e.repeat`），**禁止 CSS `scroll-behavior:smooth`**
+- **11-08 顶栏升级已落地**：44px 单行三段 `[▤][←/⨯][↻] │ 地址槽(--ff-field 填充,30高,flex:1) │ [⌕][▦][⊞] | [⋯]`，全 28×28；搜索 28 图标⇄220 输入（挤压地址槽，两向 transition 走拍内分带）；返回常驻置灰、栈底变 ⨯；刷新搬进导航区；更多移到最右；密度去文字靠 `.is-on` 表档位。⚠️ **Less `.is-open &` 会编译成 `.is-open .toolbar …`（祖先顺序反、静默失效）**，修饰类一律另起全路径规则；⚠️ 槽上的 hover 只能用 `--ff-ctl-on`（深色下 `--ff-ctl-hover` == `--ff-field`）。全文 `docs/DESIGN-HEADER-UPGRADE-2026-11-08.md`
+- **10-29 网格密度三档**（6/8/12，localStorage）：唯一真相源 `FileFinder/density.ts` → `--ff-grid-cols`；`grid` + `repeat(N,minmax(0,1fr))`，列数必须**精确 = N**；窄窗不降档；切档**必须**失效 `useGridCursor` 行缓存（走 `deps.cols`）。`docs/DESIGN-GRID-DENSITY-2026-10-29.md`
+- **10-22 补/换封面暂停·终止·试跑中断**：`jobs.ts` 加 Gate + pause/resume/reopen。`docs/FIX-COVER-PAUSE-2026-10-22.md`
+- **10-22 webp/视频裂图**：打包版 `@ffmpeg-installer` 在 asar 内 ⇒ `ENOENT` ⇒ webp/抽帧全挂（jpg/png 走 nativeImage 正常）；`thumbnail.ts` 加 `realBin()` + `asarUnpack` 显式化。**旧缓存失败条目要按 ↻ 才重扫**。`docs/FIX-WEBP-VIDEO-COVER-2026-10-22.md`
+- **Q1 增量对账**：`server/index.ts` 9 处 ~25 行，闸门只在 `readFolder`
+- **唯一真缺口 = 全局搜索**：`index.vue` 只过滤当前层；`data[].name` 全在内存 ⇒ 纯前端可搜、零读盘（**只下发投影，绝不下发原始 `data[]`**）
+- **伪缺口**：`create_at` 刷新年龄、抽帧失败率 0.5%、ffprobe 泄漏（已修）
+- 根目录 `searchCache.db` = **主人主动备份** ⇒ 保留；真库在 `%USERPROFILE%\.file-finder\`。基线 `5 盘 · 218 记录 · 1471 条目`。视频扩展名唯一真相源 `server/videoExt.ts`（改要同步 `index.vue` 的 `VIDEO_EXT_RE` + 重启 dev）
+- **10-05 P3.1/P3.2 站点规则编辑器**：三段式 + 占位符管道 `urlTemplate.ts` + 点选图片 + 录一遍（页面写 sessionStorage，主进程 400ms 轮询）。`docs/IMPLEMENT-RULE-BUILDER-P3.2-2026-10-05.md`，探针 39/39
+- **待重启 dev 目视**：底部状态条挂卸 · 网格密度切档 · 文件夹 size · 预览抢点击 · 盘条 chip · 预览层排版 · 离线看大图 · zip 还原 · exe 图标
+- `.toolbar{flex-wrap:nowrap}` + `.header-bar .n-input{width:200px}` **两条不许删**
 
 ## 六、待他动作
-重启 dev · PRD §15/§16 真机自测 · 目视验收离线只读层 · 真机回归导航 · **exe 图标目视**。
-**10-22 起**：关掉运行中的 app 再 `npm run build` 装新 exe（旧 exe 里 ffmpeg 起不来），然后对没封面的目录按 **↻** 重扫。
-❌ 不再待办 `npm install`。**旧结论作废**：`node_modules/.app-builder-bin-*` 与打包无因果 ⇒ 判因果必须 grep 真实 `require`。
+重启 dev · PRD §15/§16 真机自测 · 目视验收离线只读层 · 真机回归导航。
+**打包**：关掉运行中的 app 再 `npm run build`（旧 exe 里 ffmpeg 起不来），再对没封面的目录按 **↻**。❌ 不再待办 `npm install`。
 
 ## 七、暂缓
 视觉去重/以图搜图**砍掉**；盘舰队看板、常驻增量索引**短期不做**；走「功能完善」路线。
 
 ## 八、管理助手（active，只做 JAV）
-- 隐藏 BrowserWindow 抓取（不引 puppeteer/cheerio）；站点规则=JSON 候选链；接口走 `/assistant/*`；UI=全屏 `n-modal`。apply 后**必须 `removeCache` 失效**；`tmp→rename` 原子写 + `apply.log` + 回滚。
-- `cf_clearance` 绑 IP+UA+TLS ⇒ **不能**走 Node `fetch`，全程 Chromium 网络栈。
-- `avatar.jpg`/`cover.jpg` 是**保留名，助手永不写**。降级链：解析出番号 → 站点抓封面；认不出 → **视频抽帧**；都不行 → 手动 URL。**禁止**对"认不出"自动乱搜。
-- `parseTitle` = 有序候选链（FC2 排前；连写无分隔**不识别**；**字母段可混数字 / 数字段可带字母前缀 / 6 位日期型**；**空格不算分隔符**）；**容器判断先于条目判断**。实测/边界 → `docs/FIX-PARSE-TITLE-COVERAGE-2026-10-22.md`，覆盖率探针 `docs/probes/parse-title/{run,coverage,ab}.mjs`（零读盘）。
-- ⚠️ `route()` 精确匹配 pathname ⇒ 任务 id 走 `?id=`；⚠️ 隐藏窗使 `window-all-closed` 永不触发 ⇒ 加 `win.on('closed')` 清理。
-- 站点：`freejavbt`/`javwine`/`javbus`/`javdock`/`onejav` + `javtext.net`，均无账号。
-- **数据在系统盘 `~/.file-finder/`**：`assistant/rules.json`（站点规则，**明文 JSON 为真相源**；删了回落到内置 PRESET 并重写）、`assistant/cover-backup/<serial>/`（**换封面覆盖前**的原图备份；**无自动回滚入口**）、`assistant-hits.jsonl`（命中缓存）、`apply.log`（写入流水，也是「深度重扫」来源）。
+- 隐藏 BrowserWindow 抓取（不引 puppeteer/cheerio）；站点规则=JSON 候选链；接口 `/assistant/*`；UI=全屏 `n-modal`；apply 后**必须 `removeCache`**；`tmp→rename` 原子写 + `apply.log`
+- `cf_clearance` 绑 IP+UA+TLS ⇒ **不能**走 Node `fetch`，全程 Chromium 网络栈
+- `avatar.jpg`/`cover.jpg` 是**保留名，助手永不写**。降级链：番号→站点封面；认不出→**视频抽帧**；都不行→手动 URL。**禁止**对"认不出"自动乱搜
+- `parseTitle` = 有序候选链（FC2 排前；连写无分隔**不识别**；**空格不算分隔符**；容器判断先于条目）：`docs/FIX-PARSE-TITLE-COVERAGE-2026-10-22.md`
+- ⚠️ `route()` 精确匹配 pathname ⇒ 任务 id 走 `?id=`；⚠️ 隐藏窗使 `window-all-closed` 永不触发 ⇒ 加 `win.on('closed')`
+- 站点：freejavbt / javwine / javbus / javdock / onejav / javtext.net，均无账号
+- 数据 `~/.file-finder/`：`assistant/rules.json`（明文真相源，删了回落 PRESET）、`cover-backup/<serial>/`（**无自动回滚入口**）、`assistant-hits.jsonl`、`apply.log`
 
-## 九、实测事实（错了会误导）· 全文 → `docs/MEMORY-APPENDIX-2026-10-03.md` §九
-**图片（10-04 起）**：缩略图 384px/q78、大图长边 2048/q82（源够小原样存）；`t-<sig>`/`p-<sig>` = 同源两尺寸（**`sig` 锚在缩略图字节**），`/preview` 懒生成幂等 ⇒ **点一次后 0 读盘**；加密于 `~/.file-finder/bin/`；**离线/视频大图 = 有没有 `p-*`**。
-**常被引用**：**网格一行 6 个**(`100%/6−10px`+负 margin，别换 gap/nth-child) · **Windows 目录 size 恒 0** ⇒ 唯一不读盘路=缓存子树求和 · 本机无 SVG 光栅化器 ⇒ 无头 Electron。其余（主屏 2048×1280、unmatched 46% 是目录、HistoryTable 换页不重置页码等）→ appendix-10-03 §九。
+## 九、实测事实（错了会误导）· 全文 → appendix-10-03 §九
+**图片**：缩略图 384/q78、大图长边 2048/q82；`t-<sig>`/`p-<sig>` 同源两尺寸（`sig` 锚在缩略图字节），`/preview` 懒生成幂等 ⇒ 点一次后 0 读盘；加密于 `~/.file-finder/bin/`；**离线/视频大图 = 有没有 `p-*`**。
+**常被引用**：网格一行 6 个（旧 flex 方案）· **Windows 目录 size 恒 0** ⇒ 唯一不读盘路=缓存子树求和 · 本机无 SVG 光栅化器 ⇒ 用无头 Electron。
 
 ## 十、五条硬约束（他原话）
-1. **不加「操作」列** —— 打开固定为**双击**。 2. **不要读盘** —— 统计必须纯内存汇总。 3. **尽量不加扫盘功能**，若有**必须主动告诉他**（每轮方案附读盘清单）。 4. 交付前自查：**自洽／有没有误解／有没有把握**（未实测必须标出）。 5. **不允许手动输入/编辑路径**（2026-09-30）—— 路径只能由"点击/选择"产生。
+1. **不加「操作」列** —— 打开固定为**双击**
+2. **不要读盘** —— 统计必须纯内存汇总
+3. **尽量不加扫盘功能**，若有**必须主动告诉他**（每轮附读盘清单）
+4. 交付前自查：**自洽／有没有误解／有没有把握**（未实测必须标出）
+5. **不允许手动输入/编辑路径**（2026-09-30）—— 路径只能由"点击/选择"产生
 
-## 十一、已验证写法 · 全文 → `docs/MEMORY-APPENDIX-2026-10-03.md` §十一
-`render()` 节点 `<style scoped>` 匹配不到 ⇒ 不带 scoped + 外层前缀 · 并发用**请求序号**不用 `if(loading)` · 改下发逻辑先找**唯一出口**，字段只在**下发态**补 · ⚠️ **同一件事有多条路径时必须共用一份实现**（拼 URL 曾有 3 处、抓取有"试跑/正式"两条通道 ⇒ 一次审查各抓出一条真 bug：`{q|noDash}` 在输入框侧被当字面量填进去、正式抓取侧完全忽略动作序列） · **覆盖 naive-ui 主题变量必须 `!important`** · **自绘元素别用 `--color-*`（本项目根本没定义 ⇒ 整条声明静默失效，曾让 hover/虚线边框完全不渲染）**：用项目色值 `#a1a1a1`/`#dbdbdb`/`#f6f7f9`/`rgba(110,123,173,.10)`，或 n-card 内继承的 `--n-*` · **改 naive-ui 定位属性连带清 `transform`**；teleport 出去的 DOM 要非 scoped + 多一层祖先前缀 · 布局坑见 `docs/LAYOUT-GOTCHAS.md`。
+## 十一、已验证写法 · 全文 → appendix-10-03 §十一
+`render()` 节点 `<style scoped>` 匹配不到 ⇒ 不带 scoped + 外层前缀 · 并发用**请求序号**不用 `if(loading)` · 改下发逻辑先找**唯一出口** · ⚠️ **同一件事有多条路径时必须共用一份实现** · **覆盖 naive-ui 主题变量必须 `!important`** · **自绘元素别用 `--color-*`（项目根本没定义）**：用 `#a1a1a1`/`#dbdbdb`/`#f6f7f9`/`rgba(110,123,173,.10)` 或继承 `--n-*` · 改 naive-ui 定位属性连带清 `transform` · teleport 出的 DOM 非 scoped + 多一层祖先前缀 · 布局坑见 `docs/LAYOUT-GOTCHAS.md`
 
-## 十二、两条自检问句 · 全文 → `docs/MEMORY-APPENDIX-2026-10-03.md` §十二
-1. **判据落在"事实"还是"快照"上？** 曾用 `path.startsWith('#')` 判能否打开 ⇒ 盘插回也永久打不开；正解：在**动作那一刻**问服务端。
-2. **尺寸/行数是常量还是用户数据的函数？** 无界内容包 `flex-wrap` ⇒ 高度成数据函数 ⇒ `nowrap`+`min-width:0`+折叠。追问：**固定一侧后另一侧还剩多少？**
+## 十二、两条自检问句 · 全文 → appendix-10-03 §十二
+1. **判据落在"事实"还是"快照"上？**（`path.startsWith('#')` 曾导致盘插回也打不开）
+2. **尺寸/行数是常量还是用户数据的函数？** 无界内容包 `flex-wrap` ⇒ 高度成数据函数 ⇒ `nowrap`+`min-width:0`+折叠
 
-## 十三、注释与文件规模纪律（10-04/10-05 立规）· 全文 → `docs/MEMORY-APPENDIX-2026-10-04.md`
-只留**判据/陷阱**（1~3 行）；**实测数据表 + naive-ui 行号索引 → 搬 `docs/`**；**推理过程 → 删**。
-⚠️ `index.vue` 曾 2304 行、注释 **37.5%**（他当面质问）⇒ **改完自己量**，超 30% 自己提。清理未做（他定「先不动代码」）。
-⚠️ **模块化（2026-10-05 他明确「记住模块化开发，别搞大文件」）**：新写代码**纯逻辑抽 `.ts`**（还可被探针直接 bundle 测）、**UI 按职责拆子组件**；**单个新文件 ≤ ~250 行**。
-示范：`AssistantRulesModal.vue` 我初版 437 行 ⇒ 拆成 219（容器）+ `rules/`（4 子组件 + `ruleDraft.ts`，合计 401）。⚠️ 别过度拆 —— 阈值不是目的，**职责单一**才是。
+## 十三、注释与文件规模纪律 · 全文 → appendix-10-04
+只留**判据/陷阱**（1~3 行）；实测数据表搬 `docs/`；推理过程删。
+⚠️ `index.vue` 曾 2304 行、注释 37.5% ⇒ **改完自己量**，超 30% 自己提。
+⚠️ **模块化**（他明确要求）：纯逻辑抽 `.ts`，UI 按职责拆子组件；**单个新文件 ≤ ~250 行**；别过度拆，**职责单一**才是目的。

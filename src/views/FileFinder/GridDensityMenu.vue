@@ -1,21 +1,21 @@
 <template>
-    <!-- 网格密度切换：一颗按钮 + 下拉三档。
-         为什么不是三段常显按钮组：工具栏已有 4 个控件，1024 最小窗下导航区还要留折叠余量
-         （主人 2026-10-29 裁定「空间不够」）。为什么按钮上带中文：纯图标看不出当前档，
-         而"当前是哪一档"正是这个控件最要紧的信息。 -->
+    <!-- 网格密度切换：一颗图标按钮 + 下拉三档。
+         ⚠️ 2026-11-08 顶栏升级：**去掉了按钮上的中文标签**（原来"▦ 宽松 ⌄"≈88px）。
+         原注释的理由是"纯图标看不出当前档"，那件事改用**按钮自己的激活态**回答：
+         偏离默认档（宽松）时按钮带底色（`.is-on`），与「平铺」同一套语言；
+         另外 `title` / 下拉里的对勾都还在报具体档位。
+         为什么不常显文字：工具条里有 4 颗图标，任何一颗带字都会让它比邻居"高一级"，
+         而"一屏铺几列"是视图偏好、不是主操作。 -->
     <n-dropdown trigger="click" :options="options" :menu-props="menuProps" @select="onSelect">
-        <n-button size="small" :title="`视图密度：${currentLabel}（点击切换）`">
+        <n-button size="small" :class="{ 'is-on': isCustom }" :title="`视图密度：${currentLabel}（点击切换）`"
+            :aria-label="`视图密度：${currentLabel}`">
             <template #icon>
                 <!-- `Grid`（2×2 方格）＝ 布局 / 一屏铺几列。主人 2026-11-08 裁决：
                      这颗"原先的已经很好了"，换 `Resize` 那版被否。
-                     ⇒ 与「平铺」的 `Apps`（3×3 九宫格）确实同为方格，但两颗**都有文字/位置区分**
-                     （密度带"宽松/标准/紧凑"，平铺在它右边且带 tooltip），不必为消重而改。 -->
+                     ⇒ 与「平铺」的 `Apps`（3×3 九宫格）确实同为方格，但两颗都靠位置与
+                     tooltip 区分，不必为消重而改。 -->
                 <n-icon :component="GridOutline" />
             </template>
-            {{ currentLabel }}
-            <!-- 箭头放 default 槽里：naive-ui 的 Button **没有 `suffix` 插槽**
-                 （只有 default / icon / loading），写 `#suffix` 会被静默丢掉。 -->
-            <n-icon :component="ChevronDownOutline" size="12" style="margin-left: 3px; vertical-align: -1px" />
         </n-button>
     </n-dropdown>
 </template>
@@ -23,9 +23,9 @@
 <script setup lang="ts">
 import { computed, h } from 'vue';
 import { NButton, NDropdown, NIcon } from 'naive-ui';
-import { CheckmarkOutline, ChevronDownOutline, GridOutline } from '@vicons/ionicons5';
+import { CheckmarkOutline, GridOutline } from '@vicons/ionicons5';
 import type { DropdownMenuProps, DropdownOption } from 'naive-ui';
-import { DENSITY_OPTIONS, labelOf } from './density';
+import { DENSITY_OPTIONS, DEFAULT_DENSITY, labelOf } from './density';
 import type { Density } from './density';
 
 const props = defineProps<{
@@ -44,6 +44,15 @@ const emit = defineEmits<{
 }>();
 
 const currentLabel = computed(() => labelOf(props.modelValue));
+
+/**
+ * 按钮的激活态：**偏离默认档**才亮。
+ *
+ * 纯图标之后，"当前是哪一档"没有文字可读了 —— 用底色回答"我动过它"，
+ * 用 title / 下拉对勾回答"动到哪一档"。默认档不亮：一进应用就亮着的开关
+ * 会让整条工具条看起来"有东西被选中"，而其实什么都没改过。
+ */
+const isCustom = computed(() => props.modelValue !== DEFAULT_DENSITY);
 
 /**
  * 菜单项：中文名 + 列数。当前档打勾。

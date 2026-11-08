@@ -1,52 +1,39 @@
 <template>
-    <div class="fs-root">
-        <n-space>
-            <!-- 还没选根时：**只放一个文件夹图标**，不占一行字。
-                 （不是表单，那句「请选择文件夹(D)」白占了 ~160px —— 而它在
-                 "冷启动→从缓存记录跳进来"这条路上会和面包屑**同时出现**，真的抢地方。）
-                 ⚠️ 图标按钮**必须**带 tooltip：本项目在「缓存记录」那个纯图标入口上吃过亏 ——
-                 只有图标、没有文字也没有 tooltip ⇒ 功能做得再好也找不到入口。
-                 提示文案就是原来那个 `label`（`请选择文件夹(D)`）⇒ 快捷键提示也没丢。 -->
-            <n-tooltip v-if="!modelValue">
-                <template #trigger>
-                    <n-button class="fs-pick" size="small" @click="handleClick">
-                        <template #icon>
-                            <!-- 2026-11-08 主人要求换回原来的彩色文件夹图：它是"文件夹"的通用符号，
-                                 纯灰描边反而认不出来。 -->
-                            <img class="fs-pick-icon" :src="folderPng" alt="" />
-                        </template>
-                    </n-button>
-                </template>
-                {{ label }}
-            </n-tooltip>
-            <!-- 选中的根路径 = 一个**有界**的字符串。
-                 层级深不会把它撑长：`foldPath()` 把它压成「首段 + … + 末 2 段」，
-                 与"单个名字过长"是两回事，后者由下面的 max-width + 省略号兜。
-                 `title` 里给**完整路径**并说明它的身份 —— 跳转之后这块 chip 可能指向
-                 另一块盘（它只是"起点"，不是"你当前位置"），悬停一句话把它讲清楚，
-                 不额外引一个 tooltip 去和这个 title 抢。 -->
-            <n-tag v-else class="fs-tag" :title="`${modelValue}\n（这是你的起点；点 × 可清除）`">
-                <div class="fs-path">
-                    <span class="fs-text">{{ shownPath }}</span>
-                    <n-button size="tiny" style="margin-left:6px" @click="onClear">x</n-button>
-                </div>
-                <template #avatar>
-                    <n-avatar :src="(folderPng as string)" color="transparent" />
-                </template>
-            </n-tag>
-        </n-space>
-    </div>
+    <!-- 起点选择器（2026-11-08 顶栏升级）：一个 28px 的**彩色**文件夹图标。
+
+         ⚠️ 为什么留彩色图：整条 chrome 是无彩的（中性灰），这枚彩色文件夹 + 当前段的
+         红角标是顶栏**仅有的两处颜色** —— 那是"这是起点"的记忆点，换成灰图标就没了。
+         主人原话："我用彩色图标是想让界面丰富些"。
+
+         ⚠️ 为什么不再是带路径文字的 tag（原来 ≤150px）：
+         起点信息其实**已经重复**在地址槽第一段（盘符）里，同一件事留两遍，
+         正是"三种画法并排（彩色 chip / 文字按钮 / 面包屑）"的来源。
+         全路径仍在 tooltip 里 ⇒ 一个信息都没丢。
+
+         ⚠️ 「清除起点」仍然是**这颗图标上的 ×**：悬停才出现、绝对定位（不占宽度、
+         不推面包屑）。`directory-changed` 里那条"取消 ≠ 清空"的历史坑没变。 -->
+    <n-tooltip>
+        <template #trigger>
+            <div class="fs-root">
+                <button type="button" class="fs-icon-btn" :aria-label="String(label)" @click="handleClick">
+                    <img class="fs-pick-icon" :src="folderPng" alt="" />
+                </button>
+                <button v-if="modelValue" type="button" class="fs-clear" aria-label="清除起点"
+                    @click.stop="onClear">×</button>
+            </div>
+        </template>
+        <span class="fs-tip">{{ modelValue || label }}</span>
+    </n-tooltip>
 </template>
 
 <script lang="ts">
-import { foldPath } from '@/utils';
 import { computed, defineComponent, ref } from 'vue';
 import FolderPng from '@/assets/folder.png';
-import { NButton, NTag, NAvatar, NSpace, NTooltip } from 'naive-ui';
+import { NTooltip } from 'naive-ui';
 import { ipcRenderer } from 'electron';
 
 export default defineComponent({
-    components: { NButton, NTag, NAvatar, NSpace, NTooltip },
+    components: { NTooltip },
     emits: ['change', 'update:modelValue'],
     props: {
         modelValue: String,
@@ -57,6 +44,7 @@ export default defineComponent({
     },
     setup(props, { emit }) {
         const isFocus = ref(false);
+
         const handleClick = () => {
             isFocus.value = true;
             ipcRenderer.send('openDirectory');
@@ -72,9 +60,6 @@ export default defineComponent({
             emit('change', value);
         }
 
-        /** 显示用：层级深度被 `foldPath` 收成有界字符串（全路径仍在 `title` 里） */
-        const shownPath = computed(() => foldPath(props.modelValue || ''));
-
         ipcRenderer.on('directory-changed', function (e, value) {
             if (!isFocus.value) return;
 
@@ -84,7 +69,7 @@ export default defineComponent({
             // 代价大、**不可逆**（要回去得重新选根、重新逐层下钻），而且没有确认、没有撤销 ——
             // 正好撞上项目自己的原则「门槛 ∝ 不可逆 × 波及面」：一个"取消"造成最大范围的
             // 不可逆后果，是这个原则是反的。
-            // 「清空」只归 chip 上那个 × —— 用户**主动点它**才是清空。
+            // 「清空」只归这颗图标上的 × —— 用户**主动点它**才是清空。
             if (!value || !value.length) {
                 isFocus.value = false;   // 对话框已经关了，别让后面的事件误命中
                 return;
@@ -92,67 +77,89 @@ export default defineComponent({
             setValue(value[0]);
         });
 
-        const folderPng: string = FolderPng;
+        /* ⚠️ 原来 tag 里用 `foldPath` 把长路径折成"首段 + … + 末段"；tag 已经没有了，
+           `foldPath` 的消费点随之消失。tooltip 给的是**全路径**、不做折叠 ——
+           提示里再省略一次没有任何意义（`.fs-tip` 负责换行）。 */
+        const folderPng = computed(() => FolderPng as string);
 
         return {
             onClear,
             handleClick,
-            folderPng,
-            shownPath
+            folderPng
         }
     }
 })
 </script>
 
 <style scoped>
-/* 单个名字过长时截断（深度问题已由 foldPath 从字符串层面解决，这里只管"一段太长"）。
-   `min-width: 0` 是必需的：flex 子项默认 `min-width: auto`，不给 0 的话
-   内层文本不会收窄，省略号也就不会出现。 */
-.fs-tag {
-    /* 初值 220px 在 820px 窗口下实测把导航区吃掉了 61%（220/362），面包屑被压成 14px 碎片；
-       降到 150px。全路径永远在 `title` 里，折叠后的形状（首段 + … + 末段）也还在 ——
-       它只是"起点书签"，不需要在窄窗口里霸占大半条导航区。真机可再调。 */
-    max-width: 150px;
+/* 28px 的方块：与顶栏其余图标按钮**同尺寸、同圆角、同悬停色**。
+   不画边框 —— 顶栏里只有"可输入 / 可选值"的面才画框（地址槽、搜索框）。 */
+.fs-root {
+    position: relative;
+    display: inline-flex;
+    flex: 0 0 auto;
 }
 
-/* ⚠️ 这一条是收缩链的**最外一环**，漏了它整条链就断在这儿：
-   `.n-tag__content` 是 n-tag 内部的 flex 子项，默认 `min-width: auto`（≈ 内容宽）
-   ⇒ 它不收窄，下面 `.fs-path` / `.fs-text` 再怎么设 `min-width: 0` 都没用。
-   症状：路径文本**画到盒子外面**、盖在后面几个面包屑标签上（整条头部上肉眼看不出来，
-   是探针的局部放大截图抓到的；实测 文本宽 211px vs 外框 150px）。
-
-   ⚠️ **必须写成"扁平"规则，不能把它嵌套进 `.fs-tag { ... }` 里**：
-   本 style 块是**纯 CSS**（没有 `lang="less"`），嵌套的 `:deep()` 会被 CSS Nesting 搅坏 ——
-   实测编译产物变成 `[data-v-x] .n-tag__content`（**`.fs-tag` 前缀整个丢了**）外加一个游离的 `}`。
-   探针里"打印编译后选择器"这一步就是为了抓这种东西。 */
-.fs-tag :deep(.n-tag__content) {
-    min-width: 0;
-    overflow: hidden;
+.fs-icon-btn {
+    width: 28px;
+    height: 28px;
+    display: grid;
+    place-items: center;
+    padding: 0;
+    border: 0;
+    border-radius: var(--ff-r-ctl);
+    background: transparent;
+    cursor: pointer;
+    transition: background-color var(--ff-dur-hover) linear;
 }
 
-.fs-path {
-    display: flex;
-    align-items: center;
-    min-width: 0;
+.fs-icon-btn:hover {
+    background: var(--ff-ctl-hover);
 }
 
-.fs-text {
-    display: inline-block;
-    /* ⚠️ 这一行不能少：它是 flex 子项，而 flex 子项默认 `min-width: auto`（≈ 内容宽）
-       ⇒ 少了它，长路径**收缩不了**、`text-overflow` 永远不触发，
-       文字会**溢出盒子盖到后面几个面包屑标签上**。
-       （2026-10-01 由探针的局部放大截图抓到：溢出的字画在邻居身上，肉眼在整条头部上看不出来。） */
-    min-width: 0;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-}
-
-/* 图标本身就是文件夹图（用户认的就是它），不要再套一层图标容器给它留白 */
+/* 图标本身就是文件夹（用户认的就是它），不要再套一层容器给它留白 */
 .fs-pick-icon {
     display: block;
-    width: 14px;
-    height: 14px;
+    width: 16px;
+    height: 16px;
     object-fit: contain;
+}
+
+/* 清除起点：悬停才出现。
+   ⚠️ `position: absolute` 是硬要求 —— 若排进文档流，它一出现就把右边的
+   返回 / 刷新 / 面包屑整体推 18px（hover 引起布局位移，是本项目最忌讳的一类）。
+   ⚠️ 底色必须是实心 `--ff-panel`：它压在彩色图标上，透明底会读不清。 */
+.fs-clear {
+    position: absolute;
+    top: -5px;
+    right: -5px;
+    /* 16 而不是 14：它触发的是**不可逆**的清空起点（清导航历史 + 视图 + 搜索词），
+       命中区不能比一颗图标按钮的角还小 —— 门槛 ∝ 不可逆 × 波及面。 */
+    width: 16px;
+    height: 16px;
+    display: grid;
+    place-items: center;
+    padding: 0;
+    border: 1px solid var(--ff-line-strong);
+    border-radius: 50%;
+    background: var(--ff-panel);
+    color: var(--ff-text-2);
+    font-size: 10px;
+    line-height: 1;
+    cursor: pointer;
+    opacity: 0;
+    transition: opacity var(--ff-dur-hover) linear;
+}
+
+.fs-root:hover .fs-clear,
+.fs-clear:focus-visible {
+    opacity: 1;
+}
+
+/* 全路径可能很长：让 tooltip 自己换行，别把它撑成一条横线 */
+.fs-tip {
+    display: inline-block;
+    max-width: 420px;
+    word-break: break-all;
 }
 </style>

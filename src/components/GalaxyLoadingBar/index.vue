@@ -4,18 +4,21 @@
 
 <script setup lang="ts">
 /**
- * 顶部进度条的 galaxy 像素层（galaxy-effort-slider 的轨道，去掉大脑图标）。
+ * galaxy 进度像素层 —— **铺满自己所在的那个盒子**（2026-11-08 第二轮）。
  *
- * ⚠️ 它**不接管**进度条，只是它的"影子"：每帧读 `.n-loading-bar` 的实际宽度和容器不透明度，
- * 在同一位置画像素点 + 前缘光晕 + 放射粒子。这样 naive 仍是唯一的进度真相源
- * （4s 缓爬、收尾淡出、出错变红全部照旧），我们只补它做不到的那一层。
- * ⚠️ 颜色的唯一来源仍是 `tokens.css`：这里只读 `--ff-bar-*`，不写任何色值。
+ * 上一版它是一条贴在窗口顶部的 14px 轨道；主人要求"把效果用到地址栏的盒子里、占满整个盒子"，
+ * 于是几何从"窗口宽 × `--ff-bar-h`"改成"父盒子的实际尺寸 × 100%"，其余一个常数都没动
+ * （逐格相位、左疏右密、三层辉光、放射粒子仍全在 `draw.ts`，那是唯一实现）。
+ *
+ * ⚠️ 它**仍然不接管进度**：每帧读 `.n-loading-bar` 的宽度 ÷ 容器的宽度 = 进度比例，
+ * 再乘本盒子的宽度。naive 依旧是唯一真相源（4s 缓爬、收尾淡出、出错变红全部照旧）。
+ * ⚠️ 顶部那条现在只是 `visibility: hidden`（App.vue 的 container-style）——
+ * **不能用 `display:none` / `height:0`**：那会让 `rect.height` 归零，本层就判成"加载结束"了。
  *
  * ⚠️⚠️ naive 的 `init()` **不重置 `started`** ⇒ 第一次加载之后 `.n-loading-bar-container`
- * 会**永久留在 DOM 里**，只靠 `display:none` 藏起来。两个后果都得挡住（2026-11-08 踩过）：
+ * 会**永久留在 DOM 里**，只靠 `display:none` 藏起来。两个后果都得挡住：
  *   ① 判"还在不在"不能用元素存在性，否则循环永不退出；而且 `display:none` 下 `rect.width`
- *      是 0，辉光会被画在 x=0 上 ⇒ 那团紫光常驻在左上角。判据改成 **`rect.height > 0`**
- *      （藏起来时 height 也归零，而刚起步 width=0 时 height 还是 14，两者能分开）。
+ *      是 0，辉光会被画在 x=0 上 ⇒ 那团紫光常驻在左边缘。判据改成 **`rect.height > 0`**。
  *   ② 后续每次 `start()` 只是把 display 改回来、**不增删节点** ⇒ `MutationObserver(childList)`
  *      不再触发。所以叫醒用 **`ResizeObserver`**（display 切换与宽度动画都会让它报尺寸变化），
  *      childList 观察只负责"第一次出现时把 ResizeObserver 挂上去"。
@@ -32,15 +35,21 @@ let ctx: CanvasRenderingContext2D | null = null;
 let raf = 0;
 let clock = 0;
 let last = 0;
-let barH = 14;
-/** 画布比条高出来的部分：留给前缘光晕向外扩散（按条高算，条越厚光晕越大） */
-let pad = 42;
+/** 本盒子的 CSS 尺寸（画布的坐标系就是它） */
+let boxW = 0;
+let boxH = 0;
 let colors: string[] = [];
 let glowCore = '';
 let glowMid = '';
 let glowSoft = '';
+/** 底色渐变（naive 的 `colorLoading`；顶部那条被藏起来后就由本层代画） */
+let baseFrom = '';
+let baseTo = '';
+/** 出错态的底色：naive 原来是把整条 bar 变红，本层必须接住这个信号（否则出错=效果凭空消失） */
+let errorColor = '';
 let mountObserver: MutationObserver | null = null;
 let sizeObserver: ResizeObserver | null = null;
+let boxObserver: ResizeObserver | null = null;
 let watchedBar: HTMLElement | null = null;
 let reduced: MediaQueryList | null = null;
 
@@ -51,25 +60,39 @@ const readVar = (name: string) => {
     return raw;
 };
 
+/**
+ * 尺寸跟着**父盒子**走，不跟窗口 —— 搜索展开/收起会把地址槽收窄，
+ * 那时 backing store 必须重建，否则点阵会被 CSS 拉伸成一片糊。
+ */
 const resize = () => {
     const canvas = canvasRef.value;
     if (!canvas || !ctx) return;
+    const host = canvas.parentElement;
+    if (!host) return;
+    const rect = host.getBoundingClientRect();
+    boxW = rect.width;
+    boxH = rect.height;
     const dpr = window.devicePixelRatio || 1;
-    canvas.style.height = `${barH + pad}px`;
-    canvas.width = Math.ceil(window.innerWidth * dpr);
-    canvas.height = Math.ceil((barH + pad) * dpr);
+    canvas.width = Math.max(1, Math.ceil(boxW * dpr));
+    canvas.height = Math.max(1, Math.ceil(boxH * dpr));
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
 };
 
-/** 一次布局读取同时回答两件事：条在不在（height>0）、画多宽 */
-const measure = (): { bar: HTMLElement; width: number; height: number; alpha: number } | null => {
+/** 一次布局读取同时回答三件事：还在不在、进度多少、整体透明度 */
+const measure = (): { ratio: number; alpha: number; error: boolean } | null => {
     const bar = document.querySelector<HTMLElement>(BAR);
     if (!bar) return null;
     const rect = bar.getBoundingClientRect();
     if (rect.height <= 0) return null;
     const host = bar.parentElement;
+    const hostW = host ? host.getBoundingClientRect().width : 0;
     const alpha = host ? Number(getComputedStyle(host).opacity) || 0 : 1;
-    return { bar, width: rect.width, height: rect.height, alpha };
+    // hostW 为 0 时别除 —— 那时还没有可画的宽度，交给下面 `ratio >= 0` 的判据
+    return {
+        ratio: hostW > 0 ? rect.width / hostW : 0,
+        alpha,
+        error: bar.classList.contains(BAR_ERROR),
+    };
 };
 
 const frame = (now: number) => {
@@ -78,30 +101,40 @@ const frame = (now: number) => {
 
     const m = measure();
     if (!m) {
-        // 条已藏起来 ⇒ 清屏收工。不留下最后一帧，否则那团光晕就常驻了
-        ctx.clearRect(0, 0, window.innerWidth, barH + pad);
+        // 加载结束 ⇒ 清屏收工。不留下最后一帧，否则那团光晕就常驻了
+        ctx.clearRect(0, 0, boxW, boxH);
         raf = 0;
         return;
     }
 
-    ctx.clearRect(0, 0, window.innerWidth, barH + pad);
+    ctx.clearRect(0, 0, boxW, boxH);
 
-    // width<1 是刚挂上来的头一两帧（max-width 还是 0%）：什么都别画，否则光晕会在左边缘闪一下
-    if (m.width >= 1 && !m.bar.classList.contains(BAR_ERROR) && colors.length && glowMid) {
+    /* ⚠️ 判据是 `ratio > 0`，**没有任何最小阈值**（2026-11-08 主人：
+       "阈值不需要等到 30%，0% 或 10% 就开启"）。之前的死区是自然的：底色没人画、
+       星点又"左疏"，于是在进度爬过某个宽度之前，盒子里看着什么都没有。
+       现在底色从 0 就跟着画 ⇒ 一有进度就有一条紫，不会有一段"看不出在加载"的空窗。 */
+    if (m.ratio > 0 && boxW > 0 && boxH > 0) {
         const dt = last ? Math.min(0.05, (now - last) / 1000) : 0;
         last = now;
         // 减动效下冻结时间 ⇒ 点阵是静帧，但宽度照跟
         if (!reduced?.matches) clock += dt;
+        /* ⚠️ 出错态**也要画**：顶部那条被藏起来后，naive 的"变红"就没人接了，
+           直接跳过 = 出错时进度效果凭空消失（比显示一条红更怪）。
+           做法是复用同一份 `drawGalaxyBar`，只把输入换掉：底色两端都给红、
+           点阵与光晕传空 ⇒ 只剩一条红底，星云安静地停住。 */
         drawGalaxyBar(ctx, {
-            width: m.width,
-            height: m.height,
+            width: Math.min(boxW, m.ratio * boxW),
+            height: boxH,
             time: clock,
             alpha: m.alpha,
-            colors,
-            glowCore,
-            glowMid,
-            glowSoft,
-            pad,
+            colors: m.error ? [] : colors,
+            glowCore: m.error ? '' : glowCore,
+            glowMid: m.error ? '' : glowMid,
+            glowSoft: m.error ? '' : glowSoft,
+            // 盒子外面是别人的地盘（会被 `overflow: hidden` 裁掉），所以不留扩散余量
+            pad: 0,
+            baseFrom: m.error ? errorColor : baseFrom,
+            baseTo: m.error ? errorColor : baseTo,
         });
     }
 
@@ -125,9 +158,7 @@ function kick() {
     if (raf) return;
     if (!attach()) return;
     // ⚠️ 挂观察器**绝不能等"看得见"**：naive 的 `start()` 是先插一个 `display:none` 的容器、
-    // 下一拍（`await nextTick()` 之后）才把它显示出来。第一拍就 return 的话 ResizeObserver
-    // 永远挂不上，此后每次加载既不增删节点、也没人观察 ⇒ 只能靠别处碰巧往 body 插节点时被唤醒。
-    // 症状就是"切好几次目录，像素层才出现"（2026-11-08 主人抓到的正是这个）。
+    // 下一拍才把它显示出来。第一拍就 return 的话 ResizeObserver 永远挂不上。
     if (!measure()) return;
     // 新一轮可见期 ⇒ 时间轴归零。`burst = exp(-time*6)` 是"开头一次爆发"，
     // time 一路累加不归零的话，第一次加载之后这个爆发就永远死掉了。
@@ -142,16 +173,23 @@ onMounted(() => {
     ctx = canvas.getContext('2d');
     reduced = window.matchMedia('(prefers-reduced-motion: reduce)');
 
-    barH = Number.parseFloat(readVar('--ff-bar-h')) || 14;
-    // 光晕是圆形向外扩散的 ⇒ 画布必须比条高出一截，否则会被下边界切平
-    pad = Math.round(barH * 3);
     glowCore = readVar('--ff-bar-glow-core');
     glowMid = readVar('--ff-bar-glow');
     glowSoft = readVar('--ff-bar-glow-soft');
+    baseFrom = readVar('--ff-bar-base-from');
+    baseTo = readVar('--ff-bar-base-to');
+    errorColor = readVar('--ff-danger-badge');
     colors = [1, 2, 3, 4, 5, 6].map(i => readVar(`--ff-bar-px-${i}`)).filter(Boolean);
 
     resize();
     window.addEventListener('resize', resize);
+
+    // 父盒子自己的尺寸变化（搜索展开、窗口缩放、密度切换）都要重建 backing store
+    const host = canvas.parentElement;
+    if (host) {
+        boxObserver = new ResizeObserver(() => resize());
+        boxObserver.observe(host);
+    }
 
     // 进度条容器是 teleport 到 body 的：childList 只负责抓它第一次出现
     mountObserver = new MutationObserver(() => kick());
@@ -166,19 +204,23 @@ onBeforeUnmount(() => {
     mountObserver = null;
     sizeObserver?.disconnect();
     sizeObserver = null;
+    boxObserver?.disconnect();
+    boxObserver = null;
     window.removeEventListener('resize', resize);
 });
 </script>
 
 <style scoped>
 .galaxy-bar {
-    position: fixed;
-    top: 0;
-    left: 0;
-    width: 100vw;
-    /* 高度由 JS 按 `--ff-bar-h + pad` 写 inline（一处真相源） */
+    /* 铺满父盒子（地址槽）。`inset: 0` 让它不吃任何布局 —— 槽里的面包屑照旧排布 */
+    position: absolute;
+    inset: 0;
+    width: 100%;
+    height: 100%;
+    /* 跟着槽的圆角走，否则星点会从圆角外面漏出一小块 */
+    border-radius: inherit;
     pointer-events: none;
-    /* naive 的进度条容器是 5999，且它是后 teleport 进 body 的 ⇒ 这里必须压过它 */
-    z-index: 6000;
+    /* 0 = 槽的面之上、面包屑之下（`.crumbs` 是 z-index 1） */
+    z-index: 0;
 }
 </style>

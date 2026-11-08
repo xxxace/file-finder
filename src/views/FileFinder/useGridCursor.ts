@@ -272,7 +272,33 @@ export function useGridCursor(deps: {
      * 只在这两种情况下强制对齐，中间行仍然交给 `nearest`（不动画面）。
      * 零横轴滚动条 ⇒ 纵向对齐就是全部（不用管 `inline`）。
      */
-    const scrollIntoViewIfNeeded = (key: string) => {
+    /**
+     * 系统偏好：减少动效时一律不做平滑滚动（原生 `behavior: 'smooth'` **不会**自动降级）。
+     * 每次现读，不缓存 —— 用户可能在系统设置里中途改。
+     */
+    const prefersReducedMotion = () =>
+        window.matchMedia?.('(prefers-reduced-motion: reduce)').matches === true;
+
+    /**
+     * 滚进视口。
+     *
+     * @param smooth 只有**单次按键**才给 `true`（见 `moveCursor` 的调用点）。
+     *        长按必须瞬时 —— 实测（`docs/probes/scroll-smooth/`）：每 60ms 追加一格时，
+     *        平滑滚动每一步的落后从 150px 一路涨到 **636px**，追加结束后 600ms 还停
+     *        在 714/1200 ⇒ **光标会被滚出视口**，而瞬时版每一步落后都是 0。
+     *        单次按键平滑一格 ≈ **210ms**、四格 ≈ 415ms（原生按距离给时长，同一次跑出来的数）。
+     *
+     * ⚠️ 用原生 `behavior: 'smooth'`，**不是**自己在 rAF 里写 `scrollTop`：
+     * ① 长按/换层的同一帧里 `probeLayout` 要对几百个格子读 `offsetTop`，把滚动也塞进我们的
+     *    rAF 等于在最忙的那一帧再加一份写入；原生滚动跑在 Blink 自己的滚动动画里，不抢这份预算。
+     * ② `scrollIntoView` 会替我们处理 `scroll-margin-block`（格子外面那 6px 环让位）。
+     * ③ 中途被下一次滚动打断时，原生是"从当前位置改目标"，不需要我们写重入逻辑。
+     *
+     * ⚠️ 绝不用 CSS `scroll-behavior: smooth` 兜全局：那会让 `onBack` 的 `scrollTo(恢复 scrollY)`
+     * 和 `enterScreen` 的 `scrollTo(0,0)` 一起变成动画，而它们后面的"回读确认"是**当帧**读的
+     * ⇒ 会读到动画中间值。只在这一个函数里逐次传参。
+     */
+    const scrollIntoViewIfNeeded = (key: string, smooth = false) => {
         const box = imageBox.value;
         const el = box?.querySelector<HTMLElement>(
             `.image-box-item[data-key="${CSS.escape(key)}"]`,
@@ -281,14 +307,17 @@ export function useGridCursor(deps: {
         // ⚠️ 用 `CSS.escape` 而不是拼选择器：目录名里什么字符都可能有（引号 / 方括号 / 空格），
         // 拼出来迟早炸。同款处理见 `usePreview.locateInGrid`（那里用 dataset 比对，
         // 因为它要拿的是**已知存在**的格子；这里每次移动都可能遇到特殊字符，逃不掉）。
-        el.scrollIntoView({ block: 'nearest' });
+        const behavior: ScrollBehavior = smooth && !prefersReducedMotion() ? 'smooth' : 'auto';
+        el.scrollIntoView({ block: 'nearest', behavior });
 
         // 纵向对齐：首行⇒ 顶、末行 ⇒ 底。中间行不做（画面不该乱跳）。
+        // ⚠️ 这两句会**覆盖**上面那次 `scrollIntoView`，所以 behavior 必须一起传 ——
+        // 否则平滑刚起步就被一句瞬时赋值掐掉，单次按键等于没平滑。
         const rows = probeLayout().rows;
         const at = posOf(rows, key);
         if (!at) return;
-        if (at.r === 0) box.scrollTop = 0;
-        else if (at.r === rows.length - 1) box.scrollTop = box.scrollHeight;
+        if (at.r === 0) box.scrollTo({ top: 0, behavior });
+        else if (at.r === rows.length - 1) box.scrollTo({ top: box.scrollHeight, behavior });
     };
 
     /**
@@ -316,10 +345,10 @@ export function useGridCursor(deps: {
         }, 150);
     };
 
-    const focusCursor = (key: string, opts: { scroll?: boolean } = {}) => {
+    const focusCursor = (key: string, opts: { scroll?: boolean; smooth?: boolean } = {}) => {
         if (!key) return;
         cursorKey.value = key;
-        if (opts.scroll !== false) scrollIntoViewIfNeeded(key);
+        if (opts.scroll !== false) scrollIntoViewIfNeeded(key, opts.smooth === true);
     };
 
     /**
@@ -385,7 +414,7 @@ export function useGridCursor(deps: {
      * - 正常⇒ 走一格，到边界停住（`stepPos` 内部管）
      * - 网格是空的⇒ 什么都不做（不抢事件、不报错）
      */
-    const moveCursor = (dir: Dir) => {
+    const moveCursor = (dir: Dir, smooth = false) => {
         const { rows } = probeLayout();
         // ⚠️ **先置意图、再判空**（业主 2026-10-04 报"加载时方向键失焦"）：
         // 加载中按方向键，这一行之后会 `return`（格子还没渲染）⇒ 若在这里不置位，
@@ -400,7 +429,9 @@ export function useGridCursor(deps: {
         }
         const next: Pos = stepPos(rows, at, dir);
         // 走一格（而不是停住）才 focus：停住时不必重滚，也免得抖一下
-        if (next.r !== at.r || next.c !== at.c) focusCursor(rows[next.r]![next.c]!);
+        // ⚠️ `smooth` 只对**单次按键**为真（见下面的 keydown）：长按必须瞬时，理由在
+        //    `scrollIntoViewIfNeeded` 的注释里（实测落后 636px，光标会被滚出视口）。
+        if (next.r !== at.r || next.c !== at.c) focusCursor(rows[next.r]![next.c]!, { smooth });
     };
 
     // ── 键盘 ──────────────────────────────────────────────────────────────
@@ -466,7 +497,10 @@ export function useGridCursor(deps: {
             if (now - lastMoveAt < MOVE_REPEAT_MIN_MS) return;
             lastMoveAt = now;
         }
-        moveCursor(dir);
+        // 平滑只给单次按键：`e.repeat` = 正在长按 ⇒ 每 60ms 一格，平滑会追不上（实测见
+        // `scrollIntoViewIfNeeded`）。这条判据和上面那条节流用的是**同一个事实**，
+        // 所以放在一起：它们描述的是"这一次移动是不是人手点的一下"。
+        moveCursor(dir, !e.repeat);
     };
 
     // ── 生命周期 ──────────────────────────────────────────────────────────
@@ -565,7 +599,7 @@ export function useGridCursor(deps: {
         cursorKey, cursorItem, cursorIndex,
         // 写入口（**全部**只改`cursorKey`，没有别的副作用）
         /** 鼠标单击卡片 / 定位 / 首次激活：落焦点 + 滚进视口（+ 可选闪一下） */
-        focusCursor: (key: string, opts?: { scroll?: boolean }) => {
+        focusCursor: (key: string, opts?: { scroll?: boolean; smooth?: boolean }) => {
             noteIntent();
             focusCursor(key, opts);
         },

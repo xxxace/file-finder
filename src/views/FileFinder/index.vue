@@ -1,111 +1,153 @@
 <template>
     <div class="file-finder">
         <div class="header-bar">
-            <!-- 导航区 = 头部**唯一**的弹性槽位。
-                 继续用**裸 flex**、不用 n-space：naive-ui 2.45.3 的 Space 会给每一个子项
-                 写死同一个 key（`key: 1`），而这一组的子元素个数是**会变**的
-                 （面包屑 v-for + 折叠分支 + 「返回」的条件渲染），一变就会重复 key、错位复用节点。
-                 详见 docs/FIX-2026-09-24-nspace-duplicate-keys.md -->
-            <div class="nav-zone">
+            <!-- 顶栏三段（2026-11-08 定稿）：
+                 `[▤ 起点][← 返回/⨯ 清空][↻ 刷新] │ [ 盘: › 段 › 当前段 ⑫ ] │ [⌕][▦][⊞] | [⋯]`
+                 中间那条槽是头部**唯一的弹性槽位**（`flex: 1`）—— 它吃掉剩余宽度，
+                 所以面包屑右边永远是空的：一次 append / remove 里，排在变动点右边的东西
+                 必然被推着走；右边没东西，变化就只剩"多一段 / 少一段"。
+                 继续用**裸 flex**、不用 n-space：naive-ui 2.45.3 的 Space 会给每个子项写死
+                 同一个 key（`key: 1`），而这一组的子元素个数是**会变**的（v-for + 折叠占位），
+                 一变就会重复 key、错位复用节点（docs/FIX-2026-09-24-nspace-duplicate-keys.md）。
+                 ⚠️ 槽里每个子项都必须有 key（TransitionGroup 的进出场按 key 认人）。 -->
+            <!-- 左侧三颗：起点 / 返回·清空 / 刷新（2026-11-08 顶栏升级）。
+                 ⚠️ 它们**刻意不放进 TransitionGroup** —— 本版最重要的一条结构决定：
+                 面包屑"零位移"的前提是「排在变动点右边的东西必然被推着走」；
+                 把常驻按钮挪出槽之后，槽里只剩面包屑，这条约束就退化成"只多一段 / 只少一段"，
+                 干扰源被直接删掉。顺序抄 Windows 资源管理器 / Chrome：`[←][→][↻][地址栏]`。
+
+                 ⚠️ 返回/清空 = **一颗按钮，只换图标**（原来是"两个同宽的中文词"）。
+                 换成图标反而更稳：28px 方格定宽 ⇒ 换字形连 1px 都不动。
+                 栈底（history === 1）画 `⨯` 走 `clearNav`（业主 2026-10-05：栈底也得有出口）；
+                 history === 0（还没选根）**置灰常驻**，不再 `v-if` 消失 ——
+                 它一出现/消失就会把整条面包屑推走 ~60px，正是这次要修的那类跳动。 -->
+            <div class="nav-btns">
                 <FolderSelector ref="folderSelector" v-model="dir" label="请选择文件夹(D)" @change="setRoot" />
+                <n-tooltip>
+                    <template #trigger>
+                        <n-button size="small" :disabled="!history.length" :aria-label="navBtnText"
+                            @click="onNavBtn">
+                            <template #icon>
+                                <n-icon :component="navBtnIcon" />
+                            </template>
+                        </n-button>
+                    </template>
+                    {{ navBtnTip }}
+                </n-tooltip>
+                <!-- 刷新住在导航区、不搬去动作区：它重读的是**当前这个位置**，
+                     与「返回」同属位置动作。tooltip 只为说清它和「重读这一片」的分工。
+                     扫描期间禁掉：它带 noCache、会真的再读一次盘，与整片扫描并发就是两路读盘。
+                     只读层 / 清单屏也禁掉：那两种屏的源就是缓存，没有"重读"这回事。 -->
+                <n-tooltip>
+                    <template #trigger>
+                        <n-button size="small" :disabled="scanning || readOnlyLevel || playlistLevel"
+                            aria-label="重新读取当前文件夹" @click="onRefresh">
+                            <template #icon>
+                                <n-icon :component="RefreshOutline" />
+                            </template>
+                        </n-button>
+                    </template>
+                    重新读取当前文件夹
+                </n-tooltip>
+            </div>
+
+            <!-- 地址槽（外层只管"一块面"，里层才是面包屑列表）—— 2026-11-08 第二轮。
+                 为什么拆成两层：galaxy 进度像素层要**铺满整个槽**，而 `TransitionGroup` 的子节点
+                 必须带 key、还会被 FLIP 挪来挪去 ⇒ 画布不能当它的兄弟。
+                 ⚠️ 类名仍然叫 `.nav-zone`：非 scoped 块里有 10 处 `.nav-zone .fx-*` 在兜作用域，
+                 面包屑挪进内层之后这些选择器**依旧命中**（后代选择器），一处都不用改。 -->
+            <div class="nav-zone">
+                <!-- 进度效果的落点：铺满整条地址槽（主人 2026-11-08："用到地址栏的盒子中，占满整个盒子"）。
+                     进度**仍然以 naive 的 `.n-loading-bar` 为唯一真相源** —— 它现在只是
+                     `visibility: hidden`（见 App.vue），尺寸照常读得到，本层只负责"画得好看"。 -->
+                <GalaxyLoadingBar />
 
                 <!-- 面包屑 = 从**盘符 / 离线锚点**到当前的完整链，由 `ancestorsOf(currentPath)` 现算。
                      为什么不按导航栈渲染：跳转到达的目录**不是"栈顶的子级"**，用栈拼会拼出
                      一条物理上不存在的路径（`videos › a › y`）——
                      见 docs/DESIGN-NAV-2026-09-30.md §12.3 的反证推演。
                      折叠规则：保首段 + `…` + 父 + 当前（Apple HIG 与 Fluent 2 两家官方默认行为）。 -->
-                <template v-if="crumbFold">
-                    <!-- 首段（盘符 / 离线盘）：**不可点**，只作定位。
-                         点它会打开盘根，而盘根通常没被缓存过 ⇒ **会真读一次盘**。
-                         「回根 / 换根」交给左边那个 chip，不在这里新开一条读盘路径。 -->
-                    <n-tag class="crumb crumb-root" :title="crumbFold.head.path">
-                        <span class="crumb-text">{{ crumbFold.head.name }}</span>
-                    </n-tag>
-                    <!-- 被折起来的中间层：**每一层都还能点** —— 折叠只牺牲「常显」，不牺牲任何能力 -->
-                    <n-popover trigger="click" placement="bottom-start">
-                        <template #trigger>
-                            <n-tag class="crumb crumb-more" title="展开被折叠的层级">
-                                <span class="crumb-text">…</span>
-                            </n-tag>
-                        </template>
-                        <div class="hstack">
-                            <n-button v-for="c in crumbFold.hidden" :key="c.path" size="small" @click="onCrumbClick(c)">
-                                {{ c.name }}
-                            </n-button>
-                        </div>
-                    </n-popover>
-                    <n-tag v-for="(c, i) in crumbFold.tail" :key="c.path" class="crumb"
-                        :class="{ 'crumb-current': i === crumbFold.tail.length - 1 }" :title="c.path"
-                        :data-count="i === crumbFold.tail.length - 1 ? crumbCount : null" @click="onCrumbClick(c)">
-                        <span class="crumb-text">{{ c.name }}</span>
-                        <n-spin v-if="loading && i === crumbFold.tail.length - 1" :size="12"
-                            style="margin-left: 8px;" />
-                    </n-tag>
-                </template>
-                <template v-else>
-                    <n-tag v-for="(c, i) in crumbs" :key="c.path" class="crumb"
-                        :class="{ 'crumb-root': c.kind === 'root', 'crumb-current': i === crumbs.length - 1 }"
-                        :title="c.path" :data-count="i === crumbs.length - 1 ? crumbCount : null"
-                        @click="onCrumbClick(c)">
-                        <span class="crumb-text">{{ c.name }}</span>
-                        <n-spin v-if="loading && i === crumbs.length - 1" :size="12" style="margin-left: 8px;" />
-                    </n-tag>
-                </template>
-
-                <!-- 「返回 / 清空」的出现条件是 **`history.length > 0`：此刻真有屏可谈**（事实），
-                     不是 `dir`（"曾经选过根"的快照）—— 后者在「根层」和「跳转后」都会
-                     造成"按钮看得见、点不动"的死交互。
-
-                     ⚠️ 2026-10-05 业主加的一条：**栈底（只剩一屏）也得有出口**。
-                     那时"返回"无事可做，而那颗按钮正是「离开当前这个文件夹」最顺手的位置
-                     ⇒ 同一个位置换成「清空」（`clearNav`）。
-
-                     ⚠️ 只换文案、**不加图标**：两个词都是两个字 ⇒ 按钮宽度一个像素都不变，
-                     导航区（头部唯一的弹性槽位）的宽度预算完全不动。
-                     ⚠️ Backspace **仍然只走 `onBack`**（它在栈底是空操作）——
-                       不把清空挂上去，就不会出现"在根层误按退格把视图清掉"。 -->
-                <n-tooltip v-if="history.length > 1">
+                <!-- ⚠️ 2026-11-08 重构：原来是 `v-if="crumbFold"` / `v-else` **两棵互斥的树**。
+                     层级跨过 4 的那一下，Vue 会销毁整棵子树、再重建另一棵 ⇒ 视觉上是
+                     "整排地址重新渲染一次"（主人原话）。折叠只是"列表里多一项 `…`"，
+                     **不是换一套模板** ⇒ 现在统一由 `crumbRows` 这一个数组驱动。
+                     首段 / 折叠占位 / 其余段拆成三段渲染，是为了避开
+                     `<template v-for>` + `v-if` 混用（TransitionGroup 的 FLIP 拿不到 fragment）。 -->
+                <TransitionGroup name="fx" tag="div" class="crumbs" @before-leave="pinLeaving">
+                <n-tag v-if="crumbLayout.head" :key="crumbLayout.head.key" class="crumb"
+                    :class="{ 'crumb-root': crumbLayout.head.kind === 'root', 'crumb-current': crumbLayout.headCurrent }"
+                    :title="crumbLayout.head.path" :data-count="crumbLayout.headCurrent ? crumbCount : null"
+                    @click="onCrumbClick(crumbLayout.head)">
+                    <!-- ⚠️ 首段必须绑 `@click`（2026-11-08 code review 找回的回归）：
+                         `onCrumbClick` 里 `kind === 'root'` 那支是**清单屏点根段回货架**的捷径。
+                         统一成三段渲染后首段独立成 `head`，当时没绑 ⇒ 那支变死代码。
+                         磁盘根不必担心：`onCrumbClick` 自己会 return（点它不读盘）。 -->
+                    <span class="crumb-text">{{ crumbLayout.head.name }}</span>
+                </n-tag>
+                <!-- 被折起来的中间层：**每一层都还能点** —— 折叠只牺牲「常显」，不牺牲任何能力 -->
+                <n-popover v-if="crumbLayout.fold" key="fold" trigger="click" placement="bottom-start">
                     <template #trigger>
-                        <n-button size="small" @click="onBack">返回</n-button>
+                        <n-tag class="crumb crumb-more" title="展开被折叠的层级">
+                            <span class="crumb-text">…</span>
+                        </n-tag>
                     </template>
-                    返回上一屏（Backspace）
-                </n-tooltip>
-                <n-tooltip v-else-if="history.length === 1">
-                    <template #trigger>
-                        <n-button size="small" @click="clearNav">清空</n-button>
-                    </template>
-                    清空导航历史，回到选文件夹的界面（缓存不动）
-                </n-tooltip>
+                    <div class="hstack">
+                        <n-button v-for="c in crumbHidden" :key="c.path" size="small" @click="onCrumbClick(c)">
+                            {{ c.name }}
+                        </n-button>
+                    </div>
+                </n-popover>
+                <n-tag v-for="(row, i) in crumbLayout.tail" :key="row.key" class="crumb"
+                    :class="{ 'crumb-root': row.kind === 'root', 'crumb-current': i === crumbLayout.tail.length - 1 }"
+                    :title="row.path" :data-count="i === crumbLayout.tail.length - 1 ? crumbCount : null"
+                    @click="onCrumbClick(row)">
+                    <span class="crumb-text">{{ row.name }}</span>
+                    <!-- ⚠️ 2026-11-08 第七轮：这里原来有一个
+                         `<n-spin v-if="loading && i === last" :size="12" style="margin-left:8px" />`。
+                         删掉，因为它**就是**主人报的"videos 从上跳到下"：
+                         · 转圈是当前段的一个子元素，插进 `.n-tag__content` 后把**文字顶上去 7px**，
+                           加载完再掉回来（探针实测 `文字dy = 0 → -7 → 0`，`out.txt` 场景⑤）；
+                         · 它对宽度毫无贡献（实测 47.36 不变）⇒ 它连"在转"都没人看见，
+                           纯粹是个把这一格挤变形的副作用。
+                         · 而且它是**重复**的第二个指示器：`enterScreen` / `onBack` 里
+                           `loadingBar.start()/finish()` 一直在跑，顶部那条进度条才是正经的地方。
+                         要恢复"这一层在加载"的可见信号，请在**网格区**做，别塞进面包屑。 -->
+                </n-tag>
+
+                </TransitionGroup>
             </div>
+            <!-- 动作区：搜索 / 视图组 / 更多。
+                 顺序重排过一次（2026-11-08）：「更多」从**最左**挪到**最右** ——
+                 它是兜底入口，永远排在末端（Chrome `⋮`、资源管理器 `⋯` 同理）；
+                 原来它在最左、紧挨搜索框，等于"最不常用的东西占了最顺手的位置"。 -->
             <div class="toolbar">
-                <n-dropdown trigger="click" :options="moreOptions" :disabled="scanning" :menu-props="moreMenuProps"
-                    @select="onMoreSelect">
-                    <!-- 只有图标，**不再带"更多"两个字**（主人 2026-11-08：不要两者并用）。
-                       三点是跨平台的"更多"惯例，图标本身就够；带文字只是把工具条撑宽。
-                       `aria-label` 补无障碍名字（没有文字时读屏会念不出来）。 -->
-                    <n-button size="small" :disabled="scanning" aria-label="更多">
-                        <template #icon>
-                            <n-icon>
-                                <EllipsisHorizontalOutline />
-                            </n-icon>
+                <!-- 搜索：一颗图标 ⇄ 一个输入框（主人 2026-11-08 裁决：宽度从**地址槽**里挤，不做浮层）。
+                     为什么敢挤：折叠判据 `foldCrumbList(crumbs, max = 4)` 是**按段数**的、不看宽度；
+                     而右侧从 ~420px（⋯ + 搜索 260 + 3×28）降到 ~137px ⇒ 收起态面包屑多 +181px、
+                     展开态仍 ≈ 今天 ⇒ **没有任何一个状态比现状更挤**。
+                     账与前提：docs/DESIGN-HEADER-UPGRADE-2026-11-08.md §三。
+                     ⚠️ 输入框**常驻**、不 `v-if`：换节点就丢了上一帧，宽度动画只能从 0 开始。
+                     收起态它 `opacity:0` + `pointer-events:none`，点击由上面那颗图标按钮接住。 -->
+                <div ref="searchSlot" class="search-slot" :class="{ 'is-open': searchOpen }">
+                    <n-input ref="searchInput" v-model:value="searchText" placeholder="搜索" size="small" clearable
+                        @keydown.esc="blurSearch" @blur="onSearchBlur" @focus="onSearchFocus">
+                        <template #prefix>
+                            <n-icon :component="SearchOutline" />
                         </template>
-                    </n-button>
-                </n-dropdown>
-                <!-- 缓存记录 / 清单这两个入口（2026-10-21 迁走）：
-                     它们现在住在左导航轨（页级），不再占工具条的位置。
-                     ⚠️ 别再加回来 —— 这里只放**跟当前这一层数据绑定**的动作。 -->
-                <n-input ref="searchInput" v-model:value="searchText" placeholder="搜索" size="small" clearable
-                    @keydown.esc="blurSearch">
-                    <template #prefix>
-                        <n-icon :component="SearchOutline" />
-                    </template>
-                    <template #suffix>
-                        <!-- 键名是 `S`（本产品进搜索的全局键，见 onKeydown）—— 不要改它，
-                             只借 kbd 的**形态**（规格参考 LeiBox site-search.tsx:262）。
-                             单字符时 6+6 的左右内边距 + 16 行高 ≈ 19×20，正好是方键帽的比例。 -->
-                        <kbd class="suffix-key">S</kbd>
-                    </template>
-                </n-input>
+                    </n-input>
+                    <!-- 快捷键键帽（原来在输入框内做 `kbd S`）挪进 tooltip：键帽只在"看得见输入框"时
+                         才有意义，而收起态根本没有框。提示没丢，也不再占输入框的右侧空间。 -->
+                    <n-tooltip>
+                        <template #trigger>
+                            <n-button class="search-btn" size="small" aria-label="搜索（S）" @click="openSearch">
+                                <template #icon>
+                                    <n-icon :component="SearchOutline" />
+                                </template>
+                            </n-button>
+                        </template>
+                        搜索（S）
+                    </n-tooltip>
+                </div>
                 <!-- 视图密度：与下面「平铺」同属视图类动作，紧挨着放。
                      常驻（任何目录都能切），与 flat 互不影响 —— flat 决定"摊开哪些条目"，
                      密度决定"一屏铺几列"，两者正交。 -->
@@ -113,7 +155,7 @@
                 <!-- 平铺视图切换：仅在根缓存目录可用，跳过女优/父文件夹直接平铺全部作品 -->
                 <n-tooltip>
                     <template #trigger>
-                        <!-- 激活态见样式 `.toolbar .is-on`（灰底 + text-1）。
+                        <!-- 激活态见样式 `.toolbar :deep(.is-on)`（灰底 + text-1）。
                              **不用 `type="primary"`**：那会让一个视图开关变成整条工具栏最响的东西
                              （2026-11-07 截图里那块白方块就是它）。 -->
                         <n-button size="small" :class="{ 'is-on': isFlatView }"
@@ -131,24 +173,21 @@
                     </template>
                     {{ isFlatView ? '当前为平铺视图（点击切回正常视图）' : (canToggleFlat ? '切换为平铺视图（摊开所有子目录作品）' : '仅在根缓存目录可开启平铺视图') }}
                 </n-tooltip>
-                <!-- tooltip 只为说清它和「重读这一片」的分工：它只重读**当前这一层**，
-                     那个是整片。名字沿用用户已经在用的"刷新"，不改名（改名有认知成本）。
-                     扫描期间禁掉：它带 noCache、会真的再读一次盘，和正在跑的整片扫描
-                     叠在一起就是两路并发读盘 —— 那正是"串行、一次一块盘"要挡的事。
-                     只读层（盘不在）也禁掉：只读视图的源就是缓存，没有"重读"这回事。 -->
-                <n-tooltip>
-                    <template #trigger>
-                        <n-button size="small" :disabled="scanning || readOnlyLevel || playlistLevel"
-                            @click="onRefresh">
-                            <template #icon>
-                                <n-icon>
-                                    <RefreshOutline />
-                                </n-icon>
-                            </template>
-                        </n-button>
-                    </template>
-                    重新读取当前文件夹
-                </n-tooltip>
+                <span class="toolbar-sep" aria-hidden="true"></span>
+                <n-dropdown trigger="click" :options="moreOptions" :disabled="scanning" :menu-props="moreMenuProps"
+                    @select="onMoreSelect">
+                    <!-- 只有图标，**不再带"更多"两个字**（主人 2026-11-08：不要两者并用）。
+                       三点是跨平台的"更多"惯例，图标本身就够；带文字只是把工具条撑宽。
+                       `aria-label` 补无障碍名字（没有文字时读屏会念不出来）。
+                       ⚠️ 位置固定在**最右**（2026-11-08）：兜底入口永远排末端。 -->
+                    <n-button size="small" :disabled="scanning" aria-label="更多">
+                        <template #icon>
+                            <n-icon>
+                                <EllipsisHorizontalOutline />
+                            </n-icon>
+                        </template>
+                    </n-button>
+                </n-dropdown>
             </div>
         </div>
         <!-- 2026-10-21 主人裁决：次栏整条去掉。
@@ -213,10 +252,12 @@
                     <n-image v-if="(item.type === 'image' || item.type === 'video') && !!item.thumb" class="can-preview"
                         :src="thumbUrl(item.thumb)" :img-props="{ onClick: () => openPreview(item) }" :alt="item.dir"
                         :lazy="true" objectFit="contain" preview-disabled />
-                    <!-- 目录的脸：只在 70% 显示、且本来就不给点开。挑封面时要看得清，所以模式下放到 100% -->
-                    <n-image v-else-if="!!item.avatar" :src="thumbUrl(item.avatar)" :alt="item.dir || ''" :lazy="true"
-                        objectFit="contain" :style="picking ? 'width:100%;height:100%' : 'width:70%;height:70%'"
-                        preview-disabled />
+                    <!-- 目录的脸：不挑封面时缩到 70%（密网格里 100% 太抢眼），
+                         「换封面」模式下放到 100% 才看得清。缩放走 `.card-avatar` 的
+                         `transform`（不是内联宽高）—— 理由见样式里那段注释：
+                         这是**布局动画 vs 合成动画**的区别，一屏几百个目录时差一整条街。 -->
+                    <n-image v-else-if="!!item.avatar" class="card-avatar" :src="thumbUrl(item.avatar)"
+                        :alt="item.dir || ''" :lazy="true" objectFit="contain" preview-disabled />
                     <img v-else-if="item.type === 'folder'" :src="folderIcon" :alt="item.dir || ''" class="folder-face">
                     <!-- 类名必须小写：`fiv-icon-*` 是**大小写敏感**的 CSS 类，
                          而盘上有大写扩展名的文件（实测库里有 `.MOV`）⇒ `fiv-icon-MOV` 匹配不到任何图标。 -->
@@ -261,40 +302,57 @@
              ⚠️ 取消只在**目录边界**生效（当前这个目录会扫完）—— 那是刻意的：
              半途中断会留下写了一半的缓存。所以文案要说"当前这个扫完就停"，
              不能让用户以为点了就应该立刻停。 -->
-        <div v-if="scanning || picking" class="scan-bar">
-            <!-- 「换封面」的挑选中。复用这一条而不动工具条 —— 工具条那条铁律是
-                 "绝不消失、绝不换形、一个字都不随状态变"，所以模式态的信号只能住在这里。
-                 两者不会同时出现（进模式前会等扫描结束）。 -->
-            <template v-if="!scanning">
-                <!-- 三段式：模式标签 → 状态 → 动作（右对齐）。
-                     原来的形态是「一句 20 字说明 + 3 个按钮 + 一句帮助文案」全挤在一行，
-                     没有主次、也没有留白，读起来像说明书。
-                     帮助文案只在**一处都还没选**时出现 —— 选过了就不需要教了。 -->
-                <span class="pick-badge">换封面</span>
-                <span class="pick-count">已选 <b>{{ pickedCount }}</b> 处</span>
-                <span v-if="!pickedCount" class="scan-hint">点有封面的格子；没有封面的那是「补封面」管的事</span>
-                <span class="pick-spacer"></span>
-                <!-- 动作分**两档**：可逆的次要动作（清空 / 退出）与主操作（换封面）。
-                     三个按钮等距平铺时读成同一档，主操作喊不出来 —— 组内 8、组间 16。
-                     ⚠️ 0 选中时「清空」和「换封面」确实该禁用；它们与可点的「退出」必须**看得出差别**，
-                     那条差异由主题层给（`naive-theme.ts` 的 Button.textColor / textColorDisabled），
-                     不在这里写局部覆盖。 -->
-                <div class="pick-acts">
-                    <n-button size="small" :disabled="!pickedCount" @click="clearPicked">清空</n-button>
-                    <n-button size="small" @click="exitPick">退出</n-button>
-                    <n-button class="pick-go" size="small" type="primary" :disabled="!pickedCount" @click="openFaces">
-                        换封面
-                    </n-button>
+        <!-- ⚠️ 外面这层 `.scan-bar-slot` 只为一件事：**让"挂上 / 摘掉"这件事有高度可过渡**。
+             这条状态条**在文档流里**（`.file-finder` 是 flex 列），所以只做淡入是不够的：
+             卸载那一帧网格就会跳 50px、然后条自己再淡出去，等于没做。
+             要平滑，**高度必须一起过渡**；而 `height: auto` 不能过渡、`max-height` 要写魔数
+             （内容一变就剪错高度）。`grid-template-rows: minmax(0,1fr) ↔ minmax(0,0fr)`
+             零魔数、内容多高都能收干净。Chromium 152 实测可插值（docs/probes/bar-collapse/）。
+             ⚠️ 两个前提缺一不可，少一个就"收不起来"（第一版就是这么失败的）：
+                ① 轨道写 `minmax(0, …)` —— 裸写 `0fr` = `minmax(auto, 0fr)`，
+                   自动最小尺寸取内容的 min-content，`.scan-bar` 的 `min-height: 40px` 会把它顶死；
+                ② 里层 `.scan-bar` 要 `overflow: hidden` —— 网格项的自动最小尺寸
+                   只有非 visible 才归 0。
+             ⚠️ 扫描条和挑选条**共用**这一条（同一个元素），动画自然也是同一份：
+             它们不会同时出现（进模式前会等扫描结束）。 -->
+        <Transition name="fx-bar">
+            <div v-if="scanning || picking" class="scan-bar-slot">
+                <div class="scan-bar">
+                    <!-- 「换封面」的挑选中。复用这一条而不动工具条 —— 工具条那条铁律是
+                         "绝不消失、绝不换形、一个字都不随状态变"，所以模式态的信号只能住在这里。
+                         两者不会同时出现（进模式前会等扫描结束）。 -->
+                    <template v-if="!scanning">
+                        <!-- 三段式：模式标签 → 状态 → 动作（右对齐）。
+                             原来的形态是「一句 20 字说明 + 3 个按钮 + 一句帮助文案」全挤在一行，
+                             没有主次、也没有留白，读起来像说明书。
+                             帮助文案只在**一处都还没选**时出现 —— 选过了就不需要教了。 -->
+                        <span class="pick-badge">换封面</span>
+                        <span class="pick-count">已选 <b>{{ pickedCount }}</b> 处</span>
+                        <span v-if="!pickedCount" class="scan-hint">点有封面的格子；没有封面的那是「补封面」管的事</span>
+                        <span class="pick-spacer"></span>
+                        <!-- 动作分**两档**：可逆的次要动作（清空 / 退出）与主操作（换封面）。
+                             三个按钮等距平铺时读成同一档，主操作喊不出来 —— 组内 8、组间 16。
+                             ⚠️ 0 选中时「清空」和「换封面」确实该禁用；它们与可点的「退出」必须**看得出差别**，
+                             那条差异由主题层给（`naive-theme.ts` 的 Button.textColor / textColorDisabled），
+                             不在这里写局部覆盖。 -->
+                        <div class="pick-acts">
+                            <n-button size="small" :disabled="!pickedCount" @click="clearPicked">清空</n-button>
+                            <n-button size="small" @click="exitPick">退出</n-button>
+                            <n-button class="pick-go" size="small" type="primary" :disabled="!pickedCount" @click="openFaces">
+                                换封面
+                            </n-button>
+                        </div>
+                    </template>
+                    <template v-else>
+                        <span class="scan-progress">已扫 {{ scanDone }} / 待扫 {{ scanPending }}</span>
+                        <n-button size="small" :disabled="cancelling" @click="onScanCancel">
+                            {{ cancelling ? '正在取消…' : '取消' }}
+                        </n-button>
+                        <span v-if="cancelling" class="scan-hint">当前这个目录扫完就停</span>
+                    </template>
                 </div>
-            </template>
-            <template v-else>
-                <span class="scan-progress">已扫 {{ scanDone }} / 待扫 {{ scanPending }}</span>
-                <n-button size="small" :disabled="cancelling" @click="onScanCancel">
-                    {{ cancelling ? '正在取消…' : '取消' }}
-                </n-button>
-                <span v-if="cancelling" class="scan-hint">当前这个目录扫完就停</span>
-            </template>
-        </div>
+            </div>
+        </Transition>
         <!-- 「这个封面下有哪几个文件」那一层。
              ⚠️ 键盘进出全靠**焦点**，不是靠额外的守卫分支：
              `isGridKeyBlocked` 的 `e.target !== document.body` 在焦点落在某一项上时
@@ -364,10 +422,13 @@ import useNotify from '@/hooks/useNotify';
 import { usePreview } from './usePreview';
 import { useGridCursor } from './useGridCursor';
 import GridDensityMenu from './GridDensityMenu.vue';
+import GalaxyLoadingBar from '@/components/GalaxyLoadingBar/index.vue';
 import { colsOf, loadDensity, saveDensity } from './density';
 import type { Density } from './density';
+import { buildCrumbLayout } from './crumbRows';
+import { dissolveGrid } from './gridDissolve';
 import { decideOpen, isMultiFileCard } from './openDecision';
-import { SearchOutline, RefreshOutline, EllipsisHorizontalOutline, AppsOutline } from '@vicons/ionicons5';
+import { SearchOutline, RefreshOutline, EllipsisHorizontalOutline, AppsOutline, ArrowBackOutline, CloseOutline } from '@vicons/ionicons5';
 import { NButton, NInput, NIcon, NImage, NImageGroup, NTag, NPopover, NSpin, NAlert, NTooltip, NDropdown, useLoadingBar, useDialog } from 'naive-ui';
 import FolderSelector from '@/components/FolderSelector/index.vue';
 import AssistantCoverModal from './AssistantCoverModal.vue';
@@ -574,7 +635,51 @@ const ctxMenu = ref<{
 });
 const searchText = ref('');
 
-/** 搜索框按 Esc：把焦点交还给网格（否则打字框会一直吃着方向键）。 */
+/**
+ * 搜索框的**展开态**（2026-11-08 顶栏升级）。
+ *
+ * 收起 = 28px 一颗图标；展开 = 220px 输入框。宽度是从**地址槽**里挤出来的
+ * （主人裁决，不要浮层）—— 安全性论证见 docs/DESIGN-HEADER-UPGRADE-2026-11-08.md §三。
+ */
+const searchOpen = ref(false);
+const searchSlot = ref<HTMLDivElement | null>(null);
+
+const openSearch = () => {
+    searchOpen.value = true;
+    // 等宽度先挂上去再聚焦：给一个 width:28 的框聚焦，光标会落在被裁掉的那一侧
+    void nextTick(() => searchInput.value?.focus());
+};
+
+/** 收起态被 Tab 命中时自动展开 —— 否则焦点会落在一个 opacity:0 的框里，打字直接过滤网格 */
+const onSearchFocus = () => { searchOpen.value = true; };
+
+/**
+ * ⚠️ **本组件唯一的不变量：收起 ⇒ 一定没有过滤词。**
+ *
+ * 光靠 `onSearchBlur` 守不住：`onBack()` 会把上一屏的 `searchText` 还原回来
+ * （`history[].searchText`），而它**不碰 `searchOpen`** ⇒ 一个收起的、却带着词的框，
+ * 网格悄悄被过滤、界面上只有一颗图标，没有任何线索。
+ * 所以反过来也守一道：**词一出现就强制展开**（`watch` 是同步派生的，不依赖任何调用方）。
+ */
+watch(searchText, v => { if (v) searchOpen.value = true; });
+
+/**
+ * 失焦即收起 —— 但**必须先看焦点去了哪**，而且**有词时不许收**。
+ *
+ * ① 看焦点：点「清空 ×」是先 blur 再 click，直接收起会让那次点击落在已经消失的框上。
+ * ② 有词不许收：收起的框里还留着过滤词 = 网格莫名其妙少了一半东西，界面上却没有任何
+ *    线索。**"看不见的过滤条件"是最坏的一种陷阱**（比多占 190px 糟得多）——
+ *    所以收起的前提是**空**：要么用户自己点 ×，要么按 Esc 后再 clear。
+ */
+const onSearchBlur = () => {
+    window.setTimeout(() => {
+        if (searchSlot.value?.contains(document.activeElement)) return;
+        if (searchText.value) return;
+        searchOpen.value = false;
+    }, 0);
+};
+
+/** 搜索框按 Esc：把焦点交还给网格（否则打字框会一直吃着方向键）。收起交给 blur 那条路判。 */
 const blurSearch = (e: KeyboardEvent) => {
     (e.target as HTMLElement | null)?.blur();
 };
@@ -623,6 +728,61 @@ const isCurrentCacheRoot = ref(false);
 const canToggleFlat = computed(() => isCurrentCacheRoot.value && !playlistLevel.value && !!currentPath.value);
 /** 折叠决策（保首尾）。`null` = 全显。规则在 `@/utils` 的 `foldCrumbList` 里，可单独验证。 */
 const crumbFold = computed(() => foldCrumbList(crumbs.value));
+/**
+ * 面包屑的**渲染布局**（head / `…` / tail）—— 折叠与不折叠都走这一份。
+ *
+ * ⚠️ 2026-11-08：原来模板里是 `v-if="crumbFold"` / `v-else` 两棵互斥的树，
+ * 层级跨过 `max=4` 的那一下整棵子树被销毁重建 ⇒ 观感是"整排地址重新渲染"。
+ * 推导逻辑在 `crumbRows.ts`（纯函数，可被 `docs/probes/crumbs/layout.mjs` 直接跑）。
+ */
+const crumbLayout = computed(() => buildCrumbLayout(crumbs.value, crumbFold.value));
+/** 被折掉的中间层（给 `…` 的弹层用） */
+const crumbHidden = computed(() => crumbFold.value?.hidden ?? []);
+/**
+ * 离场那一格的"幽灵"：把它**钉在最后的屏幕位置上**，再交给 CSS 淡出。
+ *
+ * 为什么需要它（两条硬约束同时成立，缺一条就变形）：
+ * ① **必须脱离文档流** —— 留着占位的话整排在这 180ms 里一动不动、结束时一帧塌回去，
+ *    Vue 的 FLIP 也只在 `onUpdated` 量一次位移 ⇒ 一帧都滑不出来（第二轮踩过）。
+ * ② **必须位置钉死** —— `position: absolute` 单独撤出时，flex 容器里的绝对定位子项
+ *    静态位置按"它是唯一的 flex 项"算 ⇒ 元素会瞬移到内容区最左边（第二轮也踩过）。
+ * 所以：在 `before-leave`（此刻元素还在文档流里、rect 是真的）抄一份几何，
+ * 再用绝对定位钉回原位。定位祖先 = `el.parentElement` = 内层 `.crumbs`（它有 `position: relative`）；
+ * 外层 `.nav-zone` 只是"那块面"并负责装进度画布，别把两者记混。
+ *
+ * ⚠️ 用 `absolute` + 自己算偏移，不用 `fixed`：fixed 的坐标系会被祖先的
+ * transform / filter 改写。
+ * ⚠️ 必须显式 `box-sizing: border-box`：本项目**没有**全局 box-sizing reset，
+ * 而抄来的 width 是 border-box 尺寸 —— 不声明的话幽灵会胖出一圈 padding。
+ */
+const pinLeaving = (el: Element) => {
+    if (!(el instanceof HTMLElement)) return;
+    const zone = el.parentElement;
+    if (!zone) return;
+    const r = el.getBoundingClientRect();
+    const z = zone.getBoundingClientRect();
+    /* ⚠️ 2026-11-08：槽有了 1px 边框之后，两个 rect 的**原点不是同一个**——
+       绝对定位的坐标系是**padding box**（边框之内），而 `getBoundingClientRect()`
+       给的是 border box（边框之外）⇒ 不减这一下，幽灵会整体偏 1px 右 + 1px 下，
+       在一段 200ms 的淡出里就是"刚离开就抖了一下"。 */
+    const bs = getComputedStyle(zone);
+    const bx = parseFloat(bs.borderLeftWidth) || 0;
+    const by = parseFloat(bs.borderTopWidth) || 0;
+    const s = el.style;
+    s.boxSizing = 'border-box';
+    s.position = 'absolute';
+    s.left = `${r.left - z.left - bx}px`;
+    s.top = `${r.top - z.top - by}px`;
+    s.width = `${r.width}px`;
+    s.height = `${r.height}px`;
+    s.margin = '0';
+    /* 摘掉角标：新的当前段正在原地淡入一个同款角标，不摘的话会并排出现两个红胶囊
+       （探针截图 `shot-leave-90ms.png` 第一版就是这样：`videos 35 35`）。
+       ⚠️ 不用 CSS 去盖：`.crumb-current[data-count]::after` 在 **scoped** 块里，
+       编译后多挂一个 `[data-v-*]` 属性选择器 ⇒ 非 scoped 块里怎么写都打不过它
+       （除非上 `!important`）。摘属性是零特异性纠纷的写法。 */
+    el.removeAttribute('data-count');
+};
 /**
  * 面包屑**当前段**上的条目数角标。
  *
@@ -1638,6 +1798,28 @@ const setRoot = (value: string) => {
  */
 const clearNav = () => setRoot('');
 
+/* ── 「返回 / 清空」= 同一颗按钮，只换**图标**（2026-11-08 顶栏升级）────────────
+ * 原来是"两个同宽的中文词"（`返回` / `清空`），靠字数相同保证宽度不变。
+ * 换成 28px 固定方格的图标按钮之后这条约束**更强**：换字形连 1px 都不动，
+ * 而 `←` / `⨯` 的形状差异比两个汉字更容易在余光里分辨。
+ *
+ * 三态（判据是 `history.length` 这个**事实**，不是 `dir` 那个"曾经选过根"的快照）：
+ *   >1 → `←` 返回上一屏（`onBack`）
+ *   =1 → `⨯` 清空导航历史（`clearNav`）—— 栈底也得有出口（业主 2026-10-05）
+ *   =0 → `←` **置灰常驻**：还没选根，无屏可谈。不再 `v-if` 消失 ——
+ *        它一出现/消失就把整条面包屑推走 ~60px，正是本版要修掉的那类跳动。
+ * ⚠️ Backspace **仍然只走 `onBack`**（栈底是空操作）——
+ *    不把清空挂上去，就不会出现"在根层误按退格把视图清掉"。
+ */
+const navBtnText = computed(() => (history.value.length > 1 ? '返回' : history.value.length === 1 ? '清空' : '返回'));
+const navBtnIcon = computed(() => (history.value.length === 1 ? CloseOutline : ArrowBackOutline));
+const navBtnTip = computed(() => (history.value.length > 1
+    ? '返回上一屏（Backspace）'
+    : history.value.length === 1
+        ? '清空导航历史，回到选文件夹的界面（缓存不动）'
+        : '还没选文件夹'));
+const onNavBtn = () => (history.value.length > 1 ? onBack() : clearNav());
+
 /**
  * 从缓存记录打开一个目录。**这是一次「跳转」，不是"以它为根"**。
  *
@@ -2056,6 +2238,19 @@ const density = ref<Density>(loadDensity());
 const gridCols = computed(() => colsOf(density.value));
 watch(density, d => saveDensity(d));
 
+/**
+ * 整块内容被换掉的那一帧，让网格**溶解进来**（机制与取舍见 `./gridDissolve.ts`）。
+ *
+ * 只挂两个源，**刻意不含 `searchText`**：筛选是**每个按键**都换一次内容，
+ * 在按键频率上做任何过渡都只会变成闪烁 —— 搜索就该是瞬时的。
+ * 这里两个源都对应"用户主动跳到一个新地方"：`dataSource` 换 = 换层/首屏铺满，
+ * `gridCols` 变 = 切密度档（纯重排，不取数）。
+ *
+ * `flush: 'post'`：必须在新 DOM 就位、但**还没上屏**的那一帧起跑，
+ * 否则先看到一帧硬切再开始淡入，等于没做。
+ */
+watch([dataSource, gridCols], () => dissolveGrid(imageBox.value), { flush: 'post' });
+
 // ── 网格选择器域接线（方向键 / 回车）───────────────────────────────────────
 // ⚠️ **必须排在 `usePreview` 之前**：下面 `usePreview` 要拿本块的两个回调
 //（`focusCursor` 与 `syncCursor`）。而本块反过来需要 `previewOpen` ——
@@ -2340,7 +2535,8 @@ const onKeyup = (e: KeyboardEvent) => {
     }
 
     if (e.key.toUpperCase() === 'S') {
-        searchInput.value!.focus();
+        // 收起态它只是一颗图标 —— 先展开再聚焦（`openSearch` 内部 nextTick 才 focus）
+        openSearch();
     } else if (e.key === 'F5') {
         onRefresh();
     } else if (e.key.toUpperCase() === 'D') {
@@ -2528,7 +2724,10 @@ const onDisksChangedIpc = (_e: unknown, disks: { serial: string; drive: string }
         /* 横向 padding 不影响 44 这个高度，但显式写 border-box 是给"哪天补回 1px 底边线"
            留的保险：不写的话总高会变成 45、与 `--ff-header-h` 名不副实（踩过）。 */
         box-sizing: border-box;
-        gap: 12px;
+        /* 8px：左侧三颗图标与地址槽之间的呼吸。
+           原来是 12（那时左中右只有两块、中间靠 `justify-content` 撑开）；
+           现在三段都是实体控件，12 会把"一组工具"读成"三个互不相干的东西"。 */
+        gap: 8px;
         /* 顶栏是**文档流里的第一行**，与网格同级（2026-11-08 主人要求）：
            高度由布局分给它的 `height` 决定，不再需要 `position: absolute` 脱离文档流、
            也不再需要网格用 `padding-top` 替它让位。
@@ -2546,53 +2745,50 @@ const onDisksChangedIpc = (_e: unknown, disks: { serial: string; drive: string }
         justify-content: space-between;
 
         /* 图标与文字统一取 chrome 的图标色（#ebebeb / #171717）：
-           naive 的按钮默认吃 `--n-text-color`（次要灰），在深色里会显得没上电。 */
-        .n-button {
+           naive 的按钮默认吃 `--n-text-color`（次要灰），在深色里会显得没上电。
+           ⚠️ 同时把按钮压成 **28×28 方格**：naive `size="small"` 是
+           `--n-padding: 0 10px` + `--n-icon-margin: 6px` + 18px 图标 ⇒ 纯图标按钮
+           实际约 **44×28**（查 `button/styles/_common.mjs`），不是方格。
+           不压的话：① 搜索那颗被子容器锁死在 28，邻居却是 44 ⇒ 一排里两种宽度；
+           ② 设计文档 §三的宽度账（右区 ~137px）整个不成立。
+           这两个变量是 Button 组件**内联写上去**的 ⇒ 覆盖必须 `!important`（既有结论）。
+           ⚠️ 用 `:deep()`：`GridDensityMenu` 那颗按钮是**子组件内部**节点，拿不到本文件的
+           `data-v-*`，普通后代选择器匹配不到它 ⇒ 会变成"一排里唯一一颗 44 宽"。 */
+        :deep(.n-button) {
+            --n-padding: 0 !important;
+            --n-icon-margin: 0 !important;
             --n-text-color: var(--ff-chrome-icon) !important;
             --n-text-color-hover: var(--ff-chrome-icon) !important;
             --n-text-color-pressed: var(--ff-chrome-icon) !important;
             --n-text-color-focus: var(--ff-chrome-icon) !important;
+            width: 28px;
+            justify-content: center;
         }
 
+        /* 搜索槽：一颗 28px 图标 ⇄ 一个 220px 输入框（2026-11-08 顶栏升级）。
+           ⚠️ `width` 仍然**必须显式给**，不能删：n-input 天生 `width: 100%`，
+              一旦直系父级不是定宽盒，它就会撑满整行、把工具条顶到多行
+              （2026-09-24 事故：1805px 窗口下头部高 ~150px）。
+              现在这个 100% 被外层 `.search-slot` 的定宽关住，规则从"给像素值"
+              变成"给 100%"，但**不能缺席**。 */
         .n-input {
-            /* ⚠️ 这一行不能删。n-input 天生 `width: 100%`（为表单布局设计的），
-               而这里是 flex 行 —— 100% 会把它撑成整行宽、独霸一行，把「刷新」
-               挤到下一行，工具条从一行涨到三行（实测 1805px 窗口下头部高 ~150px）。
-               原来 n-space 会给每个子项包一层 div，恰好把这个 100% 关在盒子里；
-               换成裸容器之后就露出来了（见 docs/FIX-2026-09-24-nspace-duplicate-keys.md）。
-               260 是"1024 最小窗下仍装得下"的上限（导航区 50% + 这一条 + 两个图标）。 */
-            width: 260px;
+            width: 100%;
 
             &:deep(.n-input-wrapper) {
+                /* 只为把 1px 字形的光学中心压回行盒中线（原值；与键帽无关，别一起删） */
                 padding-top: 1px;
-                padding-right: 6px;
-
-                /* 快捷键胶囊（kbd）。规格对齐 LeiBox `site-search.tsx:262`：
-                   11px 字 + 水平 6 垂直 2 + 1px 发丝边 + 6 圆角；总高 16+2+2 = 20，
-                   在 28 高的输入框里垂直居中，四边留白对称。
-                   ⚠️ 原实现是 `padding: 7px` 四边 + 写死 height 22 + line-height 8 ——
-                   三个数互相打架，胶囊被撑成方块、字被挤在中间。**kbd 的尺寸只由
-                   "字号 + 上下内边距 + 边框"算出来**，不要同时再给 height。 */
-                .suffix-key {
-                    display: inline-block;
-                    box-sizing: border-box;
-                    padding: 1px 6px;
-                    /* 用 strong 档：kbd 只有 1px 边一条线索，`--ff-line`(8%) 叠在深色输入框上
-                       几乎看不见 —— 提示元素弱可以，但"看不见"就不算提示了。 */
-                    border: 1px solid var(--ff-line-strong);
-                    border-radius: var(--ff-r-pill);
-                    color: var(--ff-text-2);
-                    font-family: inherit;
-                    font-size: 11px;
-                    line-height: 16px;
-                    /* 中文字体下的字母容易偏宽，锁住字距让它像个键帽 */
-                    letter-spacing: 0.02em;
-                    /* 键帽不可选、不可点 —— 它只是标签 */
-                    user-select: none;
-                    pointer-events: none;
-                }
             }
         }
+    }
+
+    /* 左侧三颗：起点 / 返回·清空 / 刷新（2026-11-08 顶栏升级）。
+       28px 定宽 + gap 4 —— 图标按钮靠"字形"分组就行，不需要竖线；
+       竖线只留一道、给动作区最右那颗「更多」（见 `.toolbar-sep`）。 */
+    .nav-btns {
+        flex: 0 0 auto;
+        display: flex;
+        align-items: center;
+        gap: 4px;
     }
 
 }
@@ -2620,8 +2816,10 @@ const onDisksChangedIpc = (_e: unknown, disks: { serial: string; drive: string }
  *
  * `min-width: 0` 是这整套的地基：flex 子项默认 `min-width: auto`（≈ 内容宽），
  * 不给 0 的话，**哪怕写了 `overflow` 也不会真的收窄**，头部照样被长路径撑开。
- * `max-width: 50%` 来自 Fluent 2 的宽度预算（面包屑占整体 30–50% 是安全的）：
+ * 宽度上限来自 Fluent 2 的预算（面包屑占整体 30–50% 是安全的）：
  * 它保证动作区**永远拿得到 ≥50%**，超出的部分交给折叠规则消化。
+ * ⚠️ 实际写的是 `calc(50% + 槽宽)` 而不是 `50%`，原因见下面 `--crumb-badge-slot`
+ * 那段：内容预算仍是 50%，多出来的槽宽 只是让角标住进 padding 里。
  *
  * 实测：`docs/probes/header-width/`（真 Chromium + 真 naive-ui，窗口 640/800/1280/1920 四档）。
  */
@@ -2630,15 +2828,82 @@ const onDisksChangedIpc = (_e: unknown, disks: { serial: string; drive: string }
        这个变量。gap 与 ::before 的 left/width 共用它，改一处就够。
        原实现写的是 `left: -13px`（魔数），而 gap 是 8px ⇒ 它往左多插了 5px，
        压在**前一个标签的右边框**上（用户 2026-10-01 截图报的就是这个）。 */
-    --crumb-gap: 12px;
+    --crumb-gap: 8px;
+    /* `›` 的光学补偿（负 = 往上顶）。**它不是一个审美值，是字体度量差**：
+       `›` 的墨迹画在字身框偏下，把行盒居中之后墨迹仍低 1.5 物理 px（DPR 1.25 ⇒ 1.2 逻辑）。
+       依据与复核方式写在 `::before` 那段注释里；这个数只在这一处、只服务一个字形。 */
+    --crumb-sep-dy: -1.2px;
+    /* 角标槽 = **常驻**的 56px，长在导航区自己的右 padding 上。
+       ⚠️ 2026-11-08 code review：原来是 48px。角标起点在 `left:100% + 6px`，
+       可用只剩 42px；`104` 三位数没问题，但平铺视图/大目录出现 5 位数时
+       胶囊（padding 0 6 + tabular-nums 12px）会被 `.crumbs` 的裁剪框切掉右边。
+       56 − 6 = 50px 装得下 5 位。这个数只影响"槽里留白"，不影响换层零位移。
+
+       ⚠️ 2026-11-08 结构性返工（探针 `docs/probes/crumb-motion/` 实测）：
+       原来这个 42px 槽挂在 `.crumb-current` 身上 —— 而"当前段"是最后一格，
+       换层时它**换人**（`F:` → `videos`），于是 40px 空槽在一帧里从上一格搬到下一格，
+       中间那格被迫横移 40px。实测：`F:` 的 `padding-right` t0 就是 `42px→2px`，
+       全程唯一一次瞬时几何变化，位置正在"F: 与 videos 之间"（主人报的"F 到 videos 会跳"）。
+       ⇒ 槽改成**行级常量**（谁当当前段都占同一块），当前段就只剩换色/换字重，
+       零布局事件；多一段就是**只多一段**。
+       ⚠️ 这个 56px 现在写在**内层 `.crumbs` 的 `padding-right`** 里（不是 `.nav-zone`），
+       并且必须配 `box-sizing: border-box`：角标画在当前段盒子外面，
+       而 `.crumbs` 有 `overflow: hidden`（裁剪边界 = padding box）⇒ 只有落在它自己的
+       padding 里才不会被切掉。
+       ⚠️ 原来还有一条 `max-width: calc(50% + 槽宽)` 守"内容预算 50%"，2026-11-08 顶栏升级
+       已**取消**（理由见下面 flex 那段的注释）—— 那个槽宽不再影响任何百分比预算。 */
+    --crumb-badge-slot: 56px;
     flex: 1 1 auto;
     min-width: 0;
-    max-width: 50%;
+    box-sizing: border-box;
+    /* ⚠️ 2026-11-08 顶栏升级：**取消** `max-width: calc(50% + 槽宽)`。
+       那个 50% 预算是按"右侧动作区 ~420px"算的（见 docs/probes/header-width/）；
+       右侧已经降到 ~137px（搜索收成图标、刷新搬去左边、更多挪到末端），
+       再留 50% 只会让右半条空着 —— `justify-content: space-between` 会把槽和工具条
+       硬推开，中间出现一段死白。
+       现在它就是"吃掉所有剩余宽度"的那一格，与资源管理器地址栏同构。
+       ⚠️ 槽里还住着那个**常驻 56px 角标位**（padding-right 占着），换层时它不换人。 */
+    min-height: 30px;
+    padding: 0 0 0 8px;
+    /* 连续槽 = **一块面**，不是一条线。
+       用 `--ff-field`（"一眼看出这是一块可操作的底"那一档，明暗两个主题都调过：
+       浅 #eef0f2 贴白 chrome 差 17、深 #313131 贴 #1f1f1f 差 18）。
+       ⚠️ 不画边框：顶栏里六颗图标按钮都是无框的，这里再多一个描边矩形，
+          就会被读成"一块贴歪的框"而不是"一整条地址"（Chrome / 资源管理器也都没有线）。 */
+    background: var(--ff-field);
+    border-radius: var(--ff-r-ctl);
     display: flex;
-    flex-wrap: nowrap;
     align-items: center;
-    gap: var(--crumb-gap);
     overflow: hidden;
+    /* 离场的"幽灵"用 `position: absolute` 钉在这里（见 `.fx-leave-active`）——
+       它需要一个**定位祖先**，否则会以整页为坐标系飞出去。
+       ⚠️ 2026-11-08 第二轮：幽灵的定位祖先现在是内层 `.crumbs`（`pinLeaving` 取
+       `el.parentElement`）。这里保留 `position: relative` 只是给 galaxy 画布当坐标原点。 */
+    position: relative;
+
+    /* 内层：真正的面包屑列表（`TransitionGroup` 本体）。
+       为什么要单拆一层：galaxy 像素层要铺满整条槽，而 `TransitionGroup` 的子节点必须带 key
+       且会被 FLIP 挪动 ⇒ 画布不能挂在它下面。拆开之后"面"和"列表"各归各的，
+       而 `.nav-zone .fx-*` 那些非 scoped 规则靠**后代**关系依旧命中。 */
+    .crumbs {
+        flex: 1 1 auto;
+        min-width: 0;
+        box-sizing: border-box;
+        display: flex;
+        flex-wrap: nowrap;
+        align-items: center;
+        gap: var(--crumb-gap);
+        /* ⚠️ 角标槽（56px）**必须留在这一层**，不能留在 `.nav-zone` 上。
+           角标是 `::after` + `left: 100%` ⇒ 它画在当前段的**盒子外面**；
+           而这一层有 `overflow: hidden`（裁剪边界是 padding box）。
+           拆两层时如果 56px 还挂在外层，角标就落到这一层的裁剪框外面 ⇒ 长路径时被切掉。
+           放在这里的 padding 里，它才是"在本层内部、但不在内容区"。 */
+        padding-right: var(--crumb-badge-slot);
+        overflow: hidden;
+        /* 画布在 z-index 0，列表必须压上去，否则文字会被星光盖住 */
+        position: relative;
+        z-index: 1;
+    }
 
     /* 面包屑每一段：**单个名字有界**（层级深度问题已由折叠解决，这里只管"一段太长"）。
        ⚠️ 中文不能用 Fluent 那条「超过 30 字符就截断」——那是**拉丁文**语境的量级：
@@ -2658,17 +2923,25 @@ const onDisksChangedIpc = (_e: unknown, disks: { serial: string; drive: string }
            去边框写 `transparent` 而不是 `none`：保留 1px 占位，hover 时不会跳 2px。
            naive 的颜色变量是运行时注入的，覆盖必须 `!important`。 */
         --n-color: transparent !important;
-        --n-color-hover: transparent !important;
+        /* ⚠️ 2026-11-08 顶栏升级：悬停从**下划线**改成**圆角底色**。
+           理由：外层已经是"一块面"，段再画下划线就是两套语言；
+           而"悬停给一条圆角底"正是 Chrome 地址栏的做法 —— 还顺带回答了
+           "这一段到底能不能点"（当前段没有底色 = 不可点），比下划线更清楚。
+           ⚠️ 底色用 `--ff-ctl-on` 而**不是** `--ff-ctl-hover`：槽本身已经是 `--ff-field`
+           （浅 #eef0f2 / 深 #313131），而 `--ff-ctl-hover` 在深色下**正好等于** `--ff-field`
+           ⇒ 悬停一点变化都没有；`--ff-ctl-on` 两档都比它再远一步（浅 #e3e5e8 / 深 #3a3a3a）。 */
+        --n-color-hover: var(--ff-ctl-on) !important;
         --n-border: 1px solid transparent !important;
         --n-border-hover: 1px solid transparent !important;
         --n-text-color: var(--ff-text-2) !important;
         --n-text-color-hover: var(--ff-text-1) !important;
-        padding: 0 2px;
-
-        &:hover .crumb-text {
-            text-decoration: underline;
-            text-underline-offset: 3px;
-        }
+        /* 6px：槽里没有分隔线，段与段之间只靠留白 + `›`，太窄就"文字粘在一起" */
+        padding: 0 6px;
+        border-radius: var(--ff-r-pill);
+        /* 文字贴左，**不居中**：当前段右侧有一个角标槽（见 `.crumb-current`），
+           若居中，文字会随槽宽左右横移；贴左则槽怎么变、文字都不动。
+           非当前段左右 padding 相等，两者本来没差别 ⇒ 这条只为当前段存在。 */
+        justify-content: flex-start;
 
         /* 文本真的收窄之后 `text-overflow` 才会出现 —— 同理，这一层也要 `min-width: 0` */
         :deep(.n-tag__content) {
@@ -2686,6 +2959,9 @@ const onDisksChangedIpc = (_e: unknown, disks: { serial: string; drive: string }
                字形顶/底被切 —— 实测换主字体即复现"顶行被裁"（docs/probes/crumb-clip/）。
                取 tag 自己的内高 ⇒ 盒 28px、墨迹余量 7.5px；tag 高是定值、行盒居中 ⇒ 零布局影响。 */
             line-height: var(--n-height, 1.4);
+            /* 2026-11-08：当前段换人时**只换颜色**（尺寸与字重都不动，见 `.crumb-current`）。
+               只过渡颜色 —— `font-weight` 已经在第七轮整个去掉，不要加回来。 */
+            transition: color var(--ff-dur-hover) var(--ff-ease-move);
         }
     }
 
@@ -2694,7 +2970,16 @@ const onDisksChangedIpc = (_e: unknown, disks: { serial: string; drive: string }
        （n-space 重复 key 事故同族）。
        `position: absolute` 让它不占 tag 内部空间（tag 自带 `position: relative`）；
        **盒子正好等于那个空隙、再在盒子里居中** —— 这样就不依赖"猜一个负偏移量"，
-       换字体、换字号都不会再压到边框上。 */
+       换字体、换字号都不会再压到边框上。
+
+       ⚠️⚠️ `--crumb-sep-dy` = **光学补偿**，不是布局补丁。原因很具体：
+       `›` 这个字形由字体自己决定画在**字身框偏下**的位置（不是居中）。所以"把它的行盒
+       居中"得到的只是**盒**居中，墨迹仍然偏低 —— 中线上看过去就是一串分隔符"往下坠"。
+       实测（截图 314×63，DPR 1.25，暗色，`docs/probes/header-optical/`）：
+         槽中线 32.00 · 汉字重心 31.68 · `›` 墨迹 31..36（中心 33.50）⇒ 低 1.5 物理 = 1.2 逻辑。
+       ⇒ 所以这里往上顶 1.2px，让**墨迹**回到中线（边距仍是"盒居中 + 这一档补偿"两件事分开写）。
+       ⚠️ 换主字体 / 改 `--crumb-gap` 之外的任何字号相关的值时，这个数要重量：
+          `node docs/probes/header-optical/measure.mjs <截图>` 会直接打每块墨迹与中线的差。 */
     .crumb:not(.crumb-root)::before {
         content: '›';
         position: absolute;
@@ -2702,19 +2987,26 @@ const onDisksChangedIpc = (_e: unknown, disks: { serial: string; drive: string }
         width: var(--crumb-gap);
         text-align: center;
         top: 50%;
-        transform: translateY(-50%);
+        transform: translateY(calc(-50% + var(--crumb-sep-dy)));
         line-height: 1;
         color: var(--ff-text-muted);
         pointer-events: none;
         /* 别挡住上一个 tag / chip 的点击 */
     }
 
-    /* 当前层**永不被压掉**：它是"我在哪"的唯一答案，比任何历史段都重要 */
+    /* 当前层**永不被压掉**：它是"我在哪"的唯一答案，比任何历史段都重要。
+       ⚠️ 这里**只换颜色**，一个像素的尺寸、一条笔画都不换 —— 角标槽已经搬到
+       `.nav-zone`（见那边注释），所以连宽度都不变。
+       ⚠️⚠️ 2026-11-08（第七轮）：**去掉 `font-weight: 500`**。
+       主人原话：「高亮的 videos 会跳一下…它根本就不需要重新渲染，最多就是从灰色变成高亮不可点」。
+       加粗是这里**唯一会让字形整体重画**的东西（颜色只是重新上色）：
+       可变字体的 500 档要重新栅格化一遍字形，观感就是"这一格闪/动了一下"。
+       灰色 → 高亮的信息量本来就够（浅色 #61666d → #18191c，深色 #8f8f8f → #ededed），
+       不需要再加一层字重。⇒ 当前段的差别只剩：**亮一档 + 光标变 default**。 */
     .crumb-current {
         flex: 0 0 auto;
-        /* 字重 500（原来写 bold=700，中文在 700 下会糊；全站只用 400/500） */
         --n-text-color: var(--ff-text-1) !important;
-        font-weight: 500;
+        position: relative;
     }
 
     /* 当前段的条目数角标 —— 原来是工具条里那个飘着的 `n-badge`，
@@ -2738,10 +3030,31 @@ const onDisksChangedIpc = (_e: unknown, disks: { serial: string; drive: string }
        标记为"仅视觉位移"：`transform` 不改布局，tag 高度仍由 `.crumb-text` 的行盒决定。 */
     .crumb-current[data-count]::after {
         content: attr(data-count);
-        flex: 0 0 auto;
-        align-self: center;
-        transform: translateY(2.8px);
+        /* 画在**盒子外侧**（左边缘 = 当前段右边缘 + 6px），落在 `.nav-zone` 的常驻角标槽里。
+           两个必然结果，正是本轮要的：
+           ① 当前段的宽度不随角标有无 / 位数变化；
+           ② 槽是行级常量 ⇒ "当前段换人"不再搬运 40px 空槽 ⇒ 前面的段一个像素都不动。
+           ⚠️ 不能改回 `right: 2px` + 段内 padding：那就是上一版"F 到 videos 会跳"的根因。 */
+        position: absolute;
+        left: 100%;
         margin-left: 6px;
+        top: 50%;
+        /* ⚠️ 2026-11-08 **删掉了原来那个 `+ 2.8px`**。
+           它当初是补"块按行盒居中、文字墨迹偏低"的差 —— 那个判据是**拉丁 x-height 带**
+           的（字母小写的主体偏下）。可这个界面里地址永远是中文：汉字墨迹几乎填满字身框，
+           重心就在**行盒中心**。于是在中文上，那个补偿把胶囊整个压低了。
+           实测（槽截图 314×63，DPR 1.25，暗色）：
+             槽 14..50，中心 32.0；文字墨迹**重心 31.7**；胶囊**重心 35.7** ⇒ 低 3.7 物理 ≈ 3 逻辑。
+           去掉之后两者都对在 32 —— 记着：判据要落在"这段文字的实际重心"，不是某个字族的字体度量。 */
+        transform: translateY(-50%);
+        /* 伪元素是"命中选择器那一刻才创建"的，没有上一帧可过渡 ⇒ 只能用 keyframes
+           ⚠️ 那个延迟不是装饰，是**必须**：角标的落点恰好是"上一格"消失的位置
+           （角标挂在当前段右边缘 +6px，而下一段的起点是 +12px）⇒ 上一段退场期间
+           会被新角标整个盖住，淡出等于没做（实测 `shot-leave-zoom.png`：只剩一个 `›` 压在角标边上）。
+           让角标晚一步出现，两件事就串起来了：**先看到那段走、再看到数字来**。
+           2026-11-08 第八轮：延迟改成引用 `--ff-dur-exit`（退场带走完再出现），
+           不再写死 120ms —— 以后调拍子只改一个数。 */
+        animation: fx-badge-in var(--ff-dur-badge) var(--ff-ease-move) var(--ff-dur-exit) both;
         height: 18px;
         min-width: 18px;
         padding: 0 6px;
@@ -2786,15 +3099,19 @@ const onDisksChangedIpc = (_e: unknown, disks: { serial: string; drive: string }
     display: flex;
     flex-wrap: nowrap;
     align-items: center;
-    gap: 12px;
+    /* 4px：图标按钮靠**间距**读成"一组"，不靠竖线（竖线只留一道给「更多」）。 */
+    gap: 4px;
 
     /* 开关类按钮的激活态：**灰底 + text-1**，与左轨同一套语言（不带颜色）。
+       ⚠️ 用 `:deep()`：`GridDensityMenu` 里那颗按钮是**子组件内部**的节点，
+          拿不到本文件的 `data-v-*` 作用域属性 ⇒ 普通后代选择器匹配不到它。
+          （「平铺」那颗在本文件里，用同一条规则也能命中，所以只留这一条。）
        ⚠️ naive 的颜色变量是运行时注入的，覆盖必须 `!important`（项目既有结论）。
        为什么不用实心主按钮：一个"视图开关"不该比主操作还响。
        ⚠️ 底色用 `--ff-ctl-on` 而不是 `--ff-fill-strong`(=raised-hover)：那一档在深色下
        比悬停更**暗**，"选中"反而更不起眼。`--ff-ctl-on` 两个主题方向一致
        —— 浅色更深（#e3e5e8）、深色更亮（#3a3a3a），都比"悬停"再离底色远一档。 */
-    .is-on {
+    :deep(.is-on) {
         --n-color: var(--ff-ctl-on) !important;
         --n-color-hover: var(--ff-ctl-on) !important;
         --n-color-pressed: var(--ff-ctl-on) !important;
@@ -2802,15 +3119,133 @@ const onDisksChangedIpc = (_e: unknown, disks: { serial: string; drive: string }
         --n-text-color-hover: var(--ff-text-1) !important;
         --n-text-color-pressed: var(--ff-text-1) !important;
     }
+
+    /* 搜索槽：收起 28px（一颗图标）⇄ 展开 220px（输入框）。
+       宽度的目的不是动画本身，而是**让位**：地址槽是 `flex: 1`，它一收/一放，
+       面包屑那边自动跟着变 —— 所以 `.nav-zone` 一个 transition 都不用写。
+       节奏照 tokens 的「拍内分带」（和面包屑同一拍 200ms）：
+         展开 → 宽度先走满 75% 拍，输入框延迟 25% 才显形（先落位、后显形）；
+         收起 → 内容先在前 45% 消失，宽度延迟到那一刻之后才收（先消失、后收摊）。
+       ⚠️ 两个方向必须分别写在两端：`.is-open` 里的规则只在"去往 is-open"时生效，
+          基础规则只在"回到基础态"时生效。写在一处就只有一个方向有曲线。 */
+    .search-slot {
+        position: relative;
+        flex: 0 0 auto;
+        width: 28px;
+        height: 28px;
+        transition: width calc(var(--ff-dur-move) * 0.55) var(--ff-ease-exit) var(--ff-dur-exit);
+
+        &.is-open {
+            width: 220px;
+            transition: width calc(var(--ff-dur-move) * 0.75) var(--ff-ease-move);
+        }
+
+        /* 收起态的输入框**留在 DOM 里**（只关可见与命中）：`v-if` 会让它没有"上一帧"，
+           宽度动画就只能从 0 开始 —— 那正是"瞬间弹出"而不是"长出来"。 */
+        .n-input {
+            opacity: 0;
+            pointer-events: none;
+            transition: opacity var(--ff-dur-exit) linear;
+        }
+
+        &.is-open .n-input {
+            opacity: 1;
+            pointer-events: auto;
+            transition: opacity var(--ff-fade-in) linear var(--ff-fade-in-delay);
+        }
+    }
+
+    /* 收起态那颗图标：绝对铺在 28px 槽上，与输入框共用同一个位置。
+       不参与布局 ⇒ 展开/收起时不会因为它再算一次几何。
+       ⚠️ 展开态的规则**必须另起一条**写全路径：Less 里 `.is-open &` 展开的是
+          **累计选择器**（`.toolbar .search-btn`）⇒ 会编译成 `.is-open .toolbar .search-btn`，
+          祖先顺序反了，规则静默失效（第一版就是这么错的，靠翻编译产物抓到）。 */
+    .search-btn {
+        position: absolute;
+        inset: 0;
+        width: 28px;
+        transition: opacity var(--ff-fade-in) linear var(--ff-fade-in-delay);
+    }
+
+    .search-slot.is-open .search-btn {
+        opacity: 0;
+        pointer-events: none;
+        transition: opacity var(--ff-dur-exit) linear;
+    }
+
+    /* 「更多」与视图组之间那道竖线：它是兜底入口，不属于视图组。 */
+    .toolbar-sep {
+        flex: 0 0 auto;
+        width: 1px;
+        height: 16px;
+        background: var(--ff-line-strong);
+        margin: 0 4px;
+    }
+}
+
+/* ── 状态条「挂上 / 摘掉」的动画（2026-11-08）───────────────────────────────
+   这条状态条**在文档流里**（`.file-finder` 是 flex 列），所以只做淡入是假动画：
+   卸载那一帧网格就跳 50px，然后条自己再淡出去。**高度必须一起过渡**。
+   `height: auto` 不可过渡，`max-height` 要写魔数（内容一变就剪错高度）⇒
+   用 grid 轨道 `minmax(0,1fr) ↔ minmax(0,0fr)`：零魔数、内容多高都收得干净。
+   Chromium 152 实测可插值：`docs/probes/bar-collapse/`（200ms 一拍下采到 12 帧中间高度，槽 50→0，
+   网格顶边同步上移）。
+   ⚠️ 两个前提**缺一不可**，少一个就"收不起来"（探针第一版就是这么失败的）：
+     ① 轨道写 `minmax(0, …)` —— 裸写 `0fr` 等于 `minmax(auto, 0fr)`，轨道的自动最小尺寸
+        取内容的 min-content，`.scan-bar` 的 `min-height: 40px` 会把它顶死；
+     ② 里层 `.scan-bar` 有 `overflow: hidden` —— 网格项的自动最小尺寸只有非 visible 才归 0。
+   ⚠️ 透明度用 linear、时长走**拍内分带**（2026-11-08 第八轮，同面包屑）：
+   这条曲线是给位移的（前重后轻），拿 `--ff-ease-exit` 淡出会中途就掉到 0.1，
+   肉眼等于"闪一下"（面包屑那边踩过）。进 = 延迟 25% 拍、后用 50% 拍显形；
+   退 = 前 45% 拍内消失，然后才让空间塌下去。 */
+.scan-bar-slot {
+    display: grid;
+    grid-template-rows: minmax(0, 1fr);
+    /* 收起过程中内容仍按自身高度渲染，不裁就会盖到网格上 */
+    overflow: hidden;
+    /* 不参与压缩：该被挤的是网格（`flex: 1`），不是这条 */
+    flex: 0 0 auto;
+}
+
+.fx-bar-enter-active {
+    transition: grid-template-rows var(--ff-dur-move) var(--ff-ease-move),
+        opacity var(--ff-fade-in) linear var(--ff-fade-in-delay);
+}
+
+.fx-bar-leave-active {
+    transition: grid-template-rows var(--ff-dur-move) var(--ff-ease-exit),
+        opacity var(--ff-dur-exit) linear;
+}
+
+.fx-bar-enter-from,
+.fx-bar-leave-to {
+    grid-template-rows: minmax(0, 0fr);
+    opacity: 0;
+}
+
+/* 减少动态效果：直接切终态。轨道过渡必须整体关掉 —— 留个 0ms 的过渡在
+   `grid-template-rows` 上只会让"挂上/摘掉"多算一帧，没有意义。 */
+@media (prefers-reduced-motion: reduce) {
+
+    .fx-bar-enter-active,
+    .fx-bar-leave-active {
+        transition: none;
+    }
 }
 
 /* 扫描状态条：贴着网格下方一条，整条随 scanning 出现/消失 */
 .scan-bar {
     display: flex;
     align-items: center;
+    /* ⚠️ 2026-11-08：这条不是可有可无的 —— 它是 `.scan-bar-slot` 能把高度收到 0 的
+       **第二个前提**（网格项的自动最小尺寸只有非 visible 才归 0）。
+       顺带保证内容不被裁：收起时轨道已经 0，这里裁不裁都看不见。 */
+    overflow: hidden;
     /* 元素间距统一 8（§4.4）；组的切分交给 `.pick-acts` 内部再分一档 */
     gap: 8px;
-    /* 定高：模式条出现/消失时网格不该跟着上下跳 */
+    /* 定高：挑选条 / 扫描条**两种内容**高度一致 —— 扫描过程中途切换文案
+       （`取消` → `正在取消…` 多一行提示）不会让条自己长高、把网格顶一下。
+       ⚠️ 它**管不到**"整条挂上/摘掉"，那件事现在由 `.scan-bar-slot` 的轨道动画负责。 */
     min-height: 40px;
     padding: 2px var(--ff-content-inset) 8px;
 
@@ -2942,6 +3377,14 @@ const onDisksChangedIpc = (_e: unknown, disks: { serial: string; drive: string }
             /* 抬升阴影走 token：深色下大而虚（只为"这张在最前"），浅色下小而淡
                —— 浅底上那圈 4px 扩散的深阴影会变成一圈脏灰，主人 2026-11-07 的原话是"好丑"。 */
             box-shadow: var(--ff-shadow-lift);
+            /* 进场 60ms（= 长按方向键两次移动之间的最小间隔），退场走基类的退场带。
+               ⚠️ 60ms 这个数的来源是 `useGridCursor.MOVE_REPEAT_MIN_MS`，**不是**节奏 token：
+               这一格必须在"下一次移动到来之前"画完，否则长按时光标一路跑、环一路追。
+               60ms 短到几乎瞬时，但足以让环"长出来"而不是"啪一下贴上"。 */
+            transition: outline-color 60ms var(--ff-ease-move),
+                outline-width 60ms var(--ff-ease-move),
+                outline-offset 60ms var(--ff-ease-move),
+                box-shadow 60ms var(--ff-ease-move);
         }
 
         /* 标题也跟着变蓝：光有封面上那圈框，几十张里还是要"找一下"——
@@ -3199,7 +3642,9 @@ const onDisksChangedIpc = (_e: unknown, disks: { serial: string; drive: string }
     box-sizing: border-box;
     border: 0;
     user-select: none;
-    /* ⚠️ 必须短于方向键连发间隔（usePreview 的 KEY_REPEAT_MIN_MS = 100ms）。
+    /* ⚠️ 必须短于方向键连发间隔。真正管这件事的是 `useGridCursor.MOVE_REPEAT_MIN_MS = 60ms`
+       （长按只节流 `e.repeat`，单击零延迟），不是 `usePreview.KEY_REPEAT_MIN_MS = 100ms`
+       —— 那个是**预览层**翻页的节流，2026-11-08 核对时发现原注释引错了对象。
        原来是 .18s，比间隔还长 ⇒ 每次过渡都跑不完就被下一次打断，快移时等于没有反馈。 */
     transition: transform .08s ease-out;
 
@@ -3226,6 +3671,18 @@ const onDisksChangedIpc = (_e: unknown, disks: { serial: string; drive: string }
            `outline` 不参与布局、也不会被自己的 `overflow:hidden` 裁掉。 */
         outline: 1px solid var(--ff-card-outline);
         outline-offset: -1px;
+
+        /* 焦点环的**退场**（进场在 `&.cursor` 里被覆盖成 60ms，见那里）：
+           3px 的高亮环缩回 1px 发丝、2px 的留缝收回 0、抬升阴影淡掉 —— 都用"退场带"。
+       ⚠️ 为什么只在这边写：环是"光标在哪一格"的**位置信号**，进场迟到就会出现
+       "环追不上光标"（长按方向键每 60ms 走一格）。退场没有这个义务 ——
+       让它慢一拍缩回去，两张卡之间就变成**交接**而不是硬切。
+       ⚠️ 三个属性都能插值（`outline-width` / `outline-offset` 是长度，`outline-color` 是颜色）；
+       `box-shadow` 从 `none` 到实体阴影 Chromium 也按"全 0 透明"插值，不会跳。 */
+        transition: outline-color var(--ff-dur-exit) var(--ff-ease-move),
+            outline-width var(--ff-dur-exit) var(--ff-ease-move),
+            outline-offset var(--ff-dur-exit) var(--ff-ease-move),
+            box-shadow var(--ff-dur-exit) var(--ff-ease-move);
 
         /* 模糊底（见 `coverBackdrop()` 的注释）：把同一张图放大、模糊、压暗铺满整框。
            `inset:0` + `scale(1.15)`：blur 会吃掉边缘像素，放大一点才不会有透明边。
@@ -3343,6 +3800,29 @@ const onDisksChangedIpc = (_e: unknown, disks: { serial: string; drive: string }
 
         .card-title {
             color: var(--ff-highlight);
+        }
+    }
+
+    /* 目录的脸：70%（常态）↔ 100%（换封面，要看得清）。
+       ⚠️ 2026-11-08：原来是模板里的内联 `width/height: 70% ↔ 100%` —— 那是**布局动画**：
+       进/出「换封面」会让一屏几百个目录同时改宽高，每帧重排几百张卡片，必然发涩。
+       改成「盒子恒 100% + `transform: scale()`」：视觉结果**完全一样**
+       （`object-fit: contain` 在 100% 的盒子里按比例缩满，再整体乘 0.7 = 原来的 70% 盒子），
+       但 `transform` 不触发布局，只重绘自己那一层。
+       ⚠️ 曲线与时长直接用"一拍"：它和面包屑、底部条是同一个节奏，不是另开一套。
+       ⚠️ 别改回内联宽高 —— 那样连过渡都没法写（内联值是字符串拼接，每次切换都是硬跳）。 */
+    .card-avatar {
+        transform: scale(0.7);
+        transition: transform var(--ff-dur-move) var(--ff-ease-move);
+    }
+
+    &.pickable .card-avatar {
+        transform: scale(1);
+    }
+
+    @media (prefers-reduced-motion: reduce) {
+        .card-avatar {
+            transition: none;
         }
     }
 
@@ -3494,6 +3974,26 @@ const onDisksChangedIpc = (_e: unknown, disks: { serial: string; drive: string }
     overflow: hidden;
     background-image: url(@/assets/fileTypeIcon/blank.svg);
 }
+
+/**
+ * 计数角标的入场 —— 必须用 `@keyframes` 而不是 `transition`：
+ * 它是 `::after` 伪元素，**选择器命中那一刻才被创建**，没有"上一帧"可以过渡，
+ * 不加动画就是"啪"地冒出来。
+ *
+ * ⚠️ 2026-11-08 第七轮：**只淡入，不要 scale**。
+ * 原来带 `scale(0.7) → scale(1)`，等于让眼睛在一个 18px 的小胶囊上
+ * 看一次"从中间胀出来"的运动。主人已经明确"换层时不许有别的东西在动"，
+ * 而角标是纯信息 —— 只留透明度。
+ */
+@keyframes fx-badge-in {
+    from {
+        opacity: 0;
+    }
+
+    to {
+        opacity: 1;
+    }
+}
 </style>
 
 <!--
@@ -3550,5 +4050,88 @@ body>.n-image-preview-container .n-image-preview-toolbar .n-base-icon {
 
 body>.n-image-preview-container .n-image-preview-toolbar .n-base-icon:hover {
     opacity: .65;
+}
+
+/* ══════════════════════════════════════════════════════════════════
+   导航区（面包屑）的过渡 —— 非 scoped 块：这些类由 Vue 运行时**动态**加到
+   `n-tag` / `n-tooltip` / 组件根节点上，scoped 块的属性选择器够不到它们
+   （与上面工具条同因）。用 `.nav-zone` 前缀兜住作用域。
+
+   ⚠️ 三类必须分开写，**不能合成一条 `transition: all`**：
+     · `-move`   FLIP：只有"路径长到要挤压"时才命中（正常增删**没有一个邻居会动**，
+                 所以它平时是静默的空转）。留着是因为它顺便兜住宽度上限
+                 触发整排收缩那种情况，不留就会硬挤。
+     · `-enter`  进入：位移归位 + **延迟显形**（拍内分带，见下）
+     · `-leave`  脱离文档流后**当场淡出**（前 45% 的一拍内消失，见下）
+   ══════════════════════════════════════════════════════════════════ */
+.nav-zone .fx-move {
+    transition: transform var(--ff-dur-move) var(--ff-ease-move);
+}
+
+/* 进入 = **先落位、后显形**（2026-11-08 第八轮，照搬 Torph 的拍内分带）。
+   `opacity` 延迟 25% 拍、只用后 50% 拍显形 —— 前 50ms 里这一格已经在最终位置上
+   但几乎全透明，所以 6px 的归位只在最后一小段露出来，读起来是"从上一段里长出来"
+   而不是"从左边滑进来"。位移本身仍是完整一拍，不跟着透明度缩水。 */
+.nav-zone .fx-enter-active {
+    transition: transform var(--ff-dur-move) var(--ff-ease-move),
+        opacity var(--ff-fade-in) linear var(--ff-fade-in-delay);
+}
+
+.nav-zone .fx-enter-from {
+    opacity: 0;
+    transform: translateX(-6px);
+}
+
+/* 退出 = **先由 JS 钉死在最后的位置上、再淡出**（`@before-leave="pinLeaving"`）。
+   ⚠️ 2026-11-08 第四轮：上一版写的是 `display: none`（同步塌掉）。主人反馈
+   「进正常、退会跳」—— 因为 **enter 有 300ms、leave 是 0ms**，不对称得看得见。
+   ⚠️ 但不能只把 `display: none` 换成淡出：留着占位 ⇒ 整排这 180ms 里不动、
+   结束时一帧塌回去，Vue 的 FLIP 也全程量到位移差 0（它只在 `onUpdated` 量一次）
+   ⇒ 一帧都没滑（第二轮就踩过这个）。
+   ⇒ 两头都要：**脱离文档流**（行立刻塌、FLIP 量到的是真位移）+ **位置钉死**。
+   `position: absolute` 单独用不行 —— flex 容器里的绝对定位子项，静态位置按
+   "它是唯一的 flex 项"算 ⇒ 会被丢到内容区最左边、整段瞬移。所以 left/top/width/height
+   在 `before-leave` 里从 `getBoundingClientRect()` 抄一份。
+   ⚠️ 用 `absolute`（相对 `.nav-zone`）而不是 `fixed`：fixed 的坐标系会被祖先的
+   transform / filter 改写，absolute + 自己算偏移不吃这个亏。
+   ⚠️ 本块在非 scoped `<style>` 里，`.nav-zone` 前缀负责兜住作用域。 */
+.nav-zone .fx-leave-active {
+    /* ⚠️ 透明度必须 **linear**，不能跟位移共用 `--ff-ease-exit`：
+       那条曲线是给位移用的（前重后轻），拿它淡出时 180ms 的 **90ms 处就已经掉到 0.1**
+       ⇒ 肉眼看就是"闪一下没了"，等于没做动画（探针截图 `shot-leave-90ms.png` 抓到的就是这个）。
+       ⚠️ 2026-11-08 第八轮：总时长从 180ms 收到 **90ms**（= 一拍的前 45%，参考件的退场带）。
+       这和上一坑**不矛盾**：那时是"曲线前重后轻 + 总长 180"⇒ 90ms 到 0.1 之后还在爬
+       剩下的 90ms，读作"卡住了"；现在是 linear 90ms 直接到 0 —— 短而干净，不是停住。
+       ⚠️ 幽灵在绝对定位里，`pointer-events: none` 免得它挡 200ms 的点击。 */
+    pointer-events: none;
+    transition: opacity var(--ff-dur-exit) linear,
+        transform var(--ff-dur-move) var(--ff-ease-exit);
+}
+
+/* 退场**不位移**、只缩小 5%（参考件同款：`scale(0.95)`，不是"飘走"）。
+   位置已经在 `pinLeaving` 里钉死了，再叠一层横移只会读成"被挤出去"。 */
+.nav-zone .fx-leave-to {
+    opacity: 0;
+    transform: scale(0.95);
+}
+
+/* 减少动态效果：**直接切到终态**，不能只把时长设 0 ——
+   设 0 会让 `-enter-from` 的位移和最终位置落在同一帧、闪一下。 */
+@media (prefers-reduced-motion: reduce) {
+    .nav-zone .fx-move,
+    .nav-zone .fx-enter-active,
+    .nav-zone .fx-leave-active {
+        transition: none !important;
+    }
+
+    .nav-zone .fx-enter-from {
+        opacity: 1;
+        transform: none;
+    }
+
+    /* 角标挂出去了，不需要槽；减少动态效果下直接不出入场动画即可 */
+    .nav-zone .crumb-current[data-count]::after {
+        animation: none;
+    }
 }
 </style>
