@@ -43,6 +43,10 @@ docs/probes/grid-cursor-focus/generated-decide.js
 docs/probes/grid-cursor-focus/.decide-entry.mjs
 # theme-transition 探针的 bundle（run.sh 每次从 src/theme/transition.ts 现生）
 docs/probes/theme-transition/transition.js
+# 2026-11-08 面包屑/网格探针的 esbuild 产物与编译 CSS（build-css.mjs / run.cjs 每次现生）。
+# ⚠️ 只按后缀精确挡：探针页 index.html 与源码 .cjs / .mjs 一个都不能误伤。
+docs/probes/**/*.bundle.js
+docs/probes/**/*.generated.css
 
 # ⚠️ 探针截图**永不入库**：文件名里带的是真实番号，画面里是真实目录名。
 # 这条必须写在源头上 —— 靠提交前人工挑，早晚会漏（2026-11-07 一次就攒了 40+ 张）。

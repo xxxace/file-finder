@@ -1,0 +1,329 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+
+<head>
+    <meta charset="utf-8">
+    <title>面包屑位移探针 —— 逐元素量 left / width / transform</title>
+
+    <!-- 真实编译产物：index.vue 的 **scoped + 非 scoped 两个** style 块 + tokens.css -->
+    <link rel="stylesheet" href="css-real.generated.css">
+
+    <style>
+        html,
+        body {
+            margin: 0;
+            background: #eceef2;
+            font-family: system-ui, "Microsoft YaHei", sans-serif;
+        }
+
+        #stage {
+            padding: 8px;
+        }
+
+        /* 根 chip 的替身：**导航期间宽度恒定**，所以它参不参与动画都不影响本探针的结论。
+           真实的 FolderSelector 在这里会被换成写死的盒子 —— 这条差异已写进 README。 */
+        .chip-stub {
+            flex: 0 0 auto;
+            display: inline-flex;
+            align-items: center;
+            height: 28px;
+            padding: 0 8px;
+            border-radius: 4px;
+            background: #e3e5e8;
+            font-size: 14px;
+            color: #333;
+        }
+    </style>
+</head>
+
+<body>
+    <div id="stage"></div>
+
+    <script src="../../../node_modules/vue/dist/vue.global.prod.js"></script>
+    <script src="../../../node_modules/naive-ui/dist/index.js"></script>
+    <!-- crumbRows.ts 的真实产物（esbuild 打出来的 IIFE），不手抄一份"等效实现" -->
+    <script src="crumbRows.bundle.js"></script>
+
+    <script>
+        const { createApp, ref, computed, nextTick } = Vue;
+        const N = naive;
+        const S = 'data-v-probe';
+
+        /** 三级以内不折叠 ⇒ 本探针固定传 null（折叠路径不在本次症状范围内，README 已标注） */
+        const crumbsOf = (names) => names.map((n, i) => ({
+            name: n,
+            kind: i === 0 ? 'root' : 'dir',
+            path: names.slice(0, i + 1).join('/') + (i === 0 ? '/' : ''),
+        }));
+
+        const state = {
+            names: ref(['F:']),
+            historyLen: ref(1),
+            count: ref(35),
+            loading: ref(false),
+        };
+
+        const app = createApp({
+            setup() {
+                const crumbs = computed(() => crumbsOf(state.names.value));
+                /** 真函数、真入参 —— 探针不重写一份布局推导 */
+                const crumbLayout = computed(() => CrumbRows.buildCrumbLayout(crumbs.value, null));
+                return {
+                    ...state,
+                    crumbLayout,
+                    crumbHidden: computed(() => []),
+                    // 与 index.vue 逐字相同的幽灵钉位
+                    pinLeaving: (el) => {
+                        if (!el || !el.style) return;
+                        const zone = el.parentElement;
+                        if (!zone) return;
+                        const r = el.getBoundingClientRect();
+                        const z = zone.getBoundingClientRect();
+                        const s = el.style;
+                        s.boxSizing = 'border-box';
+                        s.position = 'absolute';
+                        s.left = `${r.left - z.left}px`;
+                        s.top = `${r.top - z.top}px`;
+                        s.width = `${r.width}px`;
+                        s.height = `${r.height}px`;
+                        s.margin = '0';
+                        // 与 index.vue 一致：摘掉角标，避免并排两个红胶囊
+                        el.removeAttribute('data-count');
+                    },
+                    // 与 index.vue 逐字相同：一个节点、只换文案
+                    navBtnText: computed(() => (state.historyLen.value > 1 ? '返回' : '清空')),
+                    navBtnTip: computed(() => (state.historyLen.value > 1 ? '返回上一屏（Backspace）' : '清空导航历史')),
+                    noop: () => { },
+                    onCrumbClick: () => { },
+                };
+            },
+            template: `
+            <div class="file-finder" ${S}>
+              <div class="header-bar" ${S}>
+                <TransitionGroup name="fx" tag="div" class="nav-zone" ${S} @before-leave="pinLeaving">
+                  <div key="chip" class="chip-stub" ${S}>F:</div>
+
+                  <n-tooltip v-if="historyLen" key="back">
+                    <template #trigger>
+                      <n-button size="small" ${S} @click="noop">{{ navBtnText }}</n-button>
+                    </template>
+                    {{ navBtnTip }}
+                  </n-tooltip>
+
+                  <n-tag v-if="crumbLayout.head" :key="crumbLayout.head.key" class="crumb" ${S}
+                    :class="{ 'crumb-root': crumbLayout.head.kind === 'root', 'crumb-current': crumbLayout.headCurrent }"
+                    :title="crumbLayout.head.path" :data-count="crumbLayout.headCurrent ? count : null">
+                    <span class="crumb-text" ${S}>{{ crumbLayout.head.name }}</span>
+                  </n-tag>
+
+                  <n-popover v-if="crumbLayout.fold" key="fold" trigger="click" placement="bottom-start">
+                    <template #trigger>
+                      <n-tag class="crumb crumb-more" ${S} title="展开被折叠的层级">
+                        <span class="crumb-text" ${S}>…</span>
+                      </n-tag>
+                    </template>
+                    <div class="hstack">
+                      <n-button v-for="c in crumbHidden" :key="c.path" size="small">{{ c.name }}</n-button>
+                    </div>
+                  </n-popover>
+
+                  <n-tag v-for="(row, i) in crumbLayout.tail" :key="row.key" class="crumb" ${S}
+                    :class="{ 'crumb-root': row.kind === 'root', 'crumb-current': i === crumbLayout.tail.length - 1 }"
+                    :title="row.path" :data-count="i === crumbLayout.tail.length - 1 ? count : null"
+                    @click="onCrumbClick(row)">
+                    <span class="crumb-text" ${S}>{{ row.name }}</span>
+                  </n-tag>
+                </TransitionGroup>
+
+                <div class="toolbar" ${S}>
+                  <n-button size="small" ${S}>•••</n-button>
+                  <n-input placeholder="搜索" size="small" ${S} />
+                </div>
+              </div>
+            </div>`,
+        });
+        app.use(N);
+        app.mount('#stage');
+
+        // ─────────────────────── 采样 ───────────────────────
+        const zone = () => document.querySelector('.nav-zone');
+
+        /** 参与比较的元素：所有 .crumb + 所有按钮（跳过 n-tooltip 之类的纯包装）
+         *
+         * ⚠️ `id` 必须来自**节点身份**（`__pid`），不能来自文字。
+         * 踩过：第一版 `id = 'btn:' + 文字`，于是"同一个节点只换了文案"被报成
+         * "旧的走了、新的来了" —— 正是本轮要证明的那件事，被 id 命名法抹掉了。
+         */
+        let pidSeq = 0;
+        const pidOf = (el) => el.__pid || (el.__pid = `${el.tagName[0]}${++pidSeq}`);
+
+        function targets() {
+            const root = zone();
+            const out = [];
+            root.querySelectorAll('*').forEach((el) => {
+                const r = el.getBoundingClientRect();
+                if (r.width === 0 && r.height === 0) return;       // display:none 的离场元素：单独标
+                const isCrumb = el.classList.contains('crumb');
+                const isBtn = el.tagName === 'BUTTON';
+                if (!isCrumb && !isBtn) return;
+                const txt = (el.querySelector('.crumb-text')?.textContent ?? el.textContent ?? '').trim();
+                out.push({
+                    id: (isCrumb ? 'crumb:' : 'btn:') + pidOf(el),
+                    文字: txt,
+                    left: Math.round(r.left * 100) / 100,
+                    top: Math.round(r.top * 100) / 100,
+                    width: Math.round(r.width * 100) / 100,
+                    height: Math.round(r.height * 100) / 100,
+                    lineH: getComputedStyle(el).lineHeight,
+                    // 文字相对自己这一格的纵向偏移 —— tag 高度没变、但**里面的字**被挤动是另一回事，
+                    // 上一版只量了 tag 的 rect，正好漏掉这一层。
+                    textDy: (() => {
+                        const t = el.querySelector('.crumb-text');
+                        if (!t) return null;
+                        return Math.round((t.getBoundingClientRect().top - r.top) * 100) / 100;
+                    })(),
+                    padR: getComputedStyle(el).paddingRight,
+                    flex: getComputedStyle(el).flex,
+                    tf: getComputedStyle(el).transform,
+                    op: Math.round(Number(getComputedStyle(el).opacity) * 100) / 100,
+                    子转圈: el.querySelectorAll('.n-spin, .n-spin-body, .n-spin-container').length,
+                    cls: el.className.replace(/n-tag--|n-button--\S+/g, '').trim(),
+                    shown: true,
+                });
+            });
+            // display:none 的（正在离场的）也记一笔，证明它是"瞬间塌掉"而不是"滑出去"
+            root.querySelectorAll('.crumb, button').forEach((el) => {
+                const r0 = el.getBoundingClientRect();
+                if (r0.width !== 0 || r0.height !== 0) return;
+                if (!el.classList.contains('crumb') && el.tagName !== 'BUTTON') return;
+                out.push({
+                    id: (el.classList.contains('crumb') ? 'crumb:' : 'btn:') + pidOf(el),
+                    文字: (el.querySelector?.('.crumb-text')?.textContent ?? el.textContent ?? '').trim(),
+                    left: null, width: 0, padR: '', flex: '', tf: '',
+                    cls: el.className.trim(), shown: false,
+                });
+            });
+            return out;
+        }
+
+        const raf = () => new Promise((r) => requestAnimationFrame(() => r()));
+        const wait = (ms) => new Promise((r) => setTimeout(r, ms));
+
+        window.__state = state;
+        window.__targets = targets;
+
+        /**
+         * 「当前段」换人时字重会从 400 变 500。如果这个变化会改字宽，
+         * 那"videos 跳一下"就不需要任何布局 bug —— **字变宽本身就是位移**。
+         *
+         * 用真字体（`public/fonts/Geist-Variable.woff2`，`--ff-font` 的第一个）在 canvas 上量，
+         * 不猜、不估。
+         */
+        window.__weightWidth = async () => {
+            const face = new FontFace('ProbeGeist', 'url(../../../public/fonts/Geist-Variable.woff2)');
+            await face.load();
+            document.fonts.add(face);
+            const c = document.createElement('canvas').getContext('2d');
+            const w = (weight, text) => {
+                c.font = `${weight} 14px ProbeGeist`;
+                return Math.round(c.measureText(text).width * 100) / 100;
+            };
+            const met = (weight) => {
+                c.font = `${weight} 14px ProbeGeist`;
+                const m = c.measureText('videos');
+                return {
+                    ascent: Math.round(m.fontBoundingBoxAscent * 100) / 100,
+                    descent: Math.round(m.fontBoundingBoxDescent * 100) / 100,
+                };
+            };
+            const rows = ['videos', 'a', 'F:'].map((t) => ({
+                文字: t,
+                '400': w(400, t),
+                '500': w(500, t),
+                差: Math.round((w(500, t) - w(400, t)) * 100) / 100,
+            }));
+            rows.push({ 文字: '字体垂直度量 400', '400': met(400).ascent + '/' + met(400).descent, '500': '', 差: '' });
+            rows.push({ 文字: '字体垂直度量 500', '400': met(500).ascent + '/' + met(500).descent, '500': '', 差: '' });
+            return rows;
+        };
+
+        /**
+         * 角标移到"盒子外侧"之后最危险的副作用：**会不会被 `.nav-zone` 的
+         * `overflow: hidden` 裁掉**。
+         *
+         * 判据不能靠肉眼，也不能靠 `getComputedStyle(el,'::after')`（拿不到几何）。
+         * 用命中测试：伪元素是**参与命中测试的**（算在生成它的元素身上），
+         * 所以在"应该是角标的地方"打一枪 ——
+         *   返回当前段 ⇒ 它真被画出来了、且没被裁；
+         *   返回别的（nav-zone / body）⇒ 被裁了或被挡住了。
+         */
+        window.__badgeHit = () => {
+            const cur = document.querySelector('.nav-zone .crumb-current');
+            if (!cur) return { 当前段: null };
+            const r = cur.getBoundingClientRect();
+            const y = r.top + r.height / 2;
+            const probeX = [10, 20, 30].map((d) => r.right + d);
+            const hits = probeX.map((x) => {
+                const el = document.elementFromPoint(x, y);
+                return el ? (el.classList.contains('crumb-current') ? '当前段(角标画出)' : el.className || el.tagName) : 'null';
+            });
+            const nz = document.querySelector('.nav-zone').getBoundingClientRect();
+            return {
+                当前段: (cur.querySelector('.crumb-text')?.textContent ?? '').trim(),
+                'right': Math.round(r.right * 100) / 100,
+                '::after content': getComputedStyle(cur, '::after').content,
+                '角标处命中': hits.join(' | '),
+                '导航区 right': Math.round(nz.right * 100) / 100,
+                '导航区 padding-right': getComputedStyle(document.querySelector('.nav-zone')).paddingRight,
+                '角标右边界余量': Math.round((nz.right - (r.right + 46)) * 100) / 100,
+            };
+        };
+
+        /**
+         * 导航一次，抓五个时刻的快照。
+         *
+         * ⚠️ 关键在 `t0`：Vue 的 FLIP 是在 `onUpdated` 里**同步**写
+         * `transform: translate(dx,dy)` 的，而 `nextTick()` 正好在 post-flush 之后。
+         * ⇒ 若某个元素真的"会滑"，`t0.left` 必须 ≈ `before.left`（它被 transform 拉回原位了）；
+         *    若 `t0.left` 已经等于最终位置，说明**它一跳就到位了，根本没走动画**。
+         * 这一条把"跳"和"滑"变成可读的数字，不需要人盯屏幕猜。
+         */
+        window.__nav = async (toNames, historyLen) => {            const before = targets();
+            state.names.value = toNames;
+            state.historyLen.value = historyLen;
+            await nextTick();
+            const t0 = targets();
+            await raf();
+            const r1 = targets();
+            await wait(80);
+            const t80 = targets();
+            await wait(450);
+            const t400 = targets();
+            return { case: before.map(b => b.id).join('|') + ' -> ' + toNames.join('>'), before, t0, r1, t80, t400 };
+        };
+
+        /**
+         * 带 `loading` 的一次导航 —— 用来量"当前段里的那个转圈"到底改了什么。
+         *
+         * 为什么必须单独一条：`__nav` 里 `loading` 恒为 false，而真实模板是
+         * `<n-spin v-if="loading && i === last" :size="12" style="margin-left:8px">`
+         * ⇒ **转圈是当前段的一个子元素**，一出现就把这一格撑宽。
+         * 前五轮探针全都漏了这条，等于这个宽度变化从来没被量过。
+         */
+        window.__navWithLoading = async (toNames, historyLen, loadMs) => {
+            const before = targets();
+            state.names.value = toNames;
+            state.historyLen.value = historyLen;
+            state.loading.value = true;
+            await nextTick();
+            const t0 = targets();
+            await wait(loadMs);
+            state.loading.value = false;
+            await nextTick();
+            const loaded = targets();
+            return { before, t0, loaded };
+        };
+    </script>
+</body>
+
+</html>

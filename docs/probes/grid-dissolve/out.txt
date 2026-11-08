@@ -1,0 +1,50 @@
+
+(electron) 'console-message' arguments are deprecated and will be removed. Please use Event<WebContentsConsoleMessageEventParams> object instead.
+[page] %cElectron Security Warning (Insecure Content-Security-Policy) font-weight: bold; This renderer process has either no Content Security
+  Policy set or a policy with "unsafe-eval" enabled. This exposes users of
+  this app to unnecessary security risks.
+
+For more information and help, consult
+https://electronjs.org/docs/tutorial/security.
+This warning will not show up
+once the app is packaged.
+Chromium = 152.0.7977.130
+{
+  "实测token": {
+    "--ff-dur-move": "200ms",
+    "--ff-ease-move": "cubic-bezier(0.19, 1, 0.22, 1)"
+  },
+  "real": {
+    "内容已换成新的": true,
+    "动画数量": 1,
+    "此刻的透明度": 0,
+    "currentTime=0": 0,
+    "currentTime=100ms": 0.98,
+    "currentTime=200ms": 1
+  },
+  "noFill": {
+    "内容已换成新的": true,
+    "动画数量": 1,
+    "此刻的透明度": 0,
+    "currentTime=0": 0,
+    "currentTime=100ms": 0.98,
+    "currentTime=200ms": 1
+  }
+}
+
+① 实际实现（fill: backwards）
+  内容已换成新的 = true；动画数量 = 1
+  ⭐ 换完内容、还没画出第一帧时的透明度 = 0
+     currentTime=0 → 0
+     currentTime=100ms → 0.98
+     currentTime=200ms → 1
+
+② 对照（不写 fill）
+  内容已换成新的 = true；动画数量 = 1
+  ⭐ 换完内容、还没画出第一帧时的透明度 = 0
+     currentTime=0 → 0
+     currentTime=100ms → 0.98
+     currentTime=200ms → 1
+
+结论：✅ 换完内容、还没作画的那一刻已经是 opacity 0 ⇒ 跳跃发生在看不见的那一帧，观感是溶解。
+  对照（不写 fill）同一时刻 = 0 —— 两组都是 0，说明 fill 在当前 Chromium 上可有可无（保留仍无害）。

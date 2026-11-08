@@ -1,0 +1,47 @@
+
+(electron) 'console-message' arguments are deprecated and will be removed. Please use Event<WebContentsConsoleMessageEventParams> object instead.
+[page] %cElectron Security Warning (Insecure Content-Security-Policy) font-weight: bold; This renderer process has either no Content Security
+  Policy set or a policy with "unsafe-eval" enabled. This exposes users of
+  this app to unnecessary security risks.
+
+For more information and help, consult
+https://electronjs.org/docs/tutorial/security.
+This warning will not show up
+once the app is packaged.
+Chromium = 152.0.7977.130
+{
+  "条自身高": 50,
+  "收起后槽高": 0,
+  "展开后槽高": 50,
+  "采到中间值的帧数": 12,
+  "总采样": 45,
+  "前6帧": [
+    [
+      50,
+      80
+    ],
+    [
+      50,
+      80
+    ],
+    [
+      29.5,
+      59.5
+    ],
+    [
+      15.3,
+      45.3
+    ],
+    [
+      7.8,
+      37.8
+    ],
+    [
+      4.1,
+      34.1
+    ]
+  ]
+}
+
+结论：✅ 轨道在插值（采到 12 帧中间高度）⇒ 状态条摘/挂时下方内容会**跟着滑**，不会最后塌一下。
+   条自身高 50px（40 min-height + 2/8 padding = 50），收起后 0px

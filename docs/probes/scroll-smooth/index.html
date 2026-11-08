@@ -1,0 +1,137 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+
+<head>
+    <meta charset="utf-8">
+    <title>原生平滑滚动到底多快、被 60ms 打断时会不会落后</title>
+    <style>
+        html,
+        body {
+            margin: 0;
+            background: #eceef2;
+            font-family: system-ui, sans-serif;
+            font-size: 12px;
+        }
+
+        .box {
+            width: 260px;
+            height: 400px;
+            overflow: auto;
+            background: #f7f8fa;
+            border: 1px solid #c9ced8;
+        }
+
+        .row {
+            height: 150px;
+            box-sizing: border-box;
+            border-bottom: 1px solid #dde;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            color: #667;
+        }
+
+        #out {
+            padding: 8px 12px;
+            white-space: pre;
+            font-family: ui-monospace, monospace;
+            font-size: 12px;
+        }
+    </style>
+</head>
+
+<body>
+    <div class="box" id="box"></div>
+    <div id="out"></div>
+
+    <script>
+        const box = document.getElementById('box');
+        for (let i = 0; i < 24; i++) {
+            const d = document.createElement('div');
+            d.className = 'row';
+            d.textContent = 'row ' + i;
+            box.appendChild(d);
+        }
+
+        const sleep = ms => new Promise(r => setTimeout(r, ms));
+        const now = () => performance.now();
+        const y = () => Math.round(box.scrollTop * 10) / 10;
+
+        /**
+         * 采一段 scrollTop 轨迹。
+         * ⚠️ 不用 rAF 采样：这个窗口是 offscreen 的，rAF 会被合并/丢帧 ⇒ 帧号不可信
+         * （`grid-dissolve` 探针就是这么被坑的）。这里要的是"多久滚完"和"某墙钟时刻滚到哪"，
+         * 用 setTimeout(8ms) + performance.now() 就够 —— 位置由合成器写，与回调是否被合并无关。
+         */
+        const trace = async (ms) => {
+            const t0 = now();
+            const points = [];
+            const end = t0 + ms;
+            while (now() < end) {
+                points.push([Math.round(now() - t0), y()]);
+                await sleep(8);
+            }
+            return points;
+        };
+
+        const firstReach = (points, target) => {
+            const p = points.find(([, v]) => Math.abs(v - target) < 1);
+            return p ? p[0] : null;
+        };
+
+        /** ① 单次平滑：150px（一格）/ 600px（四格），量"多久到位 + 轨迹形状" */
+        const testSingle = async () => {
+            const runs = [];
+            for (const dist of [150, 600]) {
+                box.scrollTop = 0;
+                await sleep(150);
+                const p = trace(dist === 150 ? 400 : 900);
+                await sleep(16);
+                box.scrollBy({ top: dist, behavior: 'smooth' });
+                const points = await p;
+                runs.push({
+                    距离: dist,
+                    到位耗时ms: firstReach(points, dist),
+                    '轨迹(每约40ms取一点)': points.filter((_, i) => i % 5 === 0).slice(0, 14),
+                });
+            }
+            return runs;
+        };
+
+        /**
+         * ② 长按：每 60ms 追加一格（= `useGridCursor.MOVE_REPEAT_MIN_MS`），共 8 格 = 1200px。
+         * 判据不是"最终到没到"，而是**每一步刚追加完的那一瞬间落后多少** ——
+         * 落后 > 一格就意味着"光标已经不在视口里了"，那正是不能接受的情况。
+         */
+        const testRepeat = async (behavior) => {
+            box.scrollTop = 0;
+            await sleep(150);
+            const lag = [];
+            for (let i = 1; i <= 8; i++) {
+                await sleep(60);
+                box.scrollBy({ top: 150, behavior });
+                lag.push({ 第几步: i, 目标: i * 150, 当时位置: y(), 落后: Math.round((i * 150 - y()) * 10) / 10 });
+            }
+            const total = trace(600);
+            const points = await total;
+            return {
+                每步刚追加完的落后: lag.map(x => x.落后),
+                最大落后: Math.max(...lag.map(x => x.落后)),
+                最后一次追加后: { 目标: 1200, 一览表: lag },
+                '600ms 后位置': y(),
+                追平耗时ms: firstReach(points, 1200),
+            };
+        };
+
+        window.__test = async () => {
+            const single = await testSingle();
+            const smooth = await testRepeat('smooth');
+            const instant = await testRepeat('auto');
+            const out = { single, smooth, instant };
+            document.getElementById('out').textContent = JSON.stringify(out, null, 2);
+            return out;
+        };
+    </script>
+</body>
+
+</html>

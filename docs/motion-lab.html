@@ -1,0 +1,429 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+
+<head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>动效实验台 · Motion Lab</title>
+    <style>
+        * { box-sizing: border-box; }
+
+        body {
+            margin: 0;
+            background: #f1f2f3;
+            color: #18191c;
+            font: 13px/1.5 -apple-system, "Segoe UI", "Microsoft YaHei", system-ui, sans-serif;
+            -webkit-font-smoothing: antialiased;
+        }
+
+        .wrap { max-width: 940px; margin: 0 auto; padding: 28px 24px 64px; }
+
+        h1 { font-size: 17px; font-weight: 600; margin: 0 0 4px; letter-spacing: -0.2px; }
+        .sub { color: #61666d; margin: 0 0 20px; font-size: 12px; }
+
+        /* 顶部开关 */
+        .tabs { display: flex; gap: 4px; background: #e8eaec; padding: 3px; border-radius: 10px; width: fit-content; margin-bottom: 18px; }
+        .tabs button {
+            all: unset; cursor: pointer; padding: 6px 14px; border-radius: 8px;
+            font-size: 12.5px; color: #61666d; transition: background-color .15s ease, color .15s ease;
+        }
+        .tabs button:hover { color: #18191c; }
+        .tabs button.on { background: #fff; color: #18191c; font-weight: 500; box-shadow: 0 1px 2px rgba(0,0,0,.08); }
+
+        .card {
+            background: #fff; border-radius: 14px; padding: 20px;
+            box-shadow: 0 1px 2px rgba(0,0,0,.05), 0 8px 24px -18px rgba(0,0,0,.28);
+            margin-bottom: 14px;
+        }
+
+        .card h2 { font-size: 13.5px; font-weight: 600; margin: 0 0 3px; }
+        .card p.hint { color: #61666d; font-size: 11.5px; margin: 0 0 16px; }
+        .card p.hint code { background: #f1f2f3; padding: 1px 5px; border-radius: 4px; font-family: ui-monospace, Consolas, monospace; font-size: 11px; }
+
+        .row { display: flex; align-items: center; gap: 12px; margin-bottom: 10px; }
+        .row label { width: 74px; flex: none; color: #61666d; font-size: 12px; font-variant-numeric: tabular-nums; }
+        .row input[type=range] { flex: 1; accent-color: #18191c; }
+        .row .val { width: 52px; flex: none; text-align: right; font-variant-numeric: tabular-nums; font-size: 12px; color: #18191c; }
+
+        .out { display: flex; gap: 18px; font-size: 11.5px; color: #61666d; margin-top: 4px; font-variant-numeric: tabular-nums; }
+        .out b { color: #18191c; font-weight: 600; }
+
+        .stage {
+            position: relative; background: #f7f8f9; border-radius: 10px;
+            overflow: hidden; margin: 4px 0 14px;
+            background-image: linear-gradient(90deg, rgba(0,0,0,.04) 1px, transparent 1px);
+            background-size: 40px 100%;
+        }
+
+        /* ---------- 1 弹簧 ---------- */
+        #springStage { height: 150px; }
+        .dot {
+            position: absolute; top: 50%; left: 0; width: 34px; height: 34px;
+            margin-top: -17px; border-radius: 9px; background: #18191c;
+            will-change: transform;
+        }
+        .dot.twin { background: #c7c9cd; }
+        .target-line { position: absolute; top: 12px; bottom: 12px; width: 1px; background: rgba(0,0,0,.16); }
+
+        /* ---------- 2 非对称 ---------- */
+        #capsule {
+            position: absolute; left: 50%; top: 50%;
+            /* 动画全部靠这两个 transition 决定，切换 class 时自动换曲线 */
+            transition:
+                height var(--dur-exit) var(--ease-exit),
+                width var(--dur-exit) var(--ease-exit),
+                border-radius var(--dur-exit) var(--ease-exit),
+                transform var(--dur-exit) var(--ease-exit);
+            transform: translate(-50%, -50%);
+            background: #18181b; color: #fff; overflow: hidden;
+            height: 56px; width: 300px; border-radius: 28px;
+            -webkit-mask-image: -webkit-radial-gradient(white, black);
+            mask-image: radial-gradient(white, black);
+        }
+        #capsule.is-open {
+            transition:
+                height var(--dur-enter) var(--ease-enter),
+                width var(--dur-enter) var(--ease-enter),
+                border-radius var(--dur-enter) var(--ease-enter),
+                transform var(--dur-enter) var(--ease-enter);
+            height: 208px; width: 360px; border-radius: 20px;
+        }
+        .cap-title {
+            position: absolute; left: 18px; top: 18px; font-size: 13.5px; font-weight: 500;
+        }
+        .cap-row {
+            position: absolute; left: 18px; right: 18px; height: 34px;
+            display: flex; align-items: center; justify-content: space-between;
+            font-size: 12.5px; color: #e6e6e6;
+            opacity: 0; transform: translateY(10px);
+            transition: opacity .14s ease, transform var(--dur-exit) var(--ease-exit);
+        }
+        #capsule.is-open .cap-row {
+            opacity: 1; transform: translateY(0);
+            transition: opacity .3s ease var(--d), transform var(--dur-enter) var(--ease-enter) var(--d);
+        }
+        .cap-row .pill { background: #27272a; border-radius: 14px; padding: 3px 10px; font-size: 11.5px; color: #fff; }
+        .cap-mini {
+            position: absolute; left: 18px; top: 18px; font-size: 12.5px; color: #a1a1aa;
+            opacity: 1; transition: opacity .2s ease .1s;
+        }
+        #capsule.is-open .cap-mini { opacity: 0; transition: opacity .12s ease; }
+
+        /* ---------- 3 速度形变 ---------- */
+        #velStage { height: 96px; padding: 0; }
+        .vel-pill {
+            position: absolute; top: 20px; left: 20px; width: 84px; height: 56px;
+            border-radius: 18px; background: #18191c; will-change: transform;
+        }
+        .vel-item {
+            position: absolute; top: 20px; width: 84px; height: 56px;
+            display: grid; place-items: center; font-size: 12px; color: #61666d;
+            cursor: pointer; border-radius: 18px; z-index: 1;
+            transition: color .15s ease;
+        }
+        .vel-item:hover { color: #18191c; }
+        .vel-item.on { color: #fff; }
+
+        .switch { display: flex; align-items: center; gap: 8px; font-size: 12px; color: #61666d; cursor: pointer; user-select: none; }
+        .switch input { accent-color: #18191c; }
+        .toolbar { display: flex; align-items: center; gap: 16px; flex-wrap: wrap; margin-bottom: 14px; }
+        .btn {
+            all: unset; cursor: pointer; padding: 6px 14px; border-radius: 8px;
+            background: #18191c; color: #fff; font-size: 12.5px;
+            transition: transform .1s ease, opacity .15s ease;
+        }
+        .btn:hover { opacity: .86; }
+        .btn:active { transform: scale(.96); }
+        .btn.ghost { background: #eceef0; color: #18191c; }
+        .note { font-size: 11.5px; color: #61666d; border-left: 2px solid #dbdbdb; padding-left: 10px; margin: 12px 0 0; line-height: 1.65; }
+        .note b { color: #18191c; }
+        .hidden { display: none !important; }
+    </style>
+</head>
+
+<body>
+    <div class="wrap">
+        <h1>动效实验台</h1>
+        <p class="sub">参数全部取自 LeiBox 样本源码。改旋钮看手感，不用改代码。</p>
+
+        <div class="tabs">
+            <button data-panel="a" class="on">① 弹簧积分器</button>
+            <button data-panel="b">② 非对称进出</button>
+            <button data-panel="c">③ 速度驱动形变</button>
+        </div>
+
+        <!-- ═══════════ ① 弹簧 ═══════════ -->
+        <div id="panel-a">
+            <div class="card">
+                <h2>同一个公式，四种手感</h2>
+                <p class="hint">样本实现：<code>v += ((target - p) * k - v * c) * h; p += v * h</code>，每帧拆 3 个子步</p>
+                <div class="stage" id="springStage">
+                    <div class="target-line" id="targetLine"></div>
+                    <div class="dot twin" id="ghostDot"></div>
+                    <div class="dot" id="mainDot"></div>
+                </div>
+                <div class="out">
+                    <span>过冲 <b id="oOver">0%</b></span>
+                    <span>落定 <b id="oSettle">0ms</b></span>
+                    <span>曲线 <b id="oShape">—</b></span>
+                </div>
+            </div>
+
+            <div class="card">
+                <div class="row">
+                    <label>刚度 k</label>
+                    <input type="range" id="k" min="80" max="900" step="5" value="400" />
+                    <span class="val" id="kV">400</span>
+                </div>
+                <div class="row">
+                    <label>阻尼 c</label>
+                    <input type="range" id="c" min="5" max="80" step="0.5" value="26" />
+                    <span class="val" id="cV">26</span>
+                </div>
+                <div class="row">
+                    <label>初速踢</label>
+                    <input type="range" id="kick" min="0" max="40" step="1" value="17" />
+                    <span class="val" id="kickV">17</span>
+                </div>
+                <div class="toolbar" style="margin-top:14px;margin-bottom:0">
+                    <button class="btn" id="fire">发射</button>
+                    <button class="btn ghost" id="presetB">抄样本（400 / 26）</button>
+                    <button class="btn ghost" id="presetC">临界阻尼（400 / 40）</button>
+                    <button class="btn ghost" id="presetD">迟缓（150 / 20）</button>
+                </div>
+                <p class="note">
+                    <b>灰色 = 无初速踢</b>，黑色 = 有初速踢。<br />
+                    <b>判据：阻尼 c 决定过不过冲。</b>c &lt; 2√k 就必然过冲（k=400 时临界点是 c=40）。<br />
+                    样本用 400/26 —— 刻意欠阻尼，过冲约 3~5%，看起来"有质量"但不廉价。
+                </p>
+            </div>
+        </div>
+
+        <!-- ═══════════ ② 非对称 ═══════════ -->
+        <div id="panel-b" class="hidden">
+            <div class="card">
+                <h2>进入带过冲，退出收紧不反弹</h2>
+                <p class="hint">对照 <code>bouncy-access</code>：展开 0.5s cubic-bezier(.34,1.35,.45,1) ／ 收起 0.35s cubic-bezier(.32,.72,0,1)</p>
+                <div class="stage" style="height:300px">
+                    <div id="capsule">
+                        <div class="cap-mini">@adityaSur11 and 4 others</div>
+                        <div class="cap-title">Access Request</div>
+                        <div class="cap-row" style="top:60px;  --d:0ms"><span>Louis Griffen</span><span class="pill">Approve</span></div>
+                        <div class="cap-row" style="top:104px; --d:40ms"><span>Peter Griffen</span><span class="pill">Approve</span></div>
+                        <div class="cap-row" style="top:148px; --d:80ms"><span>Aditya sur</span><span class="pill">Approve</span></div>
+                    </div>
+                </div>
+                <div class="toolbar">
+                    <button class="btn" id="toggleCap">展开 / 收起</button>
+                    <label class="switch"><input type="checkbox" id="symmetric" /> 强制对称（同一曲线两个方向）</label>
+                </div>
+                <p class="note">
+                    勾上"强制对称"再点几次 —— <b>感觉立刻变黏</b>，退出时你会等它。<br />
+                    这就是最常见的自制动效缺陷：<b>一条 transition 用在两个方向</b>。<br />
+                    落地手法：收起曲线写在基础选择器，展开曲线写在状态类上。
+                </p>
+            </div>
+        </div>
+
+        <!-- ═══════════ ③ 速度形变 ═══════════ -->
+        <div id="panel-c" class="hidden">
+            <div class="card">
+                <h2>位移 + 速度 → 拉伸 / 透明 / 阴影</h2>
+                <p class="hint">对照 <code>glass-tab-menu</code>：<code>travel = |v| / 7</code>，<code>scale(1 + travel*.08, 1 + travel*.25)</code></p>
+                <div class="stage" id="velStage">
+                    <div class="vel-pill" id="velPill"></div>
+                    <div class="vel-item on" data-i="0">文件</div>
+                    <div class="vel-item" data-i="1">清单</div>
+                    <div class="vel-item" data-i="2">缓存</div>
+                    <div class="vel-item" data-i="3">设置</div>
+                </div>
+                <div class="toolbar">
+                    <label class="switch"><input type="checkbox" id="velMorph" checked /> 开启速度形变</label>
+                    <button class="btn ghost" id="jumpFar">跳到最右（远距离）</button>
+                </div>
+                <div class="row">
+                    <label>形变系数</label>
+                    <input type="range" id="travelK" min="0" max="20" step="0.5" value="7" />
+                    <span class="val" id="travelKV">7</span>
+                </div>
+                <p class="note">
+                    对比开关：关掉形变它只是"平移的方块"，打开就变成"被拖着走的实体"。<br />
+                    <b>三条信号必须同时变</b>（拉伸 + 透明度 + 阴影距离），只做一条会觉得是 bug 不是质感。<br />
+                    上限不能省：样本拉伸封顶 ~25%，透明封顶 95%。
+                </p>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        /* ───────── 通用：弹簧积分器（抄 LeiBox glass-tab-menu 的 step） ───────── */
+        function step(s, h, k, d) {
+            s.v += ((s.target - s.p) * k - s.v * d) * h;
+            s.p += s.v * h;
+            if (Math.abs(s.p - s.target) < 1e-4 && Math.abs(s.v) < 1e-3) { s.p = s.target; s.v = 0; }
+            return s.p !== s.target || s.v !== 0;
+        }
+        const clamp = (n, a = 0, b = 1) => Math.min(b, Math.max(a, n));
+
+        /* ───────── tabs ───────── */
+        const panels = { a: document.getElementById('panel-a'), b: document.getElementById('panel-b'), c: document.getElementById('panel-c') };
+        document.querySelectorAll('.tabs button').forEach(btn => {
+            btn.addEventListener('click', () => {
+                document.querySelectorAll('.tabs button').forEach(b => b.classList.toggle('on', b === btn));
+                for (const k in panels) panels[k].classList.toggle('hidden', k !== btn.dataset.panel);
+            });
+        });
+
+        /* ═══════════ ① 弹簧 ═══════════ */
+        (function springLab() {
+            const stage = document.getElementById('springStage');
+            const main = document.getElementById('mainDot');
+            const ghost = document.getElementById('ghostDot');
+            const line = document.getElementById('targetLine');
+            const elK = document.getElementById('k'), elC = document.getElementById('c'), elKick = document.getElementById('kick');
+            const kR = { k: 400, c: 26, kick: 17 };
+            const PAD = 20;
+
+            const a = { p: 0, v: 0, target: 0 };   // 有初速
+            const b = { p: 0, v: 0, target: 0 };   // 无初速
+            let raf = 0, last = 0, settleAt = 0, startAt = 0, peak = 0, dirSign = 1;
+
+            function targetX() { return stage.clientWidth - PAD - 17; }
+
+            function paint() {
+                const t = targetX();
+                line.style.transform = `translateX(${t + 16}px)`;
+                main.style.transform = `translateX(${PAD + a.p * (t - PAD)}px)`;
+                ghost.style.transform = `translateX(${PAD + b.p * (t - PAD)}px)`;
+            }
+
+            function tick(now) {
+                raf = 0;
+                const dt = Math.min(0.032, (now - (last || now - 16)) / 1000);
+                last = now;
+                let moving = false;
+                for (let i = 0; i < 3; i++) {
+                    const h = dt / 3;
+                    moving = step(a, h, kR.k, kR.c) || moving;
+                    step(b, h, kR.k, kR.c);
+                }
+                peak = Math.max(peak, a.p);
+                paint();
+                if (moving) raf = requestAnimationFrame(tick);
+                else {
+                    const dur = Math.round(now - startAt);
+                    document.getElementById('oSettle').textContent = dur + 'ms';
+                    const over = Math.max(0, peak - 1);
+                    document.getElementById('oOver').textContent = (over * 100).toFixed(1) + '%';
+                    const crit = 2 * Math.sqrt(kR.k);
+                    document.getElementById('oShape').textContent =
+                        kR.c < crit ? `欠阻尼（临界 ${crit.toFixed(0)}）` : kR.c > crit ? '过阻尼（不弹）' : '临界阻尼';
+                }
+            }
+
+            function fire() {
+                cancelAnimationFrame(raf); raf = 0; last = 0; peak = 0;
+                startAt = performance.now();
+                const toEnd = a.p < 0.5;
+                a.target = toEnd ? 1 : 0;
+                b.target = a.target;
+                a.v = (toEnd ? 1 : -1) * kR.kick;   // 初速踢
+                b.v = 0;
+                raf = requestAnimationFrame(tick);
+            }
+
+            function sync() {
+                kR.k = +elK.value; kR.c = +elC.value; kR.kick = +elKick.value;
+                document.getElementById('kV').textContent = kR.k;
+                document.getElementById('cV').textContent = kR.c;
+                document.getElementById('kickV').textContent = kR.kick;
+                const crit = 2 * Math.sqrt(kR.k);
+                document.getElementById('oShape').textContent =
+                    kR.c < crit ? `欠阻尼（临界 ${crit.toFixed(0)}）` : kR.c > crit ? '过阻尼（不弹）' : '临界阻尼';
+            }
+
+            [elK, elC, elKick].forEach(el => el.addEventListener('input', sync));
+            document.getElementById('fire').addEventListener('click', fire);
+            const preset = (k, c) => { elK.value = k; elC.value = c; sync(); fire(); };
+            document.getElementById('presetB').addEventListener('click', () => preset(400, 26));
+            document.getElementById('presetC').addEventListener('click', () => preset(400, 40));
+            document.getElementById('presetD').addEventListener('click', () => preset(150, 20));
+
+            addEventListener('resize', paint);
+            sync(); paint();
+            setTimeout(fire, 300);
+        })();
+
+        /* ═══════════ ② 非对称 ═══════════ */
+        (function asymmetricLab() {
+            const cap = document.getElementById('capsule');
+            const sym = document.getElementById('symmetric');
+            const ENTER = { dur: '0.5s', ease: 'cubic-bezier(0.34,1.35,0.45,1)' };
+            const EXIT = { dur: '0.35s', ease: 'cubic-bezier(0.32,0.72,0,1)' };
+            const SAME = { dur: '0.42s', ease: 'cubic-bezier(0.4,0,0.2,1)' };
+
+            function apply() {
+                const e = sym.checked ? SAME : EXIT;
+                const o = sym.checked ? SAME : ENTER;
+                cap.style.setProperty('--dur-exit', e.dur);
+                cap.style.setProperty('--ease-exit', e.ease);
+                cap.style.setProperty('--dur-enter', o.dur);
+                cap.style.setProperty('--ease-enter', o.ease);
+            }
+            document.getElementById('toggleCap').addEventListener('click', () => cap.classList.toggle('is-open'));
+            sym.addEventListener('change', () => { apply(); cap.classList.toggle('is-open'); setTimeout(() => cap.classList.toggle('is-open'), 420); });
+            apply();
+            setTimeout(() => cap.classList.add('is-open'), 300);
+        })();
+
+        /* ═══════════ ③ 速度形变 ═══════════ */
+        (function velocityLab() {
+            const stage = document.getElementById('velStage');
+            const pill = document.getElementById('velPill');
+            const items = [...document.querySelectorAll('.vel-item')];
+            const morph = document.getElementById('velMorph');
+            const elK = document.getElementById('travelK');
+            let K = 7;
+            const PAD = 20, W = 84, GAP = 6;
+
+            const s = { p: 0, v: 0, target: 0 };
+            let raf = 0, last = 0;
+
+            function paint() {
+                const travel = clamp(Math.abs(s.v) / K);
+                const sc = morph.checked ? `scale(${1 + travel * 0.08},${1 + travel * 0.25})` : 'scale(1,1)';
+                const x = PAD + s.p * (W + GAP);
+                pill.style.transform = `translateX(${x}px) ${sc}`;
+                pill.style.opacity = String(morph.checked ? 0.98 - 0.95 * travel : 1);
+            }
+
+            function tick(now) {
+                raf = 0;
+                const dt = Math.min(0.032, (now - (last || now - 16)) / 1000);
+                last = now;
+                let moving = false;
+                for (let i = 0; i < 3; i++) moving = step(s, dt / 3, 330, 26) || moving;
+                paint();
+                if (moving) raf = requestAnimationFrame(tick);
+                else last = 0;
+            }
+
+            function go(i) {
+                s.target = i;
+                items.forEach((n, j) => n.classList.toggle('on', j === i));
+                if (!raf) raf = requestAnimationFrame(tick);
+            }
+
+            items.forEach((n, i) => {
+                n.style.left = PAD + i * (W + GAP) + 'px';
+                n.addEventListener('click', () => go(i));
+            });
+            document.getElementById('jumpFar').addEventListener('click', () => go(s.target === 0 ? 3 : 0));
+            elK.addEventListener('input', () => { K = +elK.value; document.getElementById('travelKV').textContent = K; paint(); });
+            addEventListener('resize', paint);
+            paint();
+        })();
+    </script>
+</body>
+
+</html>

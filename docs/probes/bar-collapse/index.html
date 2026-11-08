@@ -1,0 +1,131 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+
+<head>
+    <meta charset="utf-8">
+    <title>0fr ↔ 1fr 能不能真的插值</title>
+    <style>
+        html,
+        body {
+            margin: 0;
+            background: #eceef2;
+            font-family: system-ui, sans-serif;
+            font-size: 13px;
+        }
+
+        .col {
+            display: flex;
+            flex-direction: column;
+            height: 300px;
+        }
+
+        .filler {
+            height: 30px;
+            background: #dfe3ea;
+        }
+
+        /* 被折叠的槽：高度由 grid 轨道决定，不写任何像素值 */
+        .slot {
+            display: grid;
+            /* ⚠️ 必须是 `minmax(0, 1fr)` / `minmax(0, 0fr)`：
+               裸写 `0fr` 会被当成 `minmax(**auto**, 0fr)`，轨道的自动最小尺寸
+               = 内容的 min-content ⇒ `min-height: 40px` 直接把它顶死，一像素都收不起来。
+               第一版就是这么失败的（`收起后槽高 50`、中间帧 0 个）。 */
+            grid-template-rows: minmax(0, 1fr);
+            overflow: hidden;
+            opacity: 1;
+            /* ⚠️ 与实现同步（2026-11-08 第八轮改拍后）：
+               200ms + `cubic-bezier(0.19, 1, 0.22, 1)`，透明度只占前 45%（90ms）。
+               本探针只验「fr 轨道插不插值」，两个方向共用一个 class，所以取退场那档。 */
+            transition: grid-template-rows 200ms cubic-bezier(0.19, 1, 0.22, 1),
+                opacity 90ms linear;
+        }
+
+        .slot.collapsed {
+            grid-template-rows: minmax(0, 0fr);
+            opacity: 0;
+        }
+
+        /* 里面那条：min-height 是现实里会有的东西，专门用来验"会不会被撑开" */
+        .bar {
+            /* 里层也要 `overflow: hidden`：网格项的自动最小尺寸只有非 visible 才归 0，
+               这是 `0fr` 能真正收到 0 的**第二个**前提（与上面的 minmax 缺一不可）。 */
+            overflow: hidden;
+            display: flex;
+            align-items: center;
+            min-height: 40px;
+            padding: 2px 18px 8px;
+            background: #cfd6e2;
+        }
+
+        .grow {
+            flex: 1 1 auto;
+            background: #e8ebf0;
+        }
+
+        #out {
+            padding: 8px;
+            white-space: pre;
+            font-family: ui-monospace, monospace;
+            font-size: 12px;
+        }
+    </style>
+</head>
+
+<body>
+    <div class="col">
+        <div class="filler">header</div>
+        <div class="slot" id="slot">
+            <div class="bar" id="bar">换封面 · 已选 3 处 · [清空][退出][换封面]</div>
+        </div>
+        <div class="grow" id="grow">网格</div>
+    </div>
+    <div id="out"></div>
+
+    <script>
+        const slot = document.getElementById('slot');
+        const grow = document.getElementById('grow');
+        const bar = document.getElementById('bar');
+        const out = document.getElementById('out');
+
+        const raf = () => new Promise((r) => requestAnimationFrame(r));
+
+        /**
+         * 逐个 rAF 采「槽高 / 网格顶边」。
+         * 判据：
+         *  · 槽高出现**中间值**（0 与 50 之间）⇒ `fr` 轨道真的在插值；
+         *  · 网格顶边同步移动 ⇒ 下方内容跟着滑，而不是最后塌一下。
+         */
+        window.__test = async () => {
+            const samples = [];
+            const take = () => samples.push([
+                Math.round(slot.getBoundingClientRect().height * 10) / 10,
+                Math.round(grow.getBoundingClientRect().top * 10) / 10,
+            ]);
+
+            take();
+            slot.classList.add('collapsed');      // 收：模拟"卸载"
+            await raf();
+            for (let i = 0; i < 22; i++) { take(); await raf(); }
+            const collapsed = slot.getBoundingClientRect().height;
+
+            slot.classList.remove('collapsed');   // 开：模拟"渲染"
+            await raf();
+            for (let i = 0; i < 22; i++) { take(); await raf(); }
+            const open = slot.getBoundingClientRect().height;
+
+            const mids = samples.filter(([h]) => h > 1 && h < open - 1).length;
+            out.textContent = JSON.stringify({
+                条自身高: bar.getBoundingClientRect().height,
+                收起后槽高: collapsed,
+                展开后槽高: open,
+                采到中间值的帧数: mids,
+                总采样: samples.length,
+                前6帧: samples.slice(0, 6),
+            }, null, 2);
+            return { collapsed, open, mids, samples };
+        };
+    </script>
+</body>
+
+</html>

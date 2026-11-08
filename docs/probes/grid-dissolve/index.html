@@ -1,0 +1,170 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+
+<head>
+    <meta charset="utf-8">
+    <title>内容换掉的那一帧，网格是不是已经不可见了</title>
+    <!-- 真 tokens：时长/曲线不抄，直接读仓库里那份 -->
+    <link rel="stylesheet" href="../../../src/styles/tokens.css">
+    <style>
+        html,
+        body {
+            margin: 0;
+            background: #eceef2;
+            font-family: system-ui, sans-serif;
+            font-size: 12px;
+        }
+
+        .board {
+            padding: 12px;
+            border-bottom: 1px solid #c9ced8;
+        }
+
+        .board h3 {
+            margin: 0 0 8px;
+            font-size: 12px;
+            font-weight: 600;
+        }
+
+        /* 结构照 `.image-box`：grid + 固定列数 + 自己滚动 */
+        .image-box {
+            display: grid;
+            grid-template-columns: repeat(var(--ff-grid-cols, 6), minmax(0, 1fr));
+            gap: 6px;
+            align-content: start;
+            height: 180px;
+            overflow: auto;
+            background: #f7f8fa;
+        }
+
+        .card {
+            aspect-ratio: 3 / 2;
+            background: #cfd6e2;
+            border-radius: 6px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            color: #556;
+        }
+
+        #out {
+            padding: 8px 12px;
+            white-space: pre;
+            font-family: ui-monospace, monospace;
+            font-size: 12px;
+        }
+    </style>
+</head>
+
+<body>
+    <div class="board" id="boardFill">
+        <h3>① 实际实现（WAAPI + fill: backwards）</h3>
+        <div id="hostFill"></div>
+    </div>
+    <div class="board" id="boardNoFill">
+        <h3>② 对照组：同一路径但不写 fill</h3>
+        <div id="hostNoFill"></div>
+    </div>
+    <div id="out"></div>
+
+    <script src="../../../node_modules/vue/dist/vue.global.prod.js"></script>
+    <script src="gridDissolve.bundle.js"></script>
+    <script>
+        const { createApp, ref, watch, nextTick } = Vue;
+
+        /**
+         * 一个板子 = 一份跟 `index.vue` 同构的接线：
+         *   `watch([dataSource, gridCols], …, { flush: 'post' })` + 换内容
+         * 两个板子只有一处不同：① 调真实现，② 手动 `animate` 且**不写 fill**。
+         * 这样"fill 到底是不是必需"才是被量出来的，不是被讲出来的。
+         */
+        const makeBoard = (hostId, useReal) => {
+            const app = createApp({
+                setup() {
+                    const items = ref(makeList('A'));
+                    const cols = ref(6);
+                    const box = ref(null);
+                    watch([items, cols], () => {
+                        const el = box.value;
+                        if (!el) return;
+                        if (useReal) {
+                            window.GridDissolve.dissolveGrid(el);
+                            return;
+                        }
+                        const cs = getComputedStyle(el);
+                        const duration = parseFloat(cs.getPropertyValue('--ff-dur-move')) || 200;
+                        const easing = cs.getPropertyValue('--ff-ease-move').trim() || 'ease';
+                        el.animate([{ opacity: 0 }, { opacity: 1 }], { duration, easing });
+                    }, { flush: 'post' });
+                    return { items, cols, box };
+                },
+                template: `<div class="image-box" ref="box" :style="{ '--ff-grid-cols': cols }">
+                    <div class="card" v-for="it in items" :key="it">{{ it }}</div>
+                </div>`,
+            });
+            return app.mount(document.getElementById(hostId));
+        };
+
+        function makeList(prefix) {
+            return Array.from({ length: 60 }, (_, i) => prefix + String(i).padStart(2, '0'));
+        }
+
+        const vmFill = makeBoard('hostFill', true);
+        const vmNoFill = makeBoard('hostNoFill', false);
+
+        const px = el => Math.round(Number(getComputedStyle(el).opacity) * 100) / 100;
+
+        /**
+         * ⚠️ 这里**不用 rAF 逐帧采样**（第一版就是那么写的，两次跑出 0 和 0.41 两个答案）：
+         * 这个窗口是 offscreen 的，rAF 会被合并/丢帧 ⇒ "第几帧"根本不可信。
+         * 改成**同步读**：`await nextTick()` 之后、任何帧被画出来之前，
+         * 直接问"现在这个元素的透明度是多少"。这正是要验的那一刻 ——
+         * 浏览器若在这一刻作画，画出来的就是它。
+         */
+        const runOne = async (vm, prefix) => {
+            const el = vm.$el;
+            el.getAnimations().forEach(a => a.cancel());
+            const before = el.firstElementChild.textContent;
+
+            vm.items = makeList(prefix);        // ← 整块内容换掉（同 index.vue 的 dataSource 赋值）
+            await nextTick();                   // ← flush: 'post' 的回调已经跑完，但**还没有帧被画**
+
+            const anims = el.getAnimations();
+            const res = {
+                内容已换成新的: el.firstElementChild.textContent !== before,
+                动画数量: anims.length,
+                '此刻的透明度': px(el),
+            };
+
+            if (anims[0]) {
+                const a = anims[0];
+                a.pause();
+                a.currentTime = 0;
+                res['currentTime=0'] = px(el);
+                const dur = typeof a.effect.getTiming().duration === 'number' ? a.effect.getTiming().duration : 0;
+                a.currentTime = dur / 2;
+                res[`currentTime=${dur / 2}ms`] = px(el);
+                a.currentTime = dur;
+                res[`currentTime=${dur}ms`] = px(el);
+                a.cancel();
+            }
+            return res;
+        };
+
+        window.__test = async () => {
+            const cs = getComputedStyle(document.documentElement);
+            const out = {
+                实测token: {
+                    '--ff-dur-move': cs.getPropertyValue('--ff-dur-move').trim(),
+                    '--ff-ease-move': cs.getPropertyValue('--ff-ease-move').trim(),
+                },
+                real: await runOne(vmFill, 'B'),
+                noFill: await runOne(vmNoFill, 'C'),
+            };
+            document.getElementById('out').textContent = JSON.stringify(out, null, 2);
+            return out;
+        };
+    </script>
+</body>
+
+</html>
