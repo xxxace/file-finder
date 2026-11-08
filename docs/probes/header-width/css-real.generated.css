@@ -6,45 +6,103 @@
 .file-finder[data-v-probe] {
   display: flex;
   flex-flow: column;
-  padding: 10px 10px 0 10px;
-  height: 100vh;
+  /* ⚠️ 这一层**不带内边距**：顶栏要通栏贴边（Windows 那套方正的框），
+       而"内容缩进"是顶栏与网格**各自**的事 —— 凭一个共享算式算出来，见 `--ff-content-inset`。
+       2026-11-08 之前顶栏是 absolute、网格靠 `padding-top: 44+10px` 让位、顶栏再手写
+       `padding: 0 18px` 补容器的 12px —— 同一件事在三个地方各写一遍，
+       改一个页边距要同步三处，且高度成了"魔法补偿数"而不是布局自己算出来的。 */
+  padding: 0;
+  height: 100%;
+  flex: 1 1 auto;
+  min-height: 0;
   box-sizing: border-box;
+  /* 内容左/右边缘 = 页边距 12 + 焦点环让位 6 = 18。
+       ⚠️ 必须提到这一层：环让位原本是 `.image-box` 的局部变量，顶栏读不到就只能再写一个
+       18px 的魔法数 —— 那正是"顶栏和第一列封面对不齐"复发的方式。 */
+  --ff-grid-ring-room: 6px;
+  --ff-content-inset: calc(var(--ff-sp-3) + var(--ff-grid-ring-room));
+  /* 左侧三颗：起点 / 返回·清空 / 刷新（2026-11-08 顶栏升级）。
+       28px 定宽 + gap 4 —— 图标按钮靠"字形"分组就行，不需要竖线；
+       竖线只留一道、给动作区最右那颗「更多」（见 `.toolbar-sep`）。 */
 }
 .file-finder .header-bar[data-v-probe] {
   display: flex;
-  /* ⚠️ 「头部永远只有一行」的第一道保险。
-           不加它，两个子区（导航区 / 动作区）会退化成"谁装不下谁换行"，
-           头部高度就成了**用户数据（路径长度、层级数）的函数**。 */
+  /* ⚠️ 头部定高，两个子区谁装不下都不能换行 ——
+           换行就等于"头部高度成了路径长度/层级数的函数"（2026-09-24 事故的形态）。 */
   flex-wrap: nowrap;
-  padding: 4px;
-  margin-bottom: 4px;
-  border-radius: 4px;
-  box-shadow: 1px 0 6px rgba(113, 147, 192, 0.25);
+  align-items: center;
+  height: var(--ff-header-h);
+  /* 横向 padding 不影响 44 这个高度，但显式写 border-box 是给"哪天补回 1px 底边线"
+           留的保险：不写的话总高会变成 45、与 `--ff-header-h` 名不副实（踩过）。 */
+  box-sizing: border-box;
+  /* 8px：左侧三颗图标与地址槽之间的呼吸。
+           原来是 12（那时左中右只有两块、中间靠 `justify-content` 撑开）；
+           现在三段都是实体控件，12 会把"一组工具"读成"三个互不相干的东西"。 */
+  gap: 8px;
+  /* 顶栏是**文档流里的第一行**，与网格同级（2026-11-08 主人要求）：
+           高度由布局分给它的 `height` 决定，不再需要 `position: absolute` 脱离文档流、
+           也不再需要网格用 `padding-top` 替它让位。
+           代价只有一条：内容不会再从它背后滚过去 —— 而毛玻璃已于 2026-11-08 裁决
+           改回纯色（"工具类界面的顶栏是固定的框，不是浮在内容上的层"），所以零损失。 */
+  flex: 0 0 auto;
+  /* **通栏直角**，不做悬浮胶囊（2026-11-08 主人："用回 windows 方方正正的那种效果"）。
+           通栏贴边才让它"仍是页面的一部分"；悬浮胶囊反而像一块贴上去的板。
+           纯色就够，**不画底边线**（2026-11-08 裁决）：chrome 底色比画布亮一档，
+           明度差已经把它和网格分开了，再补一条线只是多一个要同步维护的值。 */
+  background: var(--ff-chrome-bg);
+  /* 与网格共用同一个左边缘算式（容器不带内边距了，这里自己给） */
+  padding: 0 var(--ff-content-inset);
+  margin: 0;
   justify-content: space-between;
-  /* 批量扫描的进度文字。颜色沿用搜索框后缀图标那个灰 */
+  /* 图标与文字统一取 chrome 的图标色（#ebebeb / #171717）：
+           naive 的按钮默认吃 `--n-text-color`（次要灰），在深色里会显得没上电。
+           ⚠️ 同时把按钮压成 **28×28 方格**：naive `size="small"` 是
+           `--n-padding: 0 10px` + `--n-icon-margin: 6px` + 18px 图标 ⇒ 纯图标按钮
+           实际约 **44×28**（查 `button/styles/_common.mjs`），不是方格。
+           不压的话：① 搜索那颗被子容器锁死在 28，邻居却是 44 ⇒ 一排里两种宽度；
+           ② 设计文档 §三的宽度账（右区 ~137px）整个不成立。
+           这两个变量是 Button 组件**内联写上去**的 ⇒ 覆盖必须 `!important`（既有结论）。
+           ⚠️ 用 `:deep()`：`GridDensityMenu` 那颗按钮是**子组件内部**节点，拿不到本文件的
+           `data-v-*`，普通后代选择器匹配不到它 ⇒ 会变成"一排里唯一一颗 44 宽"。 */
+  /* Fluent 那两颗单独放到 20px（2026-11-08）。
+           为什么同样 18px 盒子它看着比邻居小：`GridDots28Filled` 是 3×3 **实心点**，
+           18px 下点径只有 3.2px，抗锯齿会把边缘糊成灰；而密度那颗 `GridOutline` 是
+           **1.1px 空心描边**，边缘锐利、外轮廓吃到满。两者墨迹外框其实只差 0.5px
+           （14.1 vs 14.6），差的是"锐度 + 感知面积"，不是尺寸 ⇒ 放到 20px（外框 15.7px）。
+           ⚠️ `--n-icon-size` 是 Button 内联写在根节点上的，必须 `!important` 才盖得住。
+           嫌小/嫌大就改这一个数，两颗一起变。 */
+  /* 搜索槽：一颗 28px 图标 ⇄ 一个 220px 输入框（2026-11-08 顶栏升级）。
+           ⚠️ `width` 仍然**必须显式给**，不能删：n-input 天生 `width: 100%`，
+              一旦直系父级不是定宽盒，它就会撑满整行、把工具条顶到多行
+              （2026-09-24 事故：1805px 窗口下头部高 ~150px）。
+              现在这个 100% 被外层 `.search-slot` 的定宽关住，规则从"给像素值"
+              变成"给 100%"，但**不能缺席**。 */
+}
+.file-finder .header-bar[data-v-probe] .n-button {
+  --n-padding: 0 !important;
+  --n-icon-margin: 0 !important;
+  --n-text-color: var(--ff-chrome-icon) !important;
+  --n-text-color-hover: var(--ff-chrome-icon) !important;
+  --n-text-color-pressed: var(--ff-chrome-icon) !important;
+  --n-text-color-focus: var(--ff-chrome-icon) !important;
+  width: 28px;
+  justify-content: center;
+}
+.file-finder .header-bar .fluent-icon-btn[data-v-probe] {
+  --n-icon-size: 20px !important;
 }
 .file-finder .header-bar .n-input[data-v-probe] {
-  /* ⚠️ 这一行不能删。n-input 天生 `width: 100%`（为表单布局设计的），
-               而这里是 flex 行 —— 100% 会把它撑成整行宽、独霸一行，把「刷新」
-               挤到下一行，工具条从一行涨到三行（实测 1805px 窗口下头部高 ~150px）。
-               原来 n-space 会给每个子项包一层 div，恰好把这个 100% 关在盒子里；
-               换成裸容器之后就露出来了（见 docs/FIX-2026-09-24-nspace-duplicate-keys.md）。
-               搜索框本来就该是固定宽度 —— 资源管理器里它也是固定的一小段。 */
-  width: 200px;
+  width: 100%;
 }
 .file-finder .header-bar .n-input[data-v-probe] .n-input-wrapper {
+  /* 只为把 1px 字形的光学中心压回行盒中线（原值；与键帽无关，别一起删） */
   padding-top: 1px;
-  padding-right: 6px;
 }
-.file-finder .header-bar .n-input[data-v-probe] .n-input-wrapper .n-input__suffix .suffix-icon {
-  display: inline-block;
-  box-sizing: border-box;
-  padding: 7px;
-  height: 22px;
-  line-height: 8px;
-  border: 1px solid #dbdbdb;
-  border-radius: 4px;
-  color: #a1a1a1;
+.file-finder .nav-btns[data-v-probe] {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  gap: 4px;
 }
 /**
  * 横向单行容器 —— 顶替 naive-ui 的 `n-space`。
@@ -68,8 +126,10 @@
  *
  * `min-width: 0` 是这整套的地基：flex 子项默认 `min-width: auto`（≈ 内容宽），
  * 不给 0 的话，**哪怕写了 `overflow` 也不会真的收窄**，头部照样被长路径撑开。
- * `max-width: 50%` 来自 Fluent 2 的宽度预算（面包屑占整体 30–50% 是安全的）：
+ * 宽度上限来自 Fluent 2 的预算（面包屑占整体 30–50% 是安全的）：
  * 它保证动作区**永远拿得到 ≥50%**，超出的部分交给折叠规则消化。
+ * ⚠️ 实际写的是 `calc(50% + 槽宽)` 而不是 `50%`，原因见下面 `--crumb-badge-slot`
+ * 那段：内容预算仍是 50%，多出来的槽宽 只是让角标住进 padding 里。
  *
  * 实测：`docs/probes/header-width/`（真 Chromium + 真 naive-ui，窗口 640/800/1280/1920 四档）。
  */
@@ -78,15 +138,62 @@
        这个变量。gap 与 ::before 的 left/width 共用它，改一处就够。
        原实现写的是 `left: -13px`（魔数），而 gap 是 8px ⇒ 它往左多插了 5px，
        压在**前一个标签的右边框**上（用户 2026-10-01 截图报的就是这个）。 */
-  --crumb-gap: 12px;
+  --crumb-gap: 8px;
+  /* `›` 的光学补偿（负 = 往上顶）。**它不是一个审美值，是字体度量差**：
+       `›` 的墨迹画在字身框偏下，把行盒居中之后墨迹仍低 1.5 物理 px（DPR 1.25 ⇒ 1.2 逻辑）。
+       依据与复核方式写在 `::before` 那段注释里；这个数只在这一处、只服务一个字形。 */
+  --crumb-sep-dy: -1.2px;
+  /* 角标槽 = **常驻**的 56px，长在导航区自己的右 padding 上。
+       ⚠️ 2026-11-08 code review：原来是 48px。角标起点在 `left:100% + 6px`，
+       可用只剩 42px；`104` 三位数没问题，但平铺视图/大目录出现 5 位数时
+       胶囊（padding 0 6 + tabular-nums 12px）会被 `.crumbs` 的裁剪框切掉右边。
+       56 − 6 = 50px 装得下 5 位。这个数只影响"槽里留白"，不影响换层零位移。
+
+       ⚠️ 2026-11-08 结构性返工（探针 `docs/probes/crumb-motion/` 实测）：
+       原来这个 42px 槽挂在 `.crumb-current` 身上 —— 而"当前段"是最后一格，
+       换层时它**换人**（`F:` → `videos`），于是 40px 空槽在一帧里从上一格搬到下一格，
+       中间那格被迫横移 40px。实测：`F:` 的 `padding-right` t0 就是 `42px→2px`，
+       全程唯一一次瞬时几何变化，位置正在"F: 与 videos 之间"（主人报的"F 到 videos 会跳"）。
+       ⇒ 槽改成**行级常量**（谁当当前段都占同一块），当前段就只剩换色/换字重，
+       零布局事件；多一段就是**只多一段**。
+       ⚠️ 这个 56px 现在写在**内层 `.crumbs` 的 `padding-right`** 里（不是 `.nav-zone`），
+       并且必须配 `box-sizing: border-box`：角标画在当前段盒子外面，
+       而 `.crumbs` 有 `overflow: hidden`（裁剪边界 = padding box）⇒ 只有落在它自己的
+       padding 里才不会被切掉。
+       ⚠️ 原来还有一条 `max-width: calc(50% + 槽宽)` 守"内容预算 50%"，2026-11-08 顶栏升级
+       已**取消**（理由见下面 flex 那段的注释）—— 那个槽宽不再影响任何百分比预算。 */
+  --crumb-badge-slot: 56px;
   flex: 1 1 auto;
   min-width: 0;
-  max-width: 50%;
+  box-sizing: border-box;
+  /* ⚠️ 2026-11-08 顶栏升级：**取消** `max-width: calc(50% + 槽宽)`。
+       那个 50% 预算是按"右侧动作区 ~420px"算的（见 docs/probes/header-width/）；
+       右侧已经降到 ~137px（搜索收成图标、刷新搬去左边、更多挪到末端），
+       再留 50% 只会让右半条空着 —— `justify-content: space-between` 会把槽和工具条
+       硬推开，中间出现一段死白。
+       现在它就是"吃掉所有剩余宽度"的那一格，与资源管理器地址栏同构。
+       ⚠️ 槽里还住着那个**常驻 56px 角标位**（padding-right 占着），换层时它不换人。 */
+  min-height: 30px;
+  padding: 0 0 0 8px;
+  /* 连续槽 = **一块面**，不是一条线。
+       用 `--ff-field`（"一眼看出这是一块可操作的底"那一档，明暗两个主题都调过：
+       浅 #eef0f2 贴白 chrome 差 17、深 #313131 贴 #1f1f1f 差 18）。
+       ⚠️ 不画边框：顶栏里六颗图标按钮都是无框的，这里再多一个描边矩形，
+          就会被读成"一块贴歪的框"而不是"一整条地址"（Chrome / 资源管理器也都没有线）。 */
+  background: var(--ff-field);
+  border-radius: var(--ff-r-ctl);
   display: flex;
-  flex-wrap: nowrap;
   align-items: center;
-  gap: var(--crumb-gap);
   overflow: hidden;
+  /* 离场的"幽灵"用 `position: absolute` 钉在这里（见 `.fx-leave-active`）——
+       它需要一个**定位祖先**，否则会以整页为坐标系飞出去。
+       ⚠️ 2026-11-08 第二轮：幽灵的定位祖先现在是内层 `.crumbs`（`pinLeaving` 取
+       `el.parentElement`）。这里保留 `position: relative` 只是给 galaxy 画布当坐标原点。 */
+  position: relative;
+  /* 内层：真正的面包屑列表（`TransitionGroup` 本体）。
+       为什么要单拆一层：galaxy 像素层要铺满整条槽，而 `TransitionGroup` 的子节点必须带 key
+       且会被 FLIP 挪动 ⇒ 画布不能挂在它下面。拆开之后"面"和"列表"各归各的，
+       而 `.nav-zone .fx-*` 那些非 scoped 规则靠**后代**关系依旧命中。 */
   /* 面包屑每一段：**单个名字有界**（层级深度问题已由折叠解决，这里只管"一段太长"）。
        ⚠️ 中文不能用 Fluent 那条「超过 30 字符就截断」——那是**拉丁文**语境的量级：
        中文一个字约等于拉丁两个字宽，30 个字 ≈ 360px，照抄等于没截断。所以用像素。 */
@@ -95,8 +202,25 @@
        （n-space 重复 key 事故同族）。
        `position: absolute` 让它不占 tag 内部空间（tag 自带 `position: relative`）；
        **盒子正好等于那个空隙、再在盒子里居中** —— 这样就不依赖"猜一个负偏移量"，
-       换字体、换字号都不会再压到边框上。 */
-  /* 当前层**永不被压掉**：它是"我在哪"的唯一答案，比任何历史段都重要 */
+       换字体、换字号都不会再压到边框上。
+
+       ⚠️⚠️ `--crumb-sep-dy` = **光学补偿**，不是布局补丁。原因很具体：
+       `›` 这个字形由字体自己决定画在**字身框偏下**的位置（不是居中）。所以"把它的行盒
+       居中"得到的只是**盒**居中，墨迹仍然偏低 —— 中线上看过去就是一串分隔符"往下坠"。
+       实测（截图 314×63，DPR 1.25，暗色，`docs/probes/header-optical/`）：
+         槽中线 32.00 · 汉字重心 31.68 · `›` 墨迹 31..36（中心 33.50）⇒ 低 1.5 物理 = 1.2 逻辑。
+       ⇒ 所以这里往上顶 1.2px，让**墨迹**回到中线（边距仍是"盒居中 + 这一档补偿"两件事分开写）。
+       ⚠️ 换主字体 / 改 `--crumb-gap` 之外的任何字号相关的值时，这个数要重量：
+          `node docs/probes/header-optical/measure.mjs <截图>` 会直接打每块墨迹与中线的差。 */
+  /* 当前层**永不被压掉**：它是"我在哪"的唯一答案，比任何历史段都重要。
+       ⚠️ 这里**只换颜色**，一个像素的尺寸、一条笔画都不换 —— 角标槽已经搬到
+       `.nav-zone`（见那边注释），所以连宽度都不变。
+       ⚠️⚠️ 2026-11-08（第七轮）：**去掉 `font-weight: 500`**。
+       主人原话：「高亮的 videos 会跳一下…它根本就不需要重新渲染，最多就是从灰色变成高亮不可点」。
+       加粗是这里**唯一会让字形整体重画**的东西（颜色只是重新上色）：
+       可变字体的 500 档要重新栅格化一遍字形，观感就是"这一格闪/动了一下"。
+       灰色 → 高亮的信息量本来就够（浅色 #61666d → #18191c，深色 #8f8f8f → #ededed），
+       不需要再加一层字重。⇒ 当前段的差别只剩：**亮一档 + 光标变 default**。 */
   /* 当前段的条目数角标 —— 原来是工具条里那个飘着的 `n-badge`，
        用户 2026-10-02 裁决挪到这一段上（它本来就是"这一层有多少东西"的答案）。
        ⚠️ 为什么用 `::after` + `attr()`、而不是真塞一个 `<span>`：
@@ -107,9 +231,37 @@
           不在那个裁剪盒里。
        属性为空时不画：`:data-count="null"` 时 Vue 根本不渲染这个属性，整条选择器不命中 ——
        等价于原来的 `v-if="fileList.length"`，不需要再写判空。 */
+  /* 计数徽章 —— 恢复为红底白字胶囊（2026-11-08 主人："要原来的 badge"）。
+       ⚠️ 为什么不是 `align-self: baseline`：它给不了"与路径文字共基线"，
+       而是**自成 baseline 组** —— 容器里没有第二个 baseline 项时，它会贴到内容区顶部
+       （实测就是这样飞到右上角的）。共基线必须容器 `align-items: baseline`，
+       而 n-tag 是 `inline-flex` + `center`，改它会影响 tag 内所有子项。
+       ⇒ 保留 `center`，用一次**实测偏移**补掉"块按行盒居中、文字墨迹偏低"的差。
+       实测（截图 151×55 @DPR1.25）：胶囊中心 27.5、文字 x-height 带中心 31 ⇒ 差 3.5 物理
+       = **2.8 逻辑px**。这个数不是估的；它约等于半个下伸部（descender 空白）。
+       标记为"仅视觉位移"：`transform` 不改布局，tag 高度仍由 `.crumb-text` 的行盒决定。 */
   /* 两种**不可点**的段：首段（盘符 / 离线盘）与当前段。
        必须与可点的段**视觉可分** —— 现状是"所有 tag 都 cursor:pointer"，
        于是当前层看着能点、点了没反应（死交互）。 */
+}
+.nav-zone .crumbs[data-v-probe] {
+  flex: 1 1 auto;
+  min-width: 0;
+  box-sizing: border-box;
+  display: flex;
+  flex-wrap: nowrap;
+  align-items: center;
+  gap: var(--crumb-gap);
+  /* ⚠️ 角标槽（56px）**必须留在这一层**，不能留在 `.nav-zone` 上。
+           角标是 `::after` + `left: 100%` ⇒ 它画在当前段的**盒子外面**；
+           而这一层有 `overflow: hidden`（裁剪边界是 padding box）。
+           拆两层时如果 56px 还挂在外层，角标就落到这一层的裁剪框外面 ⇒ 长路径时被切掉。
+           放在这里的 padding 里，它才是"在本层内部、但不在内容区"。 */
+  padding-right: var(--crumb-badge-slot);
+  overflow: hidden;
+  /* 画布在 z-index 0，列表必须压上去，否则文字会被星光盖住 */
+  position: relative;
+  z-index: 1;
 }
 .nav-zone .crumb[data-v-probe] {
   /* ⚠️ `0 1 auto`（**可收缩**）而不是 `0 0 auto`：
@@ -119,6 +271,31 @@
   min-width: 0;
   max-width: 160px;
   cursor: pointer;
+  /* ⚠️ 2026-11-08 重设计：**去掉方块，只留文字**。
+           它原来是 n-tag 的默认描边胶囊 —— 一排方框挤在一起，既像按钮又像标签，
+           而它本质是"路径文字"（Windows 资源管理器 / GitHub / Linear 都是纯文字 + 分隔符）。
+           去边框写 `transparent` 而不是 `none`：保留 1px 占位，hover 时不会跳 2px。
+           naive 的颜色变量是运行时注入的，覆盖必须 `!important`。 */
+  --n-color: transparent !important;
+  /* ⚠️ 2026-11-08 顶栏升级：悬停从**下划线**改成**圆角底色**。
+           理由：外层已经是"一块面"，段再画下划线就是两套语言；
+           而"悬停给一条圆角底"正是 Chrome 地址栏的做法 —— 还顺带回答了
+           "这一段到底能不能点"（当前段没有底色 = 不可点），比下划线更清楚。
+           ⚠️ 底色用 `--ff-ctl-on` 而**不是** `--ff-ctl-hover`：槽本身已经是 `--ff-field`
+           （浅 #eef0f2 / 深 #313131），而 `--ff-ctl-hover` 在深色下**正好等于** `--ff-field`
+           ⇒ 悬停一点变化都没有；`--ff-ctl-on` 两档都比它再远一步（浅 #e3e5e8 / 深 #3a3a3a）。 */
+  --n-color-hover: var(--ff-ctl-on) !important;
+  --n-border: 1px solid transparent !important;
+  --n-border-hover: 1px solid transparent !important;
+  --n-text-color: var(--ff-text-2) !important;
+  --n-text-color-hover: var(--ff-text-1) !important;
+  /* 6px：槽里没有分隔线，段与段之间只靠留白 + `›`，太窄就"文字粘在一起" */
+  padding: 0 6px;
+  border-radius: var(--ff-r-pill);
+  /* 文字贴左，**不居中**：当前段右侧有一个角标槽（见 `.crumb-current`），
+           若居中，文字会随槽宽左右横移；贴左则槽怎么变、文字都不动。
+           非当前段左右 padding 相等，两者本来没差别 ⇒ 这条只为当前段存在。 */
+  justify-content: flex-start;
   /* 文本真的收窄之后 `text-overflow` 才会出现 —— 同理，这一层也要 `min-width: 0` */
 }
 .nav-zone .crumb[data-v-probe] .n-tag__content {
@@ -135,6 +312,9 @@
                字形顶/底被切 —— 实测换主字体即复现"顶行被裁"（docs/probes/crumb-clip/）。
                取 tag 自己的内高 ⇒ 盒 28px、墨迹余量 7.5px；tag 高是定值、行盒居中 ⇒ 零布局影响。 */
   line-height: var(--n-height, 1.4);
+  /* 2026-11-08：当前段换人时**只换颜色**（尺寸与字重都不动，见 `.crumb-current`）。
+               只过渡颜色 —— `font-weight` 已经在第七轮整个去掉，不要加回来。 */
+  transition: color var(--ff-dur-hover) var(--ff-ease-move);
 }
 .nav-zone .crumb[data-v-probe]:not(.crumb-root)::before {
   content: '›';
@@ -143,33 +323,59 @@
   width: var(--crumb-gap);
   text-align: center;
   top: 50%;
-  transform: translateY(-50%);
+  transform: translateY(calc(-50% + var(--crumb-sep-dy)));
   line-height: 1;
-  color: #a1a1a1;
+  color: var(--ff-text-muted);
   pointer-events: none;
   /* 别挡住上一个 tag / chip 的点击 */
 }
 .nav-zone .crumb-current[data-v-probe] {
   flex: 0 0 auto;
-  /* 与网格里条目名的字重一致（`.image-box-item span` 也是 bold）：
-           一眼看出"哪个是我现在在的地方" */
-  font-weight: bold;
+  --n-text-color: var(--ff-text-1) !important;
+  position: relative;
 }
 .nav-zone .crumb-current[data-count][data-v-probe]::after {
   content: attr(data-count);
-  flex: 0 0 auto;
+  /* 画在**盒子外侧**（左边缘 = 当前段右边缘 + 6px），落在 `.nav-zone` 的常驻角标槽里。
+           两个必然结果，正是本轮要的：
+           ① 当前段的宽度不随角标有无 / 位数变化；
+           ② 槽是行级常量 ⇒ "当前段换人"不再搬运 40px 空槽 ⇒ 前面的段一个像素都不动。
+           ⚠️ 不能改回 `right: 2px` + 段内 padding：那就是上一版"F 到 videos 会跳"的根因。 */
+  position: absolute;
+  left: 100%;
   margin-left: 6px;
-  padding: 0 6px;
+  top: 50%;
+  /* ⚠️ 2026-11-08 **删掉了原来那个 `+ 2.8px`**。
+           它当初是补"块按行盒居中、文字墨迹偏低"的差 —— 那个判据是**拉丁 x-height 带**
+           的（字母小写的主体偏下）。可这个界面里地址永远是中文：汉字墨迹几乎填满字身框，
+           重心就在**行盒中心**。于是在中文上，那个补偿把胶囊整个压低了。
+           实测（槽截图 314×63，DPR 1.25，暗色）：
+             槽 14..50，中心 32.0；文字墨迹**重心 31.7**；胶囊**重心 35.7** ⇒ 低 3.7 物理 ≈ 3 逻辑。
+           去掉之后两者都对在 32 —— 记着：判据要落在"这段文字的实际重心"，不是某个字族的字体度量。 */
+  transform: translateY(-50%);
+  /* 伪元素是"命中选择器那一刻才创建"的，没有上一帧可过渡 ⇒ 只能用 keyframes
+           ⚠️ 那个延迟不是装饰，是**必须**：角标的落点恰好是"上一格"消失的位置
+           （角标挂在当前段右边缘 +6px，而下一段的起点是 +12px）⇒ 上一段退场期间
+           会被新角标整个盖住，淡出等于没做（实测 `shot-leave-zoom.png`：只剩一个 `›` 压在角标边上）。
+           让角标晚一步出现，两件事就串起来了：**先看到那段走、再看到数字来**。
+           2026-11-08 第八轮：延迟改成引用 `--ff-dur-exit`（退场带走完再出现），
+           不再写死 120ms —— 以后调拍子只改一个数。 */
+  animation: fx-badge-in-probe var(--ff-dur-badge) var(--ff-ease-move) var(--ff-dur-exit) both;
+  height: 18px;
   min-width: 18px;
+  padding: 0 6px;
   box-sizing: border-box;
   border-radius: 9px;
-  background: #d03050;
-  /* naive-ui 的 error 红，与原 n-badge 同色 */
-  color: #fff;
+  /* 2026-11-08 主人要求用回红色（那是"这一层有多少东西"的信号，值得被看见）。
+           ⚠️ 这是**唯一**允许的彩色非交互元素：它不参与"能点哪"，只报数字。 */
+  background: var(--ff-danger-badge);
+  color: var(--ff-on-danger);
   font-size: 12px;
   line-height: 18px;
-  font-weight: normal;
-  /* 当前段是 bold，角标不该跟着粗 */
+  font-weight: 500;
+  /* 数字等宽：35 → 128 时这一行不跟着抖 */
+  font-variant-numeric: tabular-nums;
+  /* 当前段是 500，角标不该比它更粗 */
   text-align: center;
 }
 .nav-zone .crumb-more[data-v-probe] {
@@ -192,105 +398,307 @@
   display: flex;
   flex-wrap: nowrap;
   align-items: center;
-  gap: 12px;
+  /* 4px：图标按钮靠**间距**读成"一组"，不靠竖线（竖线只留一道给「更多」）。 */
+  gap: 4px;
+  /* 开关类按钮的激活态：**灰底 + text-1**，与左轨同一套语言（不带颜色）。
+       ⚠️ 用 `:deep()`：`GridDensityMenu` 里那颗按钮是**子组件内部**的节点，
+          拿不到本文件的 `data-v-*` 作用域属性 ⇒ 普通后代选择器匹配不到它。
+          （「平铺」那颗在本文件里，用同一条规则也能命中，所以只留这一条。）
+       ⚠️ naive 的颜色变量是运行时注入的，覆盖必须 `!important`（项目既有结论）。
+       为什么不用实心主按钮：一个"视图开关"不该比主操作还响。
+       ⚠️ 底色用 `--ff-ctl-on` 而不是 `--ff-fill-strong`(=raised-hover)：那一档在深色下
+       比悬停更**暗**，"选中"反而更不起眼。`--ff-ctl-on` 两个主题方向一致
+       —— 浅色更深（#e3e5e8）、深色更亮（#3a3a3a），都比"悬停"再离底色远一档。 */
+  /* 搜索槽：收起 28px（一颗图标）⇄ 展开 220px（输入框）。
+       宽度的目的不是动画本身，而是**让位**：地址槽是 `flex: 1`，它一收/一放，
+       面包屑那边自动跟着变 —— 所以 `.nav-zone` 一个 transition 都不用写。
+       节奏和面包屑同一拍 200ms，但**展开方向不走「拍内分带」**（2026-11-08 修）：
+         展开 → 宽度满拍 + 输入框同起跑（内容 0→100ms 显形）。
+                别套"先落位、后显形"：宽度不是位移，它的"落位"就是一块**空白**，
+                内容一推迟，眼睛看到的就只是空格子猛然撑开。
+         收起 → 保留"先消失、后收摊"：内容前 45% 淡出，宽度延迟到之后才收 ——
+                这个方向空白是在**变小**，不刺眼，且收窄时不该看到内容被挤。
+       ⚠️ 两个方向必须分别写在两端：`.is-open` 里的规则只在"去往 is-open"时生效，
+          基础规则只在"回到基础态"时生效。写在一处就只有一个方向有曲线。 */
+  /* 收起态那颗图标：绝对铺在 28px 槽上，与输入框共用同一个位置。
+       不参与布局 ⇒ 展开/收起时不会因为它再算一次几何。
+       ⚠️ 展开态的规则**必须另起一条**写全路径：Less 里 `.is-open &` 展开的是
+          **累计选择器**（`.toolbar .search-btn`）⇒ 会编译成 `.is-open .toolbar .search-btn`，
+          祖先顺序反了，规则静默失效（第一版就是这么错的，靠翻编译产物抓到）。 */
+  /* 「更多」与视图组之间那道竖线：它是兜底入口，不属于视图组。 */
+}
+.toolbar[data-v-probe] .is-on {
+  --n-color: var(--ff-ctl-on) !important;
+  --n-color-hover: var(--ff-ctl-on) !important;
+  --n-color-pressed: var(--ff-ctl-on) !important;
+  --n-text-color: var(--ff-text-1) !important;
+  --n-text-color-hover: var(--ff-text-1) !important;
+  --n-text-color-pressed: var(--ff-text-1) !important;
+}
+.toolbar .search-slot[data-v-probe] {
+  position: relative;
+  flex: 0 0 auto;
+  width: 28px;
+  height: 28px;
+  /* 曲线用 `--ff-ease-size` 而不是 `--ff-ease-move`（2026-11-08）：
+           后者初始斜率 5.26，在 192px 的宽度上等于"空白猛弹开"（峰值 6733px/s，
+           面包屑只有 1578px/s）。详见 tokens.css 那条注释。 */
+  transition: width calc(var(--ff-dur-move) * 0.55) var(--ff-ease-size) var(--ff-dur-exit);
+  /* 收起态的输入框**留在 DOM 里**（只关可见与命中）：`v-if` 会让它没有"上一帧"，
+           宽度动画就只能从 0 开始 —— 那正是"瞬间弹出"而不是"长出来"。 */
+}
+.toolbar .search-slot.is-open[data-v-probe] {
+  width: 220px;
+  /* 展开**拉满一拍**，不再用 0.75 拍。
+               原来那 25% 是留给"先落位、后显形"的，但宽度不是位移 ——
+               它的"落位"就是一块**空白**，内容被推迟到落位之后 ⇒ 眼睛看到的是
+               "空格子先弹开、输入框才浮现"。内容已改成同起跑，这一拍就该用满。 */
+  transition: width var(--ff-dur-move) var(--ff-ease-size);
+}
+.toolbar .search-slot .n-input[data-v-probe] {
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity var(--ff-dur-exit) linear;
+}
+.toolbar .search-slot.is-open .n-input[data-v-probe] {
+  opacity: 1;
+  pointer-events: auto;
+  /* ⚠️ **不带** `--ff-fade-in-delay`（2026-11-08）：那个 25% 拍 = 50ms，
+               恰是旧宽度曲线冲完 92% 的时间 ⇒ 前 50ms 观众只看得到空白在撑开。
+               现在宽度同拍走 200ms，内容 0→100ms 同步显形，边在长的过程里内容一直在。 */
+  transition: opacity var(--ff-fade-in) linear;
+}
+.toolbar .search-btn[data-v-probe] {
+  position: absolute;
+  inset: 0;
+  width: 28px;
+  transition: opacity var(--ff-fade-in) linear var(--ff-fade-in-delay);
+}
+.toolbar .search-slot.is-open .search-btn[data-v-probe] {
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity var(--ff-dur-exit) linear;
+}
+.toolbar .toolbar-sep[data-v-probe] {
+  flex: 0 0 auto;
+  width: 1px;
+  height: 16px;
+  background: var(--ff-line-strong);
+  margin: 0 4px;
+}
+/* ── 状态条「挂上 / 摘掉」的动画（2026-11-08）───────────────────────────────
+   这条状态条**在文档流里**（`.file-finder` 是 flex 列），所以只做淡入是假动画：
+   卸载那一帧网格就跳 50px，然后条自己再淡出去。**高度必须一起过渡**。
+   `height: auto` 不可过渡，`max-height` 要写魔数（内容一变就剪错高度）⇒
+   用 grid 轨道 `minmax(0,1fr) ↔ minmax(0,0fr)`：零魔数、内容多高都收得干净。
+   Chromium 152 实测可插值：`docs/probes/bar-collapse/`（200ms 一拍下采到 12 帧中间高度，槽 50→0，
+   网格顶边同步上移）。
+   ⚠️ 两个前提**缺一不可**，少一个就"收不起来"（探针第一版就是这么失败的）：
+     ① 轨道写 `minmax(0, …)` —— 裸写 `0fr` 等于 `minmax(auto, 0fr)`，轨道的自动最小尺寸
+        取内容的 min-content，`.scan-bar` 的 `min-height: 40px` 会把它顶死；
+     ② 里层 `.scan-bar` 有 `overflow: hidden` —— 网格项的自动最小尺寸只有非 visible 才归 0。
+   ⚠️ 透明度用 linear、时长走**拍内分带**（2026-11-08 第八轮，同面包屑）：
+   这条曲线是给位移的（前重后轻），拿 `--ff-ease-exit` 淡出会中途就掉到 0.1，
+   肉眼等于"闪一下"（面包屑那边踩过）。进 = 延迟 25% 拍、后用 50% 拍显形；
+   退 = 前 45% 拍内消失，然后才让空间塌下去。 */
+.scan-bar-slot[data-v-probe] {
+  display: grid;
+  grid-template-rows: minmax(0, 1fr);
+  /* 收起过程中内容仍按自身高度渲染，不裁就会盖到网格上 */
+  overflow: hidden;
+  /* 不参与压缩：该被挤的是网格（`flex: 1`），不是这条 */
+  flex: 0 0 auto;
+}
+.fx-bar-enter-active[data-v-probe] {
+  transition: grid-template-rows var(--ff-dur-move) var(--ff-ease-move), opacity var(--ff-fade-in) linear var(--ff-fade-in-delay);
+}
+.fx-bar-leave-active[data-v-probe] {
+  transition: grid-template-rows var(--ff-dur-move) var(--ff-ease-exit), opacity var(--ff-dur-exit) linear;
+}
+.fx-bar-enter-from[data-v-probe],
+.fx-bar-leave-to[data-v-probe] {
+  grid-template-rows: minmax(0, 0fr);
+  opacity: 0;
+}
+/* 减少动态效果：直接切终态。轨道过渡必须整体关掉 —— 留个 0ms 的过渡在
+   `grid-template-rows` 上只会让"挂上/摘掉"多算一帧，没有意义。 */
+@media (prefers-reduced-motion: reduce) {
+.fx-bar-enter-active[data-v-probe],
+  .fx-bar-leave-active[data-v-probe] {
+    transition: none;
+}
 }
 /* 扫描状态条：贴着网格下方一条，整条随 scanning 出现/消失 */
 .scan-bar[data-v-probe] {
   display: flex;
   align-items: center;
-  gap: 12px;
-  padding: 4px 4px 8px;
+  /* ⚠️ 2026-11-08：这条不是可有可无的 —— 它是 `.scan-bar-slot` 能把高度收到 0 的
+       **第二个前提**（网格项的自动最小尺寸只有非 visible 才归 0）。
+       顺带保证内容不被裁：收起时轨道已经 0，这里裁不裁都看不见。 */
+  overflow: hidden;
+  /* 元素间距统一 8（§4.4）；组的切分交给 `.pick-acts` 内部再分一档 */
+  gap: 8px;
+  /* 定高：挑选条 / 扫描条**两种内容**高度一致 —— 扫描过程中途切换文案
+       （`取消` → `正在取消…` 多一行提示）不会让条自己长高、把网格顶一下。
+       ⚠️ 它**管不到**"整条挂上/摘掉"，那件事现在由 `.scan-bar-slot` 的轨道动画负责。 */
+  min-height: 40px;
+  padding: 2px var(--ff-content-inset) 8px;
+  /* 模式标签：只用一处淡高亮，说明"你现在在一个模式里"。
+       不给整条加深色底 —— 它贴在网格上方，加深底会和封面抢注意力。 */
+  /* 计数是**状态**不是句子：数字单独加亮，单位退后 */
+  /* 把动作整体推到右端：主操作要落在**手习惯去的那一头** */
+  /* 动作组：组内 8，主操作再让 8（合计 16）—— 间距分级就是这里唯一的"层级"手段，
+       颜色那边不许再造一套（高亮色只有三处用途，见 tokens.css）。 */
 }
-.scan-bar .scan-progress[data-v-probe] {
-  font-size: 12px;
-  color: #a1a1a1;
-}
+.scan-bar .scan-progress[data-v-probe],
 .scan-bar .scan-hint[data-v-probe] {
   font-size: 12px;
-  color: #a1a1a1;
+  color: var(--ff-text-2);
+}
+.scan-bar .pick-badge[data-v-probe] {
+  flex: none;
+  font-size: 11px;
+  font-weight: 500;
+  line-height: 18px;
+  padding: 0 8px;
+  border-radius: var(--ff-r-pill);
+  /* 中性胶囊，不占高亮色 —— 高亮色只留给「卡片选中 / 悬浮 / 输入框焦点」三处。
+           模式的存在感由这条状态条本身 + 右端那颗实心主按钮承担。
+           ⚠️ 底色用 `--ff-chrome-active`（左轨选中同一个灰）：原来是 `--ff-raised`，
+           它贴白面板只差 5 级，一块"我在某个模式里"的标签淡到看不出边界。 */
+  color: var(--ff-text-1);
+  background: var(--ff-chrome-active);
+}
+.scan-bar .pick-count[data-v-probe] {
+  flex: none;
+  font-size: 13px;
+  color: var(--ff-text-2);
+}
+.scan-bar .pick-count b[data-v-probe] {
+  font-weight: 500;
+  color: var(--ff-text-1);
+  /* 数字等宽：选到 10 个时行宽不跳 */
+  font-variant-numeric: tabular-nums;
+}
+.scan-bar .pick-spacer[data-v-probe] {
+  flex: 1 1 auto;
+}
+.scan-bar .pick-acts[data-v-probe] {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.scan-bar .pick-acts .pick-go[data-v-probe] {
+  margin-left: 8px;
+}
+/* 定位后短暂压暗其余格子（600ms）：满屏几百张时，「只剩一张亮」比「给那张加框」好认得多。
+   只在 revealAndFlash 那一刻加 class，不是常驻态；opacity 走合成层，不触发重排。 */
+.image-box.is-locating .image-box-item[data-v-probe]:not(.cursor) {
+  opacity: 0.3;
+  transition: opacity 0.12s ease;
 }
 /*
- * 「换封面」模式：可选 / 已选 / 角标。
+ * 卡片状态：可选 / 已选 / 焦点。
  *
- * ⚠️ 三条硬约束：
- *   ① 选中态**复用已有的 `border`**（那条 `1px solid transparent` 本来就在）只改颜色 ——
- *      绝不能新增参与布局的属性。网格 6 列的宽度是"margin 撑间距 + `width:100%/6−10px`
- *      补偿回来"算出来的（见 `.image-box-item` 的注释），任何新增的盒模型属性都会带偏它。
- *   ② 角标**绝对定位**（配 `position: relative`，它不脱流、不影响几何）。
- *   ③ 颜色取 naive-ui 默认主色 —— 本项目没有自定义主题（`App.vue` 无 `themeOverrides`）。
+ * ⚠️ 约束没变：**状态一律不许新增参与布局的属性** —— 宽度由 grid 的 `1fr` 给，而高度必须同行等高
+ * （`groupRows` 按 `offsetTop` 分行，差一像素就劈行）。所以只用 `outline` / `box-shadow` / `transform`。
+ *
+ * 圆角：2026-10-21 主人裁定改用 B 站那套 6px，值在 `--ff-radius-card`（想改回直角只改 token）。
  */
 .image-box-item[data-v-probe] {
   position: relative;
-  /**
-     * ⚠️ **这里刻意不加 `border-radius`**（业主 2026-10-04 明确要求）。
-     *
-     * 2026-10-04 我按 PS5 那套观感加过 8px 圆角（PS5 官方 UI 用圆角表达"可进入"，
-     * 直角留给"这是内容"），业主看过后说**不要**。⇒ 网格卡片维持直角。
-     *
-     * 留这条注释是为了**防止将来又被加回来**：它不是"还没做"，是"做过并被否掉"。
-     * 顺带记下那条仍然有效的约束 ——
-     * ⛔ 将来若有人想加圆角，**绝不能顺手加 `overflow: hidden`**：
-     * 它会**裁掉外扩的焦点环**（`box-shadow` 画在盒子外侧），两者互斥。
-     * 只加 `border-radius` 不裁图是可行的（`box-shadow` 会自动跟随），
-     * 但既然直角是主人定的，就别动。
-     */
-  border-radius: 0;
-  /*
-     * 焦点 + 鼠标同时在那一格上。
-     *
-     * ⚠️ 必须显式写这一条：`:hover` 的选择器权重与 `.cursor` **相同**
-     * （都是 0,1,0 —— 前者是伪类、后者是类），而 `:hover` 写在样式表**更靠后**
-     * ⇒ 鼠标停在焦点格上时，hover 的灰边框会**盖掉**焦点的主色蓝，
-     * 焦点环整个消失（业主鼠标操作时正是最需要看见焦点的时候）。
-     * 这里把焦点态**提一级权重**，让"焦点 + hover"里焦点赢。
-     */
+  /* 卡片内层序契约（唯一真相源）——"谁盖住谁"只在这里定，别在别处补 z-index 数字。
+     * ⚠️ 封面图 z-index:1 会盖住没给层级的浮层；别逐个元素打补丁（换元素就复发），统一按下面 --z-* 变量定契约。 */
+  --z-cover-img: 1;
+  --z-cover-tag: 2;
+  --z-cover-mark: 3;
+  --z-card-mark: 2;
+  --z-card-mask: 3;
+  /* 卡片自成层叠上下文：内部层级不与兄弟卡片、外层 UI 互相比较。
+     * ⚠️ 不加的话，焦点卡放大 1.012 溢出到邻居上时，邻居的角标会盖住它。 */
+  isolation: isolate;
+  /* 已选（换封面时点中的格子）：绿圈画在封面**内侧**，与焦点的外圈各占一层，不打架。
+     * ⚠️ 必须画成 `.card-cover::after`（封面内部的第 3 层）—— 原来挂在
+     * `.card-cover` 自己的 `inset box-shadow` 上，那是**封面背景层**，
+     * 会被封面图（层级 1）盖住 ⇒ 绿圈只剩左右两截、上下边看不见。 */
+  /* 焦点 + hover 不需要专门的权重守卫了：hover 只改标题色与图片缩放，碰不到焦点环 */
   /*
      * 「正在双击打开」—— 只读层解析锚点那一瞬。
      * ⚠️ 与 `.cursor` **不冲突**：`opening` 要点鼠标双击才会置位，方向键移动不会置位它，
      *   而 `opening` 那一格盖着深色遮罩 + 转圈，识别靠的是遮罩不是边框。
-     * 只改颜色/外发光，不碰盒模型（网格宽度是 margin 算出来的）。
+     * 只改颜色/外发光，不碰盒模型（盒模型一变，同行就不等高，分行算法会劈行）。
      */
   /* 遮罩与转圈分开两层：`.opening-mask` 负责铺满，`.n-spin` 留在 naive-ui 自己的定位里
        （它的根是 `.n-spin-body`，自带 translate(-50%,-50%)；去戳它就得连 transform 一起清）。
-       绝对定位 ⇒ 尺寸跟卡片走、不参与布局（网格宽度是 margin 算出来的）。 */
+       绝对定位 ⇒ 尺寸跟卡片走、不参与布局（参与布局会改变行高，分行算法会劈行）。
+       ⚠️ `z-index` 走契约的"临时遮罩"层：它要盖住封面图 + 角标 + 卡片标记
+       （"正在双击打开"时整张卡都是这层画面），不给 z-index 就会被封面图盖住。 */
+  /* 收录星标（2026-10-21 清单）：这张卡已进某个清单。
+       纪律同 pick-badge：**绝对定位、不参与布局**（网格宽度是算出来的），
+       换到左上角与 pick-badge（右上）错开。★ 用 CSS 生成，不插 DOM 子节点。
+       ⚠️ `z-index` 走契约的"卡片标记"层（同 pick-badge）：压过封面图。 */
+  /* 已失效徽标（2026-11-06）：收藏夹内所属盘在线但确认丢失的条目。
+       绝对定位右上角，深红底色白字，小圆角胶囊形，不参与布局。 */
 }
 .image-box-item.pickable[data-v-probe] {
   cursor: pointer;
 }
-.image-box-item.picked[data-v-probe] {
-  border-color: #18a058;
+.image-box-item.picked .card-cover[data-v-probe]::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  box-shadow: inset 0 0 0 2px #18a058;
+  z-index: var(--z-cover-mark);
+  /* 纯装饰，不该拦点击（盒子贴在图片上，不加就吃掉图片的点击） */
+  pointer-events: none;
 }
 .image-box-item.cursor[data-v-probe] {
-  border-color: #2080f0;
-  /**
-         * 淡底**比 hover 更淡**（hover 是 .16，这里 .10）—— 焦点要"认得出"但不能"跳出来"。
-         * ⚠️ 它是**唯一**给焦点铺底色的规则：静止态与 `picked` 都不铺底
-         *（网格这么密，每格都铺色会糊成一块色板 —— 那是"AI 味"的主要来源）。
-         */
-  background-color: rgba(110, 123, 173, 0.1);
-  /**
-         * ⚠️ 原来是 `1px 0 10px` —— **只向右发光**的不对称阴影，典型的"AI 味"装饰。
-         * ⇒ 去掉：焦点已经由「主色边框 + 淡底」两样表达了，第三样是冗余。
-         * （`scale(1.012)` 的抬起**保留**：它是"这一格被拿起来了"的重量感，主人认可过，
-         *   且它有别的功能——见 `docs/probes/cursor-scale-row/`：抬起会污染
-         *   `getBoundingClientRect().top`，行结构探测必须用 `offsetTop` 才不受影响。）
-         */
+  /* 极轻抬升：1.012 而不是 1.02 —— 后者在密网格里很显眼，显眼=吵。
+           ⚠️ `transform` 会污染 `getBoundingClientRect`，`gridGeometry` 分行必须用 `offsetTop`。 */
   transform: scale(1.012);
-  /* 抬起来的那一格要压住相邻格（`z-index` 只在定位元素上生效，故 position: relative 已在） */
   z-index: 1;
+  /* 标题也跟着变蓝：光有封面上那圈框，几十张里还是要"找一下"——
+           文字变色是最容易被扫到的第二信号。
+           ⚠️ 这里**不再改字重**：500 已经是默认（见 `.card-title`），焦点态若再加就
+           得靠 600 才看得出变化，而全站禁 600/700。状态只靠"颜色 + 环"两层表达。 */
 }
-.image-box-item.cursor[data-v-probe]:hover {
-  border-color: #2080f0;
-  background-color: rgba(110, 123, 173, 0.1);
-  transform: scale(1.012);
+.image-box-item.cursor .card-cover[data-v-probe] {
+  /* ⚠️ 2026-11-08 关键改动：**环必须离开照片 2px**（`outline-offset: 2`）。
+               为什么：封面的颜色是不可控输入。环贴在图像边缘时，它是在跟"照片"比对比度 ——
+               碰上同色系（蓝调 / 大面积高亮）封面就瞎了，而**加粗不解决对比度问题，只放大噪音**。
+               留出 2px 间隙后，环的内侧和外侧**都只面对网格底色**（深 #141414 / 浅 #f1f2f3），
+               它于是站在"背景"上，而不是站在"照片"上 ⇒ 任何封面下都稳定可读。
+               业界同款：Figma 的选择框、VS Code 的文件焦点、macOS 焦点环都是"留缝"派；
+               Photoshop 更进一步用黑白交替的蚂蚁线 —— 本质都是"别让环和内容直接接触"。
+               2px 是下限：再细会被封面边缘的像素噪声吃掉。
+               ⚠️ 环仍画在格子外面，由容器的 `--ff-grid-ring-room`（6px）承接，
+                  `3 + 2 = 5px < 6px` ⇒ 最左/最右两列不会被 `overflow:hidden` 裁掉。
+               ⚠️ 3px 是主人定的（2026-11-08）：留缝之后环可以放心加粗，因为它已经不跟照片抢对比度了。 */
+  outline: 3px solid var(--ff-highlight);
+  outline-offset: 2px;
+  /* 抬升阴影走 token：深色下大而虚（只为"这张在最前"），浅色下小而淡
+               —— 浅底上那圈 4px 扩散的深阴影会变成一圈脏灰，主人 2026-11-07 的原话是"好丑"。 */
+  box-shadow: var(--ff-shadow-lift);
+  /* 进场 60ms（= 长按方向键两次移动之间的最小间隔），退场走基类的退场带。
+               ⚠️ 60ms 这个数的来源是 `useGridCursor.MOVE_REPEAT_MIN_MS`，**不是**节奏 token：
+               这一格必须在"下一次移动到来之前"画完，否则长按时光标一路跑、环一路追。
+               60ms 短到几乎瞬时，但足以让环"长出来"而不是"啪一下贴上"。 */
+  transition: outline-color 60ms var(--ff-ease-move), outline-width 60ms var(--ff-ease-move), outline-offset 60ms var(--ff-ease-move), box-shadow 60ms var(--ff-ease-move);
 }
-.image-box-item.opening[data-v-probe] {
-  border-color: #525e72;
-  box-shadow: 0 0 0 2px rgba(82, 94, 114, 0.35);
+.image-box-item.cursor .card-title[data-v-probe] {
+  color: var(--ff-highlight);
+}
+.image-box-item.opening .card-cover[data-v-probe] {
+  outline: 2px solid var(--ff-text-3);
+  /* 同 `.cursor`：靠容器的 `--ff-grid-ring-room` 承接，不用再往内画 */
+  outline-offset: 0;
 }
 .image-box-item .opening-mask[data-v-probe] {
   position: absolute;
   inset: 0;
+  z-index: var(--z-card-mask);
   display: flex;
   align-items: center;
   justify-content: center;
@@ -301,6 +709,9 @@
   position: absolute;
   top: 2px;
   right: 2px;
+  /* ⚠️ 契约的"卡片标记"层：必须压过封面图（否则换封面时勾选圈看不见，
+           2026-10-22 主人报）。 */
+  z-index: var(--z-card-mark);
   display: block;
   width: 16px;
   height: 16px;
@@ -322,42 +733,114 @@
   border-bottom: 2px solid #fff;
   transform: rotate(-45deg);
 }
+.image-box-item .pl-badge[data-v-probe] {
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  z-index: var(--z-card-mark);
+  display: block;
+  width: 16px;
+  height: 16px;
+  flex-shrink: 0;
+  box-sizing: border-box;
+  font-style: normal;
+  font-size: 11px;
+  line-height: 16px;
+  text-align: center;
+  border-radius: 50%;
+  color: #fff;
+  background-color: #d8a00f;
+  box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.3);
+}
+.image-box-item .pl-badge[data-v-probe]::before {
+  content: '★';
+}
+.image-box-item .pl-missing-badge[data-v-probe] {
+  position: absolute;
+  top: 3px;
+  right: 3px;
+  z-index: var(--z-card-mark);
+  display: block;
+  padding: 0 4px;
+  height: 16px;
+  line-height: 16px;
+  font-style: normal;
+  font-size: 10px;
+  font-weight: 500;
+  text-align: center;
+  border-radius: 3px;
+  color: #fff;
+  background-color: #d03050;
+  box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.25);
+  pointer-events: none;
+}
 .image-box[data-v-probe] {
   flex: 1;
-  display: flex;
-  flex-flow: row wrap;
+  /* 列数**必须精确等于密度档给的 N**，一个都不能少。
+       理由不是观感 —— `useGridCursor` 的 `deps.cols` 用"列数变了"来判定行结构缓存失效；
+       实际渲染 7 列而配置是 8 时，这个判据永远不触发，方向键会一直用旧的行结构 ⇒ 错位。
+       ⚠️ 不要用 `auto-fill` + `minmax(min-cell, 1fr)` 那套"窄窗少放几列"的写法：
+       它既是"某些宽度下右边留白"的来源，又会让实际列数 ≠ N。
+       窗口窄就格子小（12 列在 1024 窗下约 63px），这是固定列数的代价，不是 bug。
+       ⚠️ 行距 6px 来自原来 margin-top 的值，列距仍是 `--ff-grid-gap` —— 别把两者并成一个值。 */
+  display: grid;
+  grid-template-columns: repeat(var(--ff-grid-cols, 6), minmax(0, 1fr));
+  gap: 6px var(--ff-grid-gap);
+  align-content: start;
+  /* 焦点环让位量（6）定义在 `.file-finder`：顶栏也要用它算左边缘，放这里顶栏读不到。
+       环画在格子**外面**，横向靠这里的 padding 兜住；
+       纵向的 padding 滚动后就跑到视口外了 ⇒ 还要靠 `.image-box-item` 的 `scroll-margin-block`。
+       上 / 左 / 右三边共用 `--ff-content-inset`（= 页边距 12 + 环让位 6 = 18）：顶栏、状态条、
+       网格的缩进必须是**同一个算式**，否则"顶栏和第一列封面对不齐"会复发。
+       ⚠️ 底边那 6px **单独给**，不是同一个算式：它是环让位而不是页边距 ——
+       环 3 + 缝 2 = 5px 画在格子外面，滚到底时最后一行贴着 `overflow` 的裁剪边
+       ⇒ 少这 6px 就会把环切掉半圈。 */
+  padding: var(--ff-content-inset) var(--ff-content-inset) var(--ff-grid-ring-room);
+  box-sizing: border-box;
   overflow: hidden auto;
-  justify-content: flex-start;
-  align-content: flex-start;
-  /* ── 让网格左右贴边：首格 margin-left / 每行末格 margin-right 归零 ──────────────
-       `.image-box-item` 是"**用 margin 撑间距、宽度再把它补偿回来**"的算法：
-       每格 `calc(100%/6 − 10px)` 宽 + 左右各 5px margin = **恰好占 100%/6** ⇒ 一行正好 6 个。
-       代价是**容器左右边缘也各被吃掉 5px**（首格的 margin-left、每行末格的 margin-right），
-       于是整片网格比头部内缩 5px（`.header-bar` 与它同在 `.file-finder` 的 10px padding 里）
-       —— 左右不齐，这就是"第一个/最后一个还留着 margin"的来源。
-
-       解法：把容器左右各外扩 5px（= margin 的一半），边缘那 5px 就正好落回容器外。
-       首格贴左、末格贴右，与头部对齐。
-
-       ⚠️ 为什么**不用** `:nth-child(6n+1)` / `:nth-child(6n)` 去掉首尾 margin：
-       ① 那是补丁（列数一变就失效）；② **在这里还会算错** —— 格子宽度是按"margin 会被
-       补偿"设计的，只去掉首尾 margin 而宽度不变 ⇒ 每行右端空出 5px，左右不对称，比现在更糟；
-       ③ 下面的断点里列数是**会变的**（6 / 5 / 3 / 2 / 1），任何写死 `6n` 的式子都会在窄窗失效。
-
-       ⚠️ 为什么**不用** `gap`：`gap` 方向是对的（边缘天然为 0），但换过去必须**同步重算**
-       `--item-width` 在 5 个断点里的每一个值 —— 因为 `gap` 不占格子宽度、而 `margin` 占，
-       等于把"改一个百分比就能改列数"变成"每个断点要改两个数字"。
-       这里只加两行，**断点和 item 的算法一个字都不动**。 */
-  margin-left: -5px;
-  margin-right: -5px;
+  /* ── 卡片尺寸变量：**按密度档位在这里改，子元素只读** ──────────────────────────
+       为什么做成变量而不是给紧凑档另写一套 `.card-title` 规则：
+       标题高/字号/行高必须**一起**换（高换了字号没换 = 两行塞不下成省略号；
+       字号换了高没换 = 下方留一块空）。写成一组变量，档位就是一处覆盖。
+       ⚠️ 这一组值只允许在这里出现一次 —— 别在 `.card-title` 里再写死 40px。 */
+  --item-pad-b: 6px;
+  --item-title-h: 40px;
+  /* 15 / 20：字高比 1.33。原来是 14 —— 换字体后 MiSans 的中宫比雅黑略收，
+       同样 14px 看起来更小，所以抬到 15。行高不动 ⇒ 两行仍是 40，网格行高零变化。 */
+  --item-title-fs: 15px;
+  --item-title-lh: 20px;
+  --item-badge-h: 18px;
+  --item-badge-fs: 12px;
+  /* 紧凑档（12 列，格宽 147px）：标题占封面的比例从 30% 降到 26%，
+       字号收到 12px —— 14px 在 147px 宽里一行只剩 10 个字，两行就是"半截标题"。 */
+  /* 2026-11-07 起改成 `grid` + `gap`（见上面 `grid-template-columns`）——
+       原来那套「`calc(100%/N − gap)` + 左右各 gap/2 margin + 容器外扩 gap/2」的补偿算法
+       已整段删除：它在 `min-width` 触发换行时会少放一格，而剩下的空间没人接
+       （现象就是"标准 8 / 紧凑 12 在某些宽度下右边留白"）。grid 下边缘天然为 0，不需要补偿。
+       ⚠️ `probes/grid-cursor/` 的几何数据是**旧布局**的，下次动列宽/贴边必须重跑那两个探针。 */
 }
-/* 空状态：占满一整行、居中一行小字。颜色沿用搜索框后缀图标那个灰 */
+.image-box[data-density='tight'][data-v-probe] {
+  --item-pad-b: 4px;
+  --item-title-h: 34px;
+  --item-title-fs: 12px;
+  --item-title-lh: 17px;
+  --item-badge-h: 16px;
+  --item-badge-fs: 11px;
+}
+/* 空状态：一行小字，落在网格区的**视觉中间**。
+   ⚠️ 不用 `margin:auto`：`.image-box` 是 `align-content:start`，行始终贴顶，
+   纵向 auto margin 吸不到余量（实测会停在顶部）。给它自己一个视口比例的高度 + flex 居中，
+   就不依赖父容器的对齐规则。 */
 .empty-tip[data-v-probe] {
+  /* grid 下 `width:100%` 只是一列宽 ⟹ 必须跨满整行 */
+  grid-column: 1 / -1;
   width: 100%;
-  padding-top: 48px;
-  text-align: center;
+  min-height: 52vh;
+  display: flex;
+  align-items: center;
+  justify-content: center;
   font-size: 14px;
-  color: #a1a1a1;
+  color: var(--ff-text-3);
 }
 /**
  * 卡片底座：网格格子与弹层条目**共用**的那一点东西（盒模型 + 边框 + 过渡）。
@@ -367,63 +850,77 @@
  * 弹层的 `.file-cover` 被压成 0 高（等于从来没画出来）、文件名被压成单行 + 尾部省略
  *（业主 2026-10-05：「多个文件弹出层好丑」，4 个文件显示成一模一样的 `[TST-59…`）。
  * ⇒ 按"谁的属性谁持有"拆开：网格那半在下面 `.image-box-item`，弹层那半在 `.file-item`。
- * 拆开之后"网格的规则漏到弹层"在**结构上**不再可能，弹层那边也因此一个 `!important` 都不需要。
+ *
+ * ⚠️ 2026-10-21 再拆一次：网格卡片现在是"封面 + 标题 + 角标"，**没有边框也没有悬停底色**
+ *（B 站那套）。所以这条只留给弹层 —— 之前忘了拆，网格 hover 时冒出一圈灰边框，
+ * 正是主人截图里"悬浮难看"的那一条。
  */
-.image-box-item[data-v-probe],
 .file-item[data-v-probe] {
   display: flex;
   flex-direction: column;
   align-items: center;
   box-sizing: border-box;
   border: 1px solid transparent;
-  /**
-     * ⚠️ 原来是 `all .1s`。focus 现在会**放大 1.02**，`.1s` 对"抬起"这个动作太快
-     * （像抽搐）。⇒ 拆开写：颜色/阴影仍 .1s（跟手），transform 给 .18s + 缓出
-     *（PS5 那种"亮一下再稳"的手感）。`all` 也一并去掉 —— 它会让`transform`
-     * 与未来任何新属性共用同一条时长，调试时看不出是谁在动。
-     */
   transition: border-color 0.1s ease-in-out, box-shadow 0.1s ease-in-out, background-color 0.1s ease-in-out, transform 0.18s cubic-bezier(0.2, 0.9, 0.3, 1.1);
   user-select: none;
-  /**
-     * 悬停：**只**换边框色 + 一层极淡底。
-     *
-     * ⚠️ 原来还有 `box-shadow: 1px 0 10px`（**只向右发光**的不对称阴影）——
-     * 那是"AI 味"的典型装饰：单侧发光没有功能作用，纯粹是"让它看起来有设计过"。
-     * ⇒ 去掉。悬停的反馈由「边框变主色 + 淡底」承担，足够了。
-     * （与 `.cursor` 同步去掉 —— 焦点那层也去掉，两处保持同一套语言。）
-     */
 }
-.image-box-item[data-v-probe]:hover,
 .file-item[data-v-probe]:hover {
-  border-color: #7a8da9;
-  background-color: rgba(110, 123, 173, 0.12);
+  border-color: var(--ff-highlight-line);
+  background-color: var(--ff-highlight-weak);
 }
-.image-box-item[data-v-probe]:active,
 .file-item[data-v-probe]:active {
-  border-color: #525e72;
-  background-color: rgba(75, 83, 116, 0.16);
+  border-color: var(--ff-highlight);
+  background-color: var(--ff-highlight-weak);
 }
 /**
- * 网格卡片：6 列算法 + 图 + 名字。**这一段只属于网格**（弹层条目见下面 `.file-item`）。
+ * 网格卡片（B 站视频卡的骨架）。
  *
- * ⚠️ 这里的 `min-height / height / max-height` 那三条 `!important` 是**网格的生命线**
- *（`--item-height` 由 `utils/flexible.ts` 的 `1rem = clientWidth/10` 推出；
- * 去掉它们 192px 的格子会塌成 24px）。所以它们必须留在**只有网格会命中**的选择器上。
+ * 高度**只由宽度决定**：封面定比例 + 标题两行定高。
+ * ⚠️ 这是 `gridGeometry.groupRows()` 的前提 —— 同行必须等高（它按 `offsetTop` 分行，
+ *    一行里混进一个矮格子就会被劈成两行，方向键从此横着跳）。所以标题区按档位定高
+ *    （`--item-title-h`），绝不由内容撑。
+ *
+ * 列数**不在这里写死**：`--ff-grid-cols` 由密度档位给（`density.ts` → `.image-box` 的 style），
+ * 默认 6 兜底（`var(--ff-grid-cols, 6)`）只防"变量没绑上"这一种情况。
  */
 .image-box-item[data-v-probe] {
-  --item-gap: 10px;
-  --item-width: calc(100% / 6);
-  --item-height: 1.5rem;
-  flex-grow: 0;
-  flex-shrink: 0;
-  width: calc(var(--item-width) - var(--item-gap));
-  min-height: 80px !important;
-  height: var(--item-height) !important;
-  max-height: var(--item-height) !important;
-  padding: 0 2px 10px;
-  margin: 10px 5px 0px;
-  justify-content: flex-end;
-  font-size: 16px;
+  /* 宽度全部交给 grid 的 `1fr`（见 `.image-box`）。
+       `min-width: 0` 是 grid item 的必要项 —— 默认 `auto` 会被内容撑破列宽。 */
+  min-width: 0;
+  /* ⚠️ 别删：`scrollIntoView({ block: 'nearest' })` 只保证**边框盒**可见，而焦点环画在格子外。
+       容器横向 `overflow: hidden` 靠 padding 兜住，纵向的 padding 一滚动就出了视口
+       ⇒ 顶行/底行的环会被削掉。`scroll-margin` 让浏览器在判"看得见"时就把这圈余量算进去。
+       值来自 `.image-box`，与那边的 padding 共用 —— 改一处即可，别在这里写死数字。 */
+  scroll-margin-block: var(--ff-grid-ring-room);
+  padding: 0 0 var(--item-pad-b);
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  box-sizing: border-box;
+  border: 0;
+  user-select: none;
+  /* ⚠️ 必须短于方向键连发间隔。真正管这件事的是 `useGridCursor.MOVE_REPEAT_MIN_MS = 60ms`
+       （长按只节流 `e.repeat`，单击零延迟），不是 `usePreview.KEY_REPEAT_MIN_MS = 100ms`
+       —— 那个是**预览层**翻页的节流，2026-11-08 核对时发现原注释引错了对象。
+       原来是 .18s，比间隔还长 ⇒ 每次过渡都跑不完就被下一次打断，快移时等于没有反馈。 */
+  transition: transform 0.08s ease-out;
+  /* 封面：16:9 定比例 + 圆角 token。裁切交给这一层，图片自己只负责填满。
+       `overflow:hidden` 在这里是**必须**的（圆角要裁图）；焦点环画在 `outline` 上，
+       不会被自己的 overflow 裁掉 —— 这也是不用 box-shadow 画环的原因。 */
+  /* 角标（B 站封面下沿那一排）：数量在左、大小在右。
+       `pointer-events:none` —— 它盖在封面上，点它应该等于点封面。 */
+  /* 标题：永远两行高度（单行也留白）—— 见块头那条"同行等高"的约束。
+       ⚠️ 三个值（高/字号/行高）由密度档位给，成组变化；14px 是"宽松档 310px 卡片里
+       放得下 8 个汉字"的那一档，紧凑档另有一套（见 `.image-box[data-density='tight']`）。 */
+  /* hover：图轻微放大 + 标题变蓝，**不加边框不加底色** */
+  /* 目录的脸：70%（常态）↔ 100%（换封面，要看得清）。
+       ⚠️ 2026-11-08：原来是模板里的内联 `width/height: 70% ↔ 100%` —— 那是**布局动画**：
+       进/出「换封面」会让一屏几百个目录同时改宽高，每帧重排几百张卡片，必然发涩。
+       改成「盒子恒 100% + `transform: scale()`」：视觉结果**完全一样**
+       （`object-fit: contain` 在 100% 的盒子里按比例缩满，再整体乘 0.7 = 原来的 70% 盒子），
+       但 `transform` 不触发布局，只重绘自己那一层。
+       ⚠️ 曲线与时长直接用"一拍"：它和面包屑、底部条是同一个节奏，不是另开一套。
+       ⚠️ 别改回内联宽高 —— 那样连过渡都没法写（内联值是字符串拼接，每次切换都是硬跳）。 */
   /*
      * 可预览的图（模板里挂 `class="can-preview"`）要保留"能点"的手势提示。
      * 为什么得补这一行：预览层改由 `n-image-group` 渲染后，网格里的 n-image 一律
@@ -432,93 +929,153 @@
      * 点开预览的行为本身由 `img-props.onClick` 接走（见模板注释），这里只补回视觉。
      * 目录的脸不该有这行 —— 它本来就不给点开，所以靠 `can-preview` 这个类区分，不是全靠 disabled。
      */
-  /**
-     * 文件名。**2026-10-05 重做**（业主：「整体很不协调」「反 slop」）。
-     *
-     * ## 改了什么、为什么
-     *
-     * | 项 | 原 | 现 | 依据 |
-     * |---|---|---|---|
-     * | 字号 | `1em`(16px) | **13px** | 列表项的**文件名是内容**，不是标题。Fluent 的 `body-1`=14 / `caption-1`=12；资源管理器缩略图视图 ≈12–13px |
-     * | 字重 | `bold`(700) | **400常规** | M3 `body`=400；`label`=500 是给"功能性文字"（按钮/标签）的。文件名是**内容**，用 body 那一档 |
-     * | 颜色 | `#000` 纯黑 | **次级灰** | 纯黑 + 粗体 = 标题待遇。文件名是**辅助信息**，不该抢图片的戏|
-     * | 静止底色 | 每格铺淡蓝灰 | **透明** | 底色是给 `hover` / `cursor` / `picked` 用的。**静止的卡片就该是内容本身** —— 铺满底色会让整片网格糊成一块色板（"AI 味"的主要来源） |
-     *
-     * ## ⚠️ 取值依据的效力（必须诚实标注）
-     *
-     * ✅ **可信**：资源管理器/相册类产品的**实际观感**（这是 PC 文件管理器，主人要的就是"专业"）
-     * ✅ **可信**：两个独立来源（Fluent / M3）**收敛到同一条** —— "列表项正文用 body 档 12–14px、常规字重"
-     * ⚠️ **未回官方原文核实**：`m3.material.io` 是 JS 渲染、抓不到正文；`learn.microsoft.com` 那页确认了
-     *    Fluent 有 type ramp 且 base 是 body，但**没给出 caption 的具体数值**。
-     *    ⇒ 上表的 13px 是"两个第三方转述 + 资源管理器观感"的**交集**，不是从官方原文抄来的。
-     *
-     * ## 为什么"居中"保留
-     *
-     * 资源管理器的缩略图视图文件名也是**居中**（图在上、名在下、居中对齐）⇒ 居中是对的，
-     * 不协调的是**字号与字重**，不是对齐方式。
-     *
-     * ## ⚠️ 连带影响：面包屑的字重**不再**与这里一致
-     *
-     * `.crumb-current` 当初加粗的理由是"与网格条目名字重一致"（那条注释仍在面包屑那边）。
-     * 现在网格是常规字重 ⇒ 面包屑的加粗**失去了一致性依据**。
-     * ⇒ 但**不动它**：面包屑要表达"我在哪"，靠 `n-tag` 自己的边框表达位置，
-     * 加粗在这里是**功能性的**（它不是内容列表的一项）。要改应作为**独立一件事**评估，
-     * 不该搭这次排版调整的便车。
-     */
+  /* ⚠️ 旧的「文件名」规则（`height:38px !important` + 单行省略）整段删了：
+       它对 `span` 全局生效，会把角标里的 `span` 一起拉成 38px 高。
+       名字现在由 `.card-title` 管（两行定高），角标由 `.card-badges` 管。 */
 }
-.image-box-item .n-image[data-v-probe] {
-  height: calc(100% - 16px - 20px);
-  margin: 10px 0;
-}
-.image-box-item .n-image[data-v-probe] img {
+.image-box-item .card-cover[data-v-probe] {
+  position: relative;
+  /* ⚠️ 封面块自己是层叠上下文（契约里的"封面内部"三层的容器）——
+           内部的模糊底/图/角标/绿圈只在封面内排序，不与卡片外的浮层纠缠。 */
+  isolation: isolate;
   width: 100%;
-}
-.image-box-item .n-image.can-preview[data-v-probe] {
-  cursor: pointer;
-}
-.image-box-item img[data-v-probe] {
-  display: block;
-  margin: 10px 0;
-  object-fit: contain;
+  /* 比例是 token：实测本库缩略图多在 1.6 左右（16:10），16:9 会左右留边。
+           想再调只改 `--ff-cover-ratio` 一个值。 */
+  aspect-ratio: var(--ff-cover-ratio);
+  display: flex;
+  align-items: center;
+  justify-content: center;
   overflow: hidden;
+  border-radius: var(--ff-radius-card);
+  background: var(--ff-fill);
+  /* 浅色下白封面贴在白卡片上没有边界，靠一圈发丝线定形；
+           深色下 `--ff-card-outline` 是 transparent（靠明度差就够，加线只会脏）。
+           `outline` 不参与布局、也不会被自己的 `overflow:hidden` 裁掉。 */
+  outline: 1px solid var(--ff-card-outline);
+  outline-offset: -1px;
+  /* 焦点环的**退场**（进场在 `&.cursor` 里被覆盖成 60ms，见那里）：
+           3px 的高亮环缩回 1px 发丝、2px 的留缝收回 0、抬升阴影淡掉 —— 都用"退场带"。
+       ⚠️ 为什么只在这边写：环是"光标在哪一格"的**位置信号**，进场迟到就会出现
+       "环追不上光标"（长按方向键每 60ms 走一格）。退场没有这个义务 ——
+       让它慢一拍缩回去，两张卡之间就变成**交接**而不是硬切。
+       ⚠️ 三个属性都能插值（`outline-width` / `outline-offset` 是长度，`outline-color` 是颜色）；
+       `box-shadow` 从 `none` 到实体阴影 Chromium 也按"全 0 透明"插值，不会跳。 */
+  transition: outline-color var(--ff-dur-exit) var(--ff-ease-move), outline-width var(--ff-dur-exit) var(--ff-ease-move), outline-offset var(--ff-dur-exit) var(--ff-ease-move), box-shadow var(--ff-dur-exit) var(--ff-ease-move);
+  /* 模糊底（见 `coverBackdrop()` 的注释）：把同一张图放大、模糊、压暗铺满整框。
+           `inset:0` + `scale(1.15)`：blur 会吃掉边缘像素，放大一点才不会有透明边。
+           ⚠️ 没有图（`--cover-src` 未设）时背景是 `none`，这一层等于不存在。 */
+  /* ⚠️ 必须 `:deep()`：`<img>` 是 naive-ui 的 `n-image` 内部节点，**拿不到本组件的
+           scoped 属性** ⇒ 写成 `.card-cover img` 会编译成 `img[data-v-x]`，一条都命中不了，
+           图片就按原始尺寸贴在左上角（主人 2026-10-21 截图报的"图片没居中"就是这个）。
+           旧代码用的是 `&:deep(img)`，我重写时丢了这层。 */
+  /* 宽高都撑满 + `contain` + `object-position:center`：
+           比例不一致时**上下或左右留白，但图始终居中**（留白由封面底色兜住）。 */
+  /* 目录/未知类型：图标按封面的比例缩，不撑满（70% 在密网格里太抢眼）
+           `position/z-index` 是为了压在模糊底之上（绝对定位的 `::before` 会盖住静态子元素） */
 }
-.image-box-item span[data-v-probe] {
-  display: inline-block;
+.image-box-item .card-cover[data-v-probe]::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background-image: var(--cover-src, none);
+  background-size: cover;
+  background-position: center;
+  filter: blur(18px);
+  transform: scale(1.15);
+  opacity: 0.5;
+  pointer-events: none;
+}
+.image-box-item .card-cover[data-v-probe] .n-image {
+  position: relative;
+  z-index: var(--z-cover-img);
   width: 100%;
-  height: 38px !important;
-  line-height: 1em;
-  font-size: 14px;
-  color: #374151;
-  font-weight: 400;
+  height: 100%;
+}
+.image-box-item .card-cover[data-v-probe] .n-image img {
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+  object-position: center;
+  transition: transform 0.25s ease;
+}
+.image-box-item .card-cover .folder-face[data-v-probe] {
+  position: relative;
+  z-index: var(--z-cover-img);
+  width: 56%;
+  height: auto;
+  object-fit: contain;
+}
+.image-box-item .card-cover .file-face[data-v-probe] {
+  position: relative;
+  z-index: var(--z-cover-img);
+  width: 56%;
+  font-size: 40px;
+}
+.image-box-item .card-badges[data-v-probe] {
+  position: absolute;
+  left: 6px;
+  right: 6px;
+  bottom: 6px;
+  /* ⚠️ 必须压过图片（契约的"封面角标"层）：图片那层为了盖住模糊底设了
+           `z-index`，不写这一行角标会被图片**盖住**（2026-10-21 主人截图报的"大小被遮挡"）。 */
+  z-index: var(--z-cover-tag);
+  display: flex;
+  justify-content: space-between;
+  pointer-events: none;
+}
+.image-box-item .card-badges .badge[data-v-probe] {
+  max-width: 62%;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  text-align: center;
+  padding: 0 6px;
+  /* 尺寸随密度档位走（见 `.image-box` 的 `--item-badge-*`）：
+               `line-height` 必须同 `height` 一起换，否则文字会偏上/偏下。 */
+  height: var(--item-badge-h);
+  line-height: var(--item-badge-h);
+  border-radius: var(--ff-radius-pill);
+  background: var(--ff-mask);
+  color: #fff;
+  font-size: var(--item-badge-fs);
 }
-@media screen and (max-width: 1100px) {
-.image-box-item[data-v-probe] {
-    font-size: 12px;
+.image-box-item .card-title[data-v-probe] {
+  margin-top: 6px;
+  height: var(--item-title-h);
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  overflow: hidden;
+  word-break: break-all;
+  font-size: var(--item-title-fs);
+  line-height: var(--item-title-lh);
+  /* 标题默认 500（2026-11-08 主人定）。全站只有 400 / 500 两档，**禁 600/700**：
+           700 的中文在 13~14px 会发糊，而 500 在深色底上已经足够从正文里"跳出来"。
+           加粗不改行高 ⇒ 两行截断的高度仍是 `--item-title-h`，不影响下方留白。 */
+  font-weight: 500;
+  color: var(--ff-text-1);
+  transition: color 0.15s ease;
+}
+.image-box-item[data-v-probe]:hover .n-image img {
+  transform: scale(1.03);
+}
+.image-box-item:hover .card-title[data-v-probe] {
+  color: var(--ff-highlight);
+}
+.image-box-item .card-avatar[data-v-probe] {
+  transform: scale(0.7);
+  transition: transform var(--ff-dur-move) var(--ff-ease-move);
+}
+.image-box-item.pickable .card-avatar[data-v-probe] {
+  transform: scale(1);
+}
+@media (prefers-reduced-motion: reduce) {
+.image-box-item .card-avatar[data-v-probe] {
+    transition: none;
 }
 }
-@media screen and (max-width: 600px) {
-.image-box-item[data-v-probe] {
-    --item-width: 20%;
-}
-}
-@media screen and (max-width: 400px) {
-.image-box-item[data-v-probe] {
-    --item-width: 33.33%;
-}
-}
-@media screen and (max-width: 300px) {
-.image-box-item[data-v-probe] {
-    --item-width: 50%;
-}
-}
-@media screen and (max-width: 200px) {
-.image-box-item[data-v-probe] {
-    --item-width: 100%;
-}
+.image-box-item .n-image.can-preview[data-v-probe] {
+  cursor: pointer;
 }
 /**
  * 弹层里的文件列表容器（与 `.hstack` 同一个节点）。
@@ -548,24 +1105,9 @@
   outline: none;
 }
 /**
- * 弹层条目 —— 「同一部作品的多个文件」，双击封面时弹出来问"打开哪一个"。
- *
- * ## ⚠️ 2026-10-05 重做（业主：「这个多文件弹出层好丑，想办法美化或者修正」）
- *
- * 原来长这样：84×84 的**空盒子** + 一行截断到约 9 个字符的文件名。
- * 而这一层的文件名**往往是同前缀的**（`[TST-593] … CD1 / CD2`）⇒
- * 4 个格子显示成**一模一样**的 `[TST-59…` —— 根本没法选。
- * 两个原因都不是"调参能救"的，是上面那次拆分的直接后果：
- *
- * | 症状 | 根因 |
- * |---|---|
- * | 每格上方一大块空白 | `.file-cover` 漏了 `fiv-cla fiv-icon-*`（网格那边写的是 `file-cover fiv-cla fiv-icon-${ext}`），只剩 `blank.svg` 又没尺寸 ⇒ **高 0，从来没画出来过** |
- * | 名字只剩前缀（选不了） | 继承了网格那条 `white-space:nowrap` + `height:38px!important` ⇒ 这里写的 `word-break` / 多行**全是死代码** |
- *
- * ⇒ 现在：类型图标 + **可换行**的文件名（最多 3 行，尾部才是区分点）+ 灰色大小。
- * ⚠️ 注意这里**一个 `!important` 都没有** —— 原来那 3 个 `!important` 全是在跟网格那条抢，
- * 拆分之后它们自然消失，这本身就是"拆对了"的证据。
- */
+ * 弹层条目：「同一作品的多个文件」，双击封面时问打开哪一个。
+ * ⚠️ 文件名往往同前缀、尾部才是区分点 ⇒ 必须可换行（最多 3 行）+ 类型图标 + 灰色大小，别用 nowrap / 定高截断。
+ * ⚠️ 这里不该出现 !important：若需要靠它压过网格样式，说明拆分没拆对。 */
 .file-item[data-v-probe] {
   width: 150px;
   height: 116px;
@@ -648,8 +1190,8 @@
   color: #9ca3af;
 }
 .file-item.file-cursor[data-v-probe] {
-  border-color: #2080f0;
-  background-color: rgba(110, 123, 173, 0.1);
+  border-color: var(--ff-highlight);
+  background-color: var(--ff-highlight-weak);
 }
 .file-cover[data-v-probe] {
   display: block;
@@ -658,55 +1200,92 @@
   overflow: hidden;
   background-image: url(@/assets/fileTypeIcon/blank.svg);
 }
+/**
+ * 计数角标的入场 —— 必须用 `@keyframes` 而不是 `transition`：
+ * 它是 `::after` 伪元素，**选择器命中那一刻才被创建**，没有"上一帧"可以过渡，
+ * 不加动画就是"啪"地冒出来。
+ *
+ * ⚠️ 2026-11-08 第七轮：**只淡入，不要 scale**。
+ * 原来带 `scale(0.7) → scale(1)`，等于让眼睛在一个 18px 的小胶囊上
+ * 看一次"从中间胀出来"的运动。主人已经明确"换层时不许有别的东西在动"，
+ * 而角标是纯信息 —— 只留透明度。
+ */
+@keyframes fx-badge-in-probe {
+from {
+    opacity: 0;
+}
+to {
+    opacity: 1;
+}
+}
 
 
 /* ── src/components/FolderSelector/index.vue  style[0] ── */
 
-/* 单个名字过长时截断（深度问题已由 foldPath 从字符串层面解决，这里只管"一段太长"）。
-   `min-width: 0` 是必需的：flex 子项默认 `min-width: auto`，不给 0 的话
-   内层文本不会收窄，省略号也就不会出现。 */
-.fs-tag[data-v-probe] {
-    /* 初值 220px 在 820px 窗口下实测把导航区吃掉了 61%（220/362），面包屑被压成 14px 碎片；
-       降到 150px。全路径永远在 `title` 里，折叠后的形状（首段 + … + 末段）也还在 ——
-       它只是"起点书签"，不需要在窄窗口里霸占大半条导航区。真机可再调。 */
-    max-width: 150px;
+/* 28px 的方块：与顶栏其余图标按钮**同尺寸、同圆角、同悬停色**。
+   不画边框 —— 顶栏里只有"可输入 / 可选值"的面才画框（地址槽、搜索框）。 */
+.fs-root[data-v-probe] {
+    position: relative;
+    display: inline-flex;
+    flex: 0 0 auto;
+}
+.fs-icon-btn[data-v-probe] {
+    width: 28px;
+    height: 28px;
+    display: grid;
+    place-items: center;
+    padding: 0;
+    border: 0;
+    border-radius: var(--ff-r-ctl);
+    background: transparent;
+    cursor: pointer;
+    transition: background-color var(--ff-dur-hover) linear;
+}
+.fs-icon-btn[data-v-probe]:hover {
+    background: var(--ff-ctl-hover);
 }
 
-/* ⚠️ 这一条是收缩链的**最外一环**，漏了它整条链就断在这儿：
-   `.n-tag__content` 是 n-tag 内部的 flex 子项，默认 `min-width: auto`（≈ 内容宽）
-   ⇒ 它不收窄，下面 `.fs-path` / `.fs-text` 再怎么设 `min-width: 0` 都没用。
-   症状：路径文本**画到盒子外面**、盖在后面几个面包屑标签上（整条头部上肉眼看不出来，
-   是探针的局部放大截图抓到的；实测 文本宽 211px vs 外框 150px）。
-
-   ⚠️ **必须写成"扁平"规则，不能把它嵌套进 `.fs-tag { ... }` 里**：
-   本 style 块是**纯 CSS**（没有 `lang="less"`），嵌套的 `:deep()` 会被 CSS Nesting 搅坏 ——
-   实测编译产物变成 `[data-v-x] .n-tag__content`（**`.fs-tag` 前缀整个丢了**）外加一个游离的 `}`。
-   探针里"打印编译后选择器"这一步就是为了抓这种东西。 */
-.fs-tag[data-v-probe] .n-tag__content {
-    min-width: 0;
-    overflow: hidden;
-}
-.fs-path[data-v-probe] {
-    display: flex;
-    align-items: center;
-    min-width: 0;
-}
-.fs-text[data-v-probe] {
-    display: inline-block;
-    /* ⚠️ 这一行不能少：它是 flex 子项，而 flex 子项默认 `min-width: auto`（≈ 内容宽）
-       ⇒ 少了它，长路径**收缩不了**、`text-overflow` 永远不触发，
-       文字会**溢出盒子盖到后面几个面包屑标签上**。
-       （2026-10-01 由探针的局部放大截图抓到：溢出的字画在邻居身上，肉眼在整条头部上看不出来。） */
-    min-width: 0;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-}
-
-/* 图标本身就是文件夹图（用户认的就是它），不要再套一层图标容器给它留白 */
+/* 图标本身就是文件夹（用户认的就是它），不要再套一层容器给它留白 */
 .fs-pick-icon[data-v-probe] {
     display: block;
-    width: 14px;
-    height: 14px;
+    width: 16px;
+    height: 16px;
     object-fit: contain;
+}
+
+/* 清除起点：悬停才出现。
+   ⚠️ `position: absolute` 是硬要求 —— 若排进文档流，它一出现就把右边的
+   返回 / 刷新 / 面包屑整体推 18px（hover 引起布局位移，是本项目最忌讳的一类）。
+   ⚠️ 底色必须是实心 `--ff-panel`：它压在彩色图标上，透明底会读不清。 */
+.fs-clear[data-v-probe] {
+    position: absolute;
+    top: -5px;
+    right: -5px;
+    /* 16 而不是 14：它触发的是**不可逆**的清空起点（清导航历史 + 视图 + 搜索词），
+       命中区不能比一颗图标按钮的角还小 —— 门槛 ∝ 不可逆 × 波及面。 */
+    width: 16px;
+    height: 16px;
+    display: grid;
+    place-items: center;
+    padding: 0;
+    border: 1px solid var(--ff-line-strong);
+    border-radius: 50%;
+    background: var(--ff-panel);
+    color: var(--ff-text-2);
+    font-size: 10px;
+    line-height: 1;
+    cursor: pointer;
+    opacity: 0;
+    transition: opacity var(--ff-dur-hover) linear;
+}
+.fs-root:hover .fs-clear[data-v-probe],
+.fs-clear[data-v-probe]:focus-visible {
+    opacity: 1;
+}
+
+/* 全路径可能很长：让 tooltip 自己换行，别把它撑成一条横线 */
+.fs-tip[data-v-probe] {
+    display: inline-block;
+    max-width: 420px;
+    word-break: break-all;
 }
