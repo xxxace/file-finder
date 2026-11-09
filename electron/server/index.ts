@@ -580,8 +580,9 @@ async function handleCover(
  * 原版是 `readdirSync` + `statSync` 同步递归 —— 扫一整块移动硬盘（几万个文件）会把
  * 主进程事件循环按住几十秒，窗口直接假死。这里改成异步逐层让出。
  *
- * 这是 `list.txt`（628 KB 的整盘目录树）的产出方：渲染层拿到这棵树之后用 `printTree`
- * 画成 `├──` 文本，再 URL 编码导出。
+ * 这是 `list.txt`（628 KB 的整盘目录树）的产出方。⚠️ 渲染层**不再**自动拿它画 `├──`：
+ * `src/utils/index.ts` 的 `printTree` 保留下来当**手动导出工具**（在 devtools 里 import 后
+ * `printTree(data, 0, 2, '')` → URL 编码），产品流程里没有任何调用点。见 docs/CHANGES-VS-ORIGINAL.md ①。
  */
 async function collectCodeList(root: string, level = 0): Promise<Record<string, any>[]> {
     let names: string[];

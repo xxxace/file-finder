@@ -1,8 +1,7 @@
 import { computed, ref } from 'vue';
-import { postAction } from '@/utils/request';
+import { API_BASE, postAction } from '@/utils/request';
 import type { AvatarRow } from './avatarModel';
 
-const API_BASE = 'http://127.0.0.1:3060';
 /** 站点点名有频率限制，4 并发是稳妥值（原来在服务端也是这个量级） */
 const CONCURRENCY = 4;
 

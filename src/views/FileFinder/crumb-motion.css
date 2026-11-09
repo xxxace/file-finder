@@ -1,0 +1,86 @@
+/**
+ * 面包屑的过渡类（fx-move / enter / leave）。这些类由 Vue 运行时**动态**加到
+ * 组件根节点上，scoped 的属性选择器够不到 ⇒ 全局 + `.nav-zone` 前缀兜作用域。
+ */
+/* ══════════════════════════════════════════════════════════════════
+   导航区（面包屑）的过渡 —— 非 scoped 块：这些类由 Vue 运行时**动态**加到
+   `n-tag` / `n-tooltip` / 组件根节点上，scoped 块的属性选择器够不到它们
+   （与上面工具条同因）。用 `.nav-zone` 前缀兜住作用域。
+
+   ⚠️ 三类必须分开写，**不能合成一条 `transition: all`**：
+     · `-move`   FLIP：只有"路径长到要挤压"时才命中（正常增删**没有一个邻居会动**，
+                 所以它平时是静默的空转）。留着是因为它顺便兜住宽度上限
+                 触发整排收缩那种情况，不留就会硬挤。
+     · `-enter`  进入：位移归位 + **延迟显形**（拍内分带，见下）
+     · `-leave`  脱离文档流后**当场淡出**（前 45% 的一拍内消失，见下）
+   ══════════════════════════════════════════════════════════════════ */
+.nav-zone .fx-move {
+    transition: transform var(--ff-dur-move) var(--ff-ease-move);
+}
+
+/* 进入 = **先落位、后显形**（2026-11-08 第八轮，照搬 Torph 的拍内分带）。
+   `opacity` 延迟 25% 拍、只用后 50% 拍显形 —— 前 50ms 里这一格已经在最终位置上
+   但几乎全透明，所以 6px 的归位只在最后一小段露出来，读起来是"从上一段里长出来"
+   而不是"从左边滑进来"。位移本身仍是完整一拍，不跟着透明度缩水。 */
+.nav-zone .fx-enter-active {
+    transition: transform var(--ff-dur-move) var(--ff-ease-move),
+        opacity var(--ff-fade-in) linear var(--ff-fade-in-delay);
+}
+
+.nav-zone .fx-enter-from {
+    opacity: 0;
+    transform: translateX(-6px);
+}
+
+/* 退出 = **先由 JS 钉死在最后的位置上、再淡出**（`@before-leave="pinLeaving"`）。
+   ⚠️ 2026-11-08 第四轮：上一版写的是 `display: none`（同步塌掉）。主人反馈
+   「进正常、退会跳」—— 因为 **enter 有 300ms、leave 是 0ms**，不对称得看得见。
+   ⚠️ 但不能只把 `display: none` 换成淡出：留着占位 ⇒ 整排这 180ms 里不动、
+   结束时一帧塌回去，Vue 的 FLIP 也全程量到位移差 0（它只在 `onUpdated` 量一次）
+   ⇒ 一帧都没滑（第二轮就踩过这个）。
+   ⇒ 两头都要：**脱离文档流**（行立刻塌、FLIP 量到的是真位移）+ **位置钉死**。
+   `position: absolute` 单独用不行 —— flex 容器里的绝对定位子项，静态位置按
+   "它是唯一的 flex 项"算 ⇒ 会被丢到内容区最左边、整段瞬移。所以 left/top/width/height
+   在 `before-leave` 里从 `getBoundingClientRect()` 抄一份。
+   ⚠️ 用 `absolute`（相对 `.nav-zone`）而不是 `fixed`：fixed 的坐标系会被祖先的
+   transform / filter 改写，absolute + 自己算偏移不吃这个亏。
+   ⚠️ 本块在非 scoped `<style>` 里，`.nav-zone` 前缀负责兜住作用域。 */
+.nav-zone .fx-leave-active {
+    /* ⚠️ 透明度必须 **linear**，不能跟位移共用 `--ff-ease-exit`：
+       那条曲线是给位移用的（前重后轻），拿它淡出时 180ms 的 **90ms 处就已经掉到 0.1**
+       ⇒ 肉眼看就是"闪一下没了"，等于没做动画（探针截图 `shot-leave-90ms.png` 抓到的就是这个）。
+       ⚠️ 2026-11-08 第八轮：总时长从 180ms 收到 **90ms**（= 一拍的前 45%，参考件的退场带）。
+       这和上一坑**不矛盾**：那时是"曲线前重后轻 + 总长 180"⇒ 90ms 到 0.1 之后还在爬
+       剩下的 90ms，读作"卡住了"；现在是 linear 90ms 直接到 0 —— 短而干净，不是停住。
+       ⚠️ 幽灵在绝对定位里，`pointer-events: none` 免得它挡 200ms 的点击。 */
+    pointer-events: none;
+    transition: opacity var(--ff-dur-exit) linear,
+        transform var(--ff-dur-move) var(--ff-ease-exit);
+}
+
+/* 退场**不位移**、只缩小 5%（参考件同款：`scale(0.95)`，不是"飘走"）。
+   位置已经在 `pinLeaving` 里钉死了，再叠一层横移只会读成"被挤出去"。 */
+.nav-zone .fx-leave-to {
+    opacity: 0;
+    transform: scale(0.95);
+}
+
+/* 减少动态效果：**直接切到终态**，不能只把时长设 0 ——
+   设 0 会让 `-enter-from` 的位移和最终位置落在同一帧、闪一下。 */
+@media (prefers-reduced-motion: reduce) {
+    .nav-zone .fx-move,
+    .nav-zone .fx-enter-active,
+    .nav-zone .fx-leave-active {
+        transition: none !important;
+    }
+
+    .nav-zone .fx-enter-from {
+        opacity: 1;
+        transform: none;
+    }
+
+    /* 角标挂出去了，不需要槽；减少动态效果下直接不出入场动画即可 */
+    .nav-zone .crumb-current[data-count]::after {
+        animation: none;
+    }
+}

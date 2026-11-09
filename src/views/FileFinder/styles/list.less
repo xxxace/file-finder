@@ -1,0 +1,398 @@
+/* 卡片底座与多文件弹层条目 */
+
+/**
+ * 卡片底座：网格格子与弹层条目**共用**的那一点东西（盒模型 + 边框 + 过渡）。
+ *
+ * ⚠️⚠️ **只放两者真的共用的属性。** 原来这个选择器里还塞着网格的整套尺寸算法
+ *（`--item-height` 的 `!important` 高度、`white-space:nowrap`…），于是它们**原样漏进了弹层**：
+ * 弹层的 `.file-cover` 被压成 0 高（等于从来没画出来）、文件名被压成单行 + 尾部省略
+ *（业主 2026-10-05：「多个文件弹出层好丑」，4 个文件显示成一模一样的 `[TST-59…`）。
+ * ⇒ 按"谁的属性谁持有"拆开：网格那半在下面 `.image-box-item`，弹层那半在 `.file-item`。
+ *
+ * ⚠️ 2026-10-21 再拆一次：网格卡片现在是"封面 + 标题 + 角标"，**没有边框也没有悬停底色**
+ *（B 站那套）。所以这条只留给弹层 —— 之前忘了拆，网格 hover 时冒出一圈灰边框，
+ * 正是主人截图里"悬浮难看"的那一条。
+ */
+.file-item {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    box-sizing: border-box;
+    border: 1px solid transparent;
+    transition: border-color .1s ease-in-out, box-shadow .1s ease-in-out,
+        background-color .1s ease-in-out, transform .18s cubic-bezier(.2, .9, .3, 1.1);
+    user-select: none;
+
+    &:hover {
+        border-color: var(--ff-highlight-line);
+        background-color: var(--ff-highlight-weak);
+    }
+
+    &:active {
+        border-color: var(--ff-highlight);
+        background-color: var(--ff-highlight-weak);
+    }
+}
+
+/**
+ * 网格卡片（B 站视频卡的骨架）。
+ *
+ * 高度**只由宽度决定**：封面定比例 + 标题两行定高。
+ * ⚠️ 这是 `gridGeometry.groupRows()` 的前提 —— 同行必须等高（它按 `offsetTop` 分行，
+ *    一行里混进一个矮格子就会被劈成两行，方向键从此横着跳）。所以标题区按档位定高
+ *    （`--item-title-h`），绝不由内容撑。
+ *
+ * 列数**不在这里写死**：`--ff-grid-cols` 由密度档位给（`density.ts` → `.image-box` 的 style），
+ * 默认 6 兜底（`var(--ff-grid-cols, 6)`）只防"变量没绑上"这一种情况。
+ */
+.image-box-item {
+    /* 宽度全部交给 grid 的 `1fr`（见 `.image-box`）。
+       `min-width: 0` 是 grid item 的必要项 —— 默认 `auto` 会被内容撑破列宽。 */
+    min-width: 0;
+    /* ⚠️ 别删：`scrollIntoView({ block: 'nearest' })` 只保证**边框盒**可见，而焦点环画在格子外。
+       容器横向 `overflow: hidden` 靠 padding 兜住，纵向的 padding 一滚动就出了视口
+       ⇒ 顶行/底行的环会被削掉。`scroll-margin` 让浏览器在判"看得见"时就把这圈余量算进去。
+       值来自 `.image-box`，与那边的 padding 共用 —— 改一处即可，别在这里写死数字。 */
+    scroll-margin-block: var(--ff-grid-ring-room);
+    padding: 0 0 var(--item-pad-b);
+    display: flex;
+    flex-direction: column;
+    align-items: stretch;
+    box-sizing: border-box;
+    border: 0;
+    user-select: none;
+    /* ⚠️ 必须短于方向键连发间隔。真正管这件事的是 `useGridCursor.MOVE_REPEAT_MIN_MS = 60ms`
+       （长按只节流 `e.repeat`，单击零延迟），不是 `usePreview.KEY_REPEAT_MIN_MS = 100ms`
+       —— 那个是**预览层**翻页的节流，2026-11-08 核对时发现原注释引错了对象。
+       原来是 .18s，比间隔还长 ⇒ 每次过渡都跑不完就被下一次打断，快移时等于没有反馈。 */
+    transition: transform .08s ease-out;
+
+    /* 封面：16:9 定比例 + 圆角 token。裁切交给这一层，图片自己只负责填满。
+       `overflow:hidden` 在这里是**必须**的（圆角要裁图）；焦点环画在 `outline` 上，
+       不会被自己的 overflow 裁掉 —— 这也是不用 box-shadow 画环的原因。 */
+    .card-cover {
+        position: relative;
+        /* ⚠️ 封面块自己是层叠上下文（契约里的"封面内部"三层的容器）——
+           内部的模糊底/图/角标/绿圈只在封面内排序，不与卡片外的浮层纠缠。 */
+        isolation: isolate;
+        width: 100%;
+        /* 比例是 token：实测本库缩略图多在 1.6 左右（16:10），16:9 会左右留边。
+           想再调只改 `--ff-cover-ratio` 一个值。 */
+        aspect-ratio: var(--ff-cover-ratio);
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        overflow: hidden;
+        border-radius: var(--ff-radius-card);
+        background: var(--ff-fill);
+        /* 浅色下白封面贴在白卡片上没有边界，靠一圈发丝线定形；
+           深色下 `--ff-card-outline` 是 transparent（靠明度差就够，加线只会脏）。
+           `outline` 不参与布局、也不会被自己的 `overflow:hidden` 裁掉。 */
+        outline: 1px solid var(--ff-card-outline);
+        outline-offset: -1px;
+
+        /* 焦点环的**退场**（进场在 `&.cursor` 里被覆盖成 60ms，见那里）：
+           3px 的高亮环缩回 1px 发丝、2px 的留缝收回 0、抬升阴影淡掉 —— 都用"退场带"。
+       ⚠️ 为什么只在这边写：环是"光标在哪一格"的**位置信号**，进场迟到就会出现
+       "环追不上光标"（长按方向键每 60ms 走一格）。退场没有这个义务 ——
+       让它慢一拍缩回去，两张卡之间就变成**交接**而不是硬切。
+       ⚠️ 三个属性都能插值（`outline-width` / `outline-offset` 是长度，`outline-color` 是颜色）；
+       `box-shadow` 从 `none` 到实体阴影 Chromium 也按"全 0 透明"插值，不会跳。 */
+        transition: outline-color var(--ff-dur-exit) var(--ff-ease-move),
+            outline-width var(--ff-dur-exit) var(--ff-ease-move),
+            outline-offset var(--ff-dur-exit) var(--ff-ease-move),
+            box-shadow var(--ff-dur-exit) var(--ff-ease-move);
+
+        /* 模糊底（见 `coverBackdrop()` 的注释）：把同一张图放大、模糊、压暗铺满整框。
+           `inset:0` + `scale(1.15)`：blur 会吃掉边缘像素，放大一点才不会有透明边。
+           ⚠️ 没有图（`--cover-src` 未设）时背景是 `none`，这一层等于不存在。 */
+        &::before {
+            content: '';
+            position: absolute;
+            inset: 0;
+            background-image: var(--cover-src, none);
+            background-size: cover;
+            background-position: center;
+            filter: blur(18px);
+            transform: scale(1.15);
+            opacity: 0.5;
+            pointer-events: none;
+        }
+
+        /* ⚠️ 必须 `:deep()`：`<img>` 是 naive-ui 的 `n-image` 内部节点，**拿不到本组件的
+           scoped 属性** ⇒ 写成 `.card-cover img` 会编译成 `img[data-v-x]`，一条都命中不了，
+           图片就按原始尺寸贴在左上角（主人 2026-10-21 截图报的"图片没居中"就是这个）。
+           旧代码用的是 `&:deep(img)`，我重写时丢了这层。 */
+        :deep(.n-image) {
+            position: relative;
+            z-index: var(--z-cover-img);
+            width: 100%;
+            height: 100%;
+        }
+
+        /* 宽高都撑满 + `contain` + `object-position:center`：
+           比例不一致时**上下或左右留白，但图始终居中**（留白由封面底色兜住）。 */
+        :deep(.n-image img) {
+            display: block;
+            width: 100%;
+            height: 100%;
+            object-fit: contain;
+            object-position: center;
+            transition: transform .25s ease;
+        }
+
+        /* 目录/未知类型：图标按封面的比例缩，不撑满（70% 在密网格里太抢眼）
+           `position/z-index` 是为了压在模糊底之上（绝对定位的 `::before` 会盖住静态子元素） */
+        .folder-face {
+            position: relative;
+            z-index: var(--z-cover-img);
+            width: 56%;
+            height: auto;
+            object-fit: contain;
+        }
+
+        .file-face {
+            position: relative;
+            z-index: var(--z-cover-img);
+            width: 56%;
+            font-size: 40px;
+        }
+    }
+
+    /* 角标（B 站封面下沿那一排）：数量在左、大小在右。
+       `pointer-events:none` —— 它盖在封面上，点它应该等于点封面。 */
+    .card-badges {
+        position: absolute;
+        left: 6px;
+        right: 6px;
+        bottom: 6px;
+        /* ⚠️ 必须压过图片（契约的"封面角标"层）：图片那层为了盖住模糊底设了
+           `z-index`，不写这一行角标会被图片**盖住**（2026-10-21 主人截图报的"大小被遮挡"）。 */
+        z-index: var(--z-cover-tag);
+        display: flex;
+        justify-content: space-between;
+        pointer-events: none;
+
+        .badge {
+            max-width: 62%;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+            padding: 0 6px;
+            /* 尺寸随密度档位走（见 `.image-box` 的 `--item-badge-*`）：
+               `line-height` 必须同 `height` 一起换，否则文字会偏上/偏下。 */
+            height: var(--item-badge-h);
+            line-height: var(--item-badge-h);
+            border-radius: var(--ff-radius-pill);
+            background: var(--ff-mask);
+            color: var(--ff-on-highlight);
+            font-size: var(--item-badge-fs);
+        }
+    }
+
+    /* 标题：永远两行高度（单行也留白）—— 见块头那条"同行等高"的约束。
+       ⚠️ 三个值（高/字号/行高）由密度档位给，成组变化；14px 是"宽松档 310px 卡片里
+       放得下 8 个汉字"的那一档，紧凑档另有一套（见 `.image-box[data-density='tight']`）。 */
+    .card-title {
+        margin-top: 6px;
+        height: var(--item-title-h);
+        display: -webkit-box;
+        -webkit-box-orient: vertical;
+        -webkit-line-clamp: 2;
+        overflow: hidden;
+        word-break: break-all;
+        font-size: var(--item-title-fs);
+        line-height: var(--item-title-lh);
+        /* 标题默认 500（2026-11-08 主人定）。全站只有 400 / 500 两档，**禁 600/700**：
+           700 的中文在 13~14px 会发糊，而 500 在深色底上已经足够从正文里"跳出来"。
+           加粗不改行高 ⇒ 两行截断的高度仍是 `--item-title-h`，不影响下方留白。 */
+        font-weight: 500;
+        color: var(--ff-text-1);
+        transition: color .15s ease;
+    }
+
+    /* hover：图轻微放大 + 标题变蓝，**不加边框不加底色** */
+    &:hover {
+        :deep(.n-image img) {
+            transform: scale(1.03);
+        }
+
+        .card-title {
+            color: var(--ff-highlight);
+        }
+    }
+
+    /* 目录的脸：70%（常态）↔ 100%（换封面，要看得清）。
+       ⚠️ 2026-11-08：原来是模板里的内联 `width/height: 70% ↔ 100%` —— 那是**布局动画**：
+       进/出「换封面」会让一屏几百个目录同时改宽高，每帧重排几百张卡片，必然发涩。
+       改成「盒子恒 100% + `transform: scale()`」：视觉结果**完全一样**
+       （`object-fit: contain` 在 100% 的盒子里按比例缩满，再整体乘 0.7 = 原来的 70% 盒子），
+       但 `transform` 不触发布局，只重绘自己那一层。
+       ⚠️ 曲线与时长直接用"一拍"：它和面包屑、底部条是同一个节奏，不是另开一套。
+       ⚠️ 别改回内联宽高 —— 那样连过渡都没法写（内联值是字符串拼接，每次切换都是硬跳）。 */
+    .card-avatar {
+        transform: scale(0.7);
+        transition: transform var(--ff-dur-move) var(--ff-ease-move);
+    }
+
+    &.pickable .card-avatar {
+        transform: scale(1);
+    }
+
+    @media (prefers-reduced-motion: reduce) {
+        .card-avatar {
+            transition: none;
+        }
+    }
+
+    /*
+     * 可预览的图（模板里挂 `class="can-preview"`）要保留"能点"的手势提示。
+     * 为什么得补这一行：预览层改由 `n-image-group` 渲染后，网格里的 n-image 一律
+     * `preview-disabled`，而 naive-ui 的 `.n-image` 只在**没** disabled 时给 `cursor: pointer`
+     * （`image/src/styles/index.cssr.mjs` 的 `cNotM("preview-disabled", "cursor: pointer")`）。
+     * 点开预览的行为本身由 `img-props.onClick` 接走（见模板注释），这里只补回视觉。
+     * 目录的脸不该有这行 —— 它本来就不给点开，所以靠 `can-preview` 这个类区分，不是全靠 disabled。
+     */
+    .n-image.can-preview {
+        cursor: pointer;
+    }
+
+    /* ⚠️ 旧的「文件名」规则（`height:38px !important` + 单行省略）整段删了：
+       它对 `span` 全局生效，会把角标里的 `span` 一起拉成 38px 高。
+       名字现在由 `.card-title` 管（两行定高），角标由 `.card-badges` 管。 */
+}
+
+/**
+ * 弹层里的文件列表容器（与 `.hstack` 同一个节点）。
+ *
+ * `.hstack` 本身已经会换行，这里只补一条**宽度上限**：4 个 150px 的条目
+ * 加间距正好 636px，所以 660px 恰好「一行 4 个」；再多就换行，
+ * 而不是把弹层横向撑到屏幕外。
+ */
+.file-list {
+    max-width: min(660px, 88vw);
+
+    /**
+     * ⚠️ 抑制**浏览器默认焦点环**（业主 2026-10-05：「弹出层是橙色边框」）。
+     *
+     * 那个橙色不是项目里的颜色 —— 全仓 grep 没有任何橙色字面量，naive-ui 的 popover
+     * 样式里也没有 `outline`。它是 UA 的 `:focus-visible { outline: auto }`，
+     * 而 `outline: auto` 的色值取自**系统强调色**（这台机器的强调色是橙的）
+     * ⇒ 换个系统主题它就换颜色，属于"界面里冒出一个谁也解释不了的框"。
+     *
+     * 为什么该抑制：这个容器 `tabindex="-1"` 的意义就是**接住方向键**
+     *（`openFileList` 里那句 `focus()`，见它上面的注释），它不是一个"控件"；
+     * 这一层的"我在哪"由 `.file-cursor` 的蓝色边框表达 ⇒ 焦点环纯属噪音。
+     * 声明放在**元素自己**身上，而不是给将来每个 focus 调用点加守卫。
+     */
+    &:focus,
+    &:focus-visible {
+        outline: none;
+    }
+}
+
+/**
+ * 弹层条目：「同一作品的多个文件」，双击封面时问打开哪一个。
+ * ⚠️ 文件名往往同前缀、尾部才是区分点 ⇒ 必须可换行（最多 3 行）+ 类型图标 + 灰色大小，别用 nowrap / 定高截断。
+ * ⚠️ 这里不该出现 !important：若需要靠它压过网格样式，说明拆分没拆对。 */
+.file-item {
+    width: 150px;
+    height: 116px;
+    padding: 10px 8px;
+    margin: 0; // 间距只由 `.hstack` 的 gap 提供 → 一处来源
+    justify-content: flex-start; // 图标统一贴顶 ⇒ 一排卡片的图标对齐，好扫
+    gap: 4px;
+
+    /**
+     * 类型图标。`fiv-cla` 的尺寸就是 `1em`（`line-height:1em; width:.72em`）
+     * ⇒ 用 `font-size` 定大小。`.file-cover` 自带的 `blank.svg` 是**未知扩展名的兜底**
+     *（`fiv-icon-*` 有匹配时按注入顺序覆盖它）。
+     */
+    .file-cover {
+        font-size: 26px;
+        margin: 0;
+        flex: 0 0 auto;
+    }
+
+    /**
+     * 文件名。**必须换行** —— 这一层几个文件名的前缀往往一样，
+     * 尾部省略等于把**唯一的区分点**藏起来。最多 3 行，装不下就截断
+     *（完整名字在整格的 `title` 里）。
+     */
+    span {
+        /* 多行"..."：**只有 `-webkit-box` 这一种 display 能让 `-webkit-line-clamp` 生效**
+           （`block` / `-webkit-box` 之外都不吃这个属性 —— 设了也静默无效）。
+           业主 2026-10-05：「标题过长没有省略号」—— 上一版只 `overflow:hidden`，
+           长名字是被**硬切**的，看不出"后面还有"。 */
+        display: -webkit-box;
+        -webkit-box-orient: vertical;
+        -webkit-line-clamp: 3; // 与下面 `max-height` 同一个预算：3 行 × 15px
+        width: 100%;
+        max-height: 45px; // ⚠️ 兜底：万一哪个版本不认 line-clamp，也不许把卡片撑破
+        line-height: 15px;
+        font-size: 13px;
+        color: var(--ff-text-1);
+        font-weight: 400;
+        text-align: center;
+        white-space: normal;
+        /* ⚠️ 不能写 `word-break: break-all`（那会**逐字符**断，把 `[TST-593]`、`CD1.mp4`
+           这种拉丁串也从中间劈开 —— 第一版就是，读起来很碎）。
+           `overflow-wrap: break-word` 只在"整词放不下"时才断，中日韩本来就能逐字折行。 */
+        overflow-wrap: break-word;
+        overflow: hidden;
+    }
+
+    /**
+     * 大小。⚠️ 用 `<i>` 而**不是** `<span>` —— 否则会被上面那条 `span` 规则
+     * （`max-height: 45px` / `font-size: 13px`）一起吃掉。
+     * 与网格里那个选中角标用 `<i>` 同一个理由。
+     */
+    .file-size {
+        flex: 0 0 auto;
+        /* 钉在卡片底部：名字 1～3 行都能变 ⇒ 让多出来的空白落在**名字和大小之间**，
+           而不是整块吊在卡片下方（`align-items/justify-content` 都做不到这一条 ——
+           它们的作用对象是整组子元素，不是"最后一个"). */
+        margin-top: auto;
+        font-style: normal;
+        font-size: 12px;
+        line-height: 14px;
+        color: var(--ff-text-2);
+    }
+
+    /* 键盘高亮项（Enter 打开多文件封面后 ←→ 走的就是它）。
+       只改 border-color：.file-item 从共用底座继承了 1px transparent 边框与 transition，
+       不加任何盒模型属性 —— 与网格 .cursor 同一套焦点语言（1px 主色，不是双环）。 */
+    &.file-cursor {
+        border-color: var(--ff-highlight);
+        // 与 `.image-box-item.cursor` **逐条相同**（边框 + 淡底，不碰盒模型、不加阴影）
+        background-color: var(--ff-highlight-weak);
+    }
+}
+
+.file-cover {
+    display: block;
+    margin: 10px 0;
+    object-fit: contain;
+    overflow: hidden;
+    background-image: url(@/assets/fileTypeIcon/blank.svg);
+}
+
+/**
+ * 计数角标的入场 —— 必须用 `@keyframes` 而不是 `transition`：
+ * 它是 `::after` 伪元素，**选择器命中那一刻才被创建**，没有"上一帧"可以过渡，
+ * 不加动画就是"啪"地冒出来。
+ *
+ * ⚠️ 2026-11-08 第七轮：**只淡入，不要 scale**。
+ * 原来带 `scale(0.7) → scale(1)`，等于让眼睛在一个 18px 的小胶囊上
+ * 看一次"从中间胀出来"的运动。主人已经明确"换层时不许有别的东西在动"，
+ * 而角标是纯信息 —— 只留透明度。
+ */
+@keyframes fx-badge-in {
+    from {
+        opacity: 0;
+    }
+
+    to {
+        opacity: 1;
+    }
+}

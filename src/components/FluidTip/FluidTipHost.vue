@@ -2,10 +2,14 @@
     <!-- 纯视觉层。Teleport 到 body：功能页里 tooltip 要压过 naive 弹层与卡片，
          scoped 样式够不到 teleport 出去的 DOM（项目已知坑）⇒ 样式不带 scoped。 -->
     <Teleport to="body">
-        <div ref="el" class="ftip" :class="{ 'is-on': tipState.visible, 'is-snap': tipState.snap }"
+        <div ref="el" class="ftip" :class="{ 'is-on': tipState.visible, 'is-snap': tipState.snap, 'is-rich': !!tipState.body }"
             :style="{ transform: `translate(${pos.x}px, ${pos.y}px)` }">
-            <span class="ftip-text">{{ tipState.text }}</span>
-            <kbd v-if="tipState.keys" class="ftip-kbd">{{ tipState.keys }}</kbd>
+            <!-- 富内容：调用方给的渲染函数直接当函数式组件挂（宿主不认识业务结构，只给材质与定位） -->
+            <component :is="tipState.body" v-if="tipState.body" />
+            <template v-else>
+                <span class="ftip-text">{{ tipState.text }}</span>
+                <kbd v-if="tipState.keys" class="ftip-kbd">{{ tipState.keys }}</kbd>
+            </template>
         </div>
     </Teleport>
 </template>
@@ -117,6 +121,15 @@ onBeforeUnmount(() => {
     /* 首现/跳远：几何不补间，只淡入（RailTip 同款纪律） */
     &.is-snap {
         transition: opacity 0.15s ease-out;
+    }
+
+    /* 富内容（盘片那种标题 + 多行键值表）：单行胶囊的 nowrap 必须放开，
+       宽度也要有个上限，否则一块盘的长路径会把提示拉成一条横线。 */
+    &.is-rich {
+        display: block;
+        padding: 8px 10px;
+        max-width: 300px;
+        white-space: normal;
     }
 }
 

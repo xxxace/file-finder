@@ -67,10 +67,7 @@ import { ArchiveOutline, CloudDownloadOutline, FolderOpenOutline, GitMergeOutlin
 import useNotify from '@/hooks/useNotify';
 import useConfirm from '@/hooks/useConfirm';
 import { refreshIndex } from '@/views/FileFinder/playlist';
-import { postAction } from '@/utils/request';
-
-// 统一写 127.0.0.1 而不是 localhost，避免个别机器把 localhost 解析到 ::1（服务端只绑 IPv4）
-const API_BASE = 'http://127.0.0.1:3060';
+import { API_BASE, postAction } from '@/utils/request';
 
 const emit = defineEmits<{ migrated: [] }>();
 

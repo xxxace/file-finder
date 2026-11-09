@@ -14,14 +14,19 @@
 import type { Directive } from 'vue';
 import { hideTip, showTip, type TipPayload } from './fluidTip';
 
-interface Binding { text: string; keys?: string }
+/** 字符串糖 `v-tip="'...'"` 与对象写法归一 —— mounted / updated 共用一份，否则两处迟早不一致 */
+const toBinding = (value: string | TipPayload | undefined): TipPayload =>
+    typeof value === 'string'
+        ? { text: value }
+        : { text: value?.text ?? '', keys: value?.keys, body: value?.body };
 
-const store = new WeakMap<HTMLElement, Binding>();
+const store = new WeakMap<HTMLElement, TipPayload>();
 
 const onEnter = (event: Event) => {
     const el = event.currentTarget as HTMLElement;
     const cfg = store.get(el);
-    if (!cfg || !cfg.text) return;
+    // 富内容可以没有 text（text 只作占位），所以判空要两者一起看
+    if (!cfg || (!cfg.text && !cfg.body)) return;
     if (event instanceof PointerEvent && event.pointerType === 'touch') return;
     showTip(el, cfg);
 };
@@ -29,22 +34,14 @@ const onLeave = () => hideTip();
 
 export const vTip: Directive<HTMLElement, string | TipPayload> = {
     mounted(el, binding) {
-        const cfg: Binding =
-            typeof binding.value === 'string'
-                ? { text: binding.value }
-                : { text: binding.value?.text ?? '', keys: binding.value?.keys };
-        store.set(el, cfg);
+        store.set(el, toBinding(binding.value));
         el.addEventListener('pointerenter', onEnter);
         el.addEventListener('pointerleave', onLeave);
         el.addEventListener('focus', onEnter);
         el.addEventListener('blur', onLeave);
     },
     updated(el, binding) {
-        const cfg: Binding =
-            typeof binding.value === 'string'
-                ? { text: binding.value }
-                : { text: binding.value?.text ?? '', keys: binding.value?.keys };
-        store.set(el, cfg);
+        store.set(el, toBinding(binding.value));
     },
     unmounted(el) {
         el.removeEventListener('pointerenter', onEnter);

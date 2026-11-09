@@ -1,0 +1,439 @@
+/* 状态条 / 网格 / 定位压暗 / 扫描光雾 / 空状态 */
+
+/* ── 状态条「挂上 / 摘掉」的动画（2026-11-08）───────────────────────────────
+   这条状态条**在文档流里**（`.file-finder` 是 flex 列），所以只做淡入是假动画：
+   卸载那一帧网格就跳 50px，然后条自己再淡出去。**高度必须一起过渡**。
+   `height: auto` 不可过渡，`max-height` 要写魔数（内容一变就剪错高度）⇒
+   用 grid 轨道 `minmax(0,1fr) ↔ minmax(0,0fr)`：零魔数、内容多高都收得干净。
+   Chromium 152 实测可插值：`docs/probes/bar-collapse/`（200ms 一拍下采到 12 帧中间高度，槽 50→0，
+   网格顶边同步上移）。
+   ⚠️ 两个前提**缺一不可**，少一个就"收不起来"（探针第一版就是这么失败的）：
+     ① 轨道写 `minmax(0, …)` —— 裸写 `0fr` 等于 `minmax(auto, 0fr)`，轨道的自动最小尺寸
+        取内容的 min-content，`.scan-bar` 的 `min-height: 40px` 会把它顶死；
+     ② 里层 `.scan-bar` 有 `overflow: hidden` —— 网格项的自动最小尺寸只有非 visible 才归 0。
+   ⚠️ 透明度用 linear、时长走**拍内分带**（2026-11-08 第八轮，同面包屑）：
+   这条曲线是给位移的（前重后轻），拿 `--ff-ease-exit` 淡出会中途就掉到 0.1，
+   肉眼等于"闪一下"（面包屑那边踩过）。进 = 延迟 25% 拍、后用 50% 拍显形；
+   退 = 前 45% 拍内消失，然后才让空间塌下去。 */
+.scan-bar-slot {
+    display: grid;
+    grid-template-rows: minmax(0, 1fr);
+    /* 收起过程中内容仍按自身高度渲染，不裁就会盖到网格上 */
+    overflow: hidden;
+    /* 不参与压缩：该被挤的是网格（`flex: 1`），不是这条 */
+    flex: 0 0 auto;
+}
+
+.fx-bar-enter-active {
+    transition: grid-template-rows var(--ff-dur-move) var(--ff-ease-move),
+        opacity var(--ff-fade-in) linear var(--ff-fade-in-delay);
+}
+
+.fx-bar-leave-active {
+    transition: grid-template-rows var(--ff-dur-move) var(--ff-ease-exit),
+        opacity var(--ff-dur-exit) linear;
+}
+
+.fx-bar-enter-from,
+.fx-bar-leave-to {
+    grid-template-rows: minmax(0, 0fr);
+    opacity: 0;
+}
+
+/* 减少动态效果：直接切终态。轨道过渡必须整体关掉 —— 留个 0ms 的过渡在
+   `grid-template-rows` 上只会让"挂上/摘掉"多算一帧，没有意义。 */
+@media (prefers-reduced-motion: reduce) {
+
+    .fx-bar-enter-active,
+    .fx-bar-leave-active {
+        transition: none;
+    }
+}
+
+/* 扫描状态条：贴着网格下方一条，整条随 scanning 出现/消失 */
+.scan-bar {
+    display: flex;
+    align-items: center;
+    /* ⚠️ 2026-11-08：这条不是可有可无的 —— 它是 `.scan-bar-slot` 能把高度收到 0 的
+       **第二个前提**（网格项的自动最小尺寸只有非 visible 才归 0）。
+       顺带保证内容不被裁：收起时轨道已经 0，这里裁不裁都看不见。 */
+    overflow: hidden;
+    /* 元素间距统一 8（§4.4）；组的切分交给 `.pick-acts` 内部再分一档 */
+    gap: 8px;
+    /* 定高：挑选条 / 扫描条**两种内容**高度一致 —— 扫描过程中途切换文案
+       （`取消` → `正在取消…` 多一行提示）不会让条自己长高、把网格顶一下。
+       ⚠️ 它**管不到**"整条挂上/摘掉"，那件事现在由 `.scan-bar-slot` 的轨道动画负责。 */
+    min-height: 40px;
+    padding: 2px var(--ff-content-inset) 8px;
+
+    .scan-progress,
+    .scan-hint {
+        font-size: 12px;
+        color: var(--ff-text-2);
+    }
+
+    /* 模式标签：只用一处淡高亮，说明"你现在在一个模式里"。
+       不给整条加深色底 —— 它贴在网格上方，加深底会和封面抢注意力。 */
+    .pick-badge {
+        flex: none;
+        font-size: 11px;
+        font-weight: 500;
+        line-height: 18px;
+        padding: 0 8px;
+        border-radius: var(--ff-r-pill);
+        /* 中性胶囊，不占高亮色 —— 高亮色只留给「卡片选中 / 悬浮 / 输入框焦点」三处。
+           模式的存在感由这条状态条本身 + 右端那颗实心主按钮承担。
+           ⚠️ 底色用 `--ff-chrome-active`（左轨选中同一个灰）：原来是 `--ff-raised`，
+           它贴白面板只差 5 级，一块"我在某个模式里"的标签淡到看不出边界。 */
+        color: var(--ff-text-1);
+        background: var(--ff-chrome-active);
+    }
+
+    /* 计数是**状态**不是句子：数字单独加亮，单位退后 */
+    .pick-count {
+        flex: none;
+        font-size: 13px;
+        color: var(--ff-text-2);
+
+        b {
+            font-weight: 500;
+            color: var(--ff-text-1);
+            /* 数字等宽：选到 10 个时行宽不跳 */
+            font-variant-numeric: tabular-nums;
+        }
+    }
+
+    /* 把动作整体推到右端：主操作要落在**手习惯去的那一头** */
+    .pick-spacer {
+        flex: 1 1 auto;
+    }
+
+    /* 动作组：组内 8，主操作再让 8（合计 16）—— 间距分级就是这里唯一的"层级"手段，
+       颜色那边不许再造一套（高亮色只有三处用途，见 tokens.css）。 */
+    .pick-acts {
+        flex: none;
+        display: flex;
+        align-items: center;
+        gap: 8px;
+
+        .pick-go {
+            margin-left: 8px;
+        }
+    }
+}
+
+/* 定位后短暂压暗其余格子（600ms）：满屏几百张时，「只剩一张亮」比「给那张加框」好认得多。
+   ⚠️ 动效（2026-11-09）：透明度过渡写在**基类**上 —— 只写在 .is-locating 里的话，
+   撤销蒙层那一下是硬切（opacity .3 → 1 瞬间跳回）。进出不对称：压暗快（.12s，
+   注意力要立刻抓）、恢复慢（.2s 一拍，视线 softly 放回全屏）。 */
+.image-box.is-locating .image-box-item:not(.cursor) {
+    opacity: .3;
+}
+
+.image-box.is-locating .image-box-item.cursor {
+    /* 蒙层期间把光标卡再抬一档（1.012 → 1.02）：压暗语言下的「就是这张」，
+       同一族 scale 动作，不引入第二种颜色（2026-10-04 撤橙框时的结论）。 */
+    transform: scale(1.02);
+}
+
+/*
+ * 卡片状态：可选 / 已选 / 焦点。
+ *
+ * ⚠️ 约束没变：**状态一律不许新增参与布局的属性** —— 宽度由 grid 的 `1fr` 给，而高度必须同行等高
+ * （`groupRows` 按 `offsetTop` 分行，差一像素就劈行）。所以只用 `outline` / `box-shadow` / `transform`。
+ *
+ * 圆角：2026-10-21 主人裁定改用 B 站那套 6px，值在 `--ff-radius-card`（想改回直角只改 token）。
+ */
+.image-box-item {
+    position: relative;
+
+    /* 定位蒙层的透明度过渡写在基类：压暗（.is-locating）与恢复（撤 class）两个方向都要动。
+       进出不对称——压暗 .12s（立刻抓注意力）、恢复 .2s 一拍（视线 softly 放回全屏）；
+       transform 用过冲曲线（--ff-ease-enter）：cursor 卡 1.012↔1.02 的抬升带一点 Q 弹，
+       与预览进场同一族手感。 */
+    transition: opacity 0.12s ease, transform 0.18s var(--ff-ease-enter);
+
+    /* 卡片内层序契约（唯一真相源）——"谁盖住谁"只在这里定，别在别处补 z-index 数字。
+     * ⚠️ 封面图 z-index:1 会盖住没给层级的浮层；别逐个元素打补丁（换元素就复发），统一按下面 --z-* 变量定契约。 */
+    --z-cover-img: 1;
+    --z-cover-tag: 2;
+    --z-cover-mark: 3;
+    --z-card-mark: 2;
+    --z-card-mask: 3;
+
+    /* 卡片自成层叠上下文：内部层级不与兄弟卡片、外层 UI 互相比较。
+     * ⚠️ 不加的话，焦点卡放大 1.012 溢出到邻居上时，邻居的角标会盖住它。 */
+    isolation: isolate;
+
+    &.pickable {
+        cursor: pointer;
+    }
+
+    /* 已选（换封面时点中的格子）：绿圈画在封面**内侧**，与焦点的外圈各占一层，不打架。
+     * ⚠️ 必须画成 `.card-cover::after`（封面内部的第 3 层）—— 原来挂在
+     * `.card-cover` 自己的 `inset box-shadow` 上，那是**封面背景层**，
+     * 会被封面图（层级 1）盖住 ⇒ 绿圈只剩左右两截、上下边看不见。 */
+    &.picked .card-cover::after {
+        content: '';
+        position: absolute;
+        inset: 0;
+        border-radius: inherit;
+        box-shadow: inset 0 0 0 2px var(--ff-status-ok);
+        z-index: var(--z-cover-mark);
+        /* 纯装饰，不该拦点击（盒子贴在图片上，不加就吃掉图片的点击） */
+        pointer-events: none;
+    }
+
+    &.cursor {
+        /* 极轻抬升：1.012 而不是 1.02 —— 后者在密网格里很显眼，显眼=吵。
+           ⚠️ `transform` 会污染 `getBoundingClientRect`，`gridGeometry` 分行必须用 `offsetTop`。 */
+        transform: scale(1.012);
+        z-index: 1;
+
+        .card-cover {
+            /* ⚠️ 2026-11-08 关键改动：**环必须离开照片 2px**（`outline-offset: 2`）。
+               为什么：封面的颜色是不可控输入。环贴在图像边缘时，它是在跟"照片"比对比度 ——
+               碰上同色系（蓝调 / 大面积高亮）封面就瞎了，而**加粗不解决对比度问题，只放大噪音**。
+               留出 2px 间隙后，环的内侧和外侧**都只面对网格底色**（深 #141414 / 浅 #f1f2f3），
+               它于是站在"背景"上，而不是站在"照片"上 ⇒ 任何封面下都稳定可读。
+               业界同款：Figma 的选择框、VS Code 的文件焦点、macOS 焦点环都是"留缝"派；
+               Photoshop 更进一步用黑白交替的蚂蚁线 —— 本质都是"别让环和内容直接接触"。
+               2px 是下限：再细会被封面边缘的像素噪声吃掉。
+               ⚠️ 环仍画在格子外面，由容器的 `--ff-grid-ring-room`（6px）承接，
+                  `3 + 2 = 5px < 6px` ⇒ 最左/最右两列不会被 `overflow:hidden` 裁掉。
+               ⚠️ 3px 是主人定的（2026-11-08）：留缝之后环可以放心加粗，因为它已经不跟照片抢对比度了。 */
+            outline: 3px solid var(--ff-highlight);
+            outline-offset: 2px;
+            /* 抬升阴影走 token：深色下大而虚（只为"这张在最前"），浅色下小而淡
+               —— 浅底上那圈 4px 扩散的深阴影会变成一圈脏灰，主人 2026-11-07 的原话是"好丑"。 */
+            box-shadow: var(--ff-shadow-lift);
+            /* 进场 60ms（= 长按方向键两次移动之间的最小间隔），退场走基类的退场带。
+               ⚠️ 60ms 这个数的来源是 `useGridCursor.MOVE_REPEAT_MIN_MS`，**不是**节奏 token：
+               这一格必须在"下一次移动到来之前"画完，否则长按时光标一路跑、环一路追。
+               60ms 短到几乎瞬时，但足以让环"长出来"而不是"啪一下贴上"。 */
+            transition: outline-color 60ms var(--ff-ease-move),
+                outline-width 60ms var(--ff-ease-move),
+                outline-offset 60ms var(--ff-ease-move),
+                box-shadow 60ms var(--ff-ease-move);
+        }
+
+        /* 标题也跟着变蓝：光有封面上那圈框，几十张里还是要"找一下"——
+           文字变色是最容易被扫到的第二信号。
+           ⚠️ 这里**不再改字重**：500 已经是默认（见 `.card-title`），焦点态若再加就
+           得靠 600 才看得出变化，而全站禁 600/700。状态只靠"颜色 + 环"两层表达。 */
+        .card-title {
+            color: var(--ff-highlight);
+        }
+    }
+
+    /* 焦点 + hover 不需要专门的权重守卫了：hover 只改标题色与图片缩放，碰不到焦点环 */
+
+    /*
+     * 「正在双击打开」—— 只读层解析锚点那一瞬。
+     * ⚠️ 与 `.cursor` **不冲突**：`opening` 要点鼠标双击才会置位，方向键移动不会置位它，
+     *   而 `opening` 那一格盖着深色遮罩 + 转圈，识别靠的是遮罩不是边框。
+     * 只改颜色/外发光，不碰盒模型（盒模型一变，同行就不等高，分行算法会劈行）。
+     */
+    &.opening .card-cover {
+        // 中性灰：这一态只出现在"只读层点开文件、等盘回来"的那一瞬，
+        // 那一格已盖着深色遮罩 + 转圈（识别靠遮罩）⇒ 不需要抢颜色。
+        outline: 2px solid var(--ff-text-3);
+        /* 同 `.cursor`：靠容器的 `--ff-grid-ring-room` 承接，不用再往内画 */
+        outline-offset: 0;
+    }
+
+    /* 遮罩与转圈分开两层：`.opening-mask` 负责铺满，`.n-spin` 留在 naive-ui 自己的定位里
+       （它的根是 `.n-spin-body`，自带 translate(-50%,-50%)；去戳它就得连 transform 一起清）。
+       绝对定位 ⇒ 尺寸跟卡片走、不参与布局（参与布局会改变行高，分行算法会劈行）。
+       ⚠️ `z-index` 走契约的"临时遮罩"层：它要盖住封面图 + 角标 + 卡片标记
+       （"正在双击打开"时整张卡都是这层画面），不给 z-index 就会被封面图盖住。 */
+    .opening-mask {
+        position: absolute;
+        inset: 0;
+        z-index: var(--z-card-mask);
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        pointer-events: none;
+        background-color: var(--ff-mask);
+    }
+
+    .pick-badge {
+        position: absolute;
+        top: 2px;
+        right: 2px;
+        /* ⚠️ 契约的"卡片标记"层：必须压过封面图（否则换封面时勾选圈看不见，
+           2026-10-22 主人报）。 */
+        z-index: var(--z-card-mark);
+        display: block;
+        width: 16px;
+        height: 16px;
+        flex-shrink: 0;
+        box-sizing: border-box;
+        font-style: normal;
+        border-radius: 50%;
+        background-color: var(--ff-status-ok);
+        box-shadow: 0 0 0 1px var(--ff-on-highlight);
+
+        &::after {
+            content: '';
+            position: absolute;
+            left: 4px;
+            top: 3px;
+            width: 7px;
+            height: 4px;
+            border-left: 2px solid var(--ff-on-highlight);
+            border-bottom: 2px solid var(--ff-on-highlight);
+            transform: rotate(-45deg);
+        }
+    }
+
+    /* 收录星标（2026-10-21 清单）：这张卡已进某个清单。
+       纪律同 pick-badge：**绝对定位、不参与布局**（网格宽度是算出来的），
+       换到左上角与 pick-badge（右上）错开。★ 用 CSS 生成，不插 DOM 子节点。
+       ⚠️ `z-index` 走契约的"卡片标记"层（同 pick-badge）：压过封面图。 */
+    .pl-badge {
+        position: absolute;
+        top: 2px;
+        left: 2px;
+        z-index: var(--z-card-mark);
+        display: block;
+        width: 16px;
+        height: 16px;
+        flex-shrink: 0;
+        box-sizing: border-box;
+        font-style: normal;
+        font-size: 11px;
+        line-height: 16px;
+        text-align: center;
+        border-radius: 50%;
+        color: var(--ff-on-highlight);
+        background-color: var(--ff-status-warn);
+        box-shadow: 0 0 0 1px var(--ff-mask);
+
+        &::before {
+            content: '★';
+        }
+    }
+
+    /* 已失效徽标（2026-11-06）：收藏夹内所属盘在线但确认丢失的条目。
+       绝对定位右上角，深红底色白字，小圆角胶囊形，不参与布局。 */
+    .pl-missing-badge {
+        position: absolute;
+        top: 3px;
+        right: 3px;
+        z-index: var(--z-card-mark);
+        display: block;
+        padding: 0 4px;
+        height: 16px;
+        line-height: 16px;
+        font-style: normal;
+        font-size: 10px;
+        font-weight: 500;
+        text-align: center;
+        border-radius: 3px;
+        color: var(--ff-on-highlight);
+        background-color: var(--ff-danger-badge);
+        box-shadow: 0 0 0 1px var(--ff-mask);
+        pointer-events: none;
+    }
+}
+
+/* 只为给 ScanGlow 一个定位祖先：动效覆盖的是"网格可视区"，不是整窗。
+   这一层不参与任何其它职责 —— 里面那层仍是原来的滚动容器。 */
+.image-box-wrap {
+    position: relative;
+    flex: 1;
+    min-height: 0;
+    display: flex;
+    flex-direction: column;
+}
+
+/* 扫描动效期间网格整体失焦（transfer-glow 的第一步：内容先退到后面去）。
+   ⚠️ `filter: blur()` 会整层重新栅格化，面积大就有掉帧风险（STUDY-MOTION §五 的警告）——
+   这里刻意把半径压到 7px、时长 420ms，且只在动效期间存在，动效结束立刻移除。 */
+.image-box.is-glowing {
+    filter: blur(7px) saturate(0.92);
+    opacity: 0.72;
+    pointer-events: none;
+}
+
+@media (prefers-reduced-motion: reduce) {
+    .image-box.is-glowing {
+        filter: none;
+        opacity: 0.5;
+    }
+}
+
+.image-box {
+    flex: 1;
+    /* 列数**必须精确等于密度档给的 N**，一个都不能少。
+       理由不是观感 —— `useGridCursor` 的 `deps.cols` 用"列数变了"来判定行结构缓存失效；
+       实际渲染 7 列而配置是 8 时，这个判据永远不触发，方向键会一直用旧的行结构 ⇒ 错位。
+       ⚠️ 不要用 `auto-fill` + `minmax(min-cell, 1fr)` 那套"窄窗少放几列"的写法：
+       它既是"某些宽度下右边留白"的来源，又会让实际列数 ≠ N。
+       窗口窄就格子小（12 列在 1024 窗下约 63px），这是固定列数的代价，不是 bug。
+       ⚠️ 行距 6px 来自原来 margin-top 的值，列距仍是 `--ff-grid-gap` —— 别把两者并成一个值。 */
+    display: grid;
+    grid-template-columns: repeat(var(--ff-grid-cols, 6), minmax(0, 1fr));
+    gap: 6px var(--ff-grid-gap);
+    align-content: start;
+    /* 焦点环让位量（6）定义在 `.file-finder`：顶栏也要用它算左边缘，放这里顶栏读不到。
+       环画在格子**外面**，横向靠这里的 padding 兜住；
+       纵向的 padding 滚动后就跑到视口外了 ⇒ 还要靠 `.image-box-item` 的 `scroll-margin-block`。
+       上 / 左 / 右三边共用 `--ff-content-inset`（= 页边距 12 + 环让位 6 = 18）：顶栏、状态条、
+       网格的缩进必须是**同一个算式**，否则"顶栏和第一列封面对不齐"会复发。
+       ⚠️ 底边那 6px **单独给**，不是同一个算式：它是环让位而不是页边距 ——
+       环 3 + 缝 2 = 5px 画在格子外面，滚到底时最后一行贴着 `overflow` 的裁剪边
+       ⇒ 少这 6px 就会把环切掉半圈。 */
+    padding: var(--ff-content-inset) var(--ff-content-inset) var(--ff-grid-ring-room);
+    box-sizing: border-box;
+    overflow: hidden auto;
+    transition: filter 420ms ease, opacity 420ms ease;
+    /* ── 卡片尺寸变量：**按密度档位在这里改，子元素只读** ──────────────────────────
+       为什么做成变量而不是给紧凑档另写一套 `.card-title` 规则：
+       标题高/字号/行高必须**一起**换（高换了字号没换 = 两行塞不下成省略号；
+       字号换了高没换 = 下方留一块空）。写成一组变量，档位就是一处覆盖。
+       ⚠️ 这一组值只允许在这里出现一次 —— 别在 `.card-title` 里再写死 40px。 */
+    --item-pad-b: 6px;
+    --item-title-h: 40px;
+    /* 15 / 20：字高比 1.33。原来是 14 —— 换字体后 MiSans 的中宫比雅黑略收，
+       同样 14px 看起来更小，所以抬到 15。行高不动 ⇒ 两行仍是 40，网格行高零变化。 */
+    --item-title-fs: 15px;
+    --item-title-lh: 20px;
+    --item-badge-h: 18px;
+    --item-badge-fs: 12px;
+
+    /* 紧凑档（12 列，格宽 147px）：标题占封面的比例从 30% 降到 26%，
+       字号收到 12px —— 14px 在 147px 宽里一行只剩 10 个字，两行就是"半截标题"。 */
+    &[data-density='tight'] {
+        --item-pad-b: 4px;
+        --item-title-h: 34px;
+        --item-title-fs: 12px;
+        --item-title-lh: 17px;
+        --item-badge-h: 16px;
+        --item-badge-fs: 11px;
+    }
+
+    /* 2026-11-07 起改成 `grid` + `gap`（见上面 `grid-template-columns`）——
+       原来那套「`calc(100%/N − gap)` + 左右各 gap/2 margin + 容器外扩 gap/2」的补偿算法
+       已整段删除：它在 `min-width` 触发换行时会少放一格，而剩下的空间没人接
+       （现象就是"标准 8 / 紧凑 12 在某些宽度下右边留白"）。grid 下边缘天然为 0，不需要补偿。
+       ⚠️ `probes/grid-cursor/` 的几何数据是**旧布局**的，下次动列宽/贴边必须重跑那两个探针。 */
+}
+
+/* 空状态：一行小字，落在网格区的**视觉中间**。
+   ⚠️ 不用 `margin:auto`：`.image-box` 是 `align-content:start`，行始终贴顶，
+   纵向 auto margin 吸不到余量（实测会停在顶部）。给它自己一个视口比例的高度 + flex 居中，
+   就不依赖父容器的对齐规则。 */
+.empty-tip {
+    /* grid 下 `width:100%` 只是一列宽 ⟹ 必须跨满整行 */
+    grid-column: 1 / -1;
+    width: 100%;
+    min-height: 52vh;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 14px;
+    color: var(--ff-text-3);
+}

@@ -58,7 +58,7 @@ import { onActivated, onMounted, ref } from 'vue';
 import { NButton, NIcon, NInput, NPopover } from 'naive-ui';
 import { useRouter } from 'vue-router';
 import { AddOutline, BookmarkOutline } from '@vicons/ionicons5';
-import { apiUrl } from '@/utils/request';
+import { API_BASE, apiUrl } from '@/utils/request';
 import useNotify from '@/hooks/useNotify';
 import useConfirm from '@/hooks/useConfirm';
 import {
@@ -72,7 +72,6 @@ const notify = useNotify();
 const index = playlistIndex();
 const dialog = useConfirm();
 
-const API_BASE = 'http://127.0.0.1:3060';
 const thumbUrl = (k: string) => apiUrl(`${API_BASE}/thumb?k=${encodeURIComponent(k)}`);
 
 /** 行内编辑：id = 'new' 表示新建，否则是清单 id */

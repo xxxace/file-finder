@@ -251,6 +251,13 @@ export function useGridCursor(deps: {
 
     // ── 移动 ──────────────────────────────────────────────────────────────
     /**
+     * 系统偏好：减少动效时一律不做平滑滚动（原生 `behavior: 'smooth'` **不会**自动降级）。
+     * 每次现读，不缓存 —— 用户可能在系统设置里中途改。
+     */
+    const prefersReducedMotion = () =>
+        window.matchMedia?.('(prefers-reduced-motion: reduce)').matches === true;
+
+    /**
      * 滚到指定那一格，让它进入视口。
      *
      * `block: 'nearest'` 而不是 `'center'`：`center` 会让**每按一次方向键都把目标
@@ -271,15 +278,8 @@ export function useGridCursor(deps: {
      * ⇒ 判据：**落点已经在首行（`r === 0`）⇒ 直接滚到顶；在末行 ⇒ 滚到底**。
      * 只在这两种情况下强制对齐，中间行仍然交给 `nearest`（不动画面）。
      * 零横轴滚动条 ⇒ 纵向对齐就是全部（不用管 `inline`）。
-     */
-    /**
-     * 系统偏好：减少动效时一律不做平滑滚动（原生 `behavior: 'smooth'` **不会**自动降级）。
-     * 每次现读，不缓存 —— 用户可能在系统设置里中途改。
-     */
-    const prefersReducedMotion = () =>
-        window.matchMedia?.('(prefers-reduced-motion: reduce)').matches === true;
-
-    /**
+     *
+     * ---
      * 滚进视口。
      *
      * @param smooth 只有**单次按键**才给 `true`（见 `moveCursor` 的调用点）。

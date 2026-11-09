@@ -11,14 +11,9 @@
  * 封面拼格与数量，容易和服務器漂移；一次 GET /playlists 只有几 KB，重取最稳。
  */
 import { reactive } from 'vue';
-import { getAction, postAction } from '@/utils/request';
+import { API_BASE, getAction, postAction } from '@/utils/request';
 import type { CardSnapshot } from '../../../electron/server/playlist';
 import type { WiredFileInfo } from '../../../electron/server/index';
-
-const API_BASE = 'http://127.0.0.1:3060';
-
-/** 默认清单名。与服务端 `playlistStore.ts` 的 DEFAULT_PLAYLIST_NAME 必须同值 */
-export const DEFAULT_PLAYLIST_NAME = '收藏';
 
 export interface PlaylistSummary {
     id: string;

@@ -67,7 +67,7 @@
 <script setup lang="ts">
 import { computed, onMounted, ref } from 'vue';
 import { NButton, NInput, NSelect, NCheckbox } from 'naive-ui';
-import { getAction, postAction } from '@/utils/request';
+import { API_BASE, getAction, postAction } from '@/utils/request';
 import useNotify from '@/hooks/useNotify';
 import RuleSiteList from '@/views/FileFinder/rules/RuleSiteList.vue';
 import RuleStepList from '@/views/FileFinder/rules/RuleStepList.vue';
@@ -77,9 +77,6 @@ import {
     blankRule, canSave, cloneRule, toPayload, TRANSFORM_OPTIONS,
     type SiteRuleDraft, type TestRun,
 } from '@/views/FileFinder/rules/ruleDraft';
-
-// 统一写 127.0.0.1（同 FileFinder：localhost 可能解析到 ::1，服务端只绑 IPv4）
-const API_BASE = 'http://127.0.0.1:3060';
 
 const notify = useNotify();
 const rules = ref<SiteRuleDraft[]>([]);

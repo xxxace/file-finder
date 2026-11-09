@@ -1,0 +1,209 @@
+/**
+ * 预览层的全局样式：naive ImagePreview 的覆盖（.n-image-preview-*）+ 工具条内部结构（.ptb-*）。
+ *
+ * 为什么是普通 .css 而不是 SFC 的 <style>：这棵树由 naive 渲染、再 teleport 到 body，
+ * scoped 的属性选择器一个都命中不了 —— 与 usePreview.previewToolbar 是同一条约束。
+ * 选择器靠 `body>.` 与 `.ptb-` 前缀兜作用域。
+ */
+/* ① 图：上/左/右各留 16px（和改之前一致），底部留 64px = 工具条 48 + 间隙 16。 */
+body>.n-image-preview-container .n-image-preview-wrapper {
+    padding: 16px 16px 64px;
+    box-sizing: border-box;
+}
+
+/* ③ 开合过渡 token 化（2026-11-09）。naive 原装：进出场都是 .2s、进场 scale .9 弹得太大、
+      退场还缩尺（元素都在消失了不该再变形）。改按动效预算：
+      进场 = 260ms + --ff-ease-enter（过冲 1.28 的 Q 弹曲线，LeiBox 弹簧的 CSS 近似：
+      弹簧积分器只在「动画可打断」时必要，预览开合是一次性动作，Bezier 过冲拿到 80% 手感）；
+      起始 scale .9（行程够长，过冲才看得见：峰值 ≈1.014 再回落）；
+      退场 = 140ms 只淡出（退出永远比进入短，且不缩放）。
+      ⚠️ 只影响开/关那一瞬：transition 类在动画结束后被 Vue 摘掉，
+      之后的缩放/拖动（naive 每次重写整段内联 cssText）完全不受影响。 */
+body>.n-image-preview-container.fade-in-transition-enter-active {
+    transition: opacity .26s var(--ff-ease-enter) !important;
+}
+
+body>.n-image-preview-container.fade-in-transition-leave-active {
+    transition: opacity .14s ease-out !important;
+}
+
+body>.n-image-preview-container .n-image-preview.fade-in-scale-up-transition-enter-active {
+    transition: opacity .26s var(--ff-ease-enter), transform .26s var(--ff-ease-enter) !important;
+}
+
+body>.n-image-preview-container .n-image-preview.fade-in-scale-up-transition-enter-from {
+    opacity: 0;
+    transform: scale(.9);
+}
+
+body>.n-image-preview-container .n-image-preview.fade-in-scale-up-transition-enter-to {
+    opacity: 1;
+    transform: none;
+}
+
+body>.n-image-preview-container .n-image-preview.fade-in-scale-up-transition-leave-active {
+    transition: opacity .14s ease-out !important;
+}
+
+body>.n-image-preview-container .n-image-preview.fade-in-scale-up-transition-leave-to {
+    opacity: 0;
+    transform: none;
+}
+
+/* ④ 切图溶解（View Transitions，usePreview 的 onPreviewCurrentChange 触发）：
+      压短到 .18s；工具条排除在快照外（它有自己的 WAAPI 宽度动效，别让 VT 快照盖住）；
+      VT 层不拦指针（否则溶解的 0.18s 里点 ✕ / 遮罩会失灵）。 */
+::view-transition {
+    pointer-events: none;
+}
+
+::view-transition-old(root),
+::view-transition-new(root) {
+    animation-duration: .18s;
+}
+
+body>.n-image-preview-container .n-image-preview-toolbar {
+    view-transition-name: none;
+}
+
+
+/* ② 工具条（2026-11-09 重构）：回归 naive 原生的「居中胶囊」—— 通栏是旧裁定
+      （"别浪费两侧空间"），但 9 颗图标摊在 2048px 上视觉重量全失（主人不满意）。
+      现在：居中 bar + 玻璃底 + 三组结构（分组与选框见 .ptb-*）。 */
+body>.n-image-preview-container .n-image-preview-toolbar {
+    left: 50%;
+    right: auto;
+    bottom: 8px;
+    transform: translateX(-50%);
+    /* ⚠️ 必须显式 border-box：宽度 FLIP 用 GBCR/offsetWidth（border-box）量、用 WAAPI width
+       （默认 content-box）写 —— 差的正好是左右 padding 20px，表现为主人看到的
+       「先胀 20px 再缩回」的假过冲。同一个值两个盒模型，量与写必须同框。 */
+    box-sizing: border-box;
+    max-width: min(92vw, 980px);
+    height: 48px;
+    padding: 0 10px;
+    border-radius: 999px;
+    /* 宽度 FLIP 期间内容（已是新尺寸）会比动画中的 bar 宽——裁掉，别让图标戳出胶囊外 */
+    overflow: hidden;
+    /* ⚠️ 内容锚定右缘（flex-end）：bar 宽度动画时按钮群永远「骑在移动的边上」一起滑，
+       空白只出现在最左（信息侧被揭示/收回）—— 否则收缩时 ✕ 旁边会凭空多出一段死玻璃
+       （真机：变宽丝滑、变窄难受的根源）。 */
+    justify-content: flex-end;
+    /* 预览层的底色永远是"照片"，所以这组值**不随主题**，见 tokens 里的 `--ff-media-*`。 */
+    background: var(--ff-media-bar-bg);
+    backdrop-filter: blur(20px) saturate(140%);
+    box-shadow: var(--ff-media-bar-shadow);
+    /* ⚠️ 图标与文字必须显式给浅色：naive 的 `--n-icon-color` 会继承 `common.iconColor`
+       （我们把它设成了次要灰 text-2），直接落到这条工具条上就成了"灰图标压在暗底"。 */
+    color: var(--ff-media-icon);
+    --n-icon-color: var(--ff-media-icon);
+    --n-icon-color-hover: var(--ff-media-icon-hover);
+}
+
+/* ── .ptb-* 工具条内部结构（usePreview.ts 的 previewToolbar 渲染）────────── */
+
+.ptb-info {
+    display: flex;
+    align-items: center;
+    min-width: 0;
+    padding: 0 12px 0 8px;
+}
+
+.ptb-name {
+    max-width: min(40vw, 560px);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    font-size: 13px;
+    font-weight: 500;
+    color: var(--ff-media-icon);
+}
+
+.ptb-count {
+    margin-left: 10px;
+    font-size: 12px;
+    color: var(--ff-media-icon);
+    opacity: .55;
+    white-space: nowrap;
+}
+
+.ptb-tools {
+    position: relative;
+    display: flex;
+    align-items: center;
+}
+
+/* 滑动选框：同一颗节点在图标间滑（LeiBox live-selection-box；曲线照抄 builder 源码）。
+   left/width 由 JS 写（pointerenter 时量 cell），opacity 管进出。 */
+.ptb-sel {
+    position: absolute;
+    /* ⚠️ 相对 .ptb-tools（36px 高，被 flex 夹在 48px 条中间居中），不是整条工具条
+       —— top:6px 会整体下沉 6px（真机截图：图标偏上、框偏下）。0 = 与 cell 完全对齐。 */
+    top: 0;
+    height: 36px;
+    left: 0;
+    width: 0;
+    border-radius: var(--ff-r-ctl);
+    background: var(--ff-media-bar-sel);
+    opacity: 0;
+    pointer-events: none;
+    transition:
+        left .35s cubic-bezier(.2, .8, .2, 1),
+        width .35s cubic-bezier(.2, .8, .2, 1),
+        opacity .18s ease-out;
+}
+
+.ptb-sel.is-on {
+    opacity: 1;
+}
+
+/* 首现纪律（RailTip 同款）：藏着的选框不做位移补间 —— 第一次出现直接落在
+   当前图标上只做淡入；之后在图标之间移动才滑。否则截图里那种
+   "从 0 滑过来的一瞬"会被看成"没对齐"。 */
+.ptb-sel:not(.is-on) {
+    transition: opacity .18s ease-out;
+}
+
+.ptb-cell {
+    position: relative;
+    z-index: 1;
+    width: 36px;
+    height: 36px;
+    display: grid;
+    place-items: center;
+    border-radius: var(--ff-r-ctl);
+    cursor: pointer;
+    /* 按下回弹：过冲曲线同族（主人 2026-11-09 "不够Q弹"） */
+    transition: transform .18s var(--ff-ease-enter);
+}
+
+.ptb-cell:active {
+    transform: scale(.94);
+}
+
+/* naive 的图标 span 自带 padding 0 8px / font-size 28px —— 塞进 36px 格子前拍平 */
+/* ⚠️ 图标元素必须**填满整个 cell**：naive 的点击处理器挂在图标 span 自己身上，
+   图标只有 20px ⇒ cell 其余 16px 点了没反应（主人：滑块多大，点击区就得多大）。
+   撑满后点击区 = 选框 = 36px，三个面积重合。 */
+body>.n-image-preview-container .ptb-cell > * {
+    width: 100%;
+    height: 100%;
+    display: grid;
+    place-items: center;
+    padding: 0;
+    font-size: 20px;
+    line-height: 1;
+}
+
+.ptb-sep {
+    width: 1px;
+    height: 22px;
+    margin: 0 8px;
+    background: var(--ff-media-bar-line);
+}
+
+/* ✕ 与变换组之间额外加大间距（「下载紧邻 ✕ 造成误触」的教训） */
+.ptb-sep-wide {
+    margin: 0 8px 0 18px;
+}
+

@@ -23,6 +23,17 @@ if (!TOKEN) {
 }
 
 /**
+ * 本地服务的地址 —— **所有对它的引用都从这里取**。
+ *
+ * 为什么收在这里：曾经 11 个文件各写一份字面量（页面一多就再抄一份），
+ * 改端口要逐个找，漏一个的表现是"那个页面永远转圈"。
+ *
+ * 统一写 127.0.0.1 而不是 localhost：个别机器会把 localhost 解析到 ::1，
+ * 而服务端只绑 IPv4 ⇒ 每个请求都要先失败一次再回落。
+ */
+export const API_BASE = 'http://127.0.0.1:3060';
+
+/**
  * 拼一个带口令的接口地址。
  *
  * **所有对本地服务的 URL 都必须由这里产生。** 口令放在 URL 里而不是请求头，
@@ -33,10 +44,6 @@ export function apiUrl(url: string): string {
     return `${url}${url.includes('?') ? '&' : '?'}t=${TOKEN ?? ''}`;
 }
 
-/**
- * 后端出错也返回 HTTP 200，只靠 body 的 code 区分 —— 不检查会让调用方拿到 {code:500} 还提示"成功"。
- * ⚠️ 所有 HTTP 出入必须过这个唯一咽喉点：检查散落几份就会漏几份，收成一处才不会再漏。
- */
 /**
  * 本地服务返回的业务错误。
  *
@@ -60,6 +67,10 @@ export class ApiError extends Error {
     }
 }
 
+/**
+ * 后端出错也返回 HTTP 200，只靠 body 的 code 区分 —— 不检查会让调用方拿到 {code:500} 还提示"成功"。
+ * ⚠️ 所有 HTTP 出入必须过这个唯一咽喉点：检查散落几份就会漏几份，收成一处才不会再漏。
+ */
 function assertOk(response: Response, json: any) {
     if (!response.ok || (json && json.code && json.code !== 200)) {
         const message = (json && json.error) ? json.error : `请求失败(${response.status})`

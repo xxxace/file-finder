@@ -550,11 +550,6 @@ export function usePreview(deps: {
     };
 
     /**
-     * 布局（2026-11-09 重构，Apple Quick Look 分组 + LeiBox 选框）：
-     * [信息段 名称·计数] | [位置组 定位·上一条·下一条] ｜ [变换组 旋转×2·原尺寸·缩放±] ｜ [✕]
-     * 组间发丝分隔；✕ 与变换组之间额外加大间距（「下载紧邻 ✕ 造成误触」的教训）。
-     */
-    /**
      * 工具条自身的「内容变了」动效（WAAPI，一次性）：条宽跟随内容（max-content），
      * 换条目时名称/计数/宽度都变 —— 宽度从旧值 FLIP 到新值（过冲曲线，Q 弹），
      * 名称与计数做「拍内分带」的小滑入。在 rAF 里做：此刻 naive 已把新内容 patch 完。
@@ -578,6 +573,11 @@ export function usePreview(deps: {
         sel.classList.add('is-on');
     };
 
+    /**
+     * 布局（2026-11-09 重构，Apple Quick Look 分组 + LeiBox 选框）：
+     * [信息段 名称·计数] | [位置组 定位·上一条·下一条] ｜ [变换组 旋转×2·原尺寸·缩放±] ｜ [✕]
+     * 组间发丝分隔；✕ 与变换组之间额外加大间距（「下载紧邻 ✕ 造成误触」的教训）。
+     */
     const previewToolbar = ({ nodes }: { nodes: Record<string, any> }) => {
         const total = previewEntries.value.length;
         // 只有一条时"上一条/下一条"是空动作（naive-ui 首尾环绕 = 原地不动）⇒ 不显示，免得像坏了

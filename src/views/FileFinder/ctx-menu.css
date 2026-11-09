@@ -1,0 +1,70 @@
+/**
+ * 右键菜单（Apple 式纵向菜单）。内容被 n-popover teleport 到 body，scoped 够不到。
+ * 比例对齐 Apple PC 菜单：行高 26、项内距 7、菜单内衬 3、圆角 6、发丝分隔线内缩。
+ */
+/* ════ 右键菜单（2026-11-09 重构：横排小按钮 → Apple 式纵向菜单）══════
+   内容被 n-popover teleport 到 body，scoped 够不到 ⇒ 非 scoped + .ctx- 前缀兜作用域。
+   比例对齐 Apple PC 菜单（Big Sur+ 实测量级）：行高 24 紧凑档、图标-文字 8px、
+   菜单内衬 4px、分隔线短且细、圆角 6 —— 密度上去"设计感"才出得来。 */
+.ctx-menu {
+    display: flex;
+    flex-direction: column;
+    gap: 1px;
+    min-width: 188px;
+    padding: 3px;
+    box-sizing: border-box;
+    outline: none;
+}
+
+/* n-popover 自带的内衬 padding 对菜单是多余的，:has 精准只打这一个 popover */
+body>.n-popover:has(>.ctx-menu) {
+    padding: 3px;
+}
+
+.ctx-item {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    height: 26px;
+    padding: 0 7px;
+    border: 0;
+    border-radius: 6px;
+    background: transparent;
+    color: var(--ff-text-1);
+    font: inherit;
+    font-size: 13px;
+    text-align: left;
+    cursor: pointer;
+    transition: background-color var(--ff-dur-hover) ease;
+}
+
+.ctx-item:hover {
+    /* 菜单悬停走 --ff-menu-hover（语义正确的既有 token，白底上 0.10 太耳语已提一档） */
+    background: var(--ff-menu-hover);
+}
+
+.ctx-item:disabled {
+    opacity: .4;
+    cursor: default;
+}
+
+.ctx-item:active {
+    background: var(--ff-ctl-on);
+}
+
+.ctx-label {
+    flex: 1 1 auto;
+    white-space: nowrap;
+}
+
+.ctx-arrow {
+    margin-left: auto;
+    color: var(--ff-text-2);
+}
+
+.ctx-sep {
+    height: 1px;
+    margin: 3px 8px;
+    background: var(--ff-line);
+}
+

@@ -1,9 +1,8 @@
 import { onUnmounted, ref } from 'vue';
-import { deletAction, getAction, postAction } from '@/utils/request';
+import { API_BASE, deletAction, getAction, postAction } from '@/utils/request';
 import { isLiveJob } from './jobTypes';
 import type { JobSnapshot } from './jobTypes';
 
-const API_BASE = 'http://127.0.0.1:3060';
 const POLL_MS = 1200;
 
 /**

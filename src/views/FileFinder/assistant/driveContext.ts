@@ -1,6 +1,4 @@
-import { getAction } from '@/utils/request';
-
-const API_BASE = 'http://127.0.0.1:3060';
+import { API_BASE, getAction } from '@/utils/request';
 
 export interface DriveContext {
     serial: string;

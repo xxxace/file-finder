@@ -84,33 +84,19 @@
                      完整明细（状态 / 标识 / 目录 / 条目 / 最近扫描）挪进悬浮提示，需要时才出现。 -->
                 <div class="g2-disk">
                     <div class="disk-chips" role="group" aria-label="按盘筛选缓存记录">
-                        <n-tooltip v-for="chip in diskChips" :key="chip.key" trigger="hover" placement="top"
-                            :delay="180">
-                            <template #trigger>
-                                <!-- 用真实 <button> 而不是 n-tag / span：chip 是"可点选"的控件，
-                                     必须是键盘可达的按钮（Tab 到、Enter/Space 触发），
-                                     选中态用 aria-pressed 报给读屏。 -->
-                                <button type="button" class="disk-chip"
-                                    :class="{ 'is-active': model.serial === chip.value }"
-                                    :aria-pressed="model.serial === chip.value" :aria-label="chip.ariaLabel"
-                                    @click="handleSerialChange(chip.value)">
-                                    <span v-if="chip.tipDot" class="disk-dot"
-                                        :class="chip.tipDot === 'on' ? 'is-on' : 'is-off'"></span>
-                                    <span class="disk-chip-name">{{ chip.name }}</span>
-                                    <span v-if="chip.count !== undefined" class="disk-chip-count">{{ chip.count }}</span>
-                                </button>
-                            </template>
-                            <div class="disk-chip-tip">
-                                <div class="tip-head">
-                                    <span v-if="chip.tipDot" class="disk-dot"
-                                        :class="chip.tipDot === 'on' ? 'is-on' : 'is-off'"></span>
-                                    {{ chip.tipTitle }}
-                                </div>
-                                <div class="tip-row" v-for="r in chip.tipRows" :key="r.k">
-                                    <span class="tip-k">{{ r.k }}</span><span class="tip-v">{{ r.v }}</span>
-                                </div>
-                            </div>
-                        </n-tooltip>
+                        <!-- 用真实 <button> 而不是 n-tag / span：chip 是"可点选"的控件，
+                             必须是键盘可达的按钮（Tab 到、Enter/Space 触发），
+                             选中态用 aria-pressed 报给读屏。
+                             提示走全站唯一的 `v-tip`（富内容由 `chipTip()` 造），不再用 n-tooltip。 -->
+                        <button v-for="chip in diskChips" :key="chip.key" v-tip="chipTip(chip)" type="button"
+                            class="disk-chip" :class="{ 'is-active': model.serial === chip.value }"
+                            :aria-pressed="model.serial === chip.value" :aria-label="chip.ariaLabel"
+                            @click="handleSerialChange(chip.value)">
+                            <span v-if="chip.tipDot" class="disk-dot"
+                                :class="chip.tipDot === 'on' ? 'is-on' : 'is-off'"></span>
+                            <span class="disk-chip-name">{{ chip.name }}</span>
+                            <span v-if="chip.count !== undefined" class="disk-chip-count">{{ chip.count }}</span>
+                        </button>
                     </div>
                 </div>
 
@@ -193,15 +179,14 @@ import useConfirm from '@/hooks/useConfirm';
 import Banner from '@/components/Overlay/Banner.vue';
 import { Search, RefreshOutline, TrashOutline, CloseCircleOutline } from '@vicons/ionicons5';
 import {
-    NInput, NButton, NPagination, NDataTable, NSpin, NTooltip, NIcon,
+    NInput, NButton, NPagination, NDataTable, NSpin, NIcon,
 } from 'naive-ui'
 import type { DataTableColumns, DataTableRowKey, DataTableSortState, InputInst } from 'naive-ui'
 import { formatBytes, serialTail } from '@/utils';
+import { vTip } from '@/components/FluidTip/directive';
 import type { BrowseHistoryWithPagination } from 'electron/server/nedb';
-import { getAction, postAction } from '@/utils/request';
+import { API_BASE, getAction, postAction } from '@/utils/request';
 
-// 统一写 127.0.0.1 而不是 localhost，避免个别机器把 localhost 解析到 ::1（服务端只绑 IPv4）
-const API_BASE = 'http://127.0.0.1:3060';
 const router = useRouter();
 
 type HistoryQuery = {
@@ -523,6 +508,24 @@ const loadDisks = async (refresh = false) => {
 }
 
 /**
+ * 盘片悬浮提示的内容 —— 走全站唯一的 FluidTip，富内容用渲染函数给。
+ * ⚠️ 不用 `<n-tooltip>` 的模板写：那是第二套提示材质（naive 的深底框），主题一切就跟全站不是一家人。
+ */
+const chipTip = (chip: DiskChip) => ({
+    text: chip.tipTitle,
+    body: () => h('div', { class: 'disk-chip-tip' }, [
+        h('div', { class: 'tip-head' }, [
+            chip.tipDot ? h('span', { class: `disk-dot ${chip.tipDot === 'on' ? 'is-on' : 'is-off'}` }) : null,
+            chip.tipTitle,
+        ]),
+        ...chip.tipRows.map(r => h('div', { class: 'tip-row', key: r.k }, [
+            h('span', { class: 'tip-k' }, r.k),
+            h('span', { class: 'tip-v' }, r.v),
+        ])),
+    ]),
+});
+
+/**
  * 盘条 chips 的展示模型（**唯一的拼装点**）。
  *
  * 顺序：`全部` → 在线盘（按盘符）→ 离线盘（按序列号）。
@@ -732,15 +735,6 @@ const reloadAfterDataChange = () => {
  * 三件事必须分得开：真的一层都没有 / 搜索没匹配 / 读不到。
  * 最后一种由服务端 `kind` 走主界面横幅，这里只管前两种。
  */
-/**
- * 盘列表变了（主进程热插拔事件推来的）—— **只在面板开着时**重新取数。
- *
- * 走 `reloadAfterDataChange`（**不重探盘符**）：服务端那份盘列表缓存**刚被主进程
- * `getDrives(true)` 刷过**（见 `electron/main/diskWatch.ts`），这里只要重新读一遍就够。
- * 再带 `?refresh=true` 等于拿 26 次 `stat` 去换一次刚做过的事。
- *
- * 关着就不打扰 —— 顺带省掉一次没人看的请求。
- */
 const emptyText = computed(() => {
     if (loading.value || tableData.value.length) return '';
     if (model.value.path) return `没有匹配「${model.value.path}」的目录`;
@@ -933,9 +927,11 @@ onDeactivated(() => {
 });
 
 /**
- * 插拔盘：**本页在前台才重取**。
- * 后台的页为一次看不见的刷新花一次请求没有意义；而"开着这一页时插盘"必须能刷出来
- * —— 原来靠文件页的 onDisksChanged 转发（页面拆开之后那条线没了）。
+ * 插拔盘：**本页在前台才重取**。后台页为一次看不见的刷新花一次请求没有意义；
+ * 原来靠文件页转发（页面拆开之后那条线没了），所以这里自己订阅 `ff-disks-changed`。
+ *
+ * 走 `reloadAfterDataChange`（**不重探盘符**）：主进程刚用 `getDrives(true)` 刷过盘表，
+ * 这里再带 `?refresh=true` 等于拿 26 次 `stat` 换一次刚做过的事。
  */
 const onDisksChangedIpc = () => {
     if (pageActive.value) reloadAfterDataChange();
@@ -1147,10 +1143,10 @@ onUnmounted(() => ipcRenderer.off('ff-disks-changed', onDisksChangedIpc));
     background: var(--ff-text-2);
 }
 
-/* ⚠️ 悬浮提示的内容**不能**加 `.cache-panel` 前缀 ——
-   n-tooltip 的弹出层被 teleport 到 body，已经不在卡片内部了，加了前缀一个都命中不了。
-   所以下面这几条是全局规则，靠 `disk-chip-tip` 这个专属类名做隔离（不会漏到别处）。
-   naive-ui 浅色主题的 tooltip 是**深底白字**，所以这里只调透明度、不写死文字颜色。 */
+/* ⚠️ 提示内容是**渲染函数**造出来、由 FluidTip 宿主 teleport 到 body 渲染的 ——
+   既不能加 `.cache-panel` 前缀，也别指望 SFC 的 scoped 属性（宿主不是这个组件）。
+   所以下面几条是全局规则，靠 `disk-chip-tip` 这个专属类名做隔离。
+   文字颜色**不写死**：继承 `.ftip` 的 `--ff-tooltip-text`（跟随主题明暗）。 */
 .disk-chip-tip {
     font-size: 12px;
     line-height: 1.55;

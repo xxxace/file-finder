@@ -10,8 +10,9 @@
  *  ③ 设置（开关 + 音量）走 localStorage `ff.sfx`，模式照抄 `useTheme.ts`；
  *     首次**任何用户手势前**浏览器不让出声 —— 引擎在首次 play 时才建 AudioContext，天然合规。
  *
- * 性能：引擎内部按 recipe 渲染成 AudioBuffer 后缓存（LRU 96 条），
- * 重复播放零合成开销；`preloadSfx()` 在空闲时把常用音预渲染一遍。
+ * 性能：引擎内部按 recipe 渲染成 AudioBuffer 后缓存（**FIFO 96 条**：写满逐最旧的淘汰，
+ * 不是 LRU —— 13 个事件 × 少数变体远达不到上限，没必要再引入一套访问序），重复播放零合成开销；
+ * `preloadSfx()` 在空闲时把常用音预渲染一遍。
  */
 import { reactive } from 'vue';
 import { playSound, preloadSound, setSoundMuted, setSoundVolume, type Recipe } from './engine';
@@ -118,7 +119,9 @@ export function playSfx(event: SfxEvent) {
 export function preloadSfx() {
     if (typeof requestAnimationFrame !== 'function') return;
     requestAnimationFrame(() => requestAnimationFrame(() => {
-        const common: SfxEvent[] = ['mode', 'switch-on', 'theme-light', 'theme-dark', 'success'];
+        // hover / menu-click 是频率最高的两个（左轨每进一个入口、每点一次菜单）——
+        // 不预渲染的话**第一次**要等一次离线合成，手感会"虚"一下。
+        const common: SfxEvent[] = ['hover', 'menu-click', 'mode', 'switch-on', 'theme-light', 'theme-dark', 'success'];
         common.forEach((event) => preloadSound(EVENT_RECIPE[event] as unknown as Recipe));
     }));
 }

@@ -198,8 +198,8 @@ export function useNaiveOverrides(): ComputedRef<GlobalThemeOverrides> {
                 railColor: v('--ff-ctl-on'),
                 railColorActive: v('--ff-status-ok'),
                 loadingColor: v('--ff-status-ok'),
-                boxShadow: '0 1px 3px rgba(0, 0, 0, 0.25)',
-                boxShadowFocus: '0 1px 3px rgba(0, 0, 0, 0.25)',
+                boxShadow: v('--ff-ctl-shadow'),
+                boxShadowFocus: v('--ff-ctl-shadow'),
             },
 
             Slider: {

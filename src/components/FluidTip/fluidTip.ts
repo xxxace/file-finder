@@ -12,11 +12,19 @@
  *  - 触屏不显示（没有 hover 语义），交给按钮自己的 aria-label。
  */
 import { reactive } from 'vue';
+import type { VNodeChild } from 'vue';
 
 export interface TipPayload {
     text: string;
     /** 真实存在的快捷键键帽（如 'S'）；没有就不显示键帽，**不许造假角标** */
     keys?: string;
+    /**
+     * 富内容（多行表格之类）：给了就整块替换正文，`text` 退化成无障碍/占位文案。
+     *
+     * ⚠️ 收的是**渲染函数**不是 HTML 字符串 —— 字符串要 `v-html`，等于给提示开一个注入口子。
+     * ⚠️ 由调用方 `import { h }` 自己造节点：提示宿主只负责定位与材质，不认识业务结构。
+     */
+    body?: () => VNodeChild;
 }
 
 export const tipState = reactive({
@@ -25,6 +33,7 @@ export const tipState = reactive({
     snap: true,
     text: '',
     keys: '',
+    body: null as (() => VNodeChild) | null,
     anchor: null as DOMRect | null,
     /** 锚点元素本体 —— 宿主每帧校验它的活性（isConnected / rect 漂移），见 FluidTipHost */
     anchorEl: null as HTMLElement | null,
@@ -51,6 +60,7 @@ function apply(el: HTMLElement, payload: TipPayload, adjacent: boolean) {
     const rect = el.getBoundingClientRect();
     tipState.text = payload.text;
     tipState.keys = payload.keys ?? '';
+    tipState.body = payload.body ?? null;
     tipState.snap = !adjacent;
     tipState.anchor = rect;
     tipState.anchorEl = el;
@@ -88,6 +98,8 @@ export function hideTip() {
         hideTimer = 0;
         tipState.visible = false;
         tipState.anchorEl = null;
+        // 收掉时一并解开富内容的闭包：它闭着业务数据（盘列表之类），留着没有意义
+        tipState.body = null;
         lastAnchor = null;
     }, LEAVE_DELAY);
 }

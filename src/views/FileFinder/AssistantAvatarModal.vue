@@ -160,7 +160,7 @@ import {
     RefreshOutline,
     StopOutline,
 } from '@vicons/ionicons5';
-import { apiUrl, postAction } from '@/utils/request';
+import { API_BASE, apiUrl, postAction } from '@/utils/request';
 import useNotify from '@/hooks/useNotify';
 import AssistantShell from './assistant/AssistantShell.vue';
 import TaskDock from './assistant/TaskDock.vue';
@@ -176,7 +176,6 @@ import { isLiveJob } from './assistant/jobTypes';
 import { useAssistantJob } from './assistant/useAssistantJob';
 import { useAvatarMatcher } from './assistant/useAvatarMatcher';
 
-const API_BASE = 'http://127.0.0.1:3060';
 const previewSrc = (url: string) => apiUrl(`${API_BASE}/assistant/preview?url=${encodeURIComponent(url)}`);
 
 const props = withDefaults(

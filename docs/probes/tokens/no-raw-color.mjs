@@ -22,8 +22,8 @@ const EXEMPT = new Set([
     join('src', 'theme', 'transition.ts'),
 ]);
 
-/** 迁移基线：只许降，不许升。全部改造完成后改成 0。 */
-const BASELINE = 53;
+/** 迁移基线：只许降，不许升。**2026-11-09 已到 0** —— 之后任何一处都是回归，直接 exit 1。 */
+const BASELINE = 0;
 
 const HEX = /#[0-9a-fA-F]{3,8}\b/g;
 const FUNC = /\brgba?\s*\(/g;

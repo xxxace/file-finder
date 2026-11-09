@@ -30,7 +30,3 @@ export interface JobSnapshot<Row = unknown> {
 /** 跑着或暂停着 —— 轮询在这两种状态都不停（暂停中用户随时会点「继续」） */
 export const isLiveJob = (job: JobSnapshot | null | undefined): boolean =>
     job?.status === 'running' || job?.status === 'paused';
-
-/** 已经收尾（完成 / 终止 / 出错）：结果留在 rows 里，仍然可读可写 */
-export const isFinishedJob = (job: JobSnapshot | null | undefined): boolean =>
-    job?.status === 'done' || job?.status === 'cancelled' || job?.status === 'error';

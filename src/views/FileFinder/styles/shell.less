@@ -1,0 +1,128 @@
+/* 页面骨架 / 通用工具类 */
+
+.file-finder {
+    display: flex;
+    flex-flow: column;
+    /* ⚠️ 这一层**不带内边距**：顶栏要通栏贴边（Windows 那套方正的框），
+       而"内容缩进"是顶栏与网格**各自**的事 —— 凭一个共享算式算出来，见 `--ff-content-inset`。
+       2026-11-08 之前顶栏是 absolute、网格靠 `padding-top: 44+10px` 让位、顶栏再手写
+       `padding: 0 18px` 补容器的 12px —— 同一件事在三个地方各写一遍，
+       改一个页边距要同步三处，且高度成了"魔法补偿数"而不是布局自己算出来的。 */
+    padding: 0;
+    height: 100%;
+    flex: 1 1 auto;
+    min-height: 0;
+    box-sizing: border-box;
+    /* 内容左/右边缘 = 页边距 12 + 焦点环让位 6 = 18。
+       ⚠️ 必须提到这一层：环让位原本是 `.image-box` 的局部变量，顶栏读不到就只能再写一个
+       18px 的魔法数 —— 那正是"顶栏和第一列封面对不齐"复发的方式。 */
+    --ff-grid-ring-room: 6px;
+    --ff-content-inset: calc(var(--ff-sp-3) + var(--ff-grid-ring-room));
+
+    .header-bar {
+        display: flex;
+        /* ⚠️ 头部定高，两个子区谁装不下都不能换行 ——
+           换行就等于"头部高度成了路径长度/层级数的函数"（2026-09-24 事故的形态）。 */
+        flex-wrap: nowrap;
+        align-items: center;
+        height: var(--ff-header-h);
+        /* 横向 padding 不影响 44 这个高度，但显式写 border-box 是给"哪天补回 1px 底边线"
+           留的保险：不写的话总高会变成 45、与 `--ff-header-h` 名不副实（踩过）。 */
+        box-sizing: border-box;
+        /* 8px：左侧三颗图标与地址槽之间的呼吸。
+           原来是 12（那时左中右只有两块、中间靠 `justify-content` 撑开）；
+           现在三段都是实体控件，12 会把"一组工具"读成"三个互不相干的东西"。 */
+        gap: 8px;
+        /* 顶栏是**文档流里的第一行**，与网格同级（2026-11-08 主人要求）：
+           高度由布局分给它的 `height` 决定，不再需要 `position: absolute` 脱离文档流、
+           也不再需要网格用 `padding-top` 替它让位。
+           代价只有一条：内容不会再从它背后滚过去 —— 而毛玻璃已于 2026-11-08 裁决
+           改回纯色（"工具类界面的顶栏是固定的框，不是浮在内容上的层"），所以零损失。 */
+        flex: 0 0 auto;
+        /* **通栏直角**，不做悬浮胶囊（2026-11-08 主人："用回 windows 方方正正的那种效果"）。
+           通栏贴边才让它"仍是页面的一部分"；悬浮胶囊反而像一块贴上去的板。
+           纯色就够，**不画底边线**（2026-11-08 裁决）：chrome 底色比画布亮一档，
+           明度差已经把它和网格分开了，再补一条线只是多一个要同步维护的值。 */
+        background: var(--ff-chrome-bg);
+        /* 与网格共用同一个左边缘算式（容器不带内边距了，这里自己给） */
+        padding: 0 var(--ff-content-inset);
+        margin: 0;
+        justify-content: space-between;
+
+        /* 图标与文字统一取 chrome 的图标色（#ebebeb / #171717）：
+           naive 的按钮默认吃 `--n-text-color`（次要灰），在深色里会显得没上电。
+           ⚠️ 同时把按钮压成 **28×28 方格**：naive `size="small"` 是
+           `--n-padding: 0 10px` + `--n-icon-margin: 6px` + 18px 图标 ⇒ 纯图标按钮
+           实际约 **44×28**（查 `button/styles/_common.mjs`），不是方格。
+           不压的话：① 搜索那颗被子容器锁死在 28，邻居却是 44 ⇒ 一排里两种宽度；
+           ② 设计文档 §三的宽度账（右区 ~137px）整个不成立。
+           这两个变量是 Button 组件**内联写上去**的 ⇒ 覆盖必须 `!important`（既有结论）。
+           ⚠️ 用 `:deep()`：`GridDensityMenu` 那颗按钮是**子组件内部**节点，拿不到本文件的
+           `data-v-*`，普通后代选择器匹配不到它 ⇒ 会变成"一排里唯一一颗 44 宽"。 */
+        :deep(.n-button) {
+            --n-padding: 0 !important;
+            --n-icon-margin: 0 !important;
+            --n-text-color: var(--ff-chrome-icon) !important;
+            --n-text-color-hover: var(--ff-chrome-icon) !important;
+            --n-text-color-pressed: var(--ff-chrome-icon) !important;
+            --n-text-color-focus: var(--ff-chrome-icon) !important;
+            width: 28px;
+            justify-content: center;
+        }
+
+        /* 平铺、密度、更多这三颗单独放到 20px（2026-11-08）。
+           为什么同样 18px 盒子它们看着比邻居小：这三颗的墨迹只占 viewBox 的 75~77%
+           （自绘方块阵 / Fluent 竖三点），而**同一排的搜索、刷新、返回**是 ionicons 的
+           1.1px 空心描边、外轮廓吃到 81.25% —— 差的是"锐度 + 感知面积"，不是尺寸。
+           ⚠️ 必须 `:deep()`：密度那颗的按钮在 `GridDensityMenu` 内部，拿不到本文件的 data-v。
+           ⚠️ `--n-icon-size` 是 Button 内联写在根节点上的，必须 `!important` 才盖得住。
+           嫌小/嫌大就改这一个数，三颗一起变。 */
+        :deep(.icon-lg) {
+            --n-icon-size: 20px !important;
+        }
+
+        /* 搜索槽：一颗 28px 图标 ⇄ 一个 220px 输入框（2026-11-08 顶栏升级）。
+           ⚠️ `width` 仍然**必须显式给**，不能删：n-input 天生 `width: 100%`，
+              一旦直系父级不是定宽盒，它就会撑满整行、把工具条顶到多行
+              （2026-09-24 事故：1805px 窗口下头部高 ~150px）。
+              现在这个 100% 被外层 `.search-slot` 的定宽关住，规则从"给像素值"
+              变成"给 100%"，但**不能缺席**。 */
+        .n-input {
+            width: 100%;
+
+            &:deep(.n-input-wrapper) {
+                /* 只为把 1px 字形的光学中心压回行盒中线（原值；与键帽无关，别一起删） */
+                padding-top: 1px;
+            }
+        }
+    }
+
+    /* 左侧三颗：起点 / 返回·清空 / 刷新（2026-11-08 顶栏升级）。
+       28px 定宽 + gap 4 —— 图标按钮靠"字形"分组就行，不需要竖线；
+       竖线只留一道、给动作区最右那颗「更多」（见 `.toolbar-sep`）。 */
+    .nav-btns {
+        flex: 0 0 auto;
+        display: flex;
+        align-items: center;
+        gap: 4px;
+    }
+
+}
+
+/**
+ * 横向单行容器 —— 顶替 naive-ui 的 `n-space`。
+ *
+ * 不是审美选择，是**避开一个真 bug**：naive-ui 2.45.3 的 Space 给每个子项硬编码
+ * 同一个 key（`key: 1`），子元素个数变化时 Vue 的 keyed diff 会让两个旧节点认领
+ * 同一个新槽位，界面上就多出重复节点。用裸 flex + `gap` 之后子元素按位置 patch，
+ * 根本没有 key 可比 —— 这类错位在结构上不可能发生。
+ *
+ * 12px 就是 n-space 默认 size（medium）的间距，所以观感与原来一致。
+ * 见 docs/FIX-2026-09-24-nspace-duplicate-keys.md
+ */
+.hstack {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 12px;
+}

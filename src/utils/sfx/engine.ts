@@ -1,3 +1,14 @@
+/**
+ * 音效合成引擎（Web Audio）—— **第三方移植件，别按本仓风格重排它**。
+ *
+ * 来源：https://github.com/DavidHDev/react-bits 的 `react-bits-sound.ts`（去壳版）。
+ * 许可：MIT + Commons Clause —— 可用在本应用里，**不许单独倒卖音效/引擎**。
+ *     全文见 https://github.com/DavidHDev/react-bits/blob/main/LICENSE.md
+ *
+ * 改过的地方：只删掉了 React 外壳与 hooks，以及未用到的导出；合成逻辑一行未改。
+ * ⚠️ 本文件是 2 空格缩进（对齐上游），本仓的 4 空格规范在这里不适用 ——
+ *    重排会让下次对照上游 diff 变成整文件重写。配方表在同目录 `recipes.ts`。
+ */
 
 export type Wave = 'sine' | 'triangle' | 'square' | 'sawtooth';
 

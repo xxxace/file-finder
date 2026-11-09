@@ -1,4 +1,5 @@
 import { app, BrowserWindow, shell, ipcMain, dialog, clipboard, screen } from 'electron'
+import { existsSync } from 'fs'
 import { release } from 'os'
 import { join, win32 } from 'path'
 import '../server';
@@ -189,10 +190,16 @@ ipcMain.handle('copyText', async function (_e, text: string) {
  * 在资源管理器里定位一个文件（右键菜单「打开所在文件夹」用）。
  * `showItemInFolder`：开资源管理器并**选中**该文件 —— 比 openPath(目录) 多一层"指哪是哪"。
  * 路径归一化与 openFile 同一条规矩（`/` → Windows 形式）；无返回值即成功。
+ *
+ * ⚠️ `showItemInFolder` 自己**没有失败回执**：文件不在了它照样开目录、只是什么都不选中
+ * ⇒ 界面上就是"点了没反应"。所以先自己判一次存在性，把「文件被删 / 盘没插」变成一句话，
+ * 与 `openFile` 的契约（成功空串、失败是描述）保持一致。
  */
 ipcMain.handle('ff-reveal-item', async function (_e, target: string) {
-  if (!target) return '';
-  shell.showItemInFolder(win32.normalize(target));
+  if (!target) return '没有可定位的路径';
+  const normalized = win32.normalize(target);
+  if (!existsSync(normalized)) return '文件不在了（可能已被删除，或这块盘没插）';
+  shell.showItemInFolder(normalized);
   return '';
 });
 
