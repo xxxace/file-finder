@@ -606,7 +606,9 @@ export function usePreview(deps: {
             if (lastBarW && w !== lastBarW && !bar.getAnimations().length) {
                 const a = bar.animate(
                     [{ width: `${lastBarW}px` }, { width: `${w}px` }],
-                    { duration: 260, easing: 'cubic-bezier(0.34, 1.4, 0.42, 1)' },
+                    // ⚠️ 尺寸变化专用 easeOutQuad（= tokens 的 --ff-ease-size）：宽就单调变宽、
+                    // 窄就单调变窄 —— 过冲曲线（1.4）用在宽度上就是主人否掉的「先弹过头再回来」。
+                    { duration: 200, easing: 'cubic-bezier(0.25, 0.46, 0.45, 0.94)' },
                 );
                 a.onfinish = () => reapplySel(bar);
             }
