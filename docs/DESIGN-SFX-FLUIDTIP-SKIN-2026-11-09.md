@@ -217,3 +217,23 @@ unplug  vs unplug.ts: ✅ 完全一致    层数 4 / duration 0.5  / seed 86 / l
 既然音本身无差，剩下能让"听起来不像"的只有两件：**响的时刻**（上一节已修）与**同一动作叠了第二个音**。
 后者这轮也掐掉：`notify()` 增可选第 4 参 `{ silent: true }`，「这块盘已拔出」/「盘已插回」两条 toast 不再各响 Nudge / Bloom
 （插拔音已经替它们响过；一次动作两个音，人耳只会听成一团，也就认不出 Plug/Unplug）。
+
+### 补二：播放链路逐段对齐（主人要求"别有些地方有差异，导致播放也有差异"）
+
+对照对象：官网 `src/tools/sound-lab/engine/player.js` 的 `createPlayer().play()` 与本仓 `engine.ts` 的 `playSound()`。
+
+| 环节 | 官网 | 本仓 | 会不会改变声音 |
+|---|---|---|---|
+| AudioContext | `{ latencyHint: 'interactive' }` | 同 | — |
+| 合成 | `renderSound(recipe, shapeOf(tune), {sampleRate, variant})` | 同（同源代码，0 行差异） | — |
+| 渲染参数 | `shapeOf` 只留**非 undefined** 的键 | 传全 undefined 的 shape，`JSON.stringify` 同样丢掉 | — |
+| 声道 | `channels ?? 2` | 同 | — |
+| 缓存键 | `id:variant:JSON(tune)`（**不含采样率**） | `recipeId:rate:variant:JSON(shape)` | 本仓更稳（官网在"先 48k 渲染、后 44.1k 播放"的时序下可能复用错缓冲） |
+| 缓存条数 | 160 | 96 | — |
+| 播放链 | source → gain → **master(1.0)** → analyser → destination | source → gain → destination | **analyser 不进音频链** |
+| 主增益 | `10^(volume/20)`，恒 **1.0**（没有音量旋钮） | `masterVolume(0.7 默认) × db(volume)` | ⚠️ **唯一会变声的差异：−3.1 dB** |
+| 起步 | `start(now + 0.005)` | `start()` | 官网那 5ms 是给 `progress()` 记时用的 |
+| 独占 | `exclusive: true` ⇒ 先 `stop()` 上一条 | 不挡（各响各的） | 有意不齐：app 里连点会有先后叠音，是 UI 常态；掐掉会让上一条"断头" |
+| 自动播放 | 浏览器策略 | Electron 默认 `no-user-gesture-required`（`main/index.ts` 没改 webPreferences）⇒ 没点过页面也能出声 | — |
+
+**结论**：除"用户音量"这一档，其余全部不进耳朵。所以"和官网不一样"只剩两种可能：音量没拉满，或者响的时刻/叠了别的音（后两条已在前两节修掉）。
