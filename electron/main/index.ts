@@ -186,6 +186,17 @@ ipcMain.handle('copyText', async function (_e, text: string) {
 });
 
 /**
+ * 在资源管理器里定位一个文件（右键菜单「打开所在文件夹」用）。
+ * `showItemInFolder`：开资源管理器并**选中**该文件 —— 比 openPath(目录) 多一层"指哪是哪"。
+ * 路径归一化与 openFile 同一条规矩（`/` → Windows 形式）；无返回值即成功。
+ */
+ipcMain.handle('ff-reveal-item', async function (_e, target: string) {
+  if (!target) return '';
+  shell.showItemInFolder(win32.normalize(target));
+  return '';
+});
+
+/**
  * 打开缓存数据目录。
  *
  * 这就是这套缓存**全部**的「导出 / 导入」手段：数据 = 这个目录（`searchCache.db` + `bin/`），

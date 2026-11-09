@@ -202,6 +202,7 @@
                 ref="imageBox"
                 :data-density="density"
                 :style="{ '--ff-grid-cols': gridCols }"
+                @contextmenu.prevent="onBlankContextMenu"
             >
                 <!-- key 不能只用 item.name：封面条目的 name 取的是**封面图文件名**，
                      同一层的两个文件夹若都叫 cover.jpg，就会生成两个 key="cover"。
@@ -396,32 +397,47 @@
             <!-- 2026-11-09 重构：横排小按钮 → Apple 式纵向菜单（图标+标签+分组发丝线）。
                  内容被 n-popover teleport 到 body ⇒ 样式走文件末尾的非 scoped 块（.ctx-*）。 -->
             <div class="ctx-menu" tabindex="-1" @keydown.stop="onCtxMenuKeydown">
-                <button type="button" class="ctx-item" @click="copyName">
-                    <n-icon :size="16" :component="CopyOutline" />
-                    <span class="ctx-label">复制文件名</span>
-                </button>
-                <button type="button" class="ctx-item" @click="copyNameStem">
-                    <n-icon :size="16" :component="DocumentTextOutline" />
-                    <span class="ctx-label">复制文件名（去后缀）</span>
-                </button>
-                <div class="ctx-sep" aria-hidden="true"></div>
-                <!-- 同一个菜单位置，两种模式：清单屏里 = 收录动作（移除）；目录屏里 = 收录动作（加入）。
-                     模式判据读 playlistLevel（NavEntry.pl 派生），不读 path 前缀。 -->
-                <button v-if="playlistLevel" type="button" class="ctx-item" @click="removeFromCurrentPlaylist">
-                    <n-icon :size="16" :component="StarOutline" />
-                    <span class="ctx-label">从收藏夹移除</span>
-                </button>
-                <template v-else>
-                    <button type="button" class="ctx-item" @click="addToFavorite">
-                        <n-icon :size="16" :component="StarOutline" />
-                        <span class="ctx-label">加入收藏</span>
+                <!-- 文件组：只有卡片右键才有（空白处没有"这一张"）。
+                     只读层（锚点路径）没有真磁盘路径 ⇒ 复制地址/打开文件夹禁用。 -->
+                <template v-if="ctxMenu.mode === 'card'">
+                    <button type="button" class="ctx-item" @click="copyNameStem">
+                        <n-icon :size="16" :component="CopyOutline" />
+                        <span class="ctx-label">复制文件名</span>
                     </button>
-                    <button type="button" class="ctx-item" @click="openPlPicker">
-                        <n-icon :size="16" :component="StarOutline" />
-                        <span class="ctx-label">加入收藏夹…</span>
-                        <n-icon :size="14" :component="ChevronForwardOutline" class="ctx-arrow" />
+                    <button type="button" class="ctx-item" :disabled="!!readOnlyLevel" @click="copyPath">
+                        <n-icon :size="16" :component="LinkOutline" />
+                        <span class="ctx-label">复制文件地址</span>
                     </button>
+                    <button type="button" class="ctx-item" :disabled="!!readOnlyLevel" @click="revealInFolder">
+                        <n-icon :size="16" :component="FolderOpenOutline" />
+                        <span class="ctx-label">打开所在文件夹</span>
+                    </button>
+                    <div class="ctx-sep" aria-hidden="true"></div>
+                    <!-- 收录组：同一个菜单位置，两种模式——清单屏 = 移除；目录屏 = 加入。
+                         模式判据读 playlistLevel（NavEntry.pl 派生），不读 path 前缀。 -->
+                    <button v-if="playlistLevel" type="button" class="ctx-item" @click="removeFromCurrentPlaylist">
+                        <n-icon :size="16" :component="StarOutline" />
+                        <span class="ctx-label">从收藏夹移除</span>
+                    </button>
+                    <template v-else>
+                        <button type="button" class="ctx-item" @click="addToFavorite">
+                            <n-icon :size="16" :component="StarOutline" />
+                            <span class="ctx-label">加入收藏</span>
+                        </button>
+                        <button type="button" class="ctx-item" @click="openPlPicker">
+                            <n-icon :size="16" :component="StarOutline" />
+                            <span class="ctx-label">加入收藏夹…</span>
+                            <n-icon :size="14" :component="ChevronForwardOutline" class="ctx-arrow" />
+                        </button>
+                    </template>
+                    <div class="ctx-sep" aria-hidden="true"></div>
                 </template>
+                <!-- 目录工具组：卡片/空白两处都有，与「更多」下拉共用同一份 DIR_ACTIONS -->
+                <button v-for="a in dirActions" :key="a.key" type="button" class="ctx-item"
+                    :disabled="a.disabled" @click="runDirAction(a.key)">
+                    <n-icon :size="16" :component="a.icon" />
+                    <span class="ctx-label">{{ a.label }}</span>
+                </button>
             </div>
         </n-popover>
         <!-- 「加入收藏夹…」选单：右键菜单的第二级，原地展开在同一坐标（同 submenu 手势） -->
@@ -443,6 +459,7 @@
 <script setup lang="ts">
 import { formatBytes, ancestorsOf, foldCrumbList, isGridKeyBlocked, ANCHOR_PREFIX } from '@/utils';
 import type { PathCrumb } from '@/utils';
+import type { Component } from 'vue';
 import { apiUrl, getAction, postAction, ApiError } from '@/utils/request';
 import {
     addToPlaylist, buildMemberMap, defaultPlaylist, getPlaylistItems, playlistIndex,
@@ -464,7 +481,7 @@ import type { Density } from './density';
 import { buildCrumbLayout } from './crumbRows';
 import { dissolveGrid } from './gridDissolve';
 import { decideOpen, isMultiFileCard } from './openDecision';
-import { SearchOutline, RefreshOutline, ArrowBackOutline, CloseOutline, CopyOutline, DocumentTextOutline, StarOutline, ChevronForwardOutline } from '@vicons/ionicons5';
+import { SearchOutline, RefreshOutline, ArrowBackOutline, CloseOutline, CopyOutline, StarOutline, ChevronForwardOutline, LinkOutline, FolderOpenOutline, CloudDownloadOutline, ImageOutline, PersonOutline, SettingsOutline, ImagesOutline } from '@vicons/ionicons5';
 import { MoreVertical28Filled } from '@/components/icons/fluent';
 import { FlatCards24 } from '@/components/icons/grid';
 import { playSfx } from '@/utils/sfx';
@@ -663,6 +680,8 @@ const ctxMenu = ref<{
     y: number;
     name: string;
     stem: string;
+    /** 2026-11-09 双模式：card = 卡片右键（全部组）；blank = 空白右键（只有目录工具组） */
+    mode: 'card' | 'blank';
     /** 2026-10-21 清单功能：右击的那张卡。「加入收藏/加入清单」要的快照来源 */
     item: WiredFileInfo | null;
 }>({
@@ -671,6 +690,7 @@ const ctxMenu = ref<{
     y: 0,
     name: '',
     stem: '',
+    mode: 'card',
     item: null,
 });
 const searchText = ref('');
@@ -1511,31 +1531,32 @@ const onContextMenu = (e: MouseEvent, item: WiredFileInfo) => {
     ctxMenu.value.y = e.clientY;
     ctxMenu.value.name = fileNameOf(item);
     ctxMenu.value.stem = item.name;
+    ctxMenu.value.mode = 'card';
     // 2026-10-21 清单功能：连带记住这张卡 —— 「加入收藏 / 加入收藏夹…」的快照来源
     ctxMenu.value.item = item;
+};
+
+/**
+ * 空白处的右键：只有**目录工具组**（补全/重读/补封面/头像回收/站点规则/换封面）——
+ * 文件组与收录组都依赖"这一张"，空白处没有这一张。
+ * 卡片自己的右键会冒泡上来，用 closest 判掉：卡片由 onContextMenu 处理，这里只管空白。
+ */
+const onBlankContextMenu = (e: MouseEvent) => {
+    if ((e.target as HTMLElement).closest('.image-box-item')) return;
+    ctxMenu.value.visible = true;
+    ctxMenu.value.x = e.clientX;
+    ctxMenu.value.y = e.clientY;
+    ctxMenu.value.mode = 'blank';
+    ctxMenu.value.item = null;
 };
 
 /**
  * 菜单项「复制文件名」：把文件名交给主进程的 `copyText`（沿用 openFile 那条 IPC 通道）。
  * 先关菜单再复制：菜单是手动定位的浮层，留着会挡着后面的操作；
  * 并且复制是用户手势内发的，关掉它不影响 clipboard 写入。
- */
-const copyName = async () => {
-    const name = ctxMenu.value.name;
-    // ⚠️ 走 `closeCtxMenu()`：它顺带**收回焦点**（点过的按钮会把焦点留在
-    // 一个 `display:none` 的元素上 ⇒ 方向键随后失灵，见它的注释）
-    closeCtxMenu();
-    if (!name) return;
-    const err = await ipcRenderer.invoke('copyText', name);
-    if (err) notify('error', '复制失败', String(err));
-    else notify('success', '已复制文件名', name);
-};
-
-/**
- * 菜单项「复制文件名（去后缀）」：贴到搜索框里找片用的 —— 那里带 `.mp4` 是搜不到的。
  *
- * 与上面那条**平行写**，不合并成一个带参数的函数：两条的差别只有"取哪个字段"，
- * 合并省下的是 4 行，换来的是"复制"这件事多一层间接。保持两条直的。
+ * ⚠️ 2026-11-09 主人裁定：只留**去后缀**这一种（贴到搜索框找片用的 —— 那里带 `.mp4`
+ *    搜不到），名字就叫「复制文件名」；带后缀的那种删除。
  */
 const copyNameStem = async () => {
     const stem = ctxMenu.value.stem;
@@ -1543,7 +1564,27 @@ const copyNameStem = async () => {
     if (!stem) return;
     const err = await ipcRenderer.invoke('copyText', stem);
     if (err) notify('error', '复制失败', String(err));
-    else notify('success', '已复制文件名（去后缀）', stem);
+    else notify('success', '已复制文件名', stem);
+};
+
+/** 菜单项「复制文件地址」：完整磁盘路径（fullPathOf，含当前盘符）。只读层是锚点、没有真路径 ⇒ 禁用。 */
+const copyPath = async () => {
+    const item = ctxMenu.value.item;
+    closeCtxMenu();
+    if (!item) return;
+    const full = fullPathOf(item);
+    const err = await ipcRenderer.invoke('copyText', full);
+    if (err) notify('error', '复制失败', String(err));
+    else notify('success', '已复制文件地址', full);
+};
+
+/** 菜单项「打开所在文件夹」：资源管理器里定位这个文件（showItemInFolder 会选中它）。 */
+const revealInFolder = async () => {
+    const item = ctxMenu.value.item;
+    closeCtxMenu();
+    if (!item) return;
+    const err = await ipcRenderer.invoke('ff-reveal-item', fullPathOf(item));
+    if (err) notify('error', '打开失败', String(err));
 };
 
 /**
@@ -2211,23 +2252,54 @@ const moreMenuProps = () => ({
     ].join('; '),
 });
 
-const moreOptions = computed(() => [
+/**
+ * 目录工具动作的**唯一清单**——「更多」下拉与右键菜单（卡片/空白两处）共用这一份。
+ * 图标只给右键菜单用；label 允许动态（换封面⇄退出换封面）。
+ * 禁用判据与 2026-11-08 的下拉版一致：扫描/挑封面期间、清单屏无历史、只读层。
+ */
+interface DirAction {
+    key: string;
+    label: () => string;
+    icon: Component;
+    disabled: () => boolean;
+}
+const scanLocked = () => scanning.value || picking.value || !history.value.length || !!readOnlyLevel.value;
+const DIR_ACTIONS: DirAction[] = [
     // ⚠️ 扫描类动作在「挑封面」模式下**也禁用**：它们会把网格重扫一遍，
     // 而状态条那边是 `v-if="scanning || picking"` 且扫描优先 —— 扫描条会把挑选 UI
     // 顶掉（选中的东西还在、但你看不见那个计数和处理按钮了）。
-    { label: '补全这一片', key: 'fill', disabled: scanning.value || picking.value || !history.value.length || readOnlyLevel.value },
-    { label: '重读这一片', key: 'rescan', disabled: scanning.value || picking.value || !history.value.length || readOnlyLevel.value },
-    { label: '补封面', key: 'cover', disabled: scanning.value },
-    { label: '头像回收', key: 'avatar-recovery', disabled: scanning.value || picking.value || !history.value.length || readOnlyLevel.value },
+    { key: 'fill', label: () => '补全这一片', icon: CloudDownloadOutline, disabled: scanLocked },
+    { key: 'rescan', label: () => '重读这一片', icon: RefreshOutline, disabled: scanLocked },
+    { key: 'cover', label: () => '补封面', icon: ImageOutline, disabled: () => scanning.value },
+    { key: 'avatar-recovery', label: () => '头像回收', icon: PersonOutline, disabled: scanLocked },
     // 「站点规则」= 抓取规则的编辑器（入口 / 动作 / 抽取三段）。它是**系统盘上的配置**，
     // 与移动硬盘无关 ⇒ 离线只读层里也允许打开（不禁用）。
-    { label: '站点规则', key: 'rules' },
+    { key: 'rules', label: () => '站点规则', icon: SettingsOutline, disabled: () => false },
     // 「换封面」= 补封面的**反面**：补封面是让程序找出"没有封面的"，
     // 换封面是让用户自己挑"有封面但要换的"。两者最终复用同一个弹窗、同一条抓取写入链路。
-    // 「换封面」= 补封面的反面（用户自己挑"有封面但要换的"）。
     // 2026-10-21：主人裁定它不是高频动作 ⇒ 从次栏搬回这里，不占常驻位置。
-    { label: picking.value ? '退出换封面' : '换封面', key: 'faces', disabled: scanning.value || readOnlyLevel.value },
-]);
+    { key: 'faces', label: () => (picking.value ? '退出换封面' : '换封面'), icon: ImagesOutline, disabled: () => scanning.value || !!readOnlyLevel.value },
+];
+
+const moreOptions = computed(() => DIR_ACTIONS.map((a) => ({
+    label: a.label(),
+    key: a.key,
+    disabled: a.disabled(),
+})));
+
+/** 右键菜单的目录工具组：label/disabled 求值成普通值供模板渲染 */
+const dirActions = computed(() => DIR_ACTIONS.map((a) => ({
+    key: a.key,
+    label: a.label(),
+    icon: a.icon,
+    disabled: a.disabled(),
+})));
+
+/** 右键菜单里点目录工具：先收菜单再走与下拉同一个处理器（一份实现） */
+const runDirAction = (key: string) => {
+    closeCtxMenu();
+    onMoreSelect(key);
+};
 
 /**
  * 下拉选中。**「重读」的确认放在这里**（唯一不可逆 × 波及面最大的动作）。
@@ -4255,6 +4327,11 @@ body>.n-popover:has(>.ctx-menu) {
 .ctx-item:hover {
     /* 菜单悬停走 --ff-menu-hover（语义正确的既有 token，白底上 0.10 太耳语已提一档） */
     background: var(--ff-menu-hover);
+}
+
+.ctx-item:disabled {
+    opacity: .4;
+    cursor: default;
 }
 
 .ctx-item:active {
