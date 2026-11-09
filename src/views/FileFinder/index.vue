@@ -465,6 +465,7 @@ import { decideOpen, isMultiFileCard } from './openDecision';
 import { SearchOutline, RefreshOutline, ArrowBackOutline, CloseOutline } from '@vicons/ionicons5';
 import { MoreVertical28Filled } from '@/components/icons/fluent';
 import { FlatCards24 } from '@/components/icons/grid';
+import { playSfx } from '@/utils/sfx';
 import { NButton, NInput, NIcon, NImage, NImageGroup, NTag, NPopover, NSpin, NTooltip, NDropdown, useLoadingBar } from 'naive-ui';
 import FolderSelector from '@/components/FolderSelector/index.vue';
 import ScanGlow from './ScanGlow.vue';
@@ -1770,6 +1771,7 @@ const waitForGridOf = async (path: string, maxFrames = 20) => {
 const toggleFlatView = async () => {
     if (!canToggleFlat.value || scanning.value) return;
     isFlatView.value = !isFlatView.value;
+    playSfx(isFlatView.value ? 'switch-on' : 'switch-off');
     const cur = history.value[history.value.length - 1];
     if (cur) {
         await fetchFolder(cur.path, cur.mode, false, isFlatView.value);
