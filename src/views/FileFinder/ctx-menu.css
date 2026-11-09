@@ -16,9 +16,13 @@
     outline: none;
 }
 
-/* n-popover 自带的内衬 padding 对菜单是多余的，:has 精准只打这一个 popover */
-body>.n-popover:has(>.ctx-menu) {
-    padding: 3px;
+/* 内衬：naive 的 popover 读 `--n-padding`（默认 8px 14px，对菜单太胖）。
+   两条都写：变量给 devtools 看和以后复用，`padding` 直接压属性 —— naive 的主题变量是
+   **内联**挂在根节点上的，只改 CSS 变量赢不了内联值。
+   选择器不带 `body>`：弹层挂在哪个容器由 naive 决定，靠类名 + `:has` 精准命中这一个菜单。 */
+.n-popover:has(>.ctx-menu) {
+    --n-padding: 2px;
+    padding: 2px;
 }
 
 .ctx-item {

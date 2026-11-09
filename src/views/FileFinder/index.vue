@@ -299,7 +299,7 @@
                 :done="scanDone"
                 :pending="scanPending"
                 @cancel="onScanCancel"
-                @closed="glow = ''"
+                @closed="onGlowClosed"
             />
         </div>
         <!-- 扫描状态条。PC 文件管理器的做法：**进度和「取消」成对待在独立的一条里**，
@@ -1512,13 +1512,23 @@ const openHistory = (path: string) => {
  * 批量扫描「这一片」的全部状态与流程 —— 见 useScanFlow.ts。
  * 这里只留一条"扫完怎么刷当前屏"的实现（页面才知道清单屏与目录屏的差别）。
  */
-const { scanning, scanDone, scanPending, cancelling, glow, glowKey, startScan, onScanCancel } =
+const { scanning, scanDone, scanPending, cancelling, scanOk, glow, glowKey, startScan, onScanCancel } =
     useScanFlow({
         currentPath,
         notify,
         refreshScreen: reloadCurrentScreen,
         fullPathOf,
     });
+
+/**
+ * 扫描动效收尾（向上扫到顶、淡出到底）—— **完成音挂这里**，不挂在 `scanning` 变 false 的那一刻：
+ * 那一刻画面上还在往上扫，声音会抢在视觉前面。
+ * 取消 / 失败不响（`scanOk` 只在"跑到底且没人按取消"时为真）。
+ */
+const onGlowClosed = () => {
+    glow.value = '';
+    if (scanOk.value) playSfx('success');
+};
 
 /**
  * 「更多」菜单外观：只走 naive-ui 预留的 var(--n-*) 变量，不覆盖选择器。

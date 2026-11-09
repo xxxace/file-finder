@@ -460,3 +460,41 @@ isReadOnlyPath / driveLetterOf / getAnchor / resolveAnchor / notify / playSfx）
 | 独立样式文件 | 0 | 7（4 scoped .less + 3 全局 .css） |
 | 重复块（≥8 行） | 2（均为既有 vendored） | 2（未增） |
 | 死导入 / 死导出 | 若干 | 拆一轮清一轮 |
+
+---
+
+## 十五、右键菜单内衬 + 扫描完成音（2026-11-09 20:3x）
+
+### 1. 右键菜单内衬 3px → 2px
+
+原规则选的是 `body>.n-popover:has(>.ctx-menu)`。**`body>` 这一层是错的**——弹层挂在哪由 naive
+决定，多一层容器就整个选择器失效，于是 `--n-padding` 一直是默认的 `8px 14px`。
+改成 `.n-popover:has(>.ctx-menu)`（不再依赖父级），并且**变量和属性都写**：
+
+```css
+.n-popover:has(>.ctx-menu) { --n-padding: 2px; padding: 2px; }
+```
+
+只改变量不够：naive 的主题变量是**内联**挂在根节点上的，CSS 里的同名变量赢不了内联值。
+
+### 2. 扫描完成音
+
+挂在 `ScanGlow` 的 `@closed`（向上扫到顶 + 淡出到底那一刻），不是 `scanning` 变 false 那一刻 ——
+后者画面上还在往上扫，声音会抢在视觉前面。
+
+「算不算完成」由 `useScanFlow` 的 `scanOk` 决定：跑到底且没人按取消才为真；
+取消/出错都不响（出错另有 `notify('error')` 的 warn 音，不会双重）。
+
+### 3. 音效覆盖审计（顺手做的）
+
+已有（都走 `useNotify` 或显式事件，18 处 `notify('success')` 自动覆盖）：
+复制文件名/地址、加入收藏、补封面写入、头像写入、深度重扫、索引更新、备份/还原/合并、
+删除记录、站点规则保存、盘插回；交互侧有 hover / menu-click / mode / switch / theme / drive。
+
+**这次补上的唯一缺口**：扫描（补全 / 重读）完成。
+
+**发现但没动的**：
+- 「从收藏夹移除」成功时**既无 toast 也无音**（加入有）。要不要补一句 toast 属于界面行为，等裁决。
+- 配方 `pick`（bead）与 `done`（ping）**定义了但零调用点** —— 要么删，要么给「收藏添加 / 复制完成」用；
+  换掉现有 `success`(bloom) 会动到他调好的手感，所以先不动。
+- 扫描「取消」不给完成音（取消不是完成）；预览翻页、双击打开都不加（视觉反馈已经很强，加了会吵）。

@@ -78,6 +78,12 @@ export function useScanFlow(deps: ScanFlowDeps) {
     let scanCancelled = false;
 
     /**
+     * 上一轮**正常扫完**（没取消、没出错）。
+     * 页面用它决定"动效向上扫完时要不要响那一声完成音"—— 取消/失败不该有完成音。
+     */
+    const scanOk = ref(false);
+
+    /**
      * 批量扫描专用的取数：**只往返，不写任何界面状态**。
      *
      * 为什么不复用 `fetchFolder`（方案 §16.1 第 1 条）：那个函数会写
@@ -156,6 +162,7 @@ export function useScanFlow(deps: ScanFlowDeps) {
 
         scanning.value = true;
         scanCancelled = false;
+        scanOk.value = false;
         cancelling.value = false;
         scanDone.value = 0;
         glow.value = rescan ? 'rescan' : 'fill';
@@ -288,12 +295,15 @@ export function useScanFlow(deps: ScanFlowDeps) {
             // 连已缓存集合/盘列表都取不到（服务没起来）—— 再往下扫也没意义，直接报错收工
             console.error('[批量扫描] 准备失败:', err);
             deps.notify('error', rescan ? '重读失败' : '补全失败', String(err));
+            scanOk.value = false;
         } finally {
             scanning.value = false;
             // 退场时把"正在取消"一起清掉：否则下次开扫前那几百毫秒里，
             // 状态条会先按"正在取消"的样子闪一下
             cancelling.value = false;
             scanPending.value = 0;
+            // 只有"跑到底且没人按取消"才算完成 —— 这两件事在 finally 里都还读得到
+            if (!scanCancelled) scanOk.value = true;
 
             // 「重读这一片」扫的恰好包含**你正在看的这一层** —— 不刷一下的话网格还是旧的，
             // 看起来像"这个按钮没生效"。
@@ -330,5 +340,5 @@ export function useScanFlow(deps: ScanFlowDeps) {
     const glowKey = ref(0);
 
 
-    return { scanning, scanDone, scanPending, cancelling, glow, glowKey, startScan, onScanCancel };
+    return { scanning, scanDone, scanPending, cancelling, scanOk, glow, glowKey, startScan, onScanCancel };
 }
