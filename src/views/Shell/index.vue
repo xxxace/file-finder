@@ -26,6 +26,7 @@ import RailNav from './RailNav.vue';
 import { RAIL_PATHS } from './nav';
 import type { RailKey } from './nav';
 import { useTheme } from '@/hooks/useTheme';
+import { playSfx } from '@/utils/sfx';
 
 const route = useRoute();
 const router = useRouter();
@@ -37,7 +38,9 @@ const active = computed<RailKey>(() => {
 });
 
 const go = (key: RailKey) => {
+    // 已在当前页 = 空点击，不响（路由也不推）。这里是全部菜单点击的唯一出口。
     if (active.value === key) return;
+    playSfx('menu-click');
     void router.push(RAIL_PATHS[key]);
 };
 </script>

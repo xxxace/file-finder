@@ -19,6 +19,7 @@ import { SFX_RECIPES, type SfxRecipe } from './recipes';
 
 export type SfxEvent =
     | 'mode'          // 档位/步进切换（网格密度、视图模式）
+    | 'menu-click'   // 左轨菜单点击（Nib tick）
     | 'switch-on'     // 开关打开
     | 'switch-off'    // 开关关闭
     | 'theme-light'   // 切到浅色
@@ -31,6 +32,7 @@ export type SfxEvent =
 
 const EVENT_RECIPE: Record<SfxEvent, SfxRecipe> = {
     mode: SFX_RECIPES.notch,
+    'menu-click': SFX_RECIPES.nib,
     'switch-on': SFX_RECIPES.clasp,
     'switch-off': SFX_RECIPES.unclasp,
     'theme-light': SFX_RECIPES.daylight,
