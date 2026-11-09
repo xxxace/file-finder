@@ -96,6 +96,7 @@ onBeforeUnmount(() => {
     border-radius: 8px;
     background: var(--ff-tooltip-bg);
     color: var(--ff-tooltip-text);
+    backdrop-filter: var(--ff-tooltip-backdrop);
     font-size: 12.5px;
     font-weight: 500;
     line-height: 1.2;
