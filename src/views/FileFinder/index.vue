@@ -4210,7 +4210,7 @@ body>.n-image-preview-container .n-image-preview-toolbar {
     /* 预览层的底色永远是"照片"，所以这组值**不随主题**，见 tokens 里的 `--ff-media-*`。 */
     background: var(--ff-media-bar-bg);
     backdrop-filter: blur(20px) saturate(140%);
-    box-shadow: inset 0 1px 0 var(--ff-media-bar-line), 0 8px 24px -8px rgba(0, 0, 0, 0.45);
+    box-shadow: var(--ff-media-bar-shadow);
     /* ⚠️ 图标与文字必须显式给浅色：naive 的 `--n-icon-color` 会继承 `common.iconColor`
        （我们把它设成了次要灰 text-2），直接落到这条工具条上就成了"灰图标压在暗底"。 */
     color: var(--ff-media-icon);
