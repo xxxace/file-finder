@@ -4175,7 +4175,7 @@ body>.n-image-preview-container .n-image-preview.fade-in-scale-up-transition-lea
 body>.n-image-preview-container .n-image-preview-toolbar {
     left: 50%;
     right: auto;
-    bottom: 12px;
+    bottom: 8px;
     transform: translateX(-50%);
     max-width: min(92vw, 980px);
     height: 48px;
@@ -4229,7 +4229,9 @@ body>.n-image-preview-container .n-image-preview-toolbar {
    left/width 由 JS 写（pointerenter 时量 cell），opacity 管进出。 */
 .ptb-sel {
     position: absolute;
-    top: 6px;
+    /* ⚠️ 相对 .ptb-tools（36px 高，被 flex 夹在 48px 条中间居中），不是整条工具条
+       —— top:6px 会整体下沉 6px（真机截图：图标偏上、框偏下）。0 = 与 cell 完全对齐。 */
+    top: 0;
     height: 36px;
     left: 0;
     width: 0;
