@@ -392,16 +392,35 @@
             </div>
         </n-popover>
         <n-popover :show="ctxMenu.visible" :x="ctxMenu.x" :y="ctxMenu.y" trigger="manual" placement="bottom-start"
-            @clickoutside="closeCtxMenu">
-            <div class="hstack" tabindex="-1" @keydown.stop="onCtxMenuKeydown">
-                <n-button size="small" @click="copyName">复制文件名</n-button>
-                <n-button size="small" @click="copyNameStem">复制文件名（去后缀）</n-button>
+            :show-arrow="false" @clickoutside="closeCtxMenu">
+            <!-- 2026-11-09 重构：横排小按钮 → Apple 式纵向菜单（图标+标签+分组发丝线）。
+                 内容被 n-popover teleport 到 body ⇒ 样式走文件末尾的非 scoped 块（.ctx-*）。 -->
+            <div class="ctx-menu" tabindex="-1" @keydown.stop="onCtxMenuKeydown">
+                <button type="button" class="ctx-item" @click="copyName">
+                    <n-icon :size="16" :component="CopyOutline" />
+                    <span class="ctx-label">复制文件名</span>
+                </button>
+                <button type="button" class="ctx-item" @click="copyNameStem">
+                    <n-icon :size="16" :component="DocumentTextOutline" />
+                    <span class="ctx-label">复制文件名（去后缀）</span>
+                </button>
+                <div class="ctx-sep" aria-hidden="true"></div>
                 <!-- 同一个菜单位置，两种模式：清单屏里 = 收录动作（移除）；目录屏里 = 收录动作（加入）。
                      模式判据读 playlistLevel（NavEntry.pl 派生），不读 path 前缀。 -->
-                <n-button v-if="playlistLevel" size="small" @click="removeFromCurrentPlaylist">从收藏夹移除</n-button>
+                <button v-if="playlistLevel" type="button" class="ctx-item" @click="removeFromCurrentPlaylist">
+                    <n-icon :size="16" :component="StarOutline" />
+                    <span class="ctx-label">从收藏夹移除</span>
+                </button>
                 <template v-else>
-                    <n-button size="small" @click="addToFavorite">加入收藏</n-button>
-                    <n-button size="small" @click="openPlPicker">加入收藏夹…</n-button>
+                    <button type="button" class="ctx-item" @click="addToFavorite">
+                        <n-icon :size="16" :component="StarOutline" />
+                        <span class="ctx-label">加入收藏</span>
+                    </button>
+                    <button type="button" class="ctx-item" @click="openPlPicker">
+                        <n-icon :size="16" :component="StarOutline" />
+                        <span class="ctx-label">加入收藏夹…</span>
+                        <n-icon :size="14" :component="ChevronForwardOutline" class="ctx-arrow" />
+                    </button>
                 </template>
             </div>
         </n-popover>
@@ -445,7 +464,7 @@ import type { Density } from './density';
 import { buildCrumbLayout } from './crumbRows';
 import { dissolveGrid } from './gridDissolve';
 import { decideOpen, isMultiFileCard } from './openDecision';
-import { SearchOutline, RefreshOutline, ArrowBackOutline, CloseOutline } from '@vicons/ionicons5';
+import { SearchOutline, RefreshOutline, ArrowBackOutline, CloseOutline, CopyOutline, DocumentTextOutline, StarOutline, ChevronForwardOutline } from '@vicons/ionicons5';
 import { MoreVertical28Filled } from '@/components/icons/fluent';
 import { FlatCards24 } from '@/components/icons/grid';
 import { playSfx } from '@/utils/sfx';
@@ -4195,6 +4214,65 @@ body>.n-image-preview-container .n-image-preview.fade-in-scale-up-transition-lea
 
 body>.n-image-preview-container .n-image-preview-toolbar {
     view-transition-name: none;
+}
+
+/* ════ 右键菜单（2026-11-09 重构：横排小按钮 → Apple 式纵向菜单）══════
+   内容被 n-popover teleport 到 body，scoped 够不到 ⇒ 非 scoped + .ctx- 前缀兜作用域。
+   语言与全站一族：圆角 8 灰底悬浮、发丝分隔线、图标与文字同色。 */
+.ctx-menu {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    min-width: 208px;
+    padding: 4px;
+    box-sizing: border-box;
+    outline: none;
+}
+
+/* n-popover 自带的内衬 padding 对菜单是多余的，:has 精准只打这一个 popover */
+body>.n-popover:has(>.ctx-menu) {
+    padding: 4px;
+}
+
+.ctx-item {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    height: 32px;
+    padding: 0 10px;
+    border: 0;
+    border-radius: var(--ff-r-ctl);
+    background: transparent;
+    color: var(--ff-text-1);
+    font: inherit;
+    font-size: 13px;
+    text-align: left;
+    cursor: pointer;
+    transition: background-color var(--ff-dur-hover) ease;
+}
+
+.ctx-item:hover {
+    background: var(--ff-ctl-hover);
+}
+
+.ctx-item:active {
+    background: var(--ff-ctl-on);
+}
+
+.ctx-label {
+    flex: 1 1 auto;
+    white-space: nowrap;
+}
+
+.ctx-arrow {
+    margin-left: auto;
+    color: var(--ff-text-2);
+}
+
+.ctx-sep {
+    height: 1px;
+    margin: 4px 6px;
+    background: var(--ff-line);
 }
 
 /* ② 工具条（2026-11-09 重构）：回归 naive 原生的「居中胶囊」—— 通栏是旧裁定
