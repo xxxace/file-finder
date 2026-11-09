@@ -27,8 +27,9 @@ export default defineConfig({
         onstart: process.env.VSCODE_DEBUG ? () => {} : undefined,
         vite: {
           build: {
-            // For Debug
-            sourcemap: true,
+            // sourcemap 只在 VS Code 调试流（launch.json 注入 VSCODE_DEBUG）里开；
+            // 打包版（`npm run build`）不带 —— map 是注释之外唯一漏进 asar 的"注释类"负载。
+            sourcemap: !!process.env.VSCODE_DEBUG,
             outDir: 'dist/electron/main',
           },
           /**
@@ -50,8 +51,8 @@ export default defineConfig({
         },
         vite: {
           build: {
-            // For Debug
-            sourcemap: 'inline',
+            // inline map 会把整个 map 塞进 JS 里，尤肥 —— 同样只在调试流开。
+            sourcemap: process.env.VSCODE_DEBUG ? 'inline' : false,
             outDir: 'dist/electron/preload',
           },
           // 与主进程同一条契约：预加载脚本也不许把运行期依赖内联进来。
