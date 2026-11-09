@@ -18,8 +18,8 @@
  * 放不下翻上方，左右 clamp 进视口 12px），再 nextTick 复量一次 —— 文案变了宽度会变。
  * 动画：transform 200ms `--ff-ease-move`（一拍），透明度 150ms；snap 时位移不补间。
  */
-import { nextTick, reactive, ref, watch } from 'vue';
-import { tipState } from './fluidTip';
+import { nextTick, onBeforeUnmount, reactive, ref, watch } from 'vue';
+import { hideTip, tipState } from './fluidTip';
 
 const el = ref<HTMLElement | null>(null);
 const pos = reactive({ x: -1000, y: -1000 });
@@ -46,6 +46,38 @@ watch(
     },
     { deep: false },
 );
+
+/**
+ * 锚点活性自愈（Floating UI `autoUpdate` 的思路）：
+ * 「进入」由事件驱动，但事件有管不到的死亡路径 —— 锚点被从 DOM 拆掉
+ * （预览关层、列表重渲染、v-if 撤销）时 `pointerleave` 永远不会发。
+ * 可见期间逐帧校验：锚点不在文档里 / 尺寸归零 ⇒ 立刻收；
+ * 锚点只是**动了**（滚动 / 布局变化）⇒ 更新 anchor 让落位跟着走。
+ * 只在可见时跑一帧一次 `getBoundingClientRect`，隐藏即停 —— 成本可忽略。
+ */
+let tickRaf = 0;
+const tick = () => {
+    tickRaf = 0;
+    const el = tipState.anchorEl;
+    if (!tipState.visible || !el) return;
+    if (!el.isConnected) { hideTip(); return; }
+    const r = el.getBoundingClientRect();
+    if (r.width === 0 && r.height === 0) { hideTip(); return; }
+    const a = tipState.anchor;
+    if (!a || r.left !== a.left || r.top !== a.top || r.width !== a.width || r.height !== a.height) {
+        tipState.anchor = r;
+    }
+    tickRaf = requestAnimationFrame(tick);
+};
+
+watch(() => tipState.visible, (v) => {
+    if (v && !tickRaf) tickRaf = requestAnimationFrame(tick);
+    else if (!v && tickRaf) { cancelAnimationFrame(tickRaf); tickRaf = 0; }
+});
+
+onBeforeUnmount(() => {
+    if (tickRaf) cancelAnimationFrame(tickRaf);
+});
 </script>
 
 <style lang="less">

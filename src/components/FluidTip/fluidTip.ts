@@ -26,6 +26,8 @@ export const tipState = reactive({
     text: '',
     keys: '',
     anchor: null as DOMRect | null,
+    /** 锚点元素本体 —— 宿主每帧校验它的活性（isConnected / rect 漂移），见 FluidTipHost */
+    anchorEl: null as HTMLElement | null,
 });
 
 let lastAnchor: DOMRect | null = null;
@@ -51,6 +53,7 @@ function apply(el: HTMLElement, payload: TipPayload, adjacent: boolean) {
     tipState.keys = payload.keys ?? '';
     tipState.snap = !adjacent;
     tipState.anchor = rect;
+    tipState.anchorEl = el;
     lastAnchor = rect;
     tipState.visible = true;
 }
@@ -84,6 +87,7 @@ export function hideTip() {
     hideTimer = window.setTimeout(() => {
         hideTimer = 0;
         tipState.visible = false;
+        tipState.anchorEl = null;
         lastAnchor = null;
     }, LEAVE_DELAY);
 }

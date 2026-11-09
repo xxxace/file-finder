@@ -8,7 +8,6 @@ import { computed, h, nextTick, onMounted, ref, watch, withDirectives } from 'vu
 import { NIcon } from 'naive-ui';
 import { LocateOutline } from '@vicons/ionicons5';
 import { vTip } from '@/components/FluidTip/directive';
-import { hideTip } from '@/components/FluidTip/fluidTip';
 import type { ImgHTMLAttributes } from 'vue';
 import type { WiredFileInfo } from '../../../electron/server/index';
 
@@ -198,9 +197,8 @@ export function usePreview(deps: {
         // 已经排好的"升级大图"要掐掉：那个请求可能要读移动硬盘上的原图，
         // 预览都关了还去读就是白读（见 cancelSharpTimer 的注释）。
         cancelSharpTimer();
-        // ⚠️ 关预览时 naive 直接拆掉工具条 DOM，pointerleave 永远不会发
-        // ⇒ FluidTip 会卡在原地不销毁（真机 bug：点定位/回车后胶囊还挂着）。显式收掉。
-        hideTip();
+        // FluidTip 的销毁不用管：锚点（工具栏 DOM）被拆掉时，宿主的活性自愈
+        // （FluidTipHost 的逐帧 isConnected 校验）会自己收掉它 —— 组件级机制，调用方零感知。
         // 翻页只同步不滚动 ⇒ 关掉时高亮可能停在视口外。这里把它请回来（幂等：看得见就不动）。
         revealCursor();
     };
