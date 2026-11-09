@@ -3403,8 +3403,9 @@ const onDisksChangedIpc = (_e: unknown, disks: { serial: string; drive: string }
 
     /* 定位蒙层的透明度过渡写在基类：压暗（.is-locating）与恢复（撤 class）两个方向都要动。
        进出不对称——压暗 .12s（立刻抓注意力）、恢复 .2s 一拍（视线 softly 放回全屏）；
-       transform 同步给 cursor 卡的 1.012↔1.02 抬升用。 */
-    transition: opacity 0.12s ease, transform 0.16s var(--ff-ease-move);
+       transform 用过冲曲线（--ff-ease-enter）：cursor 卡 1.012↔1.02 的抬升带一点 Q 弹，
+       与预览进场同一族手感。 */
+    transition: opacity 0.12s ease, transform 0.18s var(--ff-ease-enter);
 
     /* 卡片内层序契约（唯一真相源）——"谁盖住谁"只在这里定，别在别处补 z-index 数字。
      * ⚠️ 封面图 z-index:1 会盖住没给层级的浮层；别逐个元素打补丁（换元素就复发），统一按下面 --z-* 变量定契约。 */
@@ -4131,12 +4132,14 @@ body>.n-image-preview-container .n-image-preview-wrapper {
 
 /* ③ 开合过渡 token 化（2026-11-09）。naive 原装：进出场都是 .2s、进场 scale .9 弹得太大、
       退场还缩尺（元素都在消失了不该再变形）。改按动效预算：
-      进场 = 200ms 一拍 + --ff-ease-move（scale .965 轻抬，不过冲）；
+      进场 = 260ms + --ff-ease-enter（过冲 1.28 的 Q 弹曲线，LeiBox 弹簧的 CSS 近似：
+      弹簧积分器只在「动画可打断」时必要，预览开合是一次性动作，Bezier 过冲拿到 80% 手感）；
+      起始 scale .9（行程够长，过冲才看得见：峰值 ≈1.014 再回落）；
       退场 = 140ms 只淡出（退出永远比进入短，且不缩放）。
       ⚠️ 只影响开/关那一瞬：transition 类在动画结束后被 Vue 摘掉，
       之后的缩放/拖动（naive 每次重写整段内联 cssText）完全不受影响。 */
 body>.n-image-preview-container.fade-in-transition-enter-active {
-    transition: opacity .2s var(--ff-ease-move) !important;
+    transition: opacity .26s var(--ff-ease-enter) !important;
 }
 
 body>.n-image-preview-container.fade-in-transition-leave-active {
@@ -4144,12 +4147,12 @@ body>.n-image-preview-container.fade-in-transition-leave-active {
 }
 
 body>.n-image-preview-container .n-image-preview.fade-in-scale-up-transition-enter-active {
-    transition: opacity .2s var(--ff-ease-move), transform .2s var(--ff-ease-move) !important;
+    transition: opacity .26s var(--ff-ease-enter), transform .26s var(--ff-ease-enter) !important;
 }
 
 body>.n-image-preview-container .n-image-preview.fade-in-scale-up-transition-enter-from {
     opacity: 0;
-    transform: scale(.965);
+    transform: scale(.9);
 }
 
 body>.n-image-preview-container .n-image-preview.fade-in-scale-up-transition-enter-to {
