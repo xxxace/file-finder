@@ -210,7 +210,9 @@ export function useNaiveOverrides(): ComputedRef<GlobalThemeOverrides> {
                ⚠️ 点阵、闪烁、前缘辉光都在 `loading-bar.css`：那些是 naive 没有对应键的东西，
                写进主题只会变成"主题里假装能配、实际不生效"。 */
             LoadingBar: {
-                colorLoading: v('--ff-bar-base'),
+                /* 直接拿 `--ff-bar-base-stops` 拼：那条定制属性就是唯一真相源，
+                   不在 tokens 里再存一份 `linear-gradient(...)` 的镜像值。 */
+                colorLoading: `linear-gradient(90deg, ${v('--ff-bar-base-stops')})`,
                 height: v('--ff-bar-h'),
             },
 

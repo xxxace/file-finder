@@ -18,6 +18,8 @@
                比我方 CSS 更晚 ⇒ 同权重下它赢；走 inline style 就与加载顺序无关。 -->
           <n-loading-bar-provider :container-style="{ height: 'var(--ff-bar-h)', visibility: 'hidden' }">
             <AppShell />
+            <!-- 提示类浮层（toast / confirm / banner）的唯一宿主，内部 Teleport 到 body -->
+            <OverlayHost />
           </n-loading-bar-provider>
         </n-message-provider>
       </n-notification-provider>
@@ -28,6 +30,7 @@
 <script setup lang="ts">
 import { ref } from 'vue';
 import AppShell from './views/Shell/index.vue';
+import OverlayHost from './components/Overlay/OverlayHost.vue';
 import {
   NConfigProvider, NLoadingBarProvider, NMessageProvider, NNotificationProvider, NDialogProvider,
   zhCN, dateZhCN, darkTheme,

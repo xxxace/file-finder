@@ -26,7 +26,12 @@
                             </template>
                         </n-input>
                     </div>
-                    <n-button size="small" :loading="diskLoading || loading" @click="onRefresh">刷新</n-button>
+                    <!-- 2026-11-08 图标化（主人裁决）：对齐主界面 11-08 顶栏语言（28×28 图标钮）。
+                         loading 态 naive 会把图标换成转圈，语义不丢；title 补"刷新"二字的可发现性。 -->
+                    <n-button size="small" circle quaternary :loading="diskLoading || loading"
+                        @click="onRefresh" title="刷新（重探盘符并重取列表）" aria-label="刷新">
+                        <template #icon><n-icon :component="RefreshOutline" /></template>
+                    </n-button>
                 </div>
         </header>
             <!-- ⚠️ 只有**表格那一块**滚动，不是整个弹窗 body 滚动。
@@ -42,11 +47,10 @@
                     数据加载中...
                 </template>
 
-                <n-alert v-if="duplicated.length" type="warning" :show-icon="true" style="margin-bottom: 10px">
-                    <template #header>检测到克隆盘</template>
+                <Banner v-if="duplicated.length" type="warning" title="检测到克隆盘" style="margin-bottom: 10px">
                     有 {{ duplicated.length }} 组移动硬盘的卷序列号完全一样（用 Ghost 之类整盘克隆会这样）。
                     序列号是这套缓存区分硬盘的唯一依据，两者会互相串 —— 建议重新格式化其中一块。
-                </n-alert>
+                </Banner>
 
                 <!-- G2「逛」= 总览 + 唯一的安全出口；下一行才是盘筛选。
                      这一行左边留给总览句（盘数 / 目录数 / 条目数 / 已读到多少 / 库大小 / 最近扫描）——
@@ -64,7 +68,12 @@
                          全部来自 /getDisks 的 stats —— **服务端在内存里汇总**，一次盘都不读。
                          「已读到」这个措辞是刻意的：它是缓存里记录到的字节之和（扫描快照），
                          不是"硬盘上有多少"。 -->
-                    <span class="overview">{{ overview }}</span>
+                    <!-- 2026-11-08 形态升级为「数据带」（主人裁决）：仍是独占一行、仍是同一句内容，
+                         但装进面板皮；主句允许折两行，扫描时间永远靠右不折。措辞一字未动。 -->
+                    <div v-if="overviewMain" class="overview-band">
+                        <span class="overview">{{ overviewMain }}</span>
+                        <span v-if="overviewScan" class="overview-scan">{{ overviewScan }}</span>
+                    </div>
                 </div>
 
                 <!-- 选盘 = 这套缓存的分组维度：先说清"这些缓存属于哪块盘"，再列那块盘缓存过哪些目录。
@@ -138,72 +147,38 @@
                 </div>
             </n-spin>
 
-            <!-- G4「管理」= 低频 + 会动数据的动作，全部收进折叠区（默认收起）。
-                 分组本身就是第一道危险分级：外面那几行是查 / 逛 / 安全出口，这里面才是会改数据的。
-                 ⚠️ 两个「备份」已合一：原来那个「备份」把库默默写进你看不见的数据目录，
-                 而且**按天同名覆盖**（同一天备份第二次会把第一次盖掉）——
-                 那给的是"我以为备份了"的**假安全感**，是备份功能最坏的失败模式。
-                 `/backup` 接口保留不删（零成本，将来"退出时自动快照"可直接复用）。
-                 见 docs/DESIGN-BACKUP-2026-09-24.md §7.8 —— 那里本来就挂着"是否收掉，等你一句话"。 -->
-            <n-collapse class="migrate-collapse">
-                <n-collapse-item title="备份与迁移" name="migrate">
-                    <div class="mi-row">
-                        <n-button size="small" :loading="backupLoading" @click="handleBackupToFile">备份到一个文件…</n-button>
-                        <span class="mi-hint">默认文件名带你今天的日期，位置自己挑 —— 不会被任何东西覆盖</span>
-                    </div>
-                    <div class="mi-row">
-                        <!-- 唯一着色的一条：这一组里只有它是"整份替换"（合并只增不删）。 -->
-                        <n-button size="small" type="error" @click="handleRestoreFromFile">从文件还原…</n-button>
-                        <span class="mi-hint warn">缓存整份替换；收藏夹只增不删</span>
-                    </div>
-                    <div class="mi-row">
-                        <n-button size="small" :loading="bulkLoading" @click="handleMergeCache">合并缓存…</n-button>
-                        <span class="mi-hint">只增不删（新增 / 覆盖 / 跳过 会报给你）</span>
-                    </div>
-                    <!-- 「打开存放文件夹」从顶部挪到这儿（2026-10-04，用户提的）。
-                         原来把它留在折叠区外面，理由是"它不碰任何数据，别藏起来"——那个理由站不住：
-                         这个折叠区本来就不是纯危险区（备份是安全的、合并只增不删），
-                         真正危险的只有「从文件还原」，而它是靠**自己那身红色**标出来的，不是靠分组。
-                         而且它和上面三项本就是同一件事的两面：那三项是**自动**搬运整库，
-                         这一项是**手动**搬运的入口（缓存库、图片、备份都躺在那个文件夹里）。
-                         顺带解决一个更实在的：它原来压在盘条右侧，占掉约 110px ——
-                         而盘条正是"盘越多越需要横向空间"的那一行。
-                         ⚠️ 代价与补偿：位置原本承担着"这是安全出口"的信号，现在这信号改由 hint 明说。
-                         见 docs/DESIGN-DISK-FILTER-2026-10-04.md §11。 -->
-                    <div class="mi-row">
-                        <n-button size="small" @click="openDataDir">打开存放文件夹</n-button>
-                        <span class="mi-hint">只打开文件夹、不动任何数据（缓存库、图片和备份都在这儿）</span>
-                    </div>
-                </n-collapse-item>
-            </n-collapse>
+            <!-- G4「管理」= 低频 + 会动数据的动作。2026-11-08 主人裁决：**整体抽离、暂时不放出来**，
+                 后续移进设置页 —— 功能与文案原样住在 `./BackupPanel.vue`（含全部历史注释），
+                 挂载方式见那个文件头部的说明。这里不再渲染任何管理动作。 -->
 
-            <!-- 批量区固定在底部、**高度恒定**：没选中时按钮置灰而不是消失 ——
-                 用 v-if 的话它一出现就把整行推走（原来正是这样）。
-                 勾选是**受控**的（`:checked-row-keys`）—— 这既让"清空选择"和关闭面板复位真的生效，
-                 也让跨页勾选后"要删哪些"不再是黑箱：几项不在本页直接写在提示里。
-                 （原先我担心"受控要自己管清理时机"就没做受控，结果"清空选择"点了没反应 ——
-                 见表格上那条注释。） -->
-            <div class="foot-row">
-                    <div class="foot-left">
-                        <n-button size="small" type="error" :disabled="!checkedRowKeysRef.length"
-                            :loading="bulkLoading" @click="handleRemove">删除记录</n-button>
-                        <span class="sel-hint">
-                            {{ checkedRowKeysRef.length
-                                ? `已选 ${checkedRowKeysRef.length} 项（其中 ${checkedOnOtherPages} 项不在本页）`
-                                : '未选中任何记录' }}
-                        </span>
-                        <n-button v-if="checkedRowKeysRef.length" text size="small"
-                            @click="handleCheck([])">清空选择</n-button>
-                    </div>
-                    <n-pagination size="small" :page="model.pageNo" :page-size="model.pageSize"
-                        :disabled="loading" :item-count="model.total" show-size-picker show-quick-jumper :page-slot="7"
-                        :page-sizes="[10, 16, 20, 30, 40, 60, 80, 100]" :on-update:page="handlePageChange"
-                        :on-update:page-size="handlePageSizeChange">
-                        <template #prefix="{ itemCount }">
-                            共 {{ itemCount }} 项
-                        </template>
-                    </n-pagination>
+            <!-- 底栏 = 状态条 + **随选中出现的动作**（2026-11-09 五轮，主人裁决：删除移回底部、
+                 和清空选择一起、带图标）。没选中时这里只有一句状态，页头保持干净；
+                 选中后 [🗑 删除记录] 和 [清空选择] 一起出现 —— 动作跟着它的对象走。
+                 高度 36px；整宽贴边（负 margin 吃掉页面 padding）。
+                 勾选是**受控**的（`:checked-row-keys`）—— 清空选择、关闭面板复位才真的生效。 -->
+            <div class="foot-dock">
+                <div class="foot-left">
+                    <span class="sel-hint">共 {{ model.total }} 项 · {{ selStatus }}</span>
+                    <!-- 两个动作都只在有选中时出现，**都带图标**（主人 11-09："这设计不对称"——
+                         一个纯文字一个带图标就是歪的）；顺序 = 主动作在前：先删除、后清空。 -->
+                    <n-button v-if="checkedRowKeysRef.length" size="small" type="error" quaternary
+                        :loading="bulkLoading" @click="handleRemove">
+                        <template #icon><n-icon :component="TrashOutline" /></template>
+                        删除记录
+                    </n-button>
+                    <n-button v-if="checkedRowKeysRef.length" text size="small"
+                        @click="handleCheck([])">
+                        <template #icon><n-icon :component="CloseCircleOutline" /></template>
+                        清空选择
+                    </n-button>
                 </div>
+                <!-- macOS 没有分页器（列表一律滚动加载），服务端分页是硬约束 ⇒
+                     只留最必要的两样：页码 + 每页条数；「跳至 N 页」已是 web 控件，三轮砍掉。 -->
+                <n-pagination size="small" :page="model.pageNo" :page-size="model.pageSize"
+                    :disabled="loading" :item-count="model.total" show-size-picker :page-slot="7"
+                    :page-sizes="[10, 16, 20, 30, 40, 60, 80, 100]" :on-update:page="handlePageChange"
+                    :on-update:page-size="handlePageSizeChange" />
+            </div>
         </div>
     </div>
 </template>
@@ -212,13 +187,13 @@
 import { computed, h, nextTick, onActivated, onDeactivated, onMounted, onUnmounted, ref, toRaw, watch } from 'vue';
 import { useRouter } from 'vue-router';
 import { openInFiles } from '@/views/FileFinder/target';
-import { refreshIndex } from '@/views/FileFinder/playlist';
 import { ipcRenderer } from 'electron';
 import useNotify from '@/hooks/useNotify';
-import { Search } from '@vicons/ionicons5';
+import useConfirm from '@/hooks/useConfirm';
+import Banner from '@/components/Overlay/Banner.vue';
+import { Search, RefreshOutline, TrashOutline, CloseCircleOutline } from '@vicons/ionicons5';
 import {
-    NInput, NButton, NPagination, NDataTable, NSpin, NTooltip, NAlert, NTag, NIcon,
-    NCollapse, NCollapseItem, useDialog,
+    NInput, NButton, NPagination, NDataTable, NSpin, NTooltip, NIcon,
 } from 'naive-ui'
 import type { DataTableColumns, DataTableRowKey, DataTableSortState, InputInst } from 'naive-ui'
 import { formatBytes, serialTail } from '@/utils';
@@ -331,12 +306,14 @@ const columns = ref<DataTableColumns<RowData>>([{
      */
     title: '盘', key: 'disk', width: 88,
     render(row) {
-        // 离线那枚标签带一句说明 —— 行里不再单独挂"离线 · 只读"（那是重复信息，用户要求去掉）。
-        // 但"只读"这件事本身要有个地方说得清，所以挂在标签的 title 上，不占视觉空间。
-        return h(NTag, {
-            size: 'small', bordered: false, type: row.online ? 'success' : 'default',
-            title: row.online ? '' : '这块盘没插 —— 打开看到的是缓存，缩略图可用',
-        }, { default: () => (row.online && row.path ? row.path.slice(0, 2) : '离线') });
+        // 2026-11-08 二轮 Apple 化（主人："苹果PC真的会这样设计吗"）：实心彩色 tag 是
+        // 后台管理的皮，macOS 表格里状态列就是**素色文字**（Finder 的大小/日期全是灰）。
+        // 盘符降到 text-2 次要档；离线的那句说明仍挂在 title 上，不占视觉空间。
+        const online = row.online && row.path;
+        return h('span', {
+            class: 'disk-cell',
+            title: online ? '' : '这块盘没插 —— 打开看到的是缓存，缩略图可用',
+        }, [online ? row.path.slice(0, 2) : '离线']);
     },
 }, {
     /**
@@ -367,7 +344,7 @@ const columns = ref<DataTableColumns<RowData>>([{
 }, {
     // 「封面」→「条目」：它本来就是这一层的**条目数**（scanAndCache 写的是 `count: data.length`，
     // 即收敛之后的卡片数），不是"封面图有多少张"。实测 AAAA1111 = 106 个目录 / 644 个条目。
-    title: '条目', key: 'count', width: 88, align: 'right', sorter: true,
+    title: '条目', key: 'count', width: 88, align: 'right', sorter: true, className: 'num-cell',
 }, {
     /**
      * 大小 = 这一层的内容字节总量。
@@ -378,10 +355,10 @@ const columns = ref<DataTableColumns<RowData>>([{
      * 0 / 算不出时 `formatBytes` 给 `—`（反例：有一层 104 个条目全是子目录，合计 0 字节 ——
      * 写 "0 B" 会被读成"这 104 个东西没内容"）。
      */
-    title: '大小', key: 'bytes', width: 96, align: 'right', sorter: true,
+    title: '大小', key: 'bytes', width: 96, align: 'right', sorter: true, className: 'num-cell',
     render: row => formatBytes(row.bytes),
 }, {
-    title: '上次扫描', key: 'create_at', width: 150, align: 'right', sorter: true,
+    title: '上次扫描', key: 'create_at', width: 150, align: 'right', sorter: true, className: 'num-cell',
     render: row => fmtScanTime(row.create_at),
 }])
 
@@ -430,12 +407,13 @@ const handleSorterChange = (sorter: DataTableSortState | DataTableSortState[] | 
 };
 
 /**
- * 顶部「总览」那一句。数据来自 `/getDisks` 的 `stats`（服务端内存汇总，零读盘）。
- * 拿不到 stats 时返回空串（不显示）—— 首次加载前那一下不该闪出一个半截句子。
+ * 顶部「总览」数据带。数据来自 `/getDisks` 的 `stats`（服务端内存汇总，零读盘）。
+ * 拆成「主句 + 右侧扫描时间」两段展示（2026-11-08 数据带化）：主句允许折两行，
+ * 扫描时间恒靠右。拿不到 stats 时主句为空 ⇒ 带子整个不渲染（不闪半截壳）。
  */
-const overview = computed(() => {
+const overviewStats = computed(() => {
     const s = stats.value;
-    if (!s) return '';
+    if (!s) return null;
     const parts = [
         `${s.disks} 块盘`,
         `${s.folders} 个目录`,
@@ -450,13 +428,19 @@ const overview = computed(() => {
     if (typeof s.binCount === 'number') {
         parts.push(`图片 ${s.binCount} 张 · ${formatBytes(s.binBytes ?? 0)}`);
     }
-    if (s.lastScanAt) parts.push(`最近扫描 ${fmtScanTime(s.lastScanAt)}`);
-    return parts.join(' · ');
+    return parts;
+});
+
+const overviewMain = computed(() => overviewStats.value?.join(' · ') ?? '');
+
+const overviewScan = computed(() => {
+    const s = stats.value;
+    return s?.lastScanAt ? `最近扫描 ${fmtScanTime(s.lastScanAt)}` : '';
 });
 
 const tableData = ref<RowData[]>([])
 const notify = useNotify();
-const dialog = useDialog();
+const dialog = useConfirm();
 const model = ref<HistoryQuery>({
     serial: '',
     path: '',
@@ -476,9 +460,8 @@ const model = ref<HistoryQuery>({
 })
 const loading = ref(false);
 const diskLoading = ref(false);
-/** 备份进行中。不复用 `loading`（那个罩表格，而备份不动列表）。见模板上的对照表。 */
-const backupLoading = ref(false);
-/** 删记录 + 合并缓存共用：两者都改整库，本就不许并发。不复用 `loading`（那个翻页也会置位）。 */
+/** 删记录专用：改整库，不许并发。不复用 `loading`（那个翻页也会置位）。
+ *  ⚠️ 原来和合并缓存共用 —— 备份迁移整体抽到 `BackupPanel.vue` 后只剩删除这一个消费者。 */
 const bulkLoading = ref(false);
 /**
  * `/getDisks` 回来的原始盘列表（盘条 chips 的数据源）。
@@ -643,19 +626,22 @@ const getHistrotyList = () => {
 }
 
 /**
- * 选盘 / 取消选盘 —— 点 chip 的**唯一入口**。
+ * 选盘 —— 点 chip 的**唯一入口**。
  *
- * 语义：点一块盘 → 只看那块盘；**再点一次已选中的 chip → 取消过滤、回到「全部」**。
- * 为什么要这个来回：单选过滤器里"怎么回到全部"如果只能点首项，用户就得先去扫「全部」在哪；
- * 让"选中项自己就能取消"是 chip 的通用手感（Material 的 filter chip 也是这么做的）。
- * 而「全部」chip 依然保留 —— 它让"此刻没有过滤"是**看得见**的，而不是靠"没有高亮项"去猜。
+ * 语义：点一块盘 → 只看那块盘。**再点已选中的 chip 不做任何事**（2026-11-09 主人裁决，
+ * 废掉原来的"再点取消"）—— 取消过滤的出口只有「全部」那一枚，它本来就是看得见的复位键。
+ * （原设计引 Material filter chip 的"选中项自己能取消"手感；单选过滤器的取消动作
+ * 交给固定位置的复位键，才不会"点两下状态跳两次"。）
  *
  * ⚠️ 沿用一条老教训：**一个 update 事件只挂一个 handler**。
  * 赋值和后续动作必须写在同一个函数里 —— 当年 `v-model` 与 `:on-update` 争同一个 prop、
  * 后写的把前写的整个顶掉，症状是"点了没反应"（见 docs/FIX-2026-09-24-naive-ui-update-prop.md）。
  */
 const handleSerialChange = (serial: string) => {
-    model.value.serial = model.value.serial === serial ? '' : serial;
+    // 2026-11-09 主人裁决：chip **不再"重复点取消选中"** —— 点多少次都保持选中。
+    // 取消过滤的出口只有「全部」那一枚，它本来就是看得见的复位键（见上面 630 行那条注释）。
+    if (model.value.serial === serial) return;
+    model.value.serial = serial;
     onSearch();
 }
 
@@ -833,6 +819,18 @@ const handleCheck = (rowKeys: DataTableRowKey[]) => {
 }
 
 /**
+ * 状态条的选择句（2026-11-09 五轮精简）：
+ * "（其中 0 项不在本页）"这种恒为零的括号是**冗余信息**（主人点名去掉）——
+ * 只有跨页勾选真的发生（off > 0）才补那句，平时只说"已选 N 项"。
+ */
+const selStatus = computed(() => {
+    const n = checkedRowKeysRef.value.length;
+    if (!n) return '未选中任何记录';
+    const off = checkedOnOtherPages.value;
+    return `已选 ${n} 项${off ? ` · 另有 ${off} 项不在本页` : ''}`;
+});
+
+/**
  * 「删除记录」的确认框。
  *
  * 原来的文案是「你确定要删除选中数据吗？」—— "数据"两个字埋了两个坑：
@@ -906,142 +904,11 @@ const onRemove = async () => {
 // 它的能力被「备份到文件…」完整覆盖且更可靠（位置自己挑、不会被覆盖），所以**按钮收掉**。
 // `/backup` 接口**保留不删**（零成本，将来做"退出时自动快照"可以直接复用）。
 // 见 docs/DESIGN-BACKUP-2026-09-24.md §7.8 —— 那里本来就挂着"是否收掉，等你一句话"。
+// （备份/还原/合并/打开数据目录四个动作 + pickPath 已整体搬进 `./BackupPanel.vue`，2026-11-08 抽离。）
 
 /** 离开这一页时清掉勾选：勾选是"这一次操作的选择"，不是页面的长期状态 */
 const onDeactivatedHook = () => {
     checkedRowKeysRef.value = []
-}
-
-/**
- * 打开缓存数据目录 —— 手工处理文件时的入口（应用内的三个动作已经覆盖常态）。
- *
- * 走 IPC 而不是本地服务：`shell.openPath` 只有主进程能做，而 `openFile` 已经在用
- * 同一条通道（同 `shell.openPath`、同"成功空串/失败描述"的返回约定），不新增机制。
- * 失败必须说出来 —— 静默失败正是当初 `双击没反应` 藏那么久的原因。
- */
-const openDataDir = async () => {
-    const err = await ipcRenderer.invoke('openDataDir');
-    if (err) notify('error', '打开失败', err);
-}
-
-/** 主进程两个「选路径」通道的返回约定（见 electron/main/index.ts） */
-type PickResult = { canceled: boolean; filePath: string };
-
-/**
- * 选一个文件路径。**取消一律走同一条出口**（空串）——
- * 三个动作各自的"用户改主意了"都靠它，不用每个调用方各判一次 `canceled`。
- */
-const pickPath = async (channel: 'pickCacheSavePath' | 'pickCacheOpenPath') => {
-    const res = await ipcRenderer.invoke(channel) as PickResult;
-    return res?.canceled ? '' : (res?.filePath || '');
-}
-
-/**
- * 「备份到一个文件…」—— 打包在服务端做，这里只挑路径 + 报结果。
- * 2026-10-04 起导出的是**一个 zip 包**（库 + 图片），资源管理器双击就能打开看里面有什么。
- *
- * 为什么复制不放这里：主进程碰不到 nedb 那个模块的状态，硬在这儿复制
- * 等于把"库在哪"再抄一份出来。分工与 `openDirectory` 一致：**需要系统能力的
- * 那一步进主进程，数据本身的操作留服务端**。
- */
-const handleBackupToFile = async () => {
-    const file = await pickPath('pickCacheSavePath');
-    if (!file) return;
-
-    // n-button 的 `loading` 自带禁用 ⇒ 不用另写 `:disabled`，也就不会出现「转着圈还能再点一次」
-    backupLoading.value = true;
-    try {
-        await postAction(API_BASE + '/backupToFile', { path: file });
-        notify('success', '成功', `已备份到 ${file}`)
-    } catch (err) {
-        notify('error', '错误', `备份失败：${err}`)
-    } finally {
-        backupLoading.value = false;
-    }
-}
-
-/**
- * 「从文件还原…」—— **整份顶掉**当前缓存，和「合并」是两件事。
- * （合并只增不删，所以它不弹确认；这一条是唯一会让记录消失的，必须问。）
- *
- * ⚠️ 文案的语气在这一版改了 —— 这是整份方案里最该改的一处：
- * 原来写的是"现在这些记录会不见"，那是**数据安全**的语言，会让人以为要丢东西。
- * 但缓存是**可重建的派生物**：丢了重扫一遍就回来了（苏格拉底那一问："缓存丢了会怎样？"）。
- * 所以真正的代价不是"丢数据"，是**你花在读移动硬盘上的时间**。
- * 把代价说成"要重新读多少"，用户才能判断"值不值得点"，
- * 也才和他最在意的最高优先级（减少对移动硬盘的读写）接得上。
- */
-const handleRestoreFromFile = () => {
-    dialog.warning({
-        title: '从文件还原（选那个 .zip 备份包）',
-        content: '会用你选中的文件整体替换当前缓存。替换后，本机独有的记录要重新读一遍移动硬盘才能回来。'
-            + '还原前会自动留一份快照（数据目录里的 searchCache-before-restore.db），还原后立即生效、不用重启。'
-            + '备份包里的图片会**只增不删**地并进来（本地已有的不动）。',
-        positiveText: '选择文件并还原',
-        negativeText: '取消',
-        maskClosable: false,
-        // 返回 Promise 让 naive-ui 把按钮切成 loading 状态 ——
-        // 还原要复制一份十几 MB 的库再整库重读，一两秒是常态，
-        // 不返回的话按钮点完就像没反应，用户会再点一次
-        onPositiveClick() {
-            return onRestoreFromFile()
-        }
-    })
-}
-
-const onRestoreFromFile = async () => {
-    const file = await pickPath('pickCacheOpenPath');
-    if (!file) return;
-
-    loading.value = true;
-    let ok = false;
-    let merged = '';
-    try {
-        const r = await postAction(API_BASE + '/restoreFromFile', { path: file }) as {
-            playlists?: number; playlistItems?: number;
-        };
-        merged = r?.playlists || r?.playlistItems ? `；并入 ${r.playlists ?? 0} 个收藏夹 / ${r.playlistItems ?? 0} 个条目` : '';
-        ok = true;
-    } catch (err) {
-        // 服务端在还原失败时已经尽力回滚过了，错误文案里会写明"已回滚"还是"回滚也失败"
-        notify('error', '还原失败', `${err}`)
-    } finally {
-        loading.value = false;
-    }
-
-    if (!ok) return;
-    notify('success', '已还原', `缓存已整份替换${merged}`)
-    // 放在 loading 复位之后：取数里有 `loading` 相关的时序，提前调用界面会像"还原了但列表没变"。
-    // 还原换的是库内容，没换"插着哪些盘" ⇒ 不重探盘符。
-    reloadAfterDataChange();
-    // 收藏夹也可能被并进来了 ⇒ 重取索引（星标 / 货架的数字都读它）
-    void refreshIndex().catch(() => undefined);
-}
-
-/**
- * 「合并缓存…」—— 两边都留，按主键并起来。
- * 不做二次确认：它只增不删（同主键冲突时取 `create_at` 新的），没有可撤销性可言。
- */
-const handleMergeCache = async () => {
-    const file = await pickPath('pickCacheOpenPath');
-    if (!file) return;
-
-    loading.value = true;
-    bulkLoading.value = true;
-    let result: { added: number; replaced: number; skipped: number } | null = null;
-    try {
-        result = await postAction(API_BASE + '/mergeCache', { path: file });
-    } catch (err) {
-        notify('error', '合并失败', `${err}`)
-    } finally {
-        loading.value = false;
-        bulkLoading.value = false;
-    }
-
-    if (!result) return;
-    notify('success', '合并完成',
-        `新增 ${result.added} 条、覆盖 ${result.replaced} 条、跳过 ${result.skipped} 条`)
-    reloadAfterDataChange();
 }
 
 /**
@@ -1115,12 +982,14 @@ onUnmounted(() => ipcRenderer.off('ff-disks-changed', onDisksChangedIpc));
     align-items: center;
     justify-content: space-between;
     gap: 16px;
+    /* 骨架判据（desktop-ui-rebuild 第一层）：页头 44px 写死，缩窗口只有表格区变 */
+    height: var(--ff-header-h);
     margin-bottom: 10px;
 }
 
 .cache-page .page-head h1 {
     margin: 0;
-    font-size: 16px;
+    font-size: var(--ff-fs-title);
     font-weight: 500;
     color: var(--ff-text-1);
 }
@@ -1128,8 +997,10 @@ onUnmounted(() => ipcRenderer.off('ff-disks-changed', onDisksChangedIpc));
 .cache-panel .g1-row {
     display: flex;
     align-items: center;
-    gap: 8px;
-    width: min(420px, 46vw);
+    gap: var(--ff-sp-2);
+    /* 搜索是第一诉求：页头 44px 化后吃满剩余宽度（对齐主界面地址槽的手感） */
+    flex: 1 1 auto;
+    min-width: 0;
 }
 
 /* 搜索框外面那层：为了接输入法的 composition 事件（见模板注释），顺带负责占满剩余宽度 */
@@ -1143,15 +1014,36 @@ onUnmounted(() => ipcRenderer.off('ff-disks-changed', onDisksChangedIpc));
     flex: 1 1 auto;
 }
 
-/* 总览**独占一行**，不和任何东西争宽度 ⇒ 它不会被迫折行。 */
+/* 总览**独占一行**（神圣，位置不动）；形态升级为数据带（2026-11-08 主人裁决）：
+   装进面板皮、长句可折两行、数字 tabular-nums、扫描时间靠右。 */
 .cache-panel .g2-row {
-    padding-bottom: 8px;
+    padding-bottom: var(--ff-sp-2);
+}
+
+.cache-panel .overview-band {
+    display: flex;
+    align-items: center;
+    gap: var(--ff-sp-3);
+    background: var(--ff-panel);
+    border: 1px solid var(--ff-card-outline);
+    border-radius: var(--ff-r-ctl);
+    padding: 5px 12px;
+    font-variant-numeric: tabular-nums;
 }
 
 .cache-panel .overview {
-    display: block;
-    font-size: 12.5px;
-    color: #666;
+    flex: 1 1 auto;
+    min-width: 0;
+    font-size: var(--ff-fs-meta);
+    line-height: 1.5;
+    color: var(--ff-text-2);
+}
+
+.cache-panel .overview-scan {
+    flex: 0 0 auto;
+    font-size: var(--ff-fs-eyebrow);
+    color: var(--ff-text-2);
+    white-space: nowrap;
 }
 
 /* 盘条那一行。
@@ -1173,8 +1065,8 @@ onUnmounted(() => ipcRenderer.off('ff-disks-changed', onDisksChangedIpc));
 }
 
 /* 一枚盘条 chip。
-   状态 = **圆点颜色**（在线亮绿 / 离线中灰）；名字位 = 盘符（离线用序列号后 4 位）；
-   数字 = 该盘的目录数。完整明细在悬浮提示里（见 .disk-chip-tip）。 */
+   2026-11-08 token 化重皮：底/边/字全走 token；悬浮与选中用主人裁定的
+   「与左轨同一套灰」（--ff-ctl-hover / --ff-ctl-on，见 tokens.css 那组注释）。 */
 .cache-panel .disk-chip {
     display: inline-flex;
     align-items: center;
@@ -1182,41 +1074,47 @@ onUnmounted(() => ipcRenderer.off('ff-disks-changed', onDisksChangedIpc));
     height: 26px;
     padding: 0 11px;
     font-family: inherit;
-    font-size: 12px;
+    font-size: var(--ff-fs-meta);
     line-height: 1;
-    color: #4a4a46;
-    background: #fff;
-    border: 1px solid #dcdcd6;
+    color: var(--ff-text-1);
+    background: var(--ff-chip-bg);
+    border: 1px solid var(--ff-line);
     border-radius: 999px;
     cursor: pointer;
     white-space: nowrap;
-    transition: background-color .12s ease, border-color .12s ease, color .12s ease;
+    transition: background-color var(--ff-dur-hover) ease, border-color var(--ff-dur-hover) ease, color var(--ff-dur-hover) ease;
 }
 
 .cache-panel .disk-chip:hover {
-    border-color: #b9b9b2;
-    background: #f8f8f6;
+    border-color: var(--ff-line-strong);
+    background: var(--ff-ctl-hover);
 }
 
-/* 选中态**只换颜色，不加边框宽度** ——
-   悄悄把边框 1px 改成 2px 会让这枚比邻居高 2px、整行跟着错位。 */
+/* 选中态（2026-11-09 六轮定稿）：**边框 + 字色**走强调色，底色不变 ——
+   淡蓝底方案被主人否了；描边选中（tint outline）同样是 macOS 分段控件的正统形态之一。
+   两主题各有一档现成值（--ff-highlight-line / --ff-highlight），零新值。 */
 .cache-panel .disk-chip.is-active {
-    color: #185fa5;
-    background: #e6f1fb;
-    border-color: #85b7eb;
+    color: var(--ff-highlight);
+    background: var(--ff-chip-bg);
+    border-color: var(--ff-highlight-line);
 }
 
 /* 选中态也必须有自己的 hover 反馈。
    `.disk-chip:hover` 与 `.is-active` 的特异性相同，而后者写在后面 ⇒ 选中那枚的 hover
    会被 `.is-active` 顶掉，鼠标压上去**一点反应都没有**。
-   偏偏它是唯一一个点下去会「取消过滤」的 chip，最需要让人知道"这里能点"。 */
+   hover 只补一档淡强调底（瞬态、不常驻），边框不动 —— 它现在选中了，不表达"取消"。 */
 .cache-panel .disk-chip.is-active:hover {
-    background: #d8ebfb;
-    border-color: #6aa6e0;
+    background: var(--ff-highlight-weak);
+    border-color: var(--ff-highlight-line);
+}
+
+/* 选中态里数字跟名字一起走强调色 —— 同一枚 chip 里出现两种颜色才是"花"。 */
+.cache-panel .disk-chip.is-active .disk-chip-count {
+    color: var(--ff-highlight);
 }
 
 .cache-panel .disk-chip:focus-visible {
-    outline: 2px solid #2080f0;
+    outline: 2px solid var(--ff-link);
     outline-offset: 1px;
 }
 
@@ -1227,17 +1125,12 @@ onUnmounted(() => ipcRenderer.off('ff-disks-changed', onDisksChangedIpc));
 
 /* 数字比名字淡一档：名字（哪块盘）是主信息，数字是辅助。 */
 .cache-panel .disk-chip-count {
-    color: #a9a9a3;
+    color: var(--ff-text-2);
     font-variant-numeric: tabular-nums;
 }
 
-.cache-panel .disk-chip.is-active .disk-chip-count {
-    color: #5a92cf;
-}
-
-/* 状态点。在线那枚要"亮"到一眼看出设备活着 ——
-   亮绿本身就是"设备在线"的通用色；再补一圈 2px 淡绿环（0 模糊，是实心环、不是发光），
-   静态就把"在线"讲清楚，不用等动画。 */
+/* 状态点。在线 = 状态图形绿（--ff-status-ok，两主题各有一档亮度）；
+   离线 = text-2 灰，比在线低一档但看得见 —— 它就是"这块盘现在不在"的全部表达。 */
 .cache-panel .disk-dot,
 .disk-chip-tip .disk-dot {
     flex: 0 0 auto;
@@ -1247,14 +1140,11 @@ onUnmounted(() => ipcRenderer.off('ff-disks-changed', onDisksChangedIpc));
 }
 
 .cache-panel .disk-dot.is-on {
-    background: #22c55e;
-    box-shadow: 0 0 0 2px rgba(34, 197, 94, .22);
+    background: var(--ff-status-ok);
 }
 
 .cache-panel .disk-dot.is-off {
-    /* 比在线那枚低一档、但别淡到看不见（#dcdcd6 这种摆在白底上几乎消失）。
-       它就是"这块盘现在不在"的全部表达，必须还看得见。 */
-    background: #b4b2a9;
+    background: var(--ff-text-2);
 }
 
 /* ⚠️ 悬浮提示的内容**不能**加 `.cache-panel` 前缀 ——
@@ -1276,11 +1166,11 @@ onUnmounted(() => ipcRenderer.off('ff-disks-changed', onDisksChangedIpc));
 }
 
 .disk-chip-tip .disk-dot.is-on {
-    background: #22c55e;
+    background: var(--ff-status-ok);
 }
 
 .disk-chip-tip .disk-dot.is-off {
-    background: #a8a8a3;
+    background: var(--ff-text-2);
 }
 
 .disk-chip-tip .tip-row {
@@ -1323,14 +1213,38 @@ onUnmounted(() => ipcRenderer.off('ff-disks-changed', onDisksChangedIpc));
  * 把 `--n-td-padding` 等作为 element style 挂到 `.n-data-table` 上，普通 CSS 规则赢不了它。
  * 实测：带 `!important` 算出 2px、不带算出 12px（naive-ui medium 默认值，见 `styles/_common.mjs`）。
  *
+ * 2026-11-08 三轮（主人"表头行高再少 20px"）：th 垂直 padding 同步 12→2（正好 −20px，
+ * 表头 ~40px → ~20px，落进 macOS 11 HIG 的紧凑表头区间）。水平仍 12px 保对齐。
+ *
  * 变量写在根节点上、td 是继承来的，所以一条就够，不用逐层写。 */
 .cache-panel .n-data-table {
     --n-td-padding: 2px 12px !important;
+    --n-th-padding: 2px 12px !important;
+}
+
+/* 表头文字：12px + 次要灰 + 500 字重 —— macOS 表头的样子（标签小一号、不抢数据的风头）。
+   specificity 两个类 > naive 的一个类，不用 !important 就能赢它的 th 规则。
+   ⚠️ line-height 写死 24px：2px padding + 24px = **28px 表头 = 28px 行**（主人 11-09 二次裁决
+   "行高整体提升至 28px"；AppKit 的标准列表行高正是 28）。不锁行高的话 naive 用 normal，
+   表头会跟着字号漂。 */
+.cache-panel .n-data-table-th {
+    font-size: var(--ff-fs-meta);
+    font-weight: 500;
+    color: var(--ff-text-2);
+    line-height: 24px;
+}
+
+/* 数据行：字号归位设计语言的 13px 正文（naive 默认 14px 偏大），行高同样锁 24px
+   ⇒ 每行 2+24+2 = 28px，与 AppKit 默认行高一致，且和表头严丝合缝。 */
+.cache-panel .n-data-table-td {
+    font-size: var(--ff-fs-body);
+    line-height: 24px;
 }
 
 /* 目录 = 双击打开的入口。**保持蓝色**（用户要求"和之前一样"）——
    它本来就是一个链接的样子，而链接的外观本身就是可发现性，
-   不需要再挂一句"双击打开"当解释（那句已被用户判为多余，去掉了）。 */
+   不需要再挂一句"双击打开"当解释（那句已被用户判为多余，去掉了）。
+   2026-11-08：主人再次裁决**保留旧蓝**不并入全站高亮 ⇒ 值进 tokens（--ff-link），本文件不写 hex。 */
 .cache-panel .dir-cell {
     display: flex;
     align-items: center;
@@ -1340,100 +1254,106 @@ onUnmounted(() => ipcRenderer.off('ff-disks-changed', onDisksChangedIpc));
 
 .cache-panel .dir-name {
     cursor: pointer;
-    color: #2080f0;
+    color: var(--ff-link);
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
 }
 
 .cache-panel .dir-name:hover {
-    color: #4098fc;
+    color: var(--ff-link-hover);
 }
 
-/* count = 0 的记录：这不是错误，是"需要你去确认一下"，所以用琥珀色而不是危险色。 */
+/* count = 0 的记录：不是错误，是"需要你去确认一下"，琥珀**文字**（2026-11-08 二轮：
+   macOS 表格不给状态贴底色签 —— 状态是文字自己的颜色，不是一块贴纸）。
+   文字 = --ff-warn（文字级）；说明仍挂在 title 上不占空间。
+   2026-11-08 三轮（主人）：**靠右渲染** —— 它不是路径的一部分，贴在列尾
+   才读得出"这是这条记录的批注"，混在路径后面会像目录名的一截。 */
 .cache-panel .dir-note {
     flex-shrink: 0;
+    margin-left: auto;
     font-size: 11.5px;
-    color: #a06a00;
-    background: #fdf3e2;
-    padding: 0 6px;
-    border-radius: 3px;
+    color: var(--ff-warn);
+}
+
+/* 素数据列（盘 / 条目 / 大小 / 扫描时间）：Finder 的规矩 —— 主列只有"目录"（蓝字链接），
+   其余列全部降次要档，一眼只有一个视觉入口。数字 tabular-nums 让个位对齐
+   （Geist 自带 tnum，等宽数字是数据表格"产品感"的一半来源）。 */
+.cache-panel .disk-cell,
+.cache-panel .num-cell {
+    color: var(--ff-text-2);
+    font-variant-numeric: tabular-nums;
+}
+
+/* 排序箭头：Apple 的规矩 —— 只有**正在排序的那列**显示箭头，其余列悬停才现身
+   （naive 默认全部常驻，就是"后台管理"味）。类名经 node_modules 源码实测：
+   th--sortable / th--sorting / n-data-table-sorter。 */
+.cache-panel .n-data-table-th--sortable .n-data-table-sorter {
+    opacity: 0;
+    transition: opacity var(--ff-dur-hover) ease;
+}
+
+.cache-panel .n-data-table-th--sortable:hover .n-data-table-sorter {
+    opacity: 1;
+}
+
+.cache-panel .n-data-table-th--sorting .n-data-table-sorter {
+    opacity: 1;
 }
 
 /* 空态：保持"一行浅灰小字"，和主界面 emptyTip 一致（不加图标、不加按钮）。 */
 .cache-panel .empty-tip {
     padding: 18px 4px;
     font-size: 12.5px;
-    color: #999;
+    color: var(--ff-text-2);
 }
 
 .cache-panel .empty-sub {
     margin-top: 4px;
     font-size: 12px;
-    color: #b5b5bd;
+    color: var(--ff-text-2);
+    opacity: .8;
 }
 
-.cache-panel .migrate-collapse {
-    border-top: 1px solid #efeff5;
-    margin-top: 6px;
-}
+/* 备份迁移的 .mi-* 样式已随功能搬进 BackupPanel.vue（2026-11-08 抽离）。 */
 
-.cache-panel .mi-row {
+/* 底栏 = **纯状态条**（2026-11-08 四轮）：动作已上移页头，这里只剩状态 + 分页。
+   高度 36px —— Finder 底部状态条的厚度（只装一行 12px 字），不是"操作 dock"的 52px。
+   整宽贴边（负 margin 吃掉页面 padding）、高度写死：缩窗口只有表格区变。 */
+.cache-panel .foot-dock {
+    flex: 0 0 auto;
     display: flex;
-    align-items: center;
-    gap: 10px;
-    flex-wrap: wrap;
-    padding: 5px 0;
-}
-
-.cache-panel .mi-hint {
-    font-size: 12px;
-    color: #999;
-}
-
-.cache-panel .mi-hint.warn {
-    color: #a06a00;
-}
-
-/* 底部：批量区**高度恒定**（没选中时按钮置灰、位置不动，不用 v-if 让它顶掉布局） */
-.cache-panel .foot-row {
-    display: flex;
-    /* 和表格拉开一点：紧贴着最后一行会读成"表格的一部分" */
-    padding-top: 10px;
     align-items: center;
     justify-content: space-between;
-    /* 小窗口下"批量区 + 分页器"一行装不下 —— 允许整块换行，
-       而不是让两边互相挤压（挤的后果就是分页器把「共 106 项」压成一列竖排的字）。 */
-    flex-wrap: wrap;
     gap: 8px 12px;
+    height: 36px;
+    margin: 8px -24px -16px;
+    padding: 0 24px;
+    background: var(--ff-chrome-bg);
+    border-top: 1px solid var(--ff-line);
 }
 
 .cache-panel .foot-left {
     display: flex;
     align-items: center;
-    flex-wrap: wrap;
-    gap: 8px;
+    gap: var(--ff-sp-2);
     min-width: 0;
 }
 
 .cache-panel .sel-hint {
-    font-size: 12.5px;
-    color: #999;
-}
-
-/* 分页器**不许被压缩**：它内部是 `flex-wrap: nowrap`，一被压就把页码和"共 N 项"叠在一起。
-   两招一起上：① 容器 `flex: 0 0 auto` —— 装不下时**整块换行**，而不是缩小；
-   ② 自身改成 `flex-wrap: wrap` —— 极窄时页码换行，而不是溢出被卡片裁掉（卡片内容是 overflow:hidden）。 */
-.cache-panel .foot-row .n-pagination {
-    flex: 0 0 auto;
-    flex-wrap: wrap;
-    row-gap: 4px;
-}
-
-/* 「共 N 项」被压成竖排（一个字一行）的根因就是它是 flex 子项、默认允许收缩到内容宽 ——
-   必须是整块不折。 */
-.cache-panel .foot-row .n-pagination-prefix {
-    flex: 0 0 auto;
+    font-size: var(--ff-fs-meta);
+    color: var(--ff-text-2);
+    font-variant-numeric: tabular-nums;
+    /* 状态条不换行：窄窗下提示句用省略号吸收挤压，高度不破 */
     white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    flex: 0 1 auto;
+}
+
+/* 分页器**不许被压缩**：它内部是 `flex-wrap: nowrap`，一被压就把页码叠在一起。
+   整块 `flex: 0 0 auto` —— 装不下时宁可溢出也不叠字（状态条不再换行，见上）。 */
+.cache-panel .foot-dock .n-pagination {
+    flex: 0 0 auto;
 }
 </style>

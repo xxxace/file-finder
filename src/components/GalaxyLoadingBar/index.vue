@@ -23,7 +23,8 @@
  *      不再触发。所以叫醒用 **`ResizeObserver`**（display 切换与宽度动画都会让它报尺寸变化），
  *      childList 观察只负责"第一次出现时把 ResizeObserver 挂上去"。
  */
-import { onBeforeUnmount, onMounted, ref } from 'vue';
+import { nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue';
+import { useTheme } from '@/hooks/useTheme';
 import { drawGalaxyBar } from './draw';
 
 const BAR = '.n-loading-bar';
@@ -42,9 +43,8 @@ let colors: string[] = [];
 let glowCore = '';
 let glowMid = '';
 let glowSoft = '';
-/** 底色渐变（naive 的 `colorLoading`；顶部那条被藏起来后就由本层代画） */
-let baseFrom = '';
-let baseTo = '';
+/** 底色渐变色标，来自 `--ff-bar-base-stops`（Canvas 不吃 CSS 变量，得拆成 位置 + 颜色串） */
+let stops: { pos: number; color: string }[] = [];
 /** 出错态的底色：naive 原来是把整条 bar 变红，本层必须接住这个信号（否则出错=效果凭空消失） */
 let errorColor = '';
 let mountObserver: MutationObserver | null = null;
@@ -59,6 +59,35 @@ const readVar = (name: string) => {
     if (!raw && import.meta.env.DEV) console.warn(`[galaxy-bar] token 缺失：${name}`);
     return raw;
 };
+
+/**
+ * ⚠️ 色板是**两套**（浅 / 深），所以这些值必须能重读，不能在 onMounted 里抓一次就锁死。
+ *    Canvas 不吃 CSS 变量 —— 它只认已解析的颜色串，这是它与 DOM 元素最本质的差别。
+ *    ⇒ 切主题时若不重读，画布会一直停在挂载那一刻的配色（2026-11-08 浅色偏暗的一半原因）。
+ */
+/** `--ff-bar-base-stops: #hex 0%, #hex 12%, …` → Canvas 的 `addColorStop(0..1, color)` */
+function parseStops(raw: string): { pos: number; color: string }[] {
+    return raw.split(',')
+        .map(part => /^(\S+)\s+([\d.]+)%$/.exec(part.trim()))
+        .filter((m): m is RegExpExecArray => !!m)
+        .map(m => ({ color: m[1], pos: Number(m[2]) / 100 }));
+}
+
+function readTokens() {
+    glowCore = readVar('--ff-bar-glow-core');
+    glowMid = readVar('--ff-bar-glow');
+    glowSoft = readVar('--ff-bar-glow-soft');
+    stops = parseStops(readVar('--ff-bar-base-stops'));
+    errorColor = readVar('--ff-danger-badge');
+    colors = [1, 2, 3, 4, 5, 6].map(i => readVar(`--ff-bar-px-${i}`)).filter(Boolean);
+}
+
+const { theme } = useTheme();
+watch(theme, async () => {
+    // `data-theme` 由 useTheme 的模块级 watch 写入；等一拍确保 computed style 已经是新主题
+    await nextTick();
+    readTokens();
+});
 
 /**
  * 尺寸跟着**父盒子**走，不跟窗口 —— 搜索展开/收起会把地址槽收窄，
@@ -120,7 +149,7 @@ const frame = (now: number) => {
         if (!reduced?.matches) clock += dt;
         /* ⚠️ 出错态**也要画**：顶部那条被藏起来后，naive 的"变红"就没人接了，
            直接跳过 = 出错时进度效果凭空消失（比显示一条红更怪）。
-           做法是复用同一份 `drawGalaxyBar`，只把输入换掉：底色两端都给红、
+           做法是复用同一份 `drawGalaxyBar`，只把输入换掉：色标换成一条纯红、
            点阵与光晕传空 ⇒ 只剩一条红底，星云安静地停住。 */
         drawGalaxyBar(ctx, {
             width: Math.min(boxW, m.ratio * boxW),
@@ -133,8 +162,10 @@ const frame = (now: number) => {
             glowSoft: m.error ? '' : glowSoft,
             // 盒子外面是别人的地盘（会被 `overflow: hidden` 裁掉），所以不留扩散余量
             pad: 0,
-            baseFrom: m.error ? errorColor : baseFrom,
-            baseTo: m.error ? errorColor : baseTo,
+            // 出错态 = 一条纯红：两端同色，星云安静停住
+            stops: m.error
+                ? [{ pos: 0, color: errorColor }, { pos: 1, color: errorColor }]
+                : stops,
         });
     }
 
@@ -173,13 +204,7 @@ onMounted(() => {
     ctx = canvas.getContext('2d');
     reduced = window.matchMedia('(prefers-reduced-motion: reduce)');
 
-    glowCore = readVar('--ff-bar-glow-core');
-    glowMid = readVar('--ff-bar-glow');
-    glowSoft = readVar('--ff-bar-glow-soft');
-    baseFrom = readVar('--ff-bar-base-from');
-    baseTo = readVar('--ff-bar-base-to');
-    errorColor = readVar('--ff-danger-badge');
-    colors = [1, 2, 3, 4, 5, 6].map(i => readVar(`--ff-bar-px-${i}`)).filter(Boolean);
+    readTokens();
 
     resize();
     window.addEventListener('resize', resize);

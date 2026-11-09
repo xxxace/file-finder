@@ -31,27 +31,31 @@ export type GalaxyBarOptions = {
     glowSoft: string;
     /** 画布比条多出来的下沿，用来让光晕溢出到条外 */
     pad: number;
-    /** 底色渐变的起止色（naive 的 `colorLoading`，2026-11-08 起由本层代画，见 `drawBase`） */
-    baseFrom: string;
-    baseTo: string;
+    /**
+     * 底色渐变色标（`--ff-bar-base-stops`），位置 0~1。
+     * ⚠️ 为什么是**多段**而不是两色标：Canvas 的线性渐变按 sRGB 插值，浅→浓之间大半段
+     *    停在灰白，看着就是"太浅、不均匀"。色标由 tokens.css 在 OKLab 里等速算好，
+     *    这里只负责逐个喂给 `addColorStop` —— 色值与感知曲线都不在代码里另算一份。
+     */
+    stops: readonly { pos: number; color: string }[];
 };
 
 /**
  * 底色：进度条自己的"实体"那一段。
  *
  * 2026-11-08 为什么搬到这层：顶部那条 `n-loading-bar` 只是被 `visibility: hidden` 藏起来了，
- * 它的 `colorLoading`（`--ff-bar-base` 那条紫渐变）也就**跟着不可见** —— 地址槽里只剩星点，
+ * 它的 `colorLoading`（`--ff-bar-base-stops` 拼出的紫渐变）也就**跟着不可见** —— 地址槽里只剩星点，
  * 看着像"渐变被取消了"。星点是"质感"，这一层才是"进度到哪了"这个事实。
  *
  * ⚠️ 渐变的坐标系是 **0 → 当前进度宽度**（不是整个盒子）：与 naive 的做法一致
  * （给 bar 元素本身设 `background`，元素变宽 ⇒ 渐变被拉伸）⇒ 换到盒子里也不能变味。
  */
 function drawBase(ctx: CanvasRenderingContext2D, o: GalaxyBarOptions): void {
-    const { width, height, alpha, baseFrom, baseTo } = o;
-    if (width <= 0 || !baseFrom || !baseTo) return;
+    const { width, height, alpha, stops } = o;
+    // 结构探针 `pattern.mjs` 不传底色（它只验图案），这里必须能安静地跳过而不是崩
+    if (width <= 0 || !stops || stops.length < 2) return;
     const gradient = ctx.createLinearGradient(0, 0, width, 0);
-    gradient.addColorStop(0, baseFrom);
-    gradient.addColorStop(1, baseTo);
+    for (const s of stops) gradient.addColorStop(clamp(s.pos, 0, 1), s.color);
     ctx.globalAlpha = clamp(alpha, 0, 1);
     ctx.fillStyle = gradient;
     ctx.fillRect(0, 0, width, height);
@@ -110,7 +114,24 @@ function drawPixels(ctx: CanvasRenderingContext2D, o: GalaxyBarOptions): void {
  * ⚠️ **必须三层、且最内层要偏白**。原版那团光的中心是被大脑图标自己顶亮的，
  * 图标去掉后只画一圈 `#8351ff` 会变成一坨死紫 —— 主人 2026-11-08 指的就是这个。
  * 三层各自"中心实色 → 边缘透明"，叠加后才有由亮到淡的扩散感。
+ *
+ * ⚠️⚠️ **淡出端点必须是「同色透明」，不能是关键字 `transparent`**：
+ *   `transparent` 等于 `rgba(0,0,0,0)`，渐变插值会把 RGB 一起拉向黑 ⇒ 前缘出现一圈
+ *   灰紫暗盘（浅色实测 (151,131,180)，复算 (151,129,183)）。光只能**变淡**不能**变脏**。
  */
+/**
+ * 把颜色换成「同色、alpha=0」。**只改 alpha，不动 RGB** —— 这是整个光晕的根。
+ * 走 CSS Color 4 的 8 位 hex（末尾 `00`），不拼 rgba 字符串、也不引入任何新色值。
+ * 认不出来的格式原样返回（token 全是我们自己定义的 hex，不会走到这条）。
+ */
+function fadeOf(color: string): string {
+    const hex = /^#([0-9a-f]{3}|[0-9a-f]{6})$/i.exec(color.trim());
+    if (!hex) return color;
+    let h = hex[1];
+    if (h.length === 3) h = h[0] + h[0] + h[1] + h[1] + h[2] + h[2];
+    return `#${h}00`;
+}
+
 function drawGlow(ctx: CanvasRenderingContext2D, o: GalaxyBarOptions): void {
     const { width, height, alpha, glowCore, glowMid, glowSoft, pad } = o;
     if (!glowMid) return;
@@ -122,7 +143,7 @@ function drawGlow(ctx: CanvasRenderingContext2D, o: GalaxyBarOptions): void {
         if (!color || radius <= 0) return;
         const gradient = ctx.createRadialGradient(cx, cy, 0, cx, cy, radius);
         gradient.addColorStop(0, color);
-        gradient.addColorStop(1, 'transparent');
+        gradient.addColorStop(1, fadeOf(color));
         ctx.globalAlpha = clamp(alpha * strength, 0, 1);
         ctx.fillStyle = gradient;
         ctx.fillRect(cx - radius, 0, radius * 2, h);

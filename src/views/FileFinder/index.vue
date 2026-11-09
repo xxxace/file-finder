@@ -204,9 +204,9 @@
              文案来自服务端给的 kind（ApiError.kind），不是 match 错误文本。 -->
         <!-- 横幅在**文档流里**（顶栏不再是浮层 ⇒ 不用再替它让出 `--ff-header-h`），
              左右缩进与顶栏、网格共用同一个算式。 -->
-        <n-alert v-if="banner.text" :type="banner.type" style="margin: 8px var(--ff-content-inset) 4px">
+        <Banner v-if="banner.text" :type="banner.type" style="margin: 8px var(--ff-content-inset) 4px">
             {{ banner.text }}
-        </n-alert>
+        </Banner>
         <!-- `--ff-grid-cols` 是列数的唯一出口（值来自 `density.ts`）；
              `data-density` 供紧凑档收缩标题/角标（见样式里那组 `--item-*` 变量）。 -->
         <!-- 只包一层：给扫描动效一个"铺满网格可视区"的定位祖先。
@@ -451,6 +451,8 @@ import type { CardSnapshot } from '../../../electron/server/playlist';
 import folderIcon from '@/assets/fileTypeIcon/folder.png';
 import usePinYin from '@/hooks/usePinYin';
 import useNotify from '@/hooks/useNotify';
+import useConfirm from '@/hooks/useConfirm';
+import Banner from '@/components/Overlay/Banner.vue';
 import { usePreview } from './usePreview';
 import { useGridCursor } from './useGridCursor';
 import GridDensityMenu from './GridDensityMenu.vue';
@@ -463,7 +465,7 @@ import { decideOpen, isMultiFileCard } from './openDecision';
 import { SearchOutline, RefreshOutline, ArrowBackOutline, CloseOutline } from '@vicons/ionicons5';
 import { MoreVertical28Filled } from '@/components/icons/fluent';
 import { FlatCards24 } from '@/components/icons/grid';
-import { NButton, NInput, NIcon, NImage, NImageGroup, NTag, NPopover, NSpin, NAlert, NTooltip, NDropdown, useLoadingBar, useDialog } from 'naive-ui';
+import { NButton, NInput, NIcon, NImage, NImageGroup, NTag, NPopover, NSpin, NTooltip, NDropdown, useLoadingBar } from 'naive-ui';
 import FolderSelector from '@/components/FolderSelector/index.vue';
 import ScanGlow from './ScanGlow.vue';
 import AssistantCoverModal from './AssistantCoverModal.vue';
@@ -955,7 +957,7 @@ const banner = computed(() => {
 
 const loadingBar = useLoadingBar();
 const notify = useNotify();
-const dialog = useDialog();
+const dialog = useConfirm();
 
 /**
  * 文件大小 → 人类可读。

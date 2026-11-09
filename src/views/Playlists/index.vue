@@ -56,11 +56,12 @@
 
 <script setup lang="ts">
 import { onActivated, onMounted, ref } from 'vue';
-import { NButton, NIcon, NInput, NPopover, useDialog } from 'naive-ui';
+import { NButton, NIcon, NInput, NPopover } from 'naive-ui';
 import { useRouter } from 'vue-router';
 import { AddOutline, BookmarkOutline } from '@vicons/ionicons5';
 import { apiUrl } from '@/utils/request';
 import useNotify from '@/hooks/useNotify';
+import useConfirm from '@/hooks/useConfirm';
 import {
     createPlaylist, deletePlaylist, playlistIndex, refreshIndex, renamePlaylist,
 } from '@/views/FileFinder/playlist';
@@ -70,7 +71,7 @@ const router = useRouter();
 const notify = useNotify();
 
 const index = playlistIndex();
-const dialog = useDialog();
+const dialog = useConfirm();
 
 const API_BASE = 'http://127.0.0.1:3060';
 const thumbUrl = (k: string) => apiUrl(`${API_BASE}/thumb?k=${encodeURIComponent(k)}`);

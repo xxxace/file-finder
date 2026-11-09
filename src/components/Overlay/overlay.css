@@ -1,0 +1,315 @@
+/**
+ * 提示类浮层（toast / confirm / banner）的**唯一样式出口**。
+ * 全局非 scoped：toast / confirm 被 teleport 到 body，scoped 够不到祖先；
+ * 而 `.n-modal-mask` 那条压根不在我们的模板里。
+ *
+ * 层级：不与 FileFinder 卡片内的 `--z-*` 契约互相比较（那套管卡片内部）。
+ *   3100 = 确认框（阻塞，压住一切）
+ *   3200 = toast（结果的回声，必须浮在确认框之上）
+ * 都高于 naive 的 modal（2000），低于它的 popup 容器。
+ */
+
+.ffo-mask {
+    position: fixed;
+    inset: 0;
+    background: var(--ff-overlay-mask);
+    pointer-events: auto;
+}
+
+/* ⚠️ 本项目**唯一**一条 `!important`，理由是不可替代：
+   naive 把遮罩色写死在 cssr 里的 `background-color: rgba(0,0,0,.4)`，
+   themeOverrides 没有对应键；它的样式表又是**运行时**注入 head、比我方 CSS 更晚，
+   ⇒ 同权重下必然是它赢。
+   这是给**将来任何 naive modal** 立的规矩：遮罩不许再由原库说了算。
+   现在两个 assistant 全屏 modal 把面板铺满了 100vw/100vh，这条只在进出场的那一拍看得见。
+   ⚠️ 用 `--ff-overlay-mask` 而不是 `--ff-mask`：后者是角标底，浅色下 0.45 黑会把整屏糊成灰雾。 */
+.n-modal-mask {
+    background-color: var(--ff-overlay-mask) !important;
+}
+
+/* ════ toast ════ */
+
+.ffo-toasts {
+    position: fixed;
+    right: 16px;
+    bottom: 16px;
+    z-index: 3200;
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    pointer-events: none;
+    /* ⚠️ 宽度写死而不是 `max-width`：toast 长短不一，逐条变宽会让右下角一列参差不齐。 */
+    width: 320px;
+}
+
+.ffo-toast {
+    pointer-events: auto;
+    /* 项目没有全局 `box-sizing: border-box`：不写这条，退场时 `width:100%` 会把 padding 撑出去 */
+    box-sizing: border-box;
+    display: flex;
+    /* 间距只用 4 的倍数（设计语言 §四）：元素间 8 */
+    gap: 8px;
+    align-items: flex-start;
+    padding: 12px;
+    border: 1px solid var(--ff-overlay-outline);
+    border-radius: var(--ff-r-card);
+    background: var(--ff-overlay-surface);
+    /* 浅色靠 1px 发丝撑边界 + 极轻投影；深色描边为 transparent，全靠大而虚的投影分层。
+       两主题各自的取值只在 tokens.css 里给一次。 */
+    box-shadow: var(--ff-overlay-shadow);
+    color: var(--ff-text-1);
+}
+
+.ffo-toast__icon {
+    flex: 0 0 auto;
+    display: flex;
+    margin-top: 1px;
+}
+
+.ffo-toast__icon svg {
+    /* 设计语言规则 6：图标 16px、统一描边体 */
+    width: 16px;
+    height: 16px;
+}
+
+/* 图标填充走「图形级」状态色，不走 `--ff-warn` 那组文字级语义色 —— 两个工种（见 tokens.css） */
+.ffo-toast__icon.is-success { color: var(--ff-status-ok); }
+.ffo-toast__icon.is-warning { color: var(--ff-status-warn); }
+.ffo-toast__icon.is-error   { color: var(--ff-status-err); }
+.ffo-toast__icon.is-info    { color: var(--ff-status-info); }
+
+.ffo-toast__text {
+    min-width: 0;
+    flex: 1 1 auto;
+}
+
+.ffo-toast__title {
+    font-size: var(--ff-fs-body);
+    font-weight: 500;
+    line-height: 1.4;
+    word-break: break-word;
+}
+
+.ffo-toast__body {
+    font-size: var(--ff-fs-meta);
+    line-height: 1.55;
+    color: var(--ff-text-2);
+    word-break: break-word;
+}
+
+/* 只有正文时（旧写法 `notify('error', undefined, msg)`）不能留一条空行的高 */
+.ffo-toast__body:first-child {
+    margin-top: 0;
+}
+
+.ffo-toast__title + .ffo-toast__body {
+    margin-top: 2px;
+}
+
+/* ════ confirm ════ */
+
+.ffo-confirm {
+    position: fixed;
+    inset: 0;
+    z-index: 3100;
+    display: grid;
+    place-items: center;
+    pointer-events: none;
+}
+
+.ffo-card {
+    position: relative;
+    pointer-events: auto;
+    box-sizing: border-box;
+    width: min(420px, calc(100vw - 48px));
+    margin: 0;
+    padding: 20px;
+    border: 1px solid var(--ff-overlay-outline);
+    border-radius: var(--ff-r-card);
+    background: var(--ff-overlay-surface);
+    box-shadow: var(--ff-overlay-shadow);
+    color: var(--ff-text-1);
+}
+
+.ffo-card__title {
+    margin: 0;
+    font-size: var(--ff-fs-title);
+    font-weight: 500;
+    line-height: 1.4;
+    word-break: break-word;
+}
+
+.ffo-card__content {
+    margin-top: 8px;
+    font-size: var(--ff-fs-body);
+    line-height: 1.7;
+    color: var(--ff-text-2);
+    word-break: break-word;
+}
+
+/* 主操作唯一且落右下：取消在左（ghost）、确认在右（反色）。
+   ⚠️ 破坏性操作**不涂红** —— 一旦允许，以后每个危险操作都要红，纪律就散了；
+   破坏性靠文案 + 正文说明承担。 */
+.ffo-card__actions {
+    display: flex;
+    justify-content: flex-end;
+    gap: 8px;
+    margin-top: 20px;
+}
+
+.ffo-btn {
+    height: var(--ff-h-ctl);
+    padding: 0 12px;
+    border: 1px solid transparent;
+    border-radius: var(--ff-r-ctl);
+    font-size: var(--ff-fs-body);
+    font-family: inherit;
+    line-height: 1;
+    cursor: pointer;
+    transition: background-color var(--ff-dur-hover) var(--ff-ease-move),
+                color var(--ff-dur-hover) var(--ff-ease-move);
+}
+
+.ffo-btn:disabled {
+    cursor: default;
+    opacity: 0.5;
+}
+
+.ffo-btn--ghost {
+    background: transparent;
+    color: var(--ff-text-1);
+}
+
+.ffo-btn--ghost:hover:not(:disabled) {
+    background: var(--ff-ctl-hover);
+}
+
+.ffo-btn--primary {
+    background: var(--ff-action);
+    color: var(--ff-on-action);
+}
+
+.ffo-btn--primary:hover:not(:disabled) {
+    background: var(--ff-action-hover);
+}
+
+.ffo-btn--primary:active:not(:disabled) {
+    background: var(--ff-action-pressed);
+}
+
+/* ════ 动效：一拍 200ms，拍内分带，退场比进场短 ════ */
+
+.ffo-confirm-enter-active .ffo-mask,
+.ffo-confirm-leave-active .ffo-mask {
+    transition: opacity var(--ff-dur-move) var(--ff-ease-move);
+}
+
+.ffo-confirm-enter-from .ffo-mask,
+.ffo-confirm-leave-to .ffo-mask {
+    opacity: 0;
+}
+
+/* 面板保留过冲（有质量感）——tokens 里唯一允许过冲的地方就是弹层 */
+.ffo-confirm-enter-active .ffo-card {
+    transition: transform var(--ff-dur-move) var(--ff-ease-enter),
+                opacity var(--ff-fade-in) var(--ff-ease-move) var(--ff-fade-in-delay);
+}
+
+.ffo-confirm-leave-active .ffo-card {
+    transition: transform var(--ff-dur-exit) var(--ff-ease-move),
+                opacity var(--ff-dur-exit) var(--ff-ease-move);
+}
+
+.ffo-confirm-enter-from .ffo-card {
+    transform: translateY(10px) scale(0.98);
+    opacity: 0;
+}
+
+.ffo-confirm-leave-to .ffo-card {
+    transform: translateY(-4px) scale(0.99);
+    opacity: 0;
+}
+
+.ffo-toast-enter-active {
+    transition: transform var(--ff-dur-move) var(--ff-ease-enter),
+                opacity var(--ff-fade-in) var(--ff-ease-move) var(--ff-fade-in-delay);
+}
+
+.ffo-toast-leave-active {
+    transition: transform var(--ff-dur-exit) var(--ff-ease-move),
+                opacity var(--ff-dur-exit) var(--ff-ease-move);
+    /* 退场时脱离文档流，让上面的 toast 平滑补位而不是跳一格 */
+    position: absolute;
+    right: 0;
+    width: 100%;
+}
+
+.ffo-toast-enter-from {
+    transform: translateX(14px);
+    opacity: 0;
+}
+
+.ffo-toast-leave-to {
+    transform: translateX(14px);
+    opacity: 0;
+}
+
+.ffo-toast-move {
+    transition: transform var(--ff-dur-move) var(--ff-ease-move);
+}
+
+/* ════ banner（页内条幅，不是浮层） ════ */
+
+.ffo-banner {
+    box-sizing: border-box;
+    display: flex;
+    gap: 8px;
+    align-items: flex-start;
+    padding: 10px 12px;
+    border: 1px solid var(--ff-overlay-outline);
+    border-radius: var(--ff-r-ctl);
+    background: var(--ff-raised);
+    color: var(--ff-text-1);
+    font-size: var(--ff-fs-body);
+    line-height: 1.6;
+}
+
+.ffo-banner__icon {
+    flex: 0 0 auto;
+    display: flex;
+    margin-top: 2px;
+}
+
+.ffo-banner__icon svg {
+    /* 与 toast 同一份规则：16px 描边体 + 图形级状态色（同一件事必须共用一份实现） */
+    width: 16px;
+    height: 16px;
+}
+
+.ffo-banner__icon.is-success { color: var(--ff-status-ok); }
+.ffo-banner__icon.is-warning { color: var(--ff-status-warn); }
+.ffo-banner__icon.is-error   { color: var(--ff-status-err); }
+.ffo-banner__icon.is-info    { color: var(--ff-status-info); }
+
+.ffo-banner__title {
+    font-weight: 500;
+    margin-bottom: 2px;
+}
+
+.ffo-banner__text {
+    color: var(--ff-text-2);
+    word-break: break-word;
+}
+
+/* 关掉动效后仍要能表达同样的信息：toast 靠停留时长 + 文字，确认框靠位置与反色按钮 */
+@media (prefers-reduced-motion: reduce) {
+    .ffo-confirm-enter-active .ffo-mask,
+    .ffo-confirm-leave-active .ffo-mask,
+    .ffo-confirm-enter-active .ffo-card,
+    .ffo-confirm-leave-active .ffo-card,
+    .ffo-toast-enter-active,
+    .ffo-toast-leave-active,
+    .ffo-toast-move {
+        transition-duration: 1ms;
+    }
+}
