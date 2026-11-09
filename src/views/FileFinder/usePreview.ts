@@ -553,6 +553,9 @@ export function usePreview(deps: {
     let lastBarW = 0;
     let lastName = '';
     let lastCount = '';
+    /** 宽度 FLIP 的在飞动画。⚠️ 重定向模型：新切换不来就「取消旧的、从当前实时宽度起飞」——
+     *  「跳过」会让旧动画继续飞向过时目标，跑完 width 释放回真实布局宽 = 肉眼回跳（真机踩过）。 */
+    let barWidthAnim: Animation | null = null;
     /** 指针当前停着的格子。naive 重渲染会重写 class 抹掉选框的 is-on，靠它请回来 */
     let hoveredCell: HTMLElement | null = null;
 
@@ -570,6 +573,11 @@ export function usePreview(deps: {
         const total = previewEntries.value.length;
         // 只有一条时"上一条/下一条"是空动作（naive-ui 首尾环绕 = 原地不动）⇒ 不显示，免得像坏了
         const hasNav = total > 1;
+        // ⚠️ 此刻是 render 阶段（DOM 还是**旧**内容）⇒ 现在量的才是「旧宽」。
+        //    拖到 patch 之后再量，量到的是新宽，FLIP 就成了"从新弹回旧再弹去新" = 主人看到的跳动。
+        //    若有宽度动画在飞，getBoundingClientRect 取到的是动画中的实时宽度 ⇒ 从它起飞 = 平滑重定向。
+        const barNow = document.querySelector<HTMLElement>('.n-image-preview-toolbar');
+        if (barNow) lastBarW = barNow.getBoundingClientRect().width;
         // 定位：准星 = "我在这儿"。Enter 是真快捷键（index.vue keyup：预览开着时 Enter=定位）
         const locate = h(NIcon, { size: 20, component: LocateOutline, onClick: locateInGrid });
         const out: any[] = [
@@ -602,15 +610,17 @@ export function usePreview(deps: {
         requestAnimationFrame(() => {
             const bar = document.querySelector<HTMLElement>('.n-image-preview-toolbar');
             if (!bar) return;
-            const w = bar.offsetWidth;
-            if (lastBarW && w !== lastBarW && !bar.getAnimations().length) {
-                const a = bar.animate(
-                    [{ width: `${lastBarW}px` }, { width: `${w}px` }],
-                    // ⚠️ 尺寸变化专用 easeOutQuad（= tokens 的 --ff-ease-size）：宽就单调变宽、
-                    // 窄就单调变窄 —— 过冲曲线（1.4）用在宽度上就是主人否掉的「先弹过头再回来」。
+            const w = bar.getBoundingClientRect().width;
+            if (lastBarW && Math.abs(w - lastBarW) >= 1) {
+                // 从当前实时宽度重定向（cancel 的瞬间跳到布局宽、同帧被新动画接住，无中间绘制）
+                const from = barWidthAnim ? bar.getBoundingClientRect().width : lastBarW;
+                barWidthAnim?.cancel();
+                barWidthAnim = bar.animate(
+                    [{ width: `${from}px` }, { width: `${w}px` }],
+                    // ⚠️ 尺寸专用 easeOutQuad（= tokens 的 --ff-ease-size）：宽窄单调直达，不过冲
                     { duration: 200, easing: 'cubic-bezier(0.25, 0.46, 0.45, 0.94)' },
                 );
-                a.onfinish = () => reapplySel(bar);
+                barWidthAnim.onfinish = () => { barWidthAnim = null; reapplySel(bar); };
             }
             lastBarW = w;
             reapplySel(bar);
