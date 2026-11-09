@@ -4175,7 +4175,7 @@ body>.n-image-preview-container .n-image-preview.fade-in-scale-up-transition-lea
 body>.n-image-preview-container .n-image-preview-toolbar {
     left: 50%;
     right: auto;
-    bottom: 24px;
+    bottom: 12px;
     transform: translateX(-50%);
     max-width: min(92vw, 980px);
     height: 48px;
@@ -4247,6 +4247,13 @@ body>.n-image-preview-container .n-image-preview-toolbar {
     opacity: 1;
 }
 
+/* 首现纪律（RailTip 同款）：藏着的选框不做位移补间 —— 第一次出现直接落在
+   当前图标上只做淡入；之后在图标之间移动才滑。否则截图里那种
+   "从 0 滑过来的一瞬"会被看成"没对齐"。 */
+.ptb-sel:not(.is-on) {
+    transition: opacity .18s ease-out;
+}
+
 .ptb-cell {
     position: relative;
     z-index: 1;
@@ -4268,6 +4275,7 @@ body>.n-image-preview-container .n-image-preview-toolbar {
 body>.n-image-preview-container .ptb-cell .n-base-icon {
     padding: 0;
     font-size: 20px;
+    line-height: 1;
     display: grid;
     place-items: center;
 }

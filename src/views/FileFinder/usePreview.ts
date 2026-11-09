@@ -4,9 +4,10 @@
  * ⚠️ 唯一例外是"开不开"必须独立状态：关闭时 previewKey 故意留着，否则淡出期 naive-ui 拿到 src=undefined 会出现空 <img>（见 previewOpenState）。
  * ⚠️ 不共用网格选择器状态：watch(previewKey) 会触发读原图升级，方向键每按一次都改它就会每按一次排一次读盘。
  */
-import { computed, h, nextTick, onMounted, ref, watch } from 'vue';
+import { computed, h, nextTick, onMounted, ref, watch, withDirectives } from 'vue';
 import { NIcon } from 'naive-ui';
 import { LocateOutline } from '@vicons/ionicons5';
+import { vTip } from '@/components/FluidTip/directive';
 import type { ImgHTMLAttributes } from 'vue';
 import type { WiredFileInfo } from '../../../electron/server/index';
 
@@ -525,11 +526,15 @@ export function usePreview(deps: {
     const leaveSel = (e: PointerEvent) => {
         (e.currentTarget as HTMLElement).querySelector('.ptb-sel')?.classList.remove('is-on');
     };
-    /** 把 naive 的工具节点包进统一命中区（28px 视觉 + 36px 命中），并挂上选框跟随 */
-    const cell = (node: any, extra = '') => h('span', {
-        class: `ptb-cell${extra}`,
-        onPointerenter: moveSel,
-    }, [node]);
+    /** 把 naive 的工具节点包进统一命中区（36px 命中），挂上选框跟随 + FluidTip（react-bits 式：文案+真键帽）。
+     *  ⚠️ 键帽只标 naive 真实绑定的键（ImagePreview.mjs:78-99）：←→ 翻页、↑↓ 缩放、Esc 关闭。 */
+    const cell = (node: any, tip?: { text: string; keys?: string }, extra = '') => {
+        const span = h('span', {
+            class: `ptb-cell${extra}`,
+            onPointerenter: moveSel,
+        }, [node]);
+        return tip ? withDirectives(span, [[vTip, tip]]) : span;
+    };
 
     /**
      * 布局（2026-11-09 重构，Apple Quick Look 分组 + LeiBox 选框）：
@@ -540,11 +545,8 @@ export function usePreview(deps: {
         const total = previewEntries.value.length;
         // 只有一条时"上一条/下一条"是空动作（naive-ui 首尾环绕 = 原地不动）⇒ 不显示，免得像坏了
         const hasNav = total > 1;
-        // 定位：准星 = "我在这儿"，tooltip 交给 title
-        const locate = h(NIcon, {
-            size: 20, component: LocateOutline, title: '定位到网格（回车）',
-            onClick: locateInGrid,
-        });
+        // 定位：准星 = "我在这儿"（Enter 在预览层没绑定，不造假键帽）
+        const locate = h(NIcon, { size: 20, component: LocateOutline, onClick: locateInGrid });
         return [
             h('span', { class: 'ptb-info' }, [
                 h('span', { class: 'ptb-name', title: previewFile.value?.name ?? '' },
@@ -554,13 +556,19 @@ export function usePreview(deps: {
             ]),
             h('span', { class: 'ptb-tools', onPointerleave: leaveSel }, [
                 h('span', { class: 'ptb-sel', 'aria-hidden': 'true' }),
-                cell(locate),
-                ...(hasNav ? [cell(nodes.prev), cell(nodes.next)] : []),
+                cell(locate, { text: '定位到网格' }),
+                ...(hasNav ? [
+                    cell(nodes.prev, { text: '上一条', keys: '←' }),
+                    cell(nodes.next, { text: '下一条', keys: '→' }),
+                ] : []),
                 h('span', { class: 'ptb-sep', 'aria-hidden': 'true' }),
-                cell(nodes.rotateCounterclockwise), cell(nodes.rotateClockwise),
-                cell(nodes.resizeToOriginalSize), cell(nodes.zoomOut), cell(nodes.zoomIn),
+                cell(nodes.rotateCounterclockwise, { text: '向左旋转' }),
+                cell(nodes.rotateClockwise, { text: '向右旋转' }),
+                cell(nodes.resizeToOriginalSize, { text: '原始尺寸' }),
+                cell(nodes.zoomOut, { text: '缩小', keys: '↓' }),
+                cell(nodes.zoomIn, { text: '放大', keys: '↑' }),
                 h('span', { class: 'ptb-sep ptb-sep-wide', 'aria-hidden': 'true' }),
-                cell(nodes.close),
+                cell(nodes.close, { text: '关闭', keys: 'Esc' }),
             ]),
         ];
     };
