@@ -3409,7 +3409,7 @@ const onDisksChangedIpc = (_e: unknown, disks: { serial: string; drive: string }
         position: absolute;
         inset: 0;
         border-radius: inherit;
-        box-shadow: inset 0 0 0 2px #18a058;
+        box-shadow: inset 0 0 0 2px var(--ff-status-ok);
         z-index: var(--z-cover-mark);
         /* 纯装饰，不该拦点击（盒子贴在图片上，不加就吃掉图片的点击） */
         pointer-events: none;
@@ -3486,7 +3486,7 @@ const onDisksChangedIpc = (_e: unknown, disks: { serial: string; drive: string }
         align-items: center;
         justify-content: center;
         pointer-events: none;
-        background-color: rgba(0, 0, 0, .35);
+        background-color: var(--ff-mask);
     }
 
     .pick-badge {
@@ -3503,8 +3503,8 @@ const onDisksChangedIpc = (_e: unknown, disks: { serial: string; drive: string }
         box-sizing: border-box;
         font-style: normal;
         border-radius: 50%;
-        background-color: #18a058;
-        box-shadow: 0 0 0 1px #fff;
+        background-color: var(--ff-status-ok);
+        box-shadow: 0 0 0 1px var(--ff-on-highlight);
 
         &::after {
             content: '';
@@ -3513,8 +3513,8 @@ const onDisksChangedIpc = (_e: unknown, disks: { serial: string; drive: string }
             top: 3px;
             width: 7px;
             height: 4px;
-            border-left: 2px solid #fff;
-            border-bottom: 2px solid #fff;
+            border-left: 2px solid var(--ff-on-highlight);
+            border-bottom: 2px solid var(--ff-on-highlight);
             transform: rotate(-45deg);
         }
     }
@@ -3538,9 +3538,9 @@ const onDisksChangedIpc = (_e: unknown, disks: { serial: string; drive: string }
         line-height: 16px;
         text-align: center;
         border-radius: 50%;
-        color: #fff;
-        background-color: #d8a00f;
-        box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.3);
+        color: var(--ff-on-highlight);
+        background-color: var(--ff-status-warn);
+        box-shadow: 0 0 0 1px var(--ff-mask);
 
         &::before {
             content: '★';
@@ -3563,9 +3563,9 @@ const onDisksChangedIpc = (_e: unknown, disks: { serial: string; drive: string }
         font-weight: 500;
         text-align: center;
         border-radius: 3px;
-        color: #fff;
-        background-color: #d03050;
-        box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.25);
+        color: var(--ff-on-highlight);
+        background-color: var(--ff-danger-badge);
+        box-shadow: 0 0 0 1px var(--ff-mask);
         pointer-events: none;
     }
 }
@@ -3854,7 +3854,7 @@ const onDisksChangedIpc = (_e: unknown, disks: { serial: string; drive: string }
             line-height: var(--item-badge-h);
             border-radius: var(--ff-radius-pill);
             background: var(--ff-mask);
-            color: #fff;
+            color: var(--ff-on-highlight);
             font-size: var(--item-badge-fs);
         }
     }
@@ -4000,7 +4000,7 @@ const onDisksChangedIpc = (_e: unknown, disks: { serial: string; drive: string }
         max-height: 45px; // ⚠️ 兜底：万一哪个版本不认 line-clamp，也不许把卡片撑破
         line-height: 15px;
         font-size: 13px;
-        color: #374151;
+        color: var(--ff-text-1);
         font-weight: 400;
         text-align: center;
         white-space: normal;
@@ -4025,7 +4025,7 @@ const onDisksChangedIpc = (_e: unknown, disks: { serial: string; drive: string }
         font-style: normal;
         font-size: 12px;
         line-height: 14px;
-        color: #9ca3af;
+        color: var(--ff-text-2);
     }
 
     /*

@@ -69,3 +69,23 @@ src/components/FluidTip/
 1. **FolderSelector 键帽**：新增 `keys` prop，index.vue 传 `keys="D"`、label 去掉 "(D)" 后缀（键帽接管快捷键展示）。
 2. **仿照不像 → 拿到官方源码逐字对齐**：找到 `WarmTooltip`（`src/content/Micro/WarmTooltip/WarmTooltip.css`）。修正：字号 12.5px / letter-spacing -0.01em / gap 7px / padding 6px 10px（去掉固定 32px 高）/ 双层投影；键帽 = 高 1.55em、radius 0.4em、bg 10%、**inset 0 -1px 0 下沿暗线**（键帽像"键盘键"的关键，此前缺的就是它）、color 72%。首现加 150ms warm-up 延迟（官方 400ms，取 150 保 fluid），簇内滑动仍即时跟手。
 3. **左轨 hover 音效**：主人指定，覆盖"不上 hover 音"一般规则。新增 nib 配方（tiny gentle tick），EVENT_VOLUME_DB 再压 -8dB；接在 RailNav.onEnter（pointerenter + focus 共用出口，触屏已排除）。
+
+## 七、第三批 · 三页 tokens 对齐（同日）
+
+**结果：`no-raw-color` 探针 53 → 0，业务代码零色值字面量**（typecheck 0 error）。
+
+| 位置 | 旧（裸值） | 新（token） | 说明 |
+|---|---|---|---|
+| 封面"已选"绿圈 + 勾选角标 | `#18a058` | `--ff-status-ok` | 勾选=图形级绿（浅 #34c759/深 #4ade80，比旧值更亮更对） |
+| 收录星标 | `#d8a00f` | `--ff-status-warn` | 图形级琥珀 |
+| 失效徽标 | `#d03050` | `--ff-danger-badge` | 同值替换 |
+| 徽标外圈/勾/白字 | `#fff` ×5 | `--ff-on-highlight` | 两主题恒白 |
+| 打开遮罩/徽标描边 | `rgba(0,0,0,…)` | `--ff-mask` | 压照片的暗层，同语义 |
+| 列表视图文件名/大小 | `#374151`/`#9ca3af` | `--ff-text-1`/`-2` | ⚠️ 旧值在深色主题下对比度仅 ~1.8:1（近隐形），token 顺带修掉 |
+| PlaylistPicker | `#18a058`/`#ececec` | `--ff-status-ok`/`--ff-line` | |
+| RuleSiteList | 紫灰 hover/active、灰分隔线 | `--ff-ctl-hover`/`--ff-ctl-on`/`--ff-line-strong` | 对齐「悬浮/选中与菜单栏统一」裁决 |
+| RuleTestResult | `#18a058`/`#d03050`/灰底 | `--ff-ok`/`--ff-danger`/`--ff-raised` | 文字级语义色（非图形级） |
+| FluidTipHost 键帽/投影 | rgba ×5 | 新 `--ff-tooltip-kbd-*`/`--ff-tooltip-shadow` | 永远反色深底，值进 tokens.css（同 --ff-media-* 工种） |
+
+未动（有判据）：`.cursor` 的 `transform: scale(1.012)`（键盘焦点态非 hover，注释已论证）；Cache 盘条富提示（naive）。
+**未真机目视** —— 待主人验收三页明暗两主题。

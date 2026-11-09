@@ -75,9 +75,7 @@ watch(
     transition:
         transform 0.2s var(--ff-ease-move),
         opacity 0.15s ease-out;
-    box-shadow:
-        0 1px 2px rgba(0, 0, 0, 0.12),
-        0 8px 24px -8px rgba(0, 0, 0, 0.45);
+    box-shadow: var(--ff-tooltip-shadow);
 
     &.is-on {
         opacity: 1;
@@ -96,10 +94,10 @@ watch(
     padding: 0 0.45em;
     box-sizing: border-box;
     border-radius: 0.4em;
-    background: rgba(255, 255, 255, 0.1);
+    background: var(--ff-tooltip-kbd-bg);
     /* 键帽的下沿：一条 1px 暗线读作"键盘键的侧面"，没有它就只是一块圆角芯片 */
-    box-shadow: inset 0 -1px 0 rgba(255, 255, 255, 0.14);
-    color: rgba(255, 255, 255, 0.72);
+    box-shadow: inset 0 -1px 0 var(--ff-tooltip-kbd-line);
+    color: var(--ff-tooltip-kbd-text);
     font-family: var(--ff-font);
     font-size: 0.86em;
     font-weight: 500;

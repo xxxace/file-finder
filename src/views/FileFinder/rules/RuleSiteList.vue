@@ -37,7 +37,7 @@ const emit = defineEmits<{
     flex: 0 0 280px;
     display: flex;
     flex-direction: column;
-    border-right: 1px solid rgba(128, 128, 128, .24);
+    border-right: 1px solid var(--ff-line-strong);
     padding-right: 14px;
     min-height: 0;
 }
@@ -65,8 +65,8 @@ const emit = defineEmits<{
     border-radius: 6px;
     cursor: pointer;
 
-    &:hover { background: rgba(110, 123, 173, .12); }
-    &.is-active { background: rgba(110, 123, 173, .2); }
+    &:hover { background: var(--ff-ctl-hover); }
+    &.is-active { background: var(--ff-ctl-on); }
 }
 
 .rule-name {

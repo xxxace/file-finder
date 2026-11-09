@@ -93,7 +93,7 @@ const createAndAdd = async () => {
     }
 
     .pl-row-check {
-        color: #18a058;
+        color: var(--ff-status-ok);
     }
 
     .pl-new {
@@ -101,7 +101,7 @@ const createAndAdd = async () => {
         gap: 6px;
         margin-top: 4px;
         padding-top: 8px;
-        border-top: 1px solid #ececec;
+        border-top: 1px solid var(--ff-line);
     }
 }
 </style>

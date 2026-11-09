@@ -70,11 +70,11 @@ defineProps<{ last: TestRun | null }>();
     margin-top: 12px;
     padding: 10px 12px;
     border-radius: 8px;
-    background: rgba(128, 128, 128, .08);
+    background: var(--ff-raised);
     font-size: 13px;
 }
 
-.result.err { color: #d03050; }
+.result.err { color: var(--ff-danger); }
 
 .seg {
     display: flex;
@@ -87,8 +87,8 @@ defineProps<{ last: TestRun | null }>();
     opacity: .7;
 }
 
-.good { color: #18a058; }
-.bad { color: #d03050; }
+.good { color: var(--ff-ok); }
+.bad { color: var(--ff-danger); }
 .dim { opacity: .75; word-break: break-all; }
 
 .imgs {
