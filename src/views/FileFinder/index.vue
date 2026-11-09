@@ -1968,7 +1968,7 @@ const onDisksChanged = async (disks: { serial: string; drive: string }[]) => {
         const anchor = await getAnchor(top.path);
         if (!anchor) return;                                  // 从没扫到过这个盘符 ⇒ 没缓存可用，保持原样
         await swapTop(anchor);
-        notify('warning', '这块盘已拔出', '已切换到缓存内容，缩略图仍可用');
+        notify('warning', '这块盘已拔出', '已切换到缓存内容，缩略图仍可用', { silent: true });
         return;
     }
 
@@ -1976,7 +1976,7 @@ const onDisksChanged = async (disks: { serial: string; drive: string }[]) => {
     const real = await resolveAnchor(top.path);
     if (!real) return;
     await swapTop(real);
-    notify('success', '盘已插回', '列表已切换到实时内容');
+    notify('success', '盘已插回', '列表已切换到实时内容', { silent: true });
 };
 
 /** 插拔音走**设备消息**（主进程 `ff-device-change`），不走盘列表差分：

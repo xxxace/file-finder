@@ -198,3 +198,22 @@ src/components/FluidTip/
   在 JS 侧读不到（lParam 只是指针）⇒ 插 U 盘以外的 USB 设备（鼠标/键盘/手机充电）也可能响一下。
   要收紧只有一条路：退回"盘列表确认后再响"，代价是必然晚 1.2s —— 那才是原来"不像"的来源。
 - `npm run typecheck`（vue-tsc + tsc electron）0 error。**改了主进程 ⇒ 必须重启 dev**。
+
+### 补：对官方 `src/sounds/ts/plug.ts` / `unplug.ts` 的机械比对（同日，主人第三次追问）
+
+主人直接给了两个官方文件地址，那就用**可复算**的方式回答，而不是眼看：
+
+```bash
+# 1) 官方 recipe：去掉 import/类型标注后当 JS 求值
+# 2) 本仓 recipes.ts 用 esbuild 打成 .mjs 再 import（不手抄）
+# 3) 逐键深比
+plug    vs plug.ts:   ✅ 完全一致    层数 4 / duration 0.55 / seed 85 / loudness -18.5 / lowpass 7000
+unplug  vs unplug.ts: ✅ 完全一致    层数 4 / duration 0.5  / seed 86 / loudness -18.5 / lowpass 6500
+```
+
+⇒ **0 处不同**（含 `bell` 泛音 `[2,0.064,0.55] [3,0.016,0.35]`、`knock` 的 `lowpass 2080/1820`、`room(.12,.5)` 的 `predelay .01/damp 5000`）。
+`plug.ts` 与 Sound Lab catalog 的 `plug` 条目本来也是同一份数据 —— 两条路都验过了。
+
+既然音本身无差，剩下能让"听起来不像"的只有两件：**响的时刻**（上一节已修）与**同一动作叠了第二个音**。
+后者这轮也掐掉：`notify()` 增可选第 4 参 `{ silent: true }`，「这块盘已拔出」/「盘已插回」两条 toast 不再各响 Nudge / Bloom
+（插拔音已经替它们响过；一次动作两个音，人耳只会听成一团，也就认不出 Plug/Unplug）。
