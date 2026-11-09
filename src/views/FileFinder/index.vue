@@ -4177,6 +4177,10 @@ body>.n-image-preview-container .n-image-preview-toolbar {
     right: auto;
     bottom: 8px;
     transform: translateX(-50%);
+    /* ⚠️ 必须显式 border-box：宽度 FLIP 用 GBCR/offsetWidth（border-box）量、用 WAAPI width
+       （默认 content-box）写 —— 差的正好是左右 padding 20px，表现为主人看到的
+       「先胀 20px 再缩回」的假过冲。同一个值两个盒模型，量与写必须同框。 */
+    box-sizing: border-box;
     max-width: min(92vw, 980px);
     height: 48px;
     padding: 0 10px;
