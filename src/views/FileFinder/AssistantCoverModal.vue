@@ -37,14 +37,9 @@
                     <n-icon :component="RefreshOutline" :size="13" />
                     扫描
                 </button>
-                <n-popconfirm positive-text="深度重扫" negative-text="取消" @positive-click="deepRescan">
-                    <template #trigger>
-                        <button type="button" class="ffw-btn ffw-btn--ghost" :disabled="busy || !selectedSerial || faceMode">
-                            深度重扫
-                        </button>
-                    </template>
-                    把写入过的目录用实时清单复核一遍（只读文件名，不抽帧）。确定吗？
-                </n-popconfirm>
+                <button type="button" class="ffw-btn ffw-btn--ghost" :disabled="busy || !selectedSerial || faceMode" @click="confirmDeepRescan">
+                    深度重扫
+                </button>
             </template>
 
             <SkeletonList v-if="scanLoading" variant="card" :count="8" />
@@ -179,7 +174,8 @@
 
 <script setup lang="ts">
 import { computed, ref } from 'vue';
-import { NModal, NSelect, NPopconfirm, NIcon } from 'naive-ui';
+import { NModal, NSelect, NIcon } from 'naive-ui';
+import useConfirm from '@/hooks/useConfirm';
 import {
     ArrowForwardOutline,
     PauseOutline,
@@ -238,6 +234,7 @@ interface ScanResult {
 
 const emit = defineEmits<{ refresh: [] }>();
 const notify = useNotify();
+const dialog = useConfirm();
 
 const visible = ref(false);
 const disks = ref<DiskRow[]>([]);
@@ -408,6 +405,15 @@ const onDiskChange = (serial: string) => {
 };
 
 /** 深度重扫：把写入过的目录用实时清单（readdir+stat，不抽帧）复核后重出清单 */
+/** 深度重扫前的确认 —— 统一走 Overlay 的 confirm（与头像写入同一份实现） */
+const confirmDeepRescan = () => dialog.warning({
+    title: '深度重扫',
+    content: '把写入过的目录用实时清单复核一遍（只读文件名，不抽帧）。确定吗？',
+    positiveText: '深度重扫',
+    negativeText: '取消',
+    onPositiveClick: () => deepRescan(),
+});
+
 const deepRescan = async () => {
     if (!selectedSerial.value || busy.value) return;
     try {

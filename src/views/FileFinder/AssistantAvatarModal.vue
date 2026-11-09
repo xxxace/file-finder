@@ -131,19 +131,15 @@
                             <button type="button" class="ffw-btn ffw-btn--ghost" :disabled="!matchedCount || rowLocked" @click="selectMatchedOnly">
                                 仅选已匹配
                             </button>
-                            <n-popconfirm @positive-click="startApply">
-                                <template #trigger>
-                                    <button
-                                        type="button"
-                                        class="ffw-btn ffw-btn--primary"
-                                        :disabled="!counts.selected || !activeIsOnline"
-                                    >
-                                        写入 {{ counts.selected }} 个头像
-                                        <n-icon :component="ArrowForwardOutline" :size="13" />
-                                    </button>
-                                </template>
-                                为这 {{ counts.selected }} 个目录下载并写入 avatar.jpg，已有旧头像会先备份。确定吗？
-                            </n-popconfirm>
+                            <button
+                                type="button"
+                                class="ffw-btn ffw-btn--primary"
+                                :disabled="!counts.selected || !activeIsOnline"
+                                @click="confirmApply"
+                            >
+                                写入 {{ counts.selected }} 个头像
+                                <n-icon :component="ArrowForwardOutline" :size="13" />
+                            </button>
                         </template>
                     </template>
                 </TaskDock>
@@ -154,7 +150,8 @@
 
 <script setup lang="ts">
 import { computed, ref, watch } from 'vue';
-import { NModal, NPopconfirm, NSelect, NIcon } from 'naive-ui';
+import { NModal, NSelect, NIcon } from 'naive-ui';
+import useConfirm from '@/hooks/useConfirm';
 import {
     ArrowForwardOutline,
     CloudOfflineOutline,
@@ -195,6 +192,7 @@ const props = withDefaults(
 
 const emit = defineEmits<{ (e: 'update:show', v: boolean): void; (e: 'applied'): void }>();
 const notify = useNotify();
+const dialog = useConfirm();
 
 const activeSource = ref<'javbus' | 'gfriends'>('javbus');
 /**
@@ -361,6 +359,15 @@ const onSourceChange = (value: 'javbus' | 'gfriends') => {
 };
 
 // ── 写入 ────────────────────────────────────────────────────
+/** 写入前的确认 —— 统一走 Overlay 的 confirm（旧 n-popconfirm 是全站唯一漏网的旧样式） */
+const confirmApply = () => dialog.warning({
+    title: '写入头像',
+    content: `为这 ${counts.value.selected} 个目录下载并写入 avatar.jpg，已有旧头像会先备份。确定吗？`,
+    positiveText: '写入',
+    negativeText: '取消',
+    onPositiveClick: () => startApply(),
+});
+
 const startApply = async () => {
     const items = selectedWithImage(rows.value).map(r => ({ relDir: r.relDir, avatarUrl: r.avatarUrl! }));
     if (!items.length) {
