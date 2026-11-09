@@ -263,10 +263,17 @@
                             :class="`file-cover fiv-cla fiv-icon-${(item.ext || '').toLowerCase()}`" class="file-face">
                         </div>
                         <!-- 角标（B 站封面下沿那一排）：数量在左、大小在右。
-                             `pointer-events:none` —— 它盖在封面上，但点它应该等于点封面。 -->
-                        <div v-if="(item.files && item.files.length) || (item.size || 0) > 0" class="card-badges">
-                            <span v-if="item.files && item.files.length" class="badge">{{ item.files.length }} 个文件</span>
-                            <span v-if="(item.size || 0) > 0" class="badge">{{ getSize(item.size) }}</span>
+                             `pointer-events:none` —— 它盖在封面上，但点它应该等于点封面。
+                             ⚠️ 数量**只在 ≠1 时出现**（2026-11-09 主人裁决）：一屏几十张卡里
+                             绝大多数都是「1 个文件」，那条恒定信息只占地方；但 **=0 要留** ——
+                             "这个目录里一张片子都没有"是真信息（只有封面图时会走到这里）。
+                             ⚠️ 判据必须是 `Array.isArray`：普通目录/单体文件没有 `files` 字段
+                             （undefined），拿 `!len` 判会让它们全冒出一个「0 个文件」。
+                             ⚠️ 大小那颗必须带 `.badge-size`：容器是 `space-between`，只剩一颗时
+                             孤子会被推到**左**端 —— 那就不是"大小"的位置了（code review 抓到）。 -->
+                        <div v-if="(Array.isArray(item.files) && item.files.length !== 1) || (item.size || 0) > 0" class="card-badges">
+                            <span v-if="Array.isArray(item.files) && item.files.length !== 1" class="badge">{{ item.files.length }} 个文件</span>
+                            <span v-if="(item.size || 0) > 0" class="badge badge-size">{{ getSize(item.size) }}</span>
                         </div>
                     </div>
                     <!-- 标题：**永远占两行的高度**（单行也留白）。

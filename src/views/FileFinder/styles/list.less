@@ -188,6 +188,13 @@
             color: var(--ff-on-highlight);
             font-size: var(--item-badge-fs);
         }
+
+        /* ⚠️ 「大小」那颗靠**角色**贴右，不靠顺序：容器是 `space-between`，
+           「数量」=1 被隐藏后只剩大小这一颗孤子，`space-between` 会把它推到左端 ——
+           而左端是"数量"的位置，读起来就是"大小跑错了栏"（2026-11-09 code review）。 */
+        .badge-size {
+            margin-left: auto;
+        }
     }
 
     /* 标题：永远两行高度（单行也留白）—— 见块头那条"同行等高"的约束。

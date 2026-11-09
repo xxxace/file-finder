@@ -501,7 +501,7 @@ const loadDisks = async (refresh = false) => {
         duplicated.value = data.duplicated || [];
         stats.value = data.stats || null;
     } catch (err) {
-        notify('error', '错误', `获取磁盘列表失败！${err}`)
+        notify('error', '错误', `获取磁盘列表失败：${err}`)
     } finally {
         diskLoading.value = false;
     }
@@ -622,7 +622,7 @@ const getHistrotyList = () => {
         model.value.total = data.total
     }).catch(err => {
         if (my !== listReqSeq) return;
-        notify('error', '错误', `获取历史数据列表错误！${err}`)
+        notify('error', '错误', `获取历史数据列表失败：${err}`)
     }).finally(() => {
         if (my === listReqSeq) loading.value = false;
     });
