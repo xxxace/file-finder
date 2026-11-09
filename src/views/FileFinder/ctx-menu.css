@@ -16,12 +16,14 @@
     outline: none;
 }
 
-/* 内衬：naive 的 popover 读 `--n-padding`（默认 8px 14px，对菜单太胖）。
-   两条都写：变量给 devtools 看和以后复用，`padding` 直接压属性 —— naive 的主题变量是
-   **内联**挂在根节点上的，只改 CSS 变量赢不了内联值。
-   选择器不带 `body>`：弹层挂在哪个容器由 naive 决定，靠类名 + `:has` 精准命中这一个菜单。 */
-.n-popover:has(>.ctx-menu) {
-    --n-padding: 2px;
+/* 内衬 2px，只作用于这一个菜单。
+   ⚠️ `--n-padding` 必须带 `!important`：naive 把主题变量**内联**写在 popover 根节点上
+   （PopoverBody.mjs:180 `style.push(cssVarsRef.value)`）⇒ 普通声明赢不了内联值，
+   只改 CSS 变量的话 devtools 里永远是 8px 14px。
+   ⚠️ 选择器用**后代** `:has(.ctx-menu)`：弹层根是 `.n-popover.n-popover-shared`，
+   里面包着 `.ctx-menu`；不要假设它是 `body` 的直接子元素（上一版就是这么错判的）。 */
+.n-popover:has(.ctx-menu) {
+    --n-padding: 2px !important;
     padding: 2px;
 }
 

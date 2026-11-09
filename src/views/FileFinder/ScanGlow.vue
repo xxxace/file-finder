@@ -58,7 +58,7 @@ const props = defineProps<{
     pending?: number;
 }>();
 
-const emit = defineEmits<{ cancel: []; closed: [] }>();
+const emit = defineEmits<{ cancel: []; closed: []; swept: [] }>();
 
 const canvasEl = ref<HTMLCanvasElement | null>(null);
 /** 进/退场包络 0~1（每帧算，写进 CSS 变量） */
@@ -75,6 +75,8 @@ let finishAt = 0;
 let finishFrom = 0;
 let exitAt = 0;
 let done = false;
+/** 扫到顶只报一次（完成音挂它，不要每帧都发） */
+let swept = false;
 
 const title = computed(() => (props.kind === 'fill' ? '补全这一片' : '重读这一片'));
 
@@ -302,6 +304,11 @@ function tick(now: number): void {
             // 从起点**按原速**扫上去（0.76→0.96 ≈ 1040ms），扫到顶才开始淡出
             p = Math.min(SWEEP_TO, finishFrom + (now - finishAt) / CYCLE_MS);
             if (p >= SWEEP_TO) {
+                // 扫到顶的那一刻（开始淡出前）—— 完成音挂这里，挂 `closed` 会晚一整段淡出
+                if (!swept) {
+                    swept = true;
+                    emit('swept');
+                }
                 if (!exitAt) exitAt = now;
                 fadeOut.value = smooth(0, EXIT_MS, now - exitAt);
                 if (fadeOut.value >= 1) {

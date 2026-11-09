@@ -299,7 +299,8 @@
                 :done="scanDone"
                 :pending="scanPending"
                 @cancel="onScanCancel"
-                @closed="onGlowClosed"
+                @swept="onScanSwept"
+                @closed="glow = ''"
             />
         </div>
         <!-- 扫描状态条。PC 文件管理器的做法：**进度和「取消」成对待在独立的一条里**，
@@ -1521,12 +1522,13 @@ const { scanning, scanDone, scanPending, cancelling, scanOk, glow, glowKey, star
     });
 
 /**
- * 扫描动效收尾（向上扫到顶、淡出到底）—— **完成音挂这里**，不挂在 `scanning` 变 false 的那一刻：
- * 那一刻画面上还在往上扫，声音会抢在视觉前面。
+ * 扫描动效**扫到顶**的那一刻（淡出开始前）—— 完成音挂这里。
+ * 三个更早/更晚的候选都不对：
+ *   · `scanning` 变 false：光还没开始往上扫，声音抢在视觉前面；
+ *   · `@closed`：已经淡完一整段（≈300ms），听起来是"音在后面追画面"。
  * 取消 / 失败不响（`scanOk` 只在"跑到底且没人按取消"时为真）。
  */
-const onGlowClosed = () => {
-    glow.value = '';
+const onScanSwept = () => {
     if (scanOk.value) playSfx('success');
 };
 

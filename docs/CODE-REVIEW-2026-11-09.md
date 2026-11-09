@@ -465,25 +465,31 @@ isReadOnlyPath / driveLetterOf / getAnchor / resolveAnchor / notify / playSfx）
 
 ## 十五、右键菜单内衬 + 扫描完成音（2026-11-09 20:3x）
 
-### 1. 右键菜单内衬 3px → 2px
+### 1. 右键菜单内衬 3px → 2px（含一次错判的更正）
 
-原规则选的是 `body>.n-popover:has(>.ctx-menu)`。**`body>` 这一层是错的**——弹层挂在哪由 naive
-决定，多一层容器就整个选择器失效，于是 `--n-padding` 一直是默认的 `8px 14px`。
-改成 `.n-popover:has(>.ctx-menu)`（不再依赖父级），并且**变量和属性都写**：
+**真正的拦路虎是内联样式，不是选择器**：naive 把主题变量**内联**写在 popover 根节点上
+（`PopoverBody.mjs:180` 的 `style.push(cssVarsRef.value)`），所以 CSS 里的
+`--n-padding: 2px` 永远赢不了它 —— devtools 里一直显示默认的 `8px 14px` 就是这个原因。
+（我第一版把锅扣在 `body>` 那层上，是**错判**：弹层根确实是 `body > .n-popover.n-popover-shared`。）
+
+最终写法（变量带 `!important` 压内联；选择器去掉 `body>` 用后代 `:has`，双重保险）：
 
 ```css
-.n-popover:has(>.ctx-menu) { --n-padding: 2px; padding: 2px; }
+.n-popover:has(.ctx-menu) { --n-padding: 2px !important; padding: 2px; }
 ```
 
-只改变量不够：naive 的主题变量是**内联**挂在根节点上的，CSS 里的同名变量赢不了内联值。
+### 2. 扫描完成音（时机改过一次）
 
-### 2. 扫描完成音
+三个候选时机，最后选中间那个：
 
-挂在 `ScanGlow` 的 `@closed`（向上扫到顶 + 淡出到底那一刻），不是 `scanning` 变 false 那一刻 ——
-后者画面上还在往上扫，声音会抢在视觉前面。
+| 时机 | 问题 |
+|---|---|
+| `scanning` 变 false | 光还没开始往上扫，声音抢在视觉前面 |
+| `ScanGlow @closed` | 已经淡完一整段（≈300ms）⇒ 听起来"音在后面追画面" |
+| **`@swept`（扫到顶、淡出开始前）** | ✔ 采用 |
 
-「算不算完成」由 `useScanFlow` 的 `scanOk` 决定：跑到底且没人按取消才为真；
-取消/出错都不响（出错另有 `notify('error')` 的 warn 音，不会双重）。
+`ScanGlow` 新增 `swept` 事件，在 `p >= SWEEP_TO` 那帧发一次（`swept` 布尔防重复）。
+「算不算完成」仍由 `useScanFlow.scanOk` 决定：跑到底且没人按取消才响。
 
 ### 3. 音效覆盖审计（顺手做的）
 
