@@ -42,6 +42,8 @@ export function useRailTip(railRef: Ref<HTMLElement | null>) {
     const centers: number[] = [];
     /** 上一次响过 hover 音的入口（-1 = 无）；见 show() 里的「只跟入口变化走」注释 */
     let lastIndex = -1;
+    /** 上一次响 hover 音的时刻（配合 HOVER_COOLDOWN_MS 的冷却闸） */
+    let lastTickAt = -Infinity;
     let leaveTimer = 0;
     let snapFrames: number[] = [];
 
@@ -84,10 +86,16 @@ export function useRailTip(railRef: Ref<HTMLElement | null>) {
         window.clearTimeout(leaveTimer);
         leaveTimer = 0;
 
-        // hover 音只跟「入口变化」走（Switch/PS5 焦点 tick 的模型）：
-        // 同一颗按钮无论 pointerenter / focus / 动画后重算 hover 来几次 show，都不许响第二声。
-        // 指针真正离开（hide 清零）后再回来，才算一次新的到达。
-        if (index !== lastIndex) playSfx('hover');
+        // hover 音双保险（Switch/PS5 焦点 tick 模型 + 冷却闸）：
+        // ① 只跟「入口变化」走；② 同一入口 1s 内只响一声。
+        // ② 是给主题切换动画兜底的：实测动画期间浏览器会因快照层/DOM 重算补发
+        //    leave→enter，把 ① 的 lastIndex 清掉 ⇒ 动画一结束又响第二声。
+        //    主题动画 650ms < 1s 冷却 ⇒ 物理上封死第二声；真离开 ≥1s 后回来照常响。
+        const now = performance.now();
+        if (index !== lastIndex || now - lastTickAt >= HOVER_COOLDOWN_MS) {
+            playSfx('hover');
+            lastTickAt = now;
+        }
         lastIndex = index;
 
         if (tipOn.value) {
@@ -117,6 +125,9 @@ export function useRailTip(railRef: Ref<HTMLElement | null>) {
         tipOn.value = false;
         lastIndex = -1;
     }
+
+    /** 同一入口的 hover 音冷却：盖过主题切换动画（650ms）的时长 */
+    const HOVER_COOLDOWN_MS = 1000;
 
     /** 指针离开：等一拍再收 —— 立刻收会在入口之间的缝隙里疯狂闪 */
     function leave() {
