@@ -8,6 +8,7 @@ import { computed, h, nextTick, onMounted, ref, watch, withDirectives } from 'vu
 import { NIcon } from 'naive-ui';
 import { LocateOutline } from '@vicons/ionicons5';
 import { vTip } from '@/components/FluidTip/directive';
+import { hideTip } from '@/components/FluidTip/fluidTip';
 import type { ImgHTMLAttributes } from 'vue';
 import type { WiredFileInfo } from '../../../electron/server/index';
 
@@ -197,6 +198,9 @@ export function usePreview(deps: {
         // 已经排好的"升级大图"要掐掉：那个请求可能要读移动硬盘上的原图，
         // 预览都关了还去读就是白读（见 cancelSharpTimer 的注释）。
         cancelSharpTimer();
+        // ⚠️ 关预览时 naive 直接拆掉工具条 DOM，pointerleave 永远不会发
+        // ⇒ FluidTip 会卡在原地不销毁（真机 bug：点定位/回车后胶囊还挂着）。显式收掉。
+        hideTip();
         // 翻页只同步不滚动 ⇒ 关掉时高亮可能停在视口外。这里把它请回来（幂等：看得见就不动）。
         revealCursor();
     };
@@ -545,7 +549,7 @@ export function usePreview(deps: {
         const total = previewEntries.value.length;
         // 只有一条时"上一条/下一条"是空动作（naive-ui 首尾环绕 = 原地不动）⇒ 不显示，免得像坏了
         const hasNav = total > 1;
-        // 定位：准星 = "我在这儿"（Enter 在预览层没绑定，不造假键帽）
+        // 定位：准星 = "我在这儿"。Enter 是真快捷键（index.vue keyup：预览开着时 Enter=定位）
         const locate = h(NIcon, { size: 20, component: LocateOutline, onClick: locateInGrid });
         return [
             h('span', { class: 'ptb-info' }, [
@@ -556,7 +560,7 @@ export function usePreview(deps: {
             ]),
             h('span', { class: 'ptb-tools', onPointerleave: leaveSel }, [
                 h('span', { class: 'ptb-sel', 'aria-hidden': 'true' }),
-                cell(locate, { text: '定位到网格' }),
+                cell(locate, { text: '定位到网格', keys: 'Enter' }),
                 ...(hasNav ? [
                     cell(nodes.prev, { text: '上一条', keys: '←' }),
                     cell(nodes.next, { text: '下一条', keys: '→' }),
