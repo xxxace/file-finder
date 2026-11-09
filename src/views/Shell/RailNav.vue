@@ -45,7 +45,6 @@ import { NIcon } from 'naive-ui';
 import { MoonOutline, SettingsOutline, SunnyOutline } from '@vicons/ionicons5';
 import { RAIL_ITEMS } from './nav';
 import type { RailKey } from './nav';
-import { playSfx } from '@/utils/sfx';
 import RailTip from './RailTip.vue';
 import { useRailTip } from './useRailTip';
 
@@ -71,10 +70,10 @@ const TIP_LABELS = computed(() => [
     isDark ? '切到浅色' : '切到深色',
 ]);
 
-/** 触屏没有 hover 语义：轻点会接着给 button 焦点，交给 focus 那条路去显示 */
+/** 触屏没有 hover 语义：轻点会接着给 button 焦点，交给 focus 那条路去显示。
+ *  hover 音在 useRailTip.show() 里按「入口变化」统一管理，这里不响。 */
 const onEnter = (event: Event, index: number) => {
     if (event instanceof PointerEvent && event.pointerType === 'touch') return;
-    playSfx('hover');
     show(index);
 };
 

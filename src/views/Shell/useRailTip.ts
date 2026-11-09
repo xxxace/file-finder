@@ -12,6 +12,7 @@
  */
 import { nextTick, onBeforeUnmount, onMounted, ref } from 'vue';
 import type { ComponentPublicInstance, Ref } from 'vue';
+import { playSfx } from '@/utils/sfx';
 
 /**
  * 胶囊高度 / 左右内边距。CSS 里**不重复写死** —— RailTip.vue 直接 `import` 这两个值注入 CSS 变量。
@@ -39,6 +40,8 @@ export function useRailTip(railRef: Ref<HTMLElement | null>) {
     const buttons: HTMLElement[] = [];
     const rows: HTMLElement[] = [];
     const centers: number[] = [];
+    /** 上一次响过 hover 音的入口（-1 = 无）；见 show() 里的「只跟入口变化走」注释 */
+    let lastIndex = -1;
     let leaveTimer = 0;
     let snapFrames: number[] = [];
 
@@ -81,6 +84,12 @@ export function useRailTip(railRef: Ref<HTMLElement | null>) {
         window.clearTimeout(leaveTimer);
         leaveTimer = 0;
 
+        // hover 音只跟「入口变化」走（Switch/PS5 焦点 tick 的模型）：
+        // 同一颗按钮无论 pointerenter / focus / 动画后重算 hover 来几次 show，都不许响第二声。
+        // 指针真正离开（hide 清零）后再回来，才算一次新的到达。
+        if (index !== lastIndex) playSfx('hover');
+        lastIndex = index;
+
         if (tipOn.value) {
             // 已经在显示：正常滑动过去（CSS 会从当前值接续，不跳回旧目标）
             paint(index);
@@ -106,6 +115,7 @@ export function useRailTip(railRef: Ref<HTMLElement | null>) {
 
     function hide() {
         tipOn.value = false;
+        lastIndex = -1;
     }
 
     /** 指针离开：等一拍再收 —— 立刻收会在入口之间的缝隙里疯狂闪 */
