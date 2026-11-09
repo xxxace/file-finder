@@ -110,3 +110,10 @@ src/components/FluidTip/
 - ≤5 动作不折叠；折叠是"高级区"工种——原折叠还造成"备份与迁移"标题出现两次。
 - **逻辑/文案零改动**，对外仍是 `migrated` 事件；GeneralPanel 卡头描述同步去掉"折叠区"字样。
 - typecheck 0 error；未真机目视。
+
+## 十、收尾三优化（同日）
+
+1. **回车开文件 2s 节流**：只锁 `open-item`（播放器），目录 drill（导航）不锁——连进两层目录不能被 2s 卡住。
+2. **定位蒙层动效化**：`is-locating` 的 opacity 过渡挪到 `.image-box-item` 基类——原来撤销蒙层是硬切（.3→1 瞬跳）；现在压暗 .12s / 恢复 .2s 进出不对称；蒙层期间光标卡 scale 1.012→1.02 再抬一档（同族 scale 语言，不引入第二色，遵守 2026-10-04 撤橙框结论）。
+3. **预览开合过渡 token 化**：覆盖 naive 的 fade-in-scale-up（原 .2s scale .9 弹跳 + 退场缩尺）→ 进场 200ms --ff-ease-move scale .965、退场 140ms 只淡出；写在 index.vue 非 scoped 块（预览 DOM teleport 到 body）。缩放/拖动不受影响（transition 类动画后即摘，内联 cssText 独立）。
+- typecheck 0 error；未真机目视。

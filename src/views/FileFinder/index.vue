@@ -1197,8 +1197,12 @@ const handleOpen = (e: MouseEvent, item: WiredFileInfo) => {
  * 网格里按 Enter：只负责派发动作，判据在 openDecision.ts（纯函数，探针与产品共用）。
  * ⚠️ open-item 必须传 item，不能传 item.files[0].name：openFile 字符串分支靠 popover.cover 算父目录，这里没开弹层 cover 是上次残留会开错文件；item 分支"双击封面=打开视频"正为此场景而写。
  */
-const onCursorConfirm = (item: WiredFileInfo) => {
-    if (picking.value) {
+/** 回车打开文件的最小间隔（误触保护，主人 2026-11-09 定 2s）：播放器进程起来要一两秒，
+ *  期间再按回车 = 又起一个进程。只锁 open-item，不锁目录 drill（导航不能被 2s 卡住）。 */
+const ENTER_OPEN_MIN_MS = 2000;
+let lastEnterOpenAt = 0;
+
+const onCursorConfirm = (item: WiredFileInfo) => {    if (picking.value) {
         onItemClick(item);
         return;
     }
@@ -1211,9 +1215,15 @@ const onCursorConfirm = (item: WiredFileInfo) => {
         case 'drill':
             openFolderInCover(action.path);
             return;
-        case 'open-item':
+        case 'open-item': {
+            // ⚠️ 误触保护（主人 2026-11-09）：回车连按/惯性双击会在播放器还没起来时又发一次。
+            // 只锁「打开文件」这条路 —— 目录的 drill 是导航，不节流（连进两层目录不能等 2s）。
+            const now = performance.now();
+            if (now - lastEnterOpenAt < ENTER_OPEN_MIN_MS) return;
+            lastEnterOpenAt = now;
             openFile(item);
             return;
+        }
         case 'pick-from-list': {
             const c = cardCenterOf(item);
             openFileList(item, c.x, c.y);
@@ -3367,10 +3377,17 @@ const onDisksChangedIpc = (_e: unknown, disks: { serial: string; drive: string }
 }
 
 /* 定位后短暂压暗其余格子（600ms）：满屏几百张时，「只剩一张亮」比「给那张加框」好认得多。
-   只在 revealAndFlash 那一刻加 class，不是常驻态；opacity 走合成层，不触发重排。 */
+   ⚠️ 动效（2026-11-09）：透明度过渡写在**基类**上 —— 只写在 .is-locating 里的话，
+   撤销蒙层那一下是硬切（opacity .3 → 1 瞬间跳回）。进出不对称：压暗快（.12s，
+   注意力要立刻抓）、恢复慢（.2s 一拍，视线 softly 放回全屏）。 */
 .image-box.is-locating .image-box-item:not(.cursor) {
     opacity: .3;
-    transition: opacity .12s ease;
+}
+
+.image-box.is-locating .image-box-item.cursor {
+    /* 蒙层期间把光标卡再抬一档（1.012 → 1.02）：压暗语言下的「就是这张」，
+       同一族 scale 动作，不引入第二种颜色（2026-10-04 撤橙框时的结论）。 */
+    transform: scale(1.02);
 }
 
 /*
@@ -3383,6 +3400,11 @@ const onDisksChangedIpc = (_e: unknown, disks: { serial: string; drive: string }
  */
 .image-box-item {
     position: relative;
+
+    /* 定位蒙层的透明度过渡写在基类：压暗（.is-locating）与恢复（撤 class）两个方向都要动。
+       进出不对称——压暗 .12s（立刻抓注意力）、恢复 .2s 一拍（视线 softly 放回全屏）；
+       transform 同步给 cursor 卡的 1.012↔1.02 抬升用。 */
+    transition: opacity 0.12s ease, transform 0.16s var(--ff-ease-move);
 
     /* 卡片内层序契约（唯一真相源）——"谁盖住谁"只在这里定，别在别处补 z-index 数字。
      * ⚠️ 封面图 z-index:1 会盖住没给层级的浮层；别逐个元素打补丁（换元素就复发），统一按下面 --z-* 变量定契约。 */
@@ -4105,6 +4127,43 @@ const onDisksChangedIpc = (_e: unknown, disks: { serial: string; drive: string }
 body>.n-image-preview-container .n-image-preview-wrapper {
     padding: 16px 16px 64px;
     box-sizing: border-box;
+}
+
+/* ③ 开合过渡 token 化（2026-11-09）。naive 原装：进出场都是 .2s、进场 scale .9 弹得太大、
+      退场还缩尺（元素都在消失了不该再变形）。改按动效预算：
+      进场 = 200ms 一拍 + --ff-ease-move（scale .965 轻抬，不过冲）；
+      退场 = 140ms 只淡出（退出永远比进入短，且不缩放）。
+      ⚠️ 只影响开/关那一瞬：transition 类在动画结束后被 Vue 摘掉，
+      之后的缩放/拖动（naive 每次重写整段内联 cssText）完全不受影响。 */
+body>.n-image-preview-container.fade-in-transition-enter-active {
+    transition: opacity .2s var(--ff-ease-move) !important;
+}
+
+body>.n-image-preview-container.fade-in-transition-leave-active {
+    transition: opacity .14s ease-out !important;
+}
+
+body>.n-image-preview-container .n-image-preview.fade-in-scale-up-transition-enter-active {
+    transition: opacity .2s var(--ff-ease-move), transform .2s var(--ff-ease-move) !important;
+}
+
+body>.n-image-preview-container .n-image-preview.fade-in-scale-up-transition-enter-from {
+    opacity: 0;
+    transform: scale(.965);
+}
+
+body>.n-image-preview-container .n-image-preview.fade-in-scale-up-transition-enter-to {
+    opacity: 1;
+    transform: none;
+}
+
+body>.n-image-preview-container .n-image-preview.fade-in-scale-up-transition-leave-active {
+    transition: opacity .14s ease-out !important;
+}
+
+body>.n-image-preview-container .n-image-preview.fade-in-scale-up-transition-leave-to {
+    opacity: 0;
+    transform: none;
 }
 
 /* ② 工具条：从「居中胶囊」改成「贴底通栏」，并且去掉 `transform: translateX(-50%)`
