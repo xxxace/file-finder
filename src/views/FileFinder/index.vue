@@ -2980,10 +2980,11 @@ const onDisksChangedIpc = (_e: unknown, disks: { serial: string; drive: string }
     .crumb {
         /* ⚠️ `0 1 auto`（**可收缩**）而不是 `0 0 auto`：
            宽度不够时先压历史段，而不是把"当前层"直接挤出屏幕右边缘被裁掉。
-           收缩下界交给 `min-width: 0` + 文本省略号 —— 极窄时显示成「…」，与资源管理器一致。 */
+           收缩下界交给 `min-width: 0` + 文本省略号 —— 极窄时显示成「…」，与资源管理器一致。
+           ⚠️ 不设 max-width（2026-11-09 主人："空间这么充足居然缩略？"）：槽里有富余时
+           面包屑按内容自然伸展；压力只来自真实的宽度不足，届时再走上面的收缩纪律。 */
         flex: 0 1 auto;
         min-width: 0;
-        max-width: 160px;
         cursor: pointer;
 
         /* ⚠️ 2026-11-08 重设计：**去掉方块，只留文字**。

@@ -142,3 +142,7 @@ src/components/FluidTip/
 - 漏网审计：全库 `n-popconfirm|NPopconfirm|useDialog|useMessage|window.confirm` 已**清零**
   （仅存注释里的历史记录）；`useNotification` 无调用方（App.vue 的 Provider 暂留无害）。
 - typecheck 0 error。
+
+## 十四、失败音 + 插拔音（同日，主人点名）
+- **warning/error toast 全部响 warn（nudge）**：撤销此前"等真机确认频率"的搁置——56 处全是离散低频的用户动作失败（文件失效/盘不在/表单校验），接在 useNotify 唯一出口。
+- **移动硬盘插拔**：Sound Lab dawn（接入上扬）/ dusk（拔出下落）。payload 只有当前盘列表 ⇒ 在 onDisksChangedIpc 与上一次差分；首次事件只建基线不响（启动≠接入）。
