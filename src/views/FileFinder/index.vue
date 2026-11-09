@@ -4169,6 +4169,22 @@ body>.n-image-preview-container .n-image-preview.fade-in-scale-up-transition-lea
     transform: none;
 }
 
+/* ④ 切图溶解（View Transitions，usePreview 的 onPreviewCurrentChange 触发）：
+      压短到 .18s；工具条排除在快照外（它有自己的 WAAPI 宽度动效，别让 VT 快照盖住）；
+      VT 层不拦指针（否则溶解的 0.18s 里点 ✕ / 遮罩会失灵）。 */
+::view-transition {
+    pointer-events: none;
+}
+
+::view-transition-old(root),
+::view-transition-new(root) {
+    animation-duration: .18s;
+}
+
+body>.n-image-preview-container .n-image-preview-toolbar {
+    view-transition-name: none;
+}
+
 /* ② 工具条（2026-11-09 重构）：回归 naive 原生的「居中胶囊」—— 通栏是旧裁定
       （"别浪费两侧空间"），但 9 颗图标摊在 2048px 上视觉重量全失（主人不满意）。
       现在：居中 bar + 玻璃底 + 三组结构（分组与选框见 .ptb-*）。 */

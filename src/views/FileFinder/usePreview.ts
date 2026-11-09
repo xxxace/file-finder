@@ -243,11 +243,20 @@ export function usePreview(deps: {
      */
     const onPreviewCurrentChange = (i: number) => {
         const e = previewEntries.value[i];
-        if (e) {
+        if (!e) return;
+        const apply = () => {
             previewKey.value = e.key;
             // 只同步选择器，**不滚动、不闪**：此刻遮罩还盖着，滚了也看不见。
             // 滚动是「定位」那一刻的事（`locateInGrid` → `focusCursor({scroll, blink})`）。
             syncCursor(e.key);
+        };
+        // 切图溶解（View Transitions）：换 src = 同一位置换 `<img>`，裸切是硬剪。
+        // VT 把新旧两帧做交叉淡化（CSS 压到 .18s）；快速连按会自动跳过在飞的旧 VT
+        // （连按永不排队），reduced-motion 直接走裸切。
+        if (document.startViewTransition && !window.matchMedia('(prefers-reduced-motion: reduce)').matches) {
+            document.startViewTransition(apply);
+        } else {
+            apply();
         }
     };
 
