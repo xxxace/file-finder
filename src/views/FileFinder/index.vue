@@ -4274,12 +4274,17 @@ body>.n-image-preview-container .n-image-preview-toolbar {
 }
 
 /* naive 的图标 span 自带 padding 0 8px / font-size 28px —— 塞进 36px 格子前拍平 */
-body>.n-image-preview-container .ptb-cell .n-base-icon {
+/* ⚠️ 图标元素必须**填满整个 cell**：naive 的点击处理器挂在图标 span 自己身上，
+   图标只有 20px ⇒ cell 其余 16px 点了没反应（主人：滑块多大，点击区就得多大）。
+   撑满后点击区 = 选框 = 36px，三个面积重合。 */
+body>.n-image-preview-container .ptb-cell > * {
+    width: 100%;
+    height: 100%;
+    display: grid;
+    place-items: center;
     padding: 0;
     font-size: 20px;
     line-height: 1;
-    display: grid;
-    place-items: center;
 }
 
 .ptb-sep {

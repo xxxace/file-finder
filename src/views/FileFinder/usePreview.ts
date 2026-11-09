@@ -543,13 +543,22 @@ export function usePreview(deps: {
      * [信息段 名称·计数] | [位置组 定位·上一条·下一条] ｜ [变换组 旋转×2·原尺寸·缩放±] ｜ [✕]
      * 组间发丝分隔；✕ 与变换组之间额外加大间距（「下载紧邻 ✕ 造成误触」的教训）。
      */
+    /**
+     * 工具条自身的「内容变了」动效（WAAPI，一次性）：条宽跟随内容（max-content），
+     * 换条目时名称/计数/宽度都变 —— 宽度从旧值 FLIP 到新值（过冲曲线，Q 弹），
+     * 名称与计数做「拍内分带」的小滑入。在 rAF 里做：此刻 naive 已把新内容 patch 完。
+     */
+    let lastBarW = 0;
+    let lastName = '';
+    let lastCount = '';
+
     const previewToolbar = ({ nodes }: { nodes: Record<string, any> }) => {
         const total = previewEntries.value.length;
         // 只有一条时"上一条/下一条"是空动作（naive-ui 首尾环绕 = 原地不动）⇒ 不显示，免得像坏了
         const hasNav = total > 1;
         // 定位：准星 = "我在这儿"。Enter 是真快捷键（index.vue keyup：预览开着时 Enter=定位）
         const locate = h(NIcon, { size: 20, component: LocateOutline, onClick: locateInGrid });
-        return [
+        const out: any[] = [
             h('span', { class: 'ptb-info' }, [
                 h('span', { class: 'ptb-name', title: previewFile.value?.name ?? '' },
                     previewFile.value?.name ?? ''),
@@ -573,6 +582,38 @@ export function usePreview(deps: {
                 cell(nodes.close, { text: '关闭', keys: 'Esc' }),
             ]),
         ];
+        // 内容变更动效（宽 FLIP + 名称/计数滑入）排到下一帧：此刻 naive 已把新内容 patch 完
+        requestAnimationFrame(() => {
+            const bar = document.querySelector<HTMLElement>('.n-image-preview-toolbar');
+            if (!bar) return;
+            const w = bar.offsetWidth;
+            if (lastBarW && w !== lastBarW) {
+                bar.animate(
+                    [{ width: `${lastBarW}px` }, { width: `${w}px` }],
+                    { duration: 260, easing: 'cubic-bezier(0.34, 1.4, 0.42, 1)' },
+                );
+            }
+            lastBarW = w;
+            const name = previewFile.value?.name ?? '';
+            const nameEl = bar.querySelector('.ptb-name');
+            if (nameEl && lastName !== name) {
+                (nameEl as HTMLElement).animate(
+                    [{ opacity: 0, transform: 'translateY(5px)' }, { opacity: 1, transform: 'none' }],
+                    { duration: 200, easing: 'cubic-bezier(0.34, 1.28, 0.42, 1)' },
+                );
+                lastName = name;
+            }
+            const count = hasNav ? `${previewIndex.value + 1} / ${total}` : '';
+            const countEl = bar.querySelector('.ptb-count');
+            if (countEl && lastCount !== count) {
+                (countEl as HTMLElement).animate(
+                    [{ opacity: 0, transform: 'translateY(5px)' }, { opacity: 1, transform: 'none' }],
+                    { duration: 200, easing: 'cubic-bezier(0.34, 1.28, 0.42, 1)' },
+                );
+                lastCount = count;
+            }
+        });
+        return out;
     };
 
     /**
