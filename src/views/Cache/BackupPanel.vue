@@ -8,7 +8,7 @@
         <button type="button" class="mi-row" :disabled="backupLoading" @click="handleBackupToFile">
             <span class="mi-icon" aria-hidden="true">
                 <n-spin v-if="backupLoading" :size="14" />
-                <n-icon v-else :size="16" :component="ArrowUpOutline" />
+                <n-icon v-else :size="16" :component="ArchiveOutline" />
             </span>
             <span class="mi-text">
                 <span class="mi-title">备份到一个文件…</span>
@@ -19,7 +19,7 @@
         <button type="button" class="mi-row mi-row-danger" :disabled="busy" @click="handleRestoreFromFile">
             <span class="mi-icon" aria-hidden="true">
                 <n-spin v-if="busy" :size="14" />
-                <n-icon v-else :size="16" :component="ArrowDownOutline" />
+                <n-icon v-else :size="16" :component="UnarchiveOutline" />
             </span>
             <span class="mi-text">
                 <span class="mi-title">从文件还原…</span>
@@ -63,7 +63,7 @@
 import { ref } from 'vue';
 import { ipcRenderer } from 'electron';
 import { NIcon, NSpin } from 'naive-ui';
-import { ArrowDownOutline, ArrowUpOutline, FolderOpenOutline, GitMergeOutline } from '@vicons/ionicons5';
+import { ArchiveOutline, FolderOpenOutline, GitMergeOutline, UnarchiveOutline } from '@vicons/ionicons5';
 import useNotify from '@/hooks/useNotify';
 import useConfirm from '@/hooks/useConfirm';
 import { refreshIndex } from '@/views/FileFinder/playlist';

@@ -59,7 +59,10 @@ const version = pkg.version;
     flex: 1 1 auto;
     min-height: 0;
     overflow-y: auto;
+    width: 100%;
     max-width: 900px;
+    /* 窗口宽时居中（Windows 11 设置同款），窄窗自动贴满 */
+    margin-inline: auto;
     padding-right: 6px;
     box-sizing: border-box;
 }
