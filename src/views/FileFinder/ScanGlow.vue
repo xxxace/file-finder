@@ -272,6 +272,15 @@ const RISE_END = 0.2;
  */
 const SWEEP_FROM = 0.76;
 const SWEEP_TO = 0.96;
+/**
+ * 完成音**提前量**（ms）。扫到顶还差这么久就发 `swept`。
+ *
+ * 为什么不是"碰顶再响"：人耳对"画面到位"和"声音到位"的对齐容差约 ±100ms，
+ * 而碰顶那一刻才开始放音，听感是"声音在追画面"（实测两轮都嫌晚）。
+ * 400ms ≈ 整段上扫（1040ms）的前 2/5，落在"快碰顶"的观感区间里。
+ * 只调这一个数，别去动 SWEEP_TO（那是几何）。
+ */
+const SWEPT_LEAD_MS = 400;
 
 function tick(now: number): void {
     if (done) return;
@@ -303,12 +312,12 @@ function tick(now: number): void {
         } else {
             // 从起点**按原速**扫上去（0.76→0.96 ≈ 1040ms），扫到顶才开始淡出
             p = Math.min(SWEEP_TO, finishFrom + (now - finishAt) / CYCLE_MS);
+            // 完成音：离顶还差 SWEPT_LEAD_MS 就发（详见常量注释），只发一次
+            if (!swept && (SWEEP_TO - p) * CYCLE_MS <= SWEPT_LEAD_MS) {
+                swept = true;
+                emit('swept');
+            }
             if (p >= SWEEP_TO) {
-                // 扫到顶的那一刻（开始淡出前）—— 完成音挂这里，挂 `closed` 会晚一整段淡出
-                if (!swept) {
-                    swept = true;
-                    emit('swept');
-                }
                 if (!exitAt) exitAt = now;
                 fadeOut.value = smooth(0, EXIT_MS, now - exitAt);
                 if (fadeOut.value >= 1) {
