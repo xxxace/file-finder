@@ -4187,6 +4187,10 @@ body>.n-image-preview-container .n-image-preview-toolbar {
     border-radius: 999px;
     /* 宽度 FLIP 期间内容（已是新尺寸）会比动画中的 bar 宽——裁掉，别让图标戳出胶囊外 */
     overflow: hidden;
+    /* ⚠️ 内容锚定右缘（flex-end）：bar 宽度动画时按钮群永远「骑在移动的边上」一起滑，
+       空白只出现在最左（信息侧被揭示/收回）—— 否则收缩时 ✕ 旁边会凭空多出一段死玻璃
+       （真机：变宽丝滑、变窄难受的根源）。 */
+    justify-content: flex-end;
     /* 预览层的底色永远是"照片"，所以这组值**不随主题**，见 tokens 里的 `--ff-media-*`。 */
     background: var(--ff-media-bar-bg);
     backdrop-filter: blur(20px) saturate(140%);
