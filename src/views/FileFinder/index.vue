@@ -4130,11 +4130,6 @@ body>.n-image-preview-container .n-image-preview-wrapper {
     box-sizing: border-box;
 }
 
-/* ⓪ 影院模式：预览遮罩永远深色幕布（token 注释详述）——浅色主题同深色，与工具条一族 */
-body>.n-image-preview-container .n-image-preview-overlay {
-    background: var(--ff-media-backdrop);
-}
-
 /* ③ 开合过渡 token 化（2026-11-09）。naive 原装：进出场都是 .2s、进场 scale .9 弹得太大、
       退场还缩尺（元素都在消失了不该再变形）。改按动效预算：
       进场 = 260ms + --ff-ease-enter（过冲 1.28 的 Q 弹曲线，LeiBox 弹簧的 CSS 近似：

@@ -191,9 +191,6 @@
   --ff-media-icon-hover: #ffffff;
   /* 工具条滑动选框的底（比 bar 高亮一档才读得出"这就是悬停的"） */
   --ff-media-bar-sel: rgba(255, 255, 255, 0.14);
-  /* 预览遮罩：全屏看图 = **影院模式**，永远深色幕布（Google Photos / Lightroom 同款），
-     不随主题——浅色主题下 30% 黑的浅灰幕布既压不住亮网格、也配不上永远深色的工具条。 */
-  --ff-media-backdrop: rgba(16, 16, 16, 0.9);
   /* 四层阴影：内描边（勾边）+ 顶缘高光（拟物光源）+ 近影 + 远影（从照片上抬起来） */
   --ff-media-bar-shadow:
       inset 0 0 0 1px rgba(255, 255, 255, 0.12),
