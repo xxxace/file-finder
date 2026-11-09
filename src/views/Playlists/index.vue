@@ -12,8 +12,7 @@
             <div v-for="pl in index.playlists" :key="pl.id" class="pl-card" @click="open(pl)"
                 @contextmenu.prevent="openMenu($event, pl)">
                 <!-- 封面拼格：前 4 个有条目的缩略图（bin 仓取，零读盘）。
-                     按张数换版式（1 张铺满 / 2 张并排 / 3 张左大右二 / 4 张田字），
-                     空清单给虚线占位 —— 不留一块白板。 -->
+                     按张数换版式（1 张铺满 / 2 张并排 / 3 张左大右二 / 4 张田字）。 -->
                 <div class="pl-cover" :class="`c${Math.min(pl.covers.length, 4)}`">
                     <img v-for="c in pl.covers.slice(0, 4)" :key="c" :src="thumbUrl(c)" alt="" />
                     <n-icon v-if="!pl.covers.length" :component="BookmarkOutline" :size="26" class="pl-cover-empty" />
@@ -172,14 +171,14 @@ const commitEdit = async (id: string) => {
 
     h1 {
         margin: 0;
-        font-size: 16px;
+        font-size: var(--ff-fs-title);
         font-weight: 500;
         color: var(--ff-text-1);
     }
 
     .page-sub {
-        font-size: 12px;
-        color: var(--ff-text-3);
+        font-size: var(--ff-fs-meta);
+        color: var(--ff-text-2);
     }
 }
 
@@ -194,24 +193,30 @@ const commitEdit = async (id: string) => {
 }
 
 /*
- * 卡片：本身不带底色/边框，**封面就是卡片**（B 站收藏夹那套）。
- * 2026-10-21：原来 hover 铺一层 `#f6f7f9` 白底 + 阴影 —— 深色主题下就是一块白板，
- * 上面的标题也跟着看不清。改成"封面浮起 + 标题变蓝"，靠阴影与颜色表达，不靠底色。
+ * 卡片：面板卡（2026-11-09 主人拍板：面板卡 + 1:1，四方案对比 demo 已删，决策记录见
+ * .workbuddy/memory/2026-11-09.md）。panel 底 + 封面内衬（Finder/照片 App 那套）。
+ * 边界规则随主题自动切换：浅色靠 1px 描边（--ff-card-outline）定界；深色描边为
+ * transparent、靠 panel/canvas 明度差分区 —— 描边 token 两条分支已在 tokens.css 定死。
+ * 同心圆角：外 12 = r-card+2，内 6 = r-pill = 外 − 内衬 6px，转折处不出尖角。
  */
 .pl-card {
     display: flex;
     flex-direction: column;
     min-width: 0;
-    padding: 0;
+    padding: 6px;
+    background: var(--ff-panel);
+    border: 1px solid var(--ff-card-outline);
+    border-radius: calc(var(--ff-r-card) + 2px);
     cursor: pointer;
+    transition: box-shadow .18s ease;
 
-    &:hover .pl-cover {
+    &:hover {
         /* 抬升阴影走 token：深色大而虚，浅色小而淡（浅底上的深投影会变成脏灰） */
         box-shadow: var(--ff-shadow-lift);
     }
 
     &:hover .pl-name {
-        color: var(--ff-blue);
+        color: var(--ff-highlight);
     }
 }
 
@@ -220,10 +225,9 @@ const commitEdit = async (id: string) => {
     aspect-ratio: 1 / 1;
     display: grid;
     gap: 2px;
-    border-radius: var(--ff-radius-card);
+    border-radius: var(--ff-r-pill);
     overflow: hidden;
-    background: var(--ff-fill);
-    transition: box-shadow .18s ease;
+    background: var(--ff-raised);
 
     img {
         width: 100%;
@@ -247,10 +251,10 @@ const commitEdit = async (id: string) => {
 }
 
 /* 空收藏夹：一块安静的底板 + 淡图标。
-   ⚠️ **不再用虚线** —— 虚线是"可新建"的语义，两个都画成虚线，用户分不清
+   ⚠️ **不用虚线** —— 虚线是"可新建"的语义，两个都画成虚线，用户分不清
    "这是个空夹子"和"这里能新建"。 */
 .pl-cover.c0 {
-    background: var(--ff-fill);
+    background: var(--ff-raised);
     border: 0;
 }
 
@@ -260,7 +264,7 @@ const commitEdit = async (id: string) => {
         position: absolute;
         inset: 0;
         margin: auto;
-        color: var(--ff-text-3);
+        color: var(--ff-text-2);
     }
 }
 
@@ -268,7 +272,7 @@ const commitEdit = async (id: string) => {
     opacity: .55;
 }
 
-/* 新建：虚线 = 可添加；悬停变粉（与左轨选中同一套语义） */
+/* 新建：虚线 = 可添加；悬停变高亮色（与左轨选中同一套语义） */
 .pl-card-new .pl-cover-new {
     background: transparent;
     border: 1.5px dashed var(--ff-line);
@@ -280,11 +284,11 @@ const commitEdit = async (id: string) => {
 }
 
 .pl-card-new:hover .pl-cover-new {
-    border-color: var(--ff-pink);
+    border-color: var(--ff-highlight);
 }
 
 .pl-card-new:hover .pl-name {
-    color: var(--ff-pink);
+    color: var(--ff-highlight);
 }
 
 .pl-name {
@@ -306,8 +310,8 @@ const commitEdit = async (id: string) => {
 
 .pl-count {
     margin-top: 2px;
-    font-size: 12px;
-    color: var(--ff-text-3);
+    font-size: var(--ff-fs-meta);
+    color: var(--ff-text-2);
     display: flex;
     align-items: center;
     gap: 6px;
@@ -326,8 +330,8 @@ const commitEdit = async (id: string) => {
 
 .pl-empty {
     grid-column: 1 / -1;
-    color: var(--ff-text-3);
-    font-size: 13px;
+    color: var(--ff-text-2);
+    font-size: var(--ff-fs-body);
     padding: 24px 0;
     text-align: center;
 }
