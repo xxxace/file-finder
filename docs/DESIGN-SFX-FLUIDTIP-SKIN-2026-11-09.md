@@ -89,3 +89,15 @@ src/components/FluidTip/
 
 未动（有判据）：`.cursor` 的 `transform: scale(1.012)`（键盘焦点态非 hover，注释已论证）；Cache 盘条富提示（naive）。
 **未真机目视** —— 待主人验收三页明暗两主题。
+
+## 八、第四批 · 设置页拆身份重构（同日，主人批准）
+
+依据：Microsoft《Guidelines for app settings》+ Apple HIG + GNOME/libadwaita + Raycast/Linear 实践。
+
+- **反模式诊断**：原页 = 站点规则编辑器（工具）戴着设置牌子；偏好（音效）缩在底部。Microsoft 明文「工作流命令不进设置页」。
+- **新骨架**：左导航（通用 / 站点规则，图标行 = 名称+说明，圆角 8 灰底激活态，同左轨一族）+ 右单列面板（max-width 900）。
+  - `GeneralPanel`：音效卡（SettingsCard 行：左标题说明右控件）· 备份与迁移卡（BackupPanel 整块复用——2026-11-08 抽离时预留的归宿）· 关于卡（版本号，无音效来源披露——主人裁定）。
+  - `SiteRulesPanel`：规则编辑器**原样搬入**（工具现场一字未动）。
+  - pane 记忆 localStorage `ff.settings.pane`（Apple：恢复最近查看）。
+- 「打开数据目录」不重复进关于卡（BackupPanel 已有同一动作）。
+- typecheck 0 error；未真机目视。
