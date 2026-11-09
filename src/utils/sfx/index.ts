@@ -29,8 +29,8 @@ export type SfxEvent =
     | 'pick'          // 收藏添加
     | 'done'          // 复制 / 导出完成
     | 'hover'         // 左轨入口 hover（主人 2026-11-09 指定，覆盖"不上 hover 音"的一般规则）
-    | 'drive-in'     // 移动硬盘接入
-    | 'drive-out'    // 移动硬盘拔出
+    | 'drive-in'     // 移动硬盘接入（音色 = Sound Lab「Plug」）
+    | 'drive-out'    // 移动硬盘拔出（音色 = Sound Lab「Unplug」）
     | 'warn';         // 失败 / 需要注意（2026-11-09 主人确认：用户动作的失败要有反馈）
 
 const EVENT_RECIPE: Record<SfxEvent, SfxRecipe> = {
@@ -44,8 +44,8 @@ const EVENT_RECIPE: Record<SfxEvent, SfxRecipe> = {
     pick: SFX_RECIPES.bead,
     done: SFX_RECIPES.ping,
     hover: SFX_RECIPES.hover,
-    'drive-in': SFX_RECIPES.dawn,
-    'drive-out': SFX_RECIPES.dusk,
+    'drive-in': SFX_RECIPES.plug,
+    'drive-out': SFX_RECIPES.unplug,
     warn: SFX_RECIPES.nudge,
 };
 
