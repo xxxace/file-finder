@@ -504,47 +504,63 @@ export function usePreview(deps: {
     });
 
     // ── 工具条 ────────────────────────────────────────────────────────────────
-    // ⚠️ 这里的样式必须**内联**：这块 DOM 由 naive-ui 渲染并 teleport 到 body，
-    // 调用方的 `<style scoped>` 够不到它。底板与 wrapper 的样式走组件里那个非 scoped 块。
-    const NAME_STYLE = 'margin-right: 10px; max-width: min(46vw, 720px); overflow: hidden; text-overflow: ellipsis; white-space: nowrap;';
-    const COUNT_STYLE = 'font-size: 13px; opacity: .55; white-space: nowrap;';
-    const GROUP_STYLE = 'display: flex; align-items: center;';
-    /** 分左右只用 `margin-left:auto`，不改 naive-ui 的 `justify-content` */
-    const GROUP_LEFT = `${GROUP_STYLE} min-width: 0;`;
-    const GROUP_RIGHT = `${GROUP_STYLE} margin-left: auto;`;
+    // ⚠️ 样式走 index.vue 的**非 scoped** 块（`.ptb-*` 类）：这块 DOM 由 naive-ui 渲染并
+    //    teleport 到 body，`<style scoped>` 够不到它。
 
     /**
-     * 左信息（名称 + 计数） · 右操作（全部按钮）。
-     *
-     * 底板是**贴底通栏**（业主裁定「下方的空间尽可能利用，别浪费」：内容在 2048 宽下只占844px，
-     * 两侧各空 602px —— 那是浪费掉的底板，不是留白）。
-     * 顺序：定位/上一条/下一条排在按钮组**最左**（「在哪 / 看哪条」一组）与旋转缩放分隔
-     * （「把这条图怎么变」另一组）；**✕ 保持最右**（「下载紧邻 ✕ 造成误触」的教训）。
-     *
-     * **没有把旋转/缩放收进「⋯」**：业主要"方便快捷"，而这个场景每颗都用得上。
+     * 「滑动选框」—— LeiBox multi-cursor-builder 的 live-selection-box 模型：
+     * hover 高亮是**同一颗节点**在图标之间滑过去（.35s cubic-bezier(.2,.8,.2,1)，
+     * 曲线照抄 builder 源码），离开工具区淡出。与左轨 RailTip / FluidTip 同属
+     * 「同节点形变」一族，但这里是第三种实现场景（图标行）。
+     */
+    const moveSel = (e: PointerEvent) => {
+        const cell = e.currentTarget as HTMLElement;
+        const tools = cell.closest('.ptb-tools');
+        const sel = tools?.querySelector<HTMLElement>('.ptb-sel');
+        if (!tools || !sel) return;
+        sel.style.left = `${cell.offsetLeft}px`;
+        sel.style.width = `${cell.offsetWidth}px`;
+        sel.classList.add('is-on');
+    };
+    const leaveSel = (e: PointerEvent) => {
+        (e.currentTarget as HTMLElement).querySelector('.ptb-sel')?.classList.remove('is-on');
+    };
+    /** 把 naive 的工具节点包进统一命中区（28px 视觉 + 36px 命中），并挂上选框跟随 */
+    const cell = (node: any, extra = '') => h('span', {
+        class: `ptb-cell${extra}`,
+        onPointerenter: moveSel,
+    }, [node]);
+
+    /**
+     * 布局（2026-11-09 重构，Apple Quick Look 分组 + LeiBox 选框）：
+     * [信息段 名称·计数] | [位置组 定位·上一条·下一条] ｜ [变换组 旋转×2·原尺寸·缩放±] ｜ [✕]
+     * 组间发丝分隔；✕ 与变换组之间额外加大间距（「下载紧邻 ✕ 造成误触」的教训）。
      */
     const previewToolbar = ({ nodes }: { nodes: Record<string, any> }) => {
         const total = previewEntries.value.length;
         // 只有一条时"上一条/下一条"是空动作（naive-ui 首尾环绕 = 原地不动）⇒ 不显示，免得像坏了
         const hasNav = total > 1;
-        // 定位：准星= "我在这儿"，tooltip 交给 title
+        // 定位：准星 = "我在这儿"，tooltip 交给 title
         const locate = h(NIcon, {
-            size: 28, component: LocateOutline, title: '定位到网格（回车）',
-            style: 'padding: 0 8px; cursor: pointer;',
+            size: 20, component: LocateOutline, title: '定位到网格（回车）',
             onClick: locateInGrid,
         });
         return [
-            h('span', { style: GROUP_LEFT }, [
-                h('span', { style: NAME_STYLE, title: previewFile.value?.name ?? '' },
+            h('span', { class: 'ptb-info' }, [
+                h('span', { class: 'ptb-name', title: previewFile.value?.name ?? '' },
                     previewFile.value?.name ?? ''),
-                ...(hasNav ? [h('span', { style: COUNT_STYLE },
+                ...(hasNav ? [h('span', { class: 'ptb-count' },
                     `${previewIndex.value + 1} / ${total}`)] : []),
             ]),
-            h('span', { style: GROUP_RIGHT }, [
-                locate,
-                ...(hasNav ? [nodes.prev, nodes.next] : []),
-                nodes.rotateCounterclockwise, nodes.rotateClockwise, nodes.resizeToOriginalSize,
-                nodes.zoomOut, nodes.zoomIn, nodes.close,
+            h('span', { class: 'ptb-tools', onPointerleave: leaveSel }, [
+                h('span', { class: 'ptb-sel', 'aria-hidden': 'true' }),
+                cell(locate),
+                ...(hasNav ? [cell(nodes.prev), cell(nodes.next)] : []),
+                h('span', { class: 'ptb-sep', 'aria-hidden': 'true' }),
+                cell(nodes.rotateCounterclockwise), cell(nodes.rotateClockwise),
+                cell(nodes.resizeToOriginalSize), cell(nodes.zoomOut), cell(nodes.zoomIn),
+                h('span', { class: 'ptb-sep ptb-sep-wide', 'aria-hidden': 'true' }),
+                cell(nodes.close),
             ]),
         ];
     };

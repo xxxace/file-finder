@@ -117,3 +117,11 @@ src/components/FluidTip/
 2. **定位蒙层动效化**：`is-locating` 的 opacity 过渡挪到 `.image-box-item` 基类——原来撤销蒙层是硬切（.3→1 瞬跳）；现在压暗 .12s / 恢复 .2s 进出不对称；蒙层期间光标卡 scale 1.012→1.02 再抬一档（同族 scale 语言，不引入第二色，遵守 2026-10-04 撤橙框结论）。
 3. **预览开合过渡 token 化**：覆盖 naive 的 fade-in-scale-up（原 .2s scale .9 弹跳 + 退场缩尺）→ 进场 200ms --ff-ease-move scale .965、退场 140ms 只淡出；写在 index.vue 非 scoped 块（预览 DOM teleport 到 body）。缩放/拖动不受影响（transition 类动画后即摘，内联 cssText 独立）。
 - typecheck 0 error；未真机目视。
+
+## 十一、预览工具栏重构（同日，主人批准：选框要、bar 居中、美感照 Apple/react-bits）
+
+- **回归居中胶囊 bar**：撤销 2026-11-08 的"贴底通栏"裁定（2048px 上 9 颗图标视觉重量全失）；玻璃底 + 999px 圆角 + 投影。
+- **三组结构**（Apple Quick Look）：信息段（名称·计数）｜位置组（定位·上一条·下一条）｜变换组（旋转×2·原尺寸·缩放±）｜✕；组间发丝分隔，✕ 前间距加大（防误触教训）。
+- **滑动选框**（LeiBox multi-cursor-builder live-selection-box 模型，曲线 .35s cubic-bezier(.2,.8,.2,1) 照抄其源码）：一颗 .ptb-sel 在图标间滑，全站第三个"同节点形变"实例。
+- **按下回弹** scale .94（--ff-ease-enter 过冲族）；命中区 36px；naive 图标（.n-base-icon 28px/padding8）拍平进格子。
+- 逻辑零改动（onClick 全保留）；typecheck 0 error；未真机目视。

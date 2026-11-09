@@ -4169,21 +4169,22 @@ body>.n-image-preview-container .n-image-preview.fade-in-scale-up-transition-lea
     transform: none;
 }
 
-/* ② 工具条：从「居中胶囊」改成「贴底通栏」，并且去掉 `transform: translateX(-50%)`
-      （那是居中定位的一部分，改成left:0/right:0 之后必须一起去掉，否则整条会左移半屏）。*/
+/* ② 工具条（2026-11-09 重构）：回归 naive 原生的「居中胶囊」—— 通栏是旧裁定
+      （"别浪费两侧空间"），但 9 颗图标摊在 2048px 上视觉重量全失（主人不满意）。
+      现在：居中 bar + 玻璃底 + 三组结构（分组与选框见 .ptb-*）。 */
 body>.n-image-preview-container .n-image-preview-toolbar {
-    left: 0;
-    right: 0;
-    bottom: 0;
-    transform: none;
+    left: 50%;
+    right: auto;
+    bottom: 24px;
+    transform: translateX(-50%);
+    max-width: min(92vw, 980px);
     height: 48px;
-    padding: 0 16px;
-    border-radius: 0;
-    /* 2026-11-08：改成**磨砂玻璃**（原来是一层半透明黑，滚到亮照片上会看不清）。
-       预览层的底色永远是"照片"，所以这组值**不随主题**，见 tokens 里的 `--ff-media-*`。 */
+    padding: 0 10px;
+    border-radius: 999px;
+    /* 预览层的底色永远是"照片"，所以这组值**不随主题**，见 tokens 里的 `--ff-media-*`。 */
     background: var(--ff-media-bar-bg);
     backdrop-filter: blur(20px) saturate(140%);
-    box-shadow: inset 0 1px 0 var(--ff-media-bar-line);
+    box-shadow: inset 0 1px 0 var(--ff-media-bar-line), 0 8px 24px -8px rgba(0, 0, 0, 0.45);
     /* ⚠️ 图标与文字必须显式给浅色：naive 的 `--n-icon-color` 会继承 `common.iconColor`
        （我们把它设成了次要灰 text-2），直接落到这条工具条上就成了"灰图标压在暗底"。 */
     color: var(--ff-media-icon);
@@ -4191,15 +4192,96 @@ body>.n-image-preview-container .n-image-preview-toolbar {
     --n-icon-color-hover: var(--ff-media-icon-hover);
 }
 
-/* ③ 悬停反馈：通栏之后按钮散开了，"点了才知道点在哪" 不够 —— 加一档透明度变化。
-      naive-ui 没给工具条图标写 hover（实测 `cssr/index.cssr.mjs:35-38` 只有
-      padding/font-size/cursor + 一个 fade-in transition），所以这里补的是**它没有的东西**。*/
-body>.n-image-preview-container .n-image-preview-toolbar .n-base-icon {
-    transition: opacity .15s ease;
+/* ── .ptb-* 工具条内部结构（usePreview.ts 的 previewToolbar 渲染）────────── */
+
+.ptb-info {
+    display: flex;
+    align-items: center;
+    min-width: 0;
+    padding: 0 12px 0 8px;
 }
 
-body>.n-image-preview-container .n-image-preview-toolbar .n-base-icon:hover {
-    opacity: .65;
+.ptb-name {
+    max-width: min(40vw, 560px);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    font-size: 13px;
+    font-weight: 500;
+    color: var(--ff-media-icon);
+}
+
+.ptb-count {
+    margin-left: 10px;
+    font-size: 12px;
+    color: var(--ff-media-icon);
+    opacity: .55;
+    white-space: nowrap;
+}
+
+.ptb-tools {
+    position: relative;
+    display: flex;
+    align-items: center;
+}
+
+/* 滑动选框：同一颗节点在图标间滑（LeiBox live-selection-box；曲线照抄 builder 源码）。
+   left/width 由 JS 写（pointerenter 时量 cell），opacity 管进出。 */
+.ptb-sel {
+    position: absolute;
+    top: 6px;
+    height: 36px;
+    left: 0;
+    width: 0;
+    border-radius: var(--ff-r-ctl);
+    background: rgba(255, 255, 255, 0.14);
+    opacity: 0;
+    pointer-events: none;
+    transition:
+        left .35s cubic-bezier(.2, .8, .2, 1),
+        width .35s cubic-bezier(.2, .8, .2, 1),
+        opacity .18s ease-out;
+}
+
+.ptb-sel.is-on {
+    opacity: 1;
+}
+
+.ptb-cell {
+    position: relative;
+    z-index: 1;
+    width: 36px;
+    height: 36px;
+    display: grid;
+    place-items: center;
+    border-radius: var(--ff-r-ctl);
+    cursor: pointer;
+    /* 按下回弹：过冲曲线同族（主人 2026-11-09 "不够Q弹"） */
+    transition: transform .18s var(--ff-ease-enter);
+}
+
+.ptb-cell:active {
+    transform: scale(.94);
+}
+
+/* naive 的图标 span 自带 padding 0 8px / font-size 28px —— 塞进 36px 格子前拍平 */
+body>.n-image-preview-container .ptb-cell .n-base-icon {
+    padding: 0;
+    font-size: 20px;
+    display: grid;
+    place-items: center;
+}
+
+.ptb-sep {
+    width: 1px;
+    height: 22px;
+    margin: 0 8px;
+    background: var(--ff-media-bar-line);
+}
+
+/* ✕ 与变换组之间额外加大间距（「下载紧邻 ✕ 造成误触」的教训） */
+.ptb-sep-wide {
+    margin: 0 8px 0 18px;
 }
 
 /* ══════════════════════════════════════════════════════════════════
