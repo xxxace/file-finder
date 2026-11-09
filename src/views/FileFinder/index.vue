@@ -2735,8 +2735,19 @@ const onDisksChanged = async (disks: { serial: string; drive: string }[]) => {
 };
 
 /** IPC 监听器的**稳定引用**：`off` 必须拿到同一个函数，否则卸不掉、组件重建后会重复响应 */
+let prevSerials: Set<string> | null = null; // null = 首次事件（只建基线，不响 —— 启动不是"接入"）
 const onDisksChangedIpc = (_e: unknown, disks: { serial: string; drive: string }[]) => {
-    void onDisksChanged(disks || []);
+    const list = disks || [];
+    // 插拔音：payload 只有"现在的盘列表"，插/拔靠与上一次的差分。KeepAlive 住 ⇒ 全会话有效。
+    const now = new Set(list.map((d) => d.serial));
+    if (prevSerials) {
+        const added = list.some((d) => !prevSerials!.has(d.serial));
+        const removed = [...prevSerials].some((s) => !now.has(s));
+        if (added) playSfx('drive-in');
+        else if (removed) playSfx('drive-out');
+    }
+    prevSerials = now;
+    void onDisksChanged(list);
 };
 
 </script>

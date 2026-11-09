@@ -105,6 +105,25 @@ export const SFX_RECIPES = {
             { type: 'tone', freq: 880, at: 0, gain: 0, partials: [[1, 1, 1], [2.76, 0.108, 0.4], [5.4, 0.027, 0.22]], env: { attack: 0.0025, decay: 0.17, curve: 6 } },
         ],
     },
+    /** 移动硬盘接入（Sound Lab「dawn」：power on / connect 的上扬辉光） */
+    dawn: {
+        duration: 0.9, seed: 81, loudness: -17, lowpass: 7000,
+        reverb: { mix: 0.22, decay: 1, predelay: 0.01, damp: 5500 },
+        layers: [
+            { type: 'tone', wave: 'triangle', freq: { from: 392, to: 523.25, time: 0.3, curve: 2 }, filter: { type: 'lowpass', freq: { from: 900, to: 4500, time: 0.35 }, q: 0.6 }, env: { attack: 0.12, rise: 1.4, decay: 0.6, curve: 4 } },
+            { type: 'tone', freq: { from: 587.33, to: 783.99, time: 0.3, curve: 2 }, gain: -9, env: { attack: 0.14, rise: 1.4, decay: 0.55, curve: 4 } },
+            { type: 'tone', freq: 1046.5, at: 0.18, gain: -20, env: { attack: 0.08, decay: 0.5, curve: 5 } },
+        ],
+    },
+    /** 移动硬盘拔出（Sound Lab「dusk」：power off / disconnect 的下落消散） */
+    dusk: {
+        duration: 0.85, seed: 82, loudness: -18, lowpass: 6000,
+        reverb: { mix: 0.2, decay: 0.9, predelay: 0.01, damp: 5000 },
+        layers: [
+            { type: 'tone', wave: 'triangle', freq: { from: 523.25, to: 392, time: 0.4, curve: 2 }, filter: { type: 'lowpass', freq: { from: 4500, to: 800, time: 0.5 }, q: 0.6 }, env: { attack: 0.02, decay: 0.7, curve: 4 } },
+            { type: 'tone', freq: { from: 783.99, to: 587.33, time: 0.4, curve: 2 }, gain: -10, env: { attack: 0.02, decay: 0.55, curve: 4 } },
+        ],
+    },
     /** 复制 / 导出完成（单铃短尾） */
     ping: {
         duration: 1.2, seed: 53, loudness: -17, lowpass: 8000,

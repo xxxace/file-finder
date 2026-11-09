@@ -129,3 +129,16 @@ src/components/FluidTip/
 ## 十二、工具栏二轮（同日）
 - 点击区=选框=36px：naive 点击处理器挂在图标 span 上（20px），CSS 撑满 cell 后三面积重合。
 - bar 宽度上限已有（min(92vw,980px)），名称 min(40vw,560px) 截断；宽度变化走 WAAPI FLIP（旧宽→新宽，过冲 1.4），名称/计数变更做 200ms 拍内分带滑入。
+
+## 十三、确认框漏网之鱼收口（同日，主人点名）
+
+- 症状：头像回收"写入"的确认还是旧样式（n-popconfirm，不吃 tokens 主题覆盖）。
+- 为什么会漏：n-popconfirm 是 naive 直渲染的气泡，**不在 naive-theme 的主题覆盖链上**，
+  而 Overlay confirm（useConfirm → OverlayHost）才是全站确认框的唯一出口——
+  这两处是当初抽 Overlay 时漏改的存量。
+- 修法（一份实现，不是点补丁）：AssistantAvatarModal（写入 N 个头像）与
+  AssistantCoverModal（深度重扫）全部改走 `useConfirm().warning({...})`，
+  文案原样平移；NPopconfirm import 摘除。
+- 漏网审计：全库 `n-popconfirm|NPopconfirm|useDialog|useMessage|window.confirm` 已**清零**
+  （仅存注释里的历史记录）；`useNotification` 无调用方（App.vue 的 Provider 暂留无害）。
+- typecheck 0 error。
