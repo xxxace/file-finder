@@ -123,7 +123,12 @@ export function preloadSfx() {
     requestAnimationFrame(() => requestAnimationFrame(() => {
         // hover / menu-click 是频率最高的两个（左轨每进一个入口、每点一次菜单）——
         // 不预渲染的话**第一次**要等一次离线合成，手感会"虚"一下。
-        const common: SfxEvent[] = ['hover', 'menu-click', 'mode', 'switch-on', 'theme-light', 'theme-dark', 'success'];
+        // drive-in / drive-out 也进来：插盘是"一辈子只发生一次"的孤例，缓存永远冷 ⇒
+        // 不预渲染就要现场合成（十几~几十毫秒），音会晚于盘符出现。
+        const common: SfxEvent[] = [
+            'hover', 'menu-click', 'mode', 'switch-on', 'theme-light', 'theme-dark', 'success',
+            'drive-in', 'drive-out',
+        ];
         common.forEach((event) => preloadSound(EVENT_RECIPE[event] as unknown as Recipe));
     }));
 }

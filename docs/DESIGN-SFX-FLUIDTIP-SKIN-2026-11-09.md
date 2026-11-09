@@ -146,3 +146,28 @@ src/components/FluidTip/
 ## 十四、失败音 + 插拔音（同日，主人点名）
 - **warning/error toast 全部响 warn（nudge）**：撤销此前"等真机确认频率"的搁置——56 处全是离散低频的用户动作失败（文件失效/盘不在/表单校验），接在 useNotify 唯一出口。
 - **移动硬盘插拔**：Sound Lab dawn（接入上扬）/ dusk（拔出下落）。payload 只有当前盘列表 ⇒ 在 onDisksChangedIpc 与上一次差分；首次事件只建基线不响（启动≠接入）。
+
+## 十五、Plug / Unplug 与官网"听感不一样"核对（同日）
+
+> ⚠️ 修正 §十四 的陈述：插拔音当天已从 dawn/dusk 换成 **plug/unplug**（`be433b9`），
+> 失败音从 nudge 独立成 **shrug**（`1517ebe`）。本节是对"到底是不是官网那两个"的逐项实测核对。
+
+**结论**：配方与引擎**都对得上**，唯一确定的偏差是**音量链 −3.1 dB**。
+证据等级：**静态**（逐参数比对官网 main 分支源码，非推测）。
+
+| 核对对象 | 官网 | 本仓 | 判定 |
+|---|---|---|---|
+| `plug` 层 1 | `blip(180,150,{decay .05, glide .02, attack .003, wave triangle})` + `filter{lowpass 800 q .6}` | 同（`curve 6` 为 blip 默认） | ✅ |
+| `plug` 层 2 | `knock(800,{gain −12, decay .012, q .7})` | 同（lowpass = min(9000, 800×2.6) = 2080） | ✅ |
+| `plug` 层 3/4 | `bell(hz81)`@.09 / `bell(hz86)`@.16，`bright .4, gain −6` | 880 / 1174.66，partials `.064/.016` | ✅ |
+| `unplug` | `bell(hz86)`→`bell(hz79)`@.08 + `blip(170,140)`@.16 + `knock(700,{−13})` | 1174.66→783.99 + 170→140 + lowpass 1820 | ✅ |
+| `kit.js` 默认值 | blip `curve 6`；bell `[[1,1,1],[2,.16·b,.55],[3,.04·b,.35]]`；room→`predelay .01, damp 5000` | 一致 | ✅ |
+| 引擎归一化 | `finish()`：`loudness()` 归一 + peak −1dB 限制 | `engine.ts` 逐行相同 | ✅ |
+| 主低通 | `recipe.lowpass × (1 + tone×.35)` | 相同（tone=0 ⇒ 7000/6500 原值） | ✅ |
+| 尾巴长度 | `end = body + spaceDecay×1.1 + predelay + echoTail + .05` | 相同 | ✅ |
+| 试听 tune | knob fallback 全 0，`cleanTune` 删掉等于默认的键 ⇒ `tune = {}` | 传 `{}` | ✅ |
+| **播放增益** | `player.js`：`gain = 10^(volume/20)` = **1.0** | `masterVolume(0.7) × db(volume)` = **0.7** | ❌ **−3.1 dB** |
+
+- 3.1 dB 为什么听成"不一样"而不只是"小一点"：配方响度目标是 −18.5 dB，再压 3 dB 后**最先塌的是 880/1174 Hz 的铃音泛音**（等响曲线在高频更敏感）⇒ 主观变成"闷、远、颗粒感少"，而 180 Hz 的 blip 体感几乎没变 —— 这正是"音色变了"的错觉来源。
+- **自跑实验**：设置 → 音效音量拉到 100%，再插/拔一次盘，即与官网等响；对齐后若仍觉得不同，才是引擎有问题（目前静态证据是零差异）。
+- **顺带修**：`drive-in` / `drive-out` 加入空闲预渲染名单 —— 插拔是孤例事件，缓存永远是冷的，不预渲染就要现场合成（十几~几十毫秒），音会晚于盘符出现。
