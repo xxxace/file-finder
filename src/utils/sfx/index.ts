@@ -31,7 +31,8 @@ export type SfxEvent =
     | 'hover'         // 左轨入口 hover（主人 2026-11-09 指定，覆盖"不上 hover 音"的一般规则）
     | 'drive-in'     // 移动硬盘接入（音色 = Sound Lab「Plug」）
     | 'drive-out'    // 移动硬盘拔出（音色 = Sound Lab「Unplug」）
-    | 'warn';         // 失败 / 需要注意（2026-11-09 主人确认：用户动作的失败要有反馈）
+    | 'warn'          // 警告 / 注意（nudge）
+    | 'fail';         // 失败 / 没成（shrug）—— 与 warn 是两件事：警告是"注意一下"，失败是"没成"
 
 const EVENT_RECIPE: Record<SfxEvent, SfxRecipe> = {
     mode: SFX_RECIPES.notch,
@@ -47,6 +48,7 @@ const EVENT_RECIPE: Record<SfxEvent, SfxRecipe> = {
     'drive-in': SFX_RECIPES.plug,
     'drive-out': SFX_RECIPES.unplug,
     warn: SFX_RECIPES.nudge,
+    fail: SFX_RECIPES.shrug,
 };
 
 /** 个别事件在配方响度之上再压一档。Hover 配方本身已是 -23dB 的"微光"（官方按 hover 调的），

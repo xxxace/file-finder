@@ -133,6 +133,19 @@ export const SFX_RECIPES = {
             { type: 'noise', color: 'pink', at: 0.16, gain: -13, punch: true, filter: [{ type: 'bandpass', freq: 700, q: 0.7 }, { type: 'lowpass', freq: 1820, q: 0.5 }], env: { attack: 0.001, decay: 0.012, curve: 6 } },
         ],
     },
+    /**
+     * 失败 / 不太对（Sound Lab「Shrug」：两个下行铃音）。
+     * 与 nudge 分工：nudge 是"注意一下"（警告），shrug 是"这件事没成"（失败）。
+     * 翻译自官方 bell(76)/bell(72)，bright .6 ⇒ 2/3 次谐波 0.096 / 0.024。
+     */
+    shrug: {
+        duration: 0.55, seed: 43, loudness: -18, lowpass: 5500,
+        reverb: { mix: 0.12, decay: 0.5, predelay: 0.01, damp: 4500 },
+        layers: [
+            { type: 'tone', freq: 659.25, at: 0, gain: 0, partials: [[1, 1, 1], [2, 0.096, 0.55], [3, 0.024, 0.35]], env: { attack: 0.006, decay: 0.22, curve: 6 } },
+            { type: 'tone', freq: 523.25, at: 0.12, gain: 0, partials: [[1, 1, 1], [2, 0.096, 0.55], [3, 0.024, 0.35]], env: { attack: 0.006, decay: 0.32, curve: 6 } },
+        ],
+    },
     /** 复制 / 导出完成（单铃短尾） */
     ping: {
         duration: 1.2, seed: 53, loudness: -17, lowpass: 8000,
