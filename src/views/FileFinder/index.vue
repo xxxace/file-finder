@@ -4225,14 +4225,14 @@ body>.n-image-preview-container .n-image-preview-toolbar {
     flex-direction: column;
     gap: 1px;
     min-width: 188px;
-    padding: 4px;
+    padding: 3px;
     box-sizing: border-box;
     outline: none;
 }
 
 /* n-popover 自带的内衬 padding 对菜单是多余的，:has 精准只打这一个 popover */
 body>.n-popover:has(>.ctx-menu) {
-    padding: 4px;
+    padding: 3px;
 }
 
 .ctx-item {
@@ -4240,7 +4240,7 @@ body>.n-popover:has(>.ctx-menu) {
     align-items: center;
     gap: 8px;
     height: 26px;
-    padding: 0 8px;
+    padding: 0 7px;
     border: 0;
     border-radius: 6px;
     background: transparent;
@@ -4253,7 +4253,8 @@ body>.n-popover:has(>.ctx-menu) {
 }
 
 .ctx-item:hover {
-    background: var(--ff-ctl-hover);
+    /* 菜单悬停走 --ff-menu-hover（语义正确的既有 token，白底上 0.10 太耳语已提一档） */
+    background: var(--ff-menu-hover);
 }
 
 .ctx-item:active {
