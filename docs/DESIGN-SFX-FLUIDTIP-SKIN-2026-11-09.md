@@ -125,3 +125,7 @@ src/components/FluidTip/
 - **滑动选框**（LeiBox multi-cursor-builder live-selection-box 模型，曲线 .35s cubic-bezier(.2,.8,.2,1) 照抄其源码）：一颗 .ptb-sel 在图标间滑，全站第三个"同节点形变"实例。
 - **按下回弹** scale .94（--ff-ease-enter 过冲族）；命中区 36px；naive 图标（.n-base-icon 28px/padding8）拍平进格子。
 - 逻辑零改动（onClick 全保留）；typecheck 0 error；未真机目视。
+
+## 十二、工具栏二轮（同日）
+- 点击区=选框=36px：naive 点击处理器挂在图标 span 上（20px），CSS 撑满 cell 后三面积重合。
+- bar 宽度上限已有（min(92vw,980px)），名称 min(40vw,560px) 截断；宽度变化走 WAAPI FLIP（旧宽→新宽，过冲 1.4），名称/计数变更做 200ms 拍内分带滑入。

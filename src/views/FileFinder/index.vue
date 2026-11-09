@@ -4181,6 +4181,8 @@ body>.n-image-preview-container .n-image-preview-toolbar {
     height: 48px;
     padding: 0 10px;
     border-radius: 999px;
+    /* 宽度 FLIP 期间内容（已是新尺寸）会比动画中的 bar 宽——裁掉，别让图标戳出胶囊外 */
+    overflow: hidden;
     /* 预览层的底色永远是"照片"，所以这组值**不随主题**，见 tokens 里的 `--ff-media-*`。 */
     background: var(--ff-media-bar-bg);
     backdrop-filter: blur(20px) saturate(140%);

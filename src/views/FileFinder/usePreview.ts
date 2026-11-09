@@ -518,6 +518,7 @@ export function usePreview(deps: {
      */
     const moveSel = (e: PointerEvent) => {
         const cell = e.currentTarget as HTMLElement;
+        hoveredCell = cell;
         const tools = cell.closest('.ptb-tools');
         const sel = tools?.querySelector<HTMLElement>('.ptb-sel');
         if (!tools || !sel) return;
@@ -526,6 +527,7 @@ export function usePreview(deps: {
         sel.classList.add('is-on');
     };
     const leaveSel = (e: PointerEvent) => {
+        hoveredCell = null;
         (e.currentTarget as HTMLElement).querySelector('.ptb-sel')?.classList.remove('is-on');
     };
     /** 把 naive 的工具节点包进统一命中区（36px 命中），挂上选框跟随 + FluidTip（react-bits 式：文案+真键帽）。
@@ -551,6 +553,18 @@ export function usePreview(deps: {
     let lastBarW = 0;
     let lastName = '';
     let lastCount = '';
+    /** 指针当前停着的格子。naive 重渲染会重写 class 抹掉选框的 is-on，靠它请回来 */
+    let hoveredCell: HTMLElement | null = null;
+
+    /** 把选框重新对到 hoveredCell 上（重渲染后 / 宽度动画结束后都要重挂一次） */
+    const reapplySel = (bar: HTMLElement) => {
+        const tools = bar.querySelector('.ptb-tools');
+        const sel = tools?.querySelector<HTMLElement>('.ptb-sel');
+        if (!tools || !sel || !hoveredCell?.isConnected || !tools.contains(hoveredCell)) return;
+        sel.style.left = `${hoveredCell.offsetLeft}px`;
+        sel.style.width = `${hoveredCell.offsetWidth}px`;
+        sel.classList.add('is-on');
+    };
 
     const previewToolbar = ({ nodes }: { nodes: Record<string, any> }) => {
         const total = previewEntries.value.length;
@@ -582,36 +596,40 @@ export function usePreview(deps: {
                 cell(nodes.close, { text: '关闭', keys: 'Esc' }),
             ]),
         ];
-        // 内容变更动效（宽 FLIP + 名称/计数滑入）排到下一帧：此刻 naive 已把新内容 patch 完
+        // 内容变更动效（宽 FLIP + 名称/计数滑入）排到下一帧：此刻 naive 已把新内容 patch 完。
+        // ⚠️ 防打架三条：动画还在跑就不重启（快速连按时各自自然结束，绝不从 0 重来）；
+        // 宽度动画结束回挂选框（动画期间 cell 位置在变）；重渲染抹掉的选框态在此请回。
         requestAnimationFrame(() => {
             const bar = document.querySelector<HTMLElement>('.n-image-preview-toolbar');
             if (!bar) return;
             const w = bar.offsetWidth;
-            if (lastBarW && w !== lastBarW) {
-                bar.animate(
+            if (lastBarW && w !== lastBarW && !bar.getAnimations().length) {
+                const a = bar.animate(
                     [{ width: `${lastBarW}px` }, { width: `${w}px` }],
                     { duration: 260, easing: 'cubic-bezier(0.34, 1.4, 0.42, 1)' },
                 );
+                a.onfinish = () => reapplySel(bar);
             }
             lastBarW = w;
+            reapplySel(bar);
             const name = previewFile.value?.name ?? '';
             const nameEl = bar.querySelector('.ptb-name');
-            if (nameEl && lastName !== name) {
+            if (nameEl && lastName !== name && !nameEl.getAnimations().length) {
                 (nameEl as HTMLElement).animate(
                     [{ opacity: 0, transform: 'translateY(5px)' }, { opacity: 1, transform: 'none' }],
                     { duration: 200, easing: 'cubic-bezier(0.34, 1.28, 0.42, 1)' },
                 );
-                lastName = name;
             }
+            lastName = name;
             const count = hasNav ? `${previewIndex.value + 1} / ${total}` : '';
             const countEl = bar.querySelector('.ptb-count');
-            if (countEl && lastCount !== count) {
+            if (countEl && lastCount !== count && !countEl.getAnimations().length) {
                 (countEl as HTMLElement).animate(
                     [{ opacity: 0, transform: 'translateY(5px)' }, { opacity: 1, transform: 'none' }],
                     { duration: 200, easing: 'cubic-bezier(0.34, 1.28, 0.42, 1)' },
                 );
-                lastCount = count;
             }
+            lastCount = count;
         });
         return out;
     };
