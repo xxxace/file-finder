@@ -22,7 +22,7 @@
                  history === 0（还没选根）**置灰常驻**，不再 `v-if` 消失 ——
                  它一出现/消失就会把整条面包屑推走 ~60px，正是这次要修的那类跳动。 -->
             <div class="nav-btns">
-                <FolderSelector ref="folderSelector" v-model="dir" label="请选择文件夹(D)" @change="setRoot" />
+                <FolderSelector ref="folderSelector" v-model="dir" label="请选择文件夹" keys="D" @change="setRoot" />
                 <n-button size="small" :disabled="!history.length" :aria-label="navBtnText"
                     v-tip="navBtnTip"
                     @click="onNavBtn">

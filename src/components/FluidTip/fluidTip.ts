@@ -30,9 +30,14 @@ export const tipState = reactive({
 
 let lastAnchor: DOMRect | null = null;
 let hideTimer = 0;
+/** 首现延迟：对齐 WarmTooltip 的"warm-up"思路（400ms 太温，取 150ms）。
+ *  已可见时**不走延迟** —— 簇内滑动必须跟手，这正是 fluid 的意义。 */
+let showTimer = 0;
+let pending: { el: HTMLElement; payload: TipPayload } | null = null;
 
 const ADJACENT_PX = 160;
 const LEAVE_DELAY = 75;
+const SHOW_DELAY = 150;
 
 function isAdjacent(a: DOMRect, b: DOMRect): boolean {
     const dx = (a.left + a.right) / 2 - (b.left + b.right) / 2;
@@ -40,24 +45,41 @@ function isAdjacent(a: DOMRect, b: DOMRect): boolean {
     return Math.hypot(dx, dy) <= ADJACENT_PX;
 }
 
-export function showTip(el: HTMLElement, { text, keys }: TipPayload) {
-    window.clearTimeout(hideTimer);
-    hideTimer = 0;
+function apply(el: HTMLElement, payload: TipPayload, adjacent: boolean) {
     const rect = el.getBoundingClientRect();
-    tipState.text = text;
-    tipState.keys = keys ?? '';
-    if (tipState.visible && lastAnchor && isAdjacent(lastAnchor, rect)) {
-        tipState.snap = false; // 相邻：滑过去
-    } else {
-        tipState.snap = true; // 首现 / 跳远：落位淡入
-    }
+    tipState.text = payload.text;
+    tipState.keys = payload.keys ?? '';
+    tipState.snap = !adjacent;
     tipState.anchor = rect;
     lastAnchor = rect;
     tipState.visible = true;
 }
 
+export function showTip(el: HTMLElement, payload: TipPayload) {
+    window.clearTimeout(hideTimer);
+    hideTimer = 0;
+    if (tipState.visible && lastAnchor) {
+        window.clearTimeout(showTimer);
+        showTimer = 0;
+        apply(el, payload, isAdjacent(lastAnchor, el.getBoundingClientRect()));
+        return;
+    }
+    // 首现：等一拍再出现（leave 会取消它），扫过一大片内容时不会噼里啪啦闪
+    pending = { el, payload };
+    window.clearTimeout(showTimer);
+    showTimer = window.setTimeout(() => {
+        showTimer = 0;
+        if (!pending) return;
+        apply(pending.el, pending.payload, false);
+        pending = null;
+    }, SHOW_DELAY);
+}
+
 export function hideTip() {
     window.clearTimeout(hideTimer);
+    window.clearTimeout(showTimer);
+    showTimer = 0;
+    pending = null;
     // 缝隙缓冲：75ms 内又进另一个入口就当没离开过
     hideTimer = window.setTimeout(() => {
         hideTimer = 0;

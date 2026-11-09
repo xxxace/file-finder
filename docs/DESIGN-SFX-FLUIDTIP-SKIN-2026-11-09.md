@@ -63,3 +63,9 @@ src/components/FluidTip/
 - **保留 naive 的**：Cache 盘条 chip 的多行明细提示（富内容非单行胶囊的工种）；其余 `title=` 原生提示待后续顺手换。
 - 交互动效：滑动 = transform 200ms `--ff-ease-move`（一拍），snap = 只淡入；触屏不显示；disabled 按钮无 hover 事件（与 n-tooltip 行为一致）。
 - typecheck 0 error；**未真机目视** —— 待主人验收：顶栏从「选择文件夹」滑到「刷新/搜索/平铺」应看到同一颗胶囊滑动换字，跳到网格内任意 title= 处应是 snap 落位。
+
+## 六、验收反馈第一轮（主人 2026-11-09）
+
+1. **FolderSelector 键帽**：新增 `keys` prop，index.vue 传 `keys="D"`、label 去掉 "(D)" 后缀（键帽接管快捷键展示）。
+2. **仿照不像 → 拿到官方源码逐字对齐**：找到 `WarmTooltip`（`src/content/Micro/WarmTooltip/WarmTooltip.css`）。修正：字号 12.5px / letter-spacing -0.01em / gap 7px / padding 6px 10px（去掉固定 32px 高）/ 双层投影；键帽 = 高 1.55em、radius 0.4em、bg 10%、**inset 0 -1px 0 下沿暗线**（键帽像"键盘键"的关键，此前缺的就是它）、color 72%。首现加 150ms warm-up 延迟（官方 400ms，取 150 保 fluid），簇内滑动仍即时跟手。
+3. **左轨 hover 音效**：主人指定，覆盖"不上 hover 音"一般规则。新增 nib 配方（tiny gentle tick），EVENT_VOLUME_DB 再压 -8dB；接在 RailNav.onEnter（pointerenter + focus 共用出口，触屏已排除）。

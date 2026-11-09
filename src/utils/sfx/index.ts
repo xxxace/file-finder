@@ -26,6 +26,7 @@ export type SfxEvent =
     | 'success'       // 扫描 / 补全 / apply 完成
     | 'pick'          // 收藏添加
     | 'done'          // 复制 / 导出完成
+    | 'hover'         // 左轨入口 hover（主人 2026-11-09 指定，覆盖"不上 hover 音"的一般规则）
     | 'warn';         // 错误 / 需要注意
 
 const EVENT_RECIPE: Record<SfxEvent, SfxRecipe> = {
@@ -37,8 +38,12 @@ const EVENT_RECIPE: Record<SfxEvent, SfxRecipe> = {
     success: SFX_RECIPES.bloom,
     pick: SFX_RECIPES.bead,
     done: SFX_RECIPES.ping,
+    hover: SFX_RECIPES.nib,
     warn: SFX_RECIPES.nudge,
 };
+
+/** 个别事件在配方响度之上再压一档：hover 是高频动作，必须比点击轻 */
+const EVENT_VOLUME_DB: Partial<Record<SfxEvent, number>> = { hover: -8 };
 
 const STORAGE_KEY = 'ff.sfx';
 const DEBOUNCE_MS = 60;
@@ -90,7 +95,7 @@ export function playSfx(event: SfxEvent) {
     const now = performance.now();
     if (now - (lastPlayed.get(event) ?? -Infinity) < DEBOUNCE_MS) return;
     lastPlayed.set(event, now);
-    playSound(EVENT_RECIPE[event] as unknown as Recipe).catch(() => undefined);
+    playSound(EVENT_RECIPE[event] as unknown as Recipe, { volume: EVENT_VOLUME_DB[event] }).catch(() => undefined);
 }
 
 /** 空闲时把常用音预渲染进缓存（RAF 两拍后 ≈ 首屏已落稳） */

@@ -49,6 +49,8 @@ watch(
 </script>
 
 <style lang="less">
+/* 视觉数值逐字对齐 react-bits WarmTooltip 官方源码（2026-11-09 取样），
+   色值换成我们的反色 token（--ff-tooltip-*）。键帽的下缘暗线是"像键盘键"的关键。 */
 .ftip {
     position: fixed;
     top: 0;
@@ -56,15 +58,16 @@ watch(
     z-index: 4000;
     display: flex;
     align-items: center;
-    gap: 8px;
-    height: 32px;
-    padding: 0 12px;
+    gap: 7px;
+    padding: 6px 10px;
     box-sizing: border-box;
     border-radius: 8px;
     background: var(--ff-tooltip-bg);
     color: var(--ff-tooltip-text);
-    font-size: 13px;
+    font-size: 12.5px;
     font-weight: 500;
+    line-height: 1.2;
+    letter-spacing: -0.01em;
     white-space: nowrap;
     pointer-events: none;
     opacity: 0;
@@ -72,6 +75,9 @@ watch(
     transition:
         transform 0.2s var(--ff-ease-move),
         opacity 0.15s ease-out;
+    box-shadow:
+        0 1px 2px rgba(0, 0, 0, 0.12),
+        0 8px 24px -8px rgba(0, 0, 0, 0.45);
 
     &.is-on {
         opacity: 1;
@@ -84,16 +90,20 @@ watch(
 }
 
 .ftip-kbd {
-    min-width: 18px;
-    padding: 1px 5px;
+    display: inline-flex;
+    align-items: center;
+    height: 1.55em;
+    padding: 0 0.45em;
     box-sizing: border-box;
-    border-radius: 5px;
-    background: rgba(255, 255, 255, 0.16);
-    color: var(--ff-tooltip-text);
+    border-radius: 0.4em;
+    background: rgba(255, 255, 255, 0.1);
+    /* 键帽的下沿：一条 1px 暗线读作"键盘键的侧面"，没有它就只是一块圆角芯片 */
+    box-shadow: inset 0 -1px 0 rgba(255, 255, 255, 0.14);
+    color: rgba(255, 255, 255, 0.72);
     font-family: var(--ff-font);
-    font-size: 11px;
+    font-size: 0.86em;
     font-weight: 500;
-    line-height: 1.4;
-    text-align: center;
+    letter-spacing: 0.02em;
+    font-variant-numeric: tabular-nums;
 }
 </style>

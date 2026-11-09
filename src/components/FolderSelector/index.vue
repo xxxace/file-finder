@@ -12,7 +12,7 @@
 
          ⚠️ 「清除起点」仍然是**这颗图标上的 ×**：悬停才出现、绝对定位（不占宽度、
          不推面包屑）。`directory-changed` 里那条"取消 ≠ 清空"的历史坑没变。 -->
-    <div class="fs-root" v-tip="String(modelValue || label)">
+    <div class="fs-root" v-tip="{ text: String(modelValue || label), keys: keys || undefined }">
         <button type="button" class="fs-icon-btn" :aria-label="String(label)" @click="handleClick">
             <img class="fs-pick-icon" :src="folderPng" alt="" />
         </button>
@@ -33,7 +33,9 @@ export default defineComponent({
         label: {
             type: [String, Number],
             default: '请选择文件夹'
-        }
+        },
+        /** 真实绑定的快捷键（父组件负责接线）；给了才在 tooltip 里渲染键帽 */
+        keys: String
     },
     setup(props, { emit }) {
         const isFocus = ref(false);
