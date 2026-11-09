@@ -189,6 +189,26 @@ export function useNaiveOverrides(): ComputedRef<GlobalThemeOverrides> {
                 borderRadius: v('--ff-r-pill'),
             },
 
+            /* Switch / Slider：**Apple 模型**——开态 = 系统绿（--ff-status-ok 就是 #34C759 系，
+               浅色字面同值、深色提亮一档），关态轨道用可见的抬升灰；滑杆填充与开关同绿成对，
+               圆点恒白（HIG：拇指永远白色，颜色由轨道表达）。
+               ⚠️ 不能跟 primaryColor 走：本项目主按钮=反色（深色下白），
+               白轨+白点就是主人截图里"看不出开关开着没"的根因。 */
+            Switch: {
+                railColor: v('--ff-ctl-on'),
+                railColorActive: v('--ff-status-ok'),
+                loadingColor: v('--ff-status-ok'),
+                boxShadow: '0 1px 3px rgba(0, 0, 0, 0.25)',
+                boxShadowFocus: '0 1px 3px rgba(0, 0, 0, 0.25)',
+            },
+
+            Slider: {
+                fillColor: v('--ff-status-ok'),
+                fillColorHover: v('--ff-status-ok'),
+                dotColor: v('--ff-on-highlight'),
+                dotBorder: `1px solid ${v('--ff-line-strong')}`,
+            },
+
             /* 图片预览的底部工具条。
                ⚠️ naive 的默认是 `toolbarColor: rgba(0,0,0,.35)` —— 压在照片上等于没有背景。
                它压在**照片**上，所以这组值不随主题（见 tokens 的 `--ff-media-*`）。
