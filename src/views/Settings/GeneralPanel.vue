@@ -26,7 +26,7 @@
             <div class="set-row set-row-head">
                 <div class="set-text">
                     <span class="set-title">备份与迁移</span>
-                    <span class="set-desc">把缓存和收藏搬出去 / 搬回来 —— 动作都在折叠区里，逐条写明了后果</span>
+                    <span class="set-desc">把缓存和收藏搬出去 / 搬回来 —— 每个动作下面写明了后果</span>
                 </div>
             </div>
             <BackupPanel />

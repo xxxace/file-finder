@@ -101,3 +101,12 @@ src/components/FluidTip/
   - pane 记忆 localStorage `ff.settings.pane`（Apple：恢复最近查看）。
 - 「打开数据目录」不重复进关于卡（BackupPanel 已有同一动作）。
 - typecheck 0 error；未真机目视。
+
+## 九、备份与迁移动作行重设计（同日，主人："感觉都是文本"）
+
+范式来源：1Password / Bitwarden / Telegram / 浏览器 profile 导出（同一套）。
+- 每动作一整行：语义图标（出=↑ 进=↓ 合并=git-merge 文件夹=folder-open）+ 动词标题 + **后果说明放第二行**；整行可点；行内 NSpin 代替按钮 loading。
+- 危险动作（从文件还原）= 标题级红文字 `--ff-danger`（macOS HIG 模型，沿用）。
+- ≤5 动作不折叠；折叠是"高级区"工种——原折叠还造成"备份与迁移"标题出现两次。
+- **逻辑/文案零改动**，对外仍是 `migrated` 事件；GeneralPanel 卡头描述同步去掉"折叠区"字样。
+- typecheck 0 error；未真机目视。

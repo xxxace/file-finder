@@ -1,39 +1,53 @@
 <template>
-    <!-- ⚠️ 2026-11-08 主人裁决：备份与迁移**整体抽离、暂时不放出来**，
-         后续要移进设置页。功能与文案一字未动，挂载时直接用：
-         `<BackupPanel @migrated="reloadAfterDataChange" />`（还原/合并成功后会 emit）。 -->
-    <n-collapse class="backup-collapse">
-        <n-collapse-item title="备份与迁移" name="migrate">
-            <div class="backup-row">
-                <n-button size="small" :loading="backupLoading" @click="handleBackupToFile">备份到一个文件…</n-button>
-                <span class="backup-hint">默认文件名带你今天的日期，位置自己挑 —— 不会被任何东西覆盖</span>
-            </div>
-            <div class="backup-row">
-                <!-- 唯一着色的一条：这一组里只有它是"整份替换"（合并只增不删）。
-                     2026-11-08 二轮 Apple 化：`quaternary` = 红字无底 —— macOS 的破坏性
-                     动作从来是**红文字**（HIG 原文：用红色的文本来强调具有破坏性的操作），
-                     不是一枚红色实心钮。红仍然在，只是不再咄咄逼人。 -->
-                <n-button size="small" type="error" quaternary @click="handleRestoreFromFile">从文件还原…</n-button>
-                <span class="backup-hint warn">缓存整份替换；收藏夹只增不删</span>
-            </div>
-            <div class="backup-row">
-                <n-button size="small" :loading="bulkLoading" @click="handleMergeCache">合并缓存…</n-button>
-                <span class="backup-hint">只增不删（新增 / 覆盖 / 跳过 会报给你）</span>
-            </div>
-            <!-- 「打开存放文件夹」从顶部挪到这儿（2026-10-04，用户提的）。
-                 原来把它留在折叠区外面，理由是"它不碰任何数据，别藏起来"——那个理由站不住：
-                 这个折叠区本来就不是纯危险区（备份是安全的、合并只增不删），
-                 真正危险的只有「从文件还原」，而它是靠**自己那身红色**标出来的，不是靠分组。
-                 而且它和上面三项本就是同一件事的两面：那三项是**自动**搬运整库，
-                 这一项是**手动**搬运的入口（缓存库、图片、备份都躺在那个文件夹里）。
-                 ⚠️ 代价与补偿：位置原本承担着"这是安全出口"的信号，现在这信号改由 hint 明说。
-                 见 docs/DESIGN-DISK-FILTER-2026-10-04.md §11。 -->
-            <div class="backup-row">
-                <n-button size="small" @click="openDataDir">打开存放文件夹</n-button>
-                <span class="backup-hint">只打开文件夹、不动任何数据（缓存库、图片和备份都在这儿）</span>
-            </div>
-        </n-collapse-item>
-    </n-collapse>
+    <!-- ⚠️ 2026-11-09 重设计（主人："感觉都是文本"）：
+         对齐 1Password / Telegram / Bitwarden 的备份动作范式——
+         每动作一整行（图标+动词+后果说明在第二行），整行可点，危险动作红色标题，
+         ≤5 个动作不折叠（折叠是"高级区"的工种，原来折叠还让标题出现了两次）。
+         逻辑与文案（后果说明）一字未动；对外接口仍是 `migrated` 事件。 -->
+    <div class="mi-list" role="group" aria-label="备份与迁移">
+        <button type="button" class="mi-row" :disabled="backupLoading" @click="handleBackupToFile">
+            <span class="mi-icon" aria-hidden="true">
+                <n-spin v-if="backupLoading" :size="14" />
+                <n-icon v-else :size="16" :component="ArrowUpOutline" />
+            </span>
+            <span class="mi-text">
+                <span class="mi-title">备份到一个文件…</span>
+                <span class="mi-desc">默认文件名带你今天的日期，位置自己挑 —— 不会被任何东西覆盖</span>
+            </span>
+        </button>
+
+        <button type="button" class="mi-row mi-row-danger" :disabled="busy" @click="handleRestoreFromFile">
+            <span class="mi-icon" aria-hidden="true">
+                <n-spin v-if="busy" :size="14" />
+                <n-icon v-else :size="16" :component="ArrowDownOutline" />
+            </span>
+            <span class="mi-text">
+                <span class="mi-title">从文件还原…</span>
+                <span class="mi-desc">缓存整份替换；收藏夹只增不删</span>
+            </span>
+        </button>
+
+        <button type="button" class="mi-row" :disabled="bulkLoading" @click="handleMergeCache">
+            <span class="mi-icon" aria-hidden="true">
+                <n-spin v-if="bulkLoading" :size="14" />
+                <n-icon v-else :size="16" :component="GitMergeOutline" />
+            </span>
+            <span class="mi-text">
+                <span class="mi-title">合并缓存…</span>
+                <span class="mi-desc">只增不删（新增 / 覆盖 / 跳过 会报给你）</span>
+            </span>
+        </button>
+
+        <button type="button" class="mi-row" @click="openDataDir">
+            <span class="mi-icon" aria-hidden="true">
+                <n-icon :size="16" :component="FolderOpenOutline" />
+            </span>
+            <span class="mi-text">
+                <span class="mi-title">打开存放文件夹</span>
+                <span class="mi-desc">只打开文件夹、不动任何数据（缓存库、图片和备份都在这儿）</span>
+            </span>
+        </button>
+    </div>
 </template>
 
 <script setup lang="ts">
@@ -48,7 +62,8 @@
  */
 import { ref } from 'vue';
 import { ipcRenderer } from 'electron';
-import { NButton, NCollapse, NCollapseItem } from 'naive-ui';
+import { NIcon, NSpin } from 'naive-ui';
+import { ArrowDownOutline, ArrowUpOutline, FolderOpenOutline, GitMergeOutline } from '@vicons/ionicons5';
 import useNotify from '@/hooks/useNotify';
 import useConfirm from '@/hooks/useConfirm';
 import { refreshIndex } from '@/views/FileFinder/playlist';
@@ -189,25 +204,59 @@ const openDataDir = async () => {
 </script>
 
 <style scoped>
-/* 这些类只服务本组件；宿主页面（缓存页 / 将来的设置页）各自的分隔与留白自己管。 */
-.backup-collapse {
-    margin-top: 6px;
+/* 动作行：图标+标题+说明两层，整行可点；激活态与全站同族（圆角 8 灰底）。
+   ⚠️ 还原这行的红 = 标题级红文字（--ff-danger），HIG 的破坏性动作模型。 */
+.mi-list {
+    display: flex;
+    flex-direction: column;
+    margin-top: 4px;
 }
 
-.backup-row {
+.mi-row {
     display: flex;
     align-items: center;
-    gap: 10px;
-    flex-wrap: wrap;
-    padding: 5px 0;
+    gap: 12px;
+    padding: 9px 10px;
+    border: 0;
+    border-radius: var(--ff-r-ctl);
+    background: transparent;
+    font: inherit;
+    text-align: left;
+    cursor: pointer;
+    transition: background-color var(--ff-dur-hover) ease;
 }
 
-.backup-hint {
+.mi-row:hover:not(:disabled) { background: var(--ff-ctl-hover); }
+.mi-row:disabled { opacity: .55; cursor: default; }
+
+.mi-icon {
+    flex: 0 0 auto;
+    display: grid;
+    place-items: center;
+    width: 28px;
+    height: 28px;
+    border-radius: var(--ff-r-pill);
+    background: var(--ff-field);
+    color: var(--ff-text-1);
+}
+
+.mi-text {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    min-width: 0;
+}
+
+.mi-title {
+    font-size: 13px;
+    font-weight: 500;
+    color: var(--ff-text-1);
+}
+
+.mi-row-danger .mi-title { color: var(--ff-danger); }
+
+.mi-desc {
     font-size: 12px;
     color: var(--ff-text-2);
-}
-
-.backup-hint.warn {
-    color: var(--ff-warn);
 }
 </style>
