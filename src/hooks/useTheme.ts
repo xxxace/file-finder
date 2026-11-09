@@ -7,7 +7,7 @@
  */
 import { computed, nextTick, ref, watch } from 'vue';
 import { runThemeTransition } from '@/theme/transition';
-import { playSfx } from '@/utils/sfx';
+import { playSfx, suppressHover } from '@/utils/sfx';
 
 export type ThemeName = 'light' | 'dark';
 
@@ -49,6 +49,8 @@ export function useTheme() {
         toggleTheme: (source?: HTMLElement | null) => {
             const next: ThemeName = theme.value === 'dark' ? 'light' : 'dark';
             playSfx(next === 'light' ? 'theme-light' : 'theme-dark');
+            // 切换动画(650ms)期间浏览器会补发 leave→enter，把 hover 音关到动画结束后
+            suppressHover(1200);
             runThemeTransition(async () => {
                 theme.value = next;
                 await nextTick();

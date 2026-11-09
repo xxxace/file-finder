@@ -90,9 +90,18 @@ export function setSfxVolume(vol: number) {
 
 const lastPlayed = new Map<SfxEvent, number>();
 
+/** hover 音抑制窗（主题切换动画专用）：动画期间浏览器会补发 leave→enter，
+ *  锚定「点击时刻」关窗 1.2s（动画 650ms + 余量），窗口内 hover 音一律忽略。 */
+let hoverSuppressedUntil = 0;
+
+export function suppressHover(ms: number) {
+    hoverSuppressedUntil = performance.now() + ms;
+}
+
 /** 播放一个界面事件音。静音/关开关时零开销直接返回。 */
 export function playSfx(event: SfxEvent) {
     if (!sfxPrefs.on || sfxPrefs.vol <= 0) return;
+    if (event === 'hover' && performance.now() < hoverSuppressedUntil) return;
     const now = performance.now();
     if (now - (lastPlayed.get(event) ?? -Infinity) < DEBOUNCE_MS) return;
     lastPlayed.set(event, now);
