@@ -66,14 +66,26 @@
                 </div>
             </section>
         </div>
+
+        <section class="sfx-bar">
+            <h4>界面音效</h4>
+            <div class="row">
+                <n-switch :value="sfxPrefs.on" @update:value="setSfxEnabled" />
+                <span class="note">切换 / 完成 / 提示时轻响一声；悬停与方向键刻意不配声</span>
+                <n-slider class="sfx-vol" :value="sfxPrefs.vol" :min="0" :max="1" :step="0.05"
+                    :disabled="!sfxPrefs.on" @update:value="setSfxVolume" />
+                <n-button size="small" :disabled="!sfxPrefs.on" @click="playSfx('success')">试听</n-button>
+            </div>
+        </section>
     </div>
 </template>
 
 <script setup lang="ts">
 import { computed, onMounted, ref } from 'vue';
-import { NButton, NInput, NSelect, NCheckbox } from 'naive-ui';
+import { NButton, NInput, NSelect, NCheckbox, NSwitch, NSlider } from 'naive-ui';
 import { getAction, postAction } from '@/utils/request';
 import useNotify from '@/hooks/useNotify';
+import { playSfx, sfxPrefs, setSfxEnabled, setSfxVolume } from '@/utils/sfx';
 import RuleSiteList from '@/views/FileFinder/rules/RuleSiteList.vue';
 import RuleStepList from '@/views/FileFinder/rules/RuleStepList.vue';
 import RuleCoverList from '@/views/FileFinder/rules/RuleCoverList.vue';
@@ -401,5 +413,22 @@ onMounted(init);
     align-items: center;
     gap: 12px;
     margin: 18px 0 8px;
+}
+
+/* 音效设置：独立于规则编辑区的一小条，占满页宽但不参与两栏布局 */
+.sfx-bar {
+    flex: 0 0 auto;
+    padding-bottom: 16px;
+
+    h4 {
+        margin: 0 0 8px;
+        font-size: 13px;
+        font-weight: 500;
+        opacity: .85;
+    }
+
+    .sfx-vol {
+        width: 160px;
+    }
 }
 </style>

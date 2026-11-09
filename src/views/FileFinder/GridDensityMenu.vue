@@ -26,6 +26,7 @@ import type { Component } from 'vue';
 import { NButton, NDropdown, NIcon } from 'naive-ui';
 import type { DropdownMenuProps, DropdownOption } from 'naive-ui';
 import { DensityNormal24, DensityTight24, DensityWide24 } from '@/components/icons/grid';
+import { playSfx } from '@/utils/sfx';
 import { DENSITY_OPTIONS, DEFAULT_DENSITY, labelOf } from './density';
 import type { Density } from './density';
 
@@ -82,6 +83,9 @@ const options = computed<DropdownOption[]>(() =>
 
 const onSelect = (key: string) => {
     const next = DENSITY_OPTIONS.find(o => o.key === key);
-    if (next) emit('update:modelValue', next.key);
+    if (next) {
+        playSfx('mode');
+        emit('update:modelValue', next.key);
+    }
 };
 </script>

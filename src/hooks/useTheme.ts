@@ -7,6 +7,7 @@
  */
 import { computed, nextTick, ref, watch } from 'vue';
 import { runThemeTransition } from '@/theme/transition';
+import { playSfx } from '@/utils/sfx';
 
 export type ThemeName = 'light' | 'dark';
 
@@ -47,6 +48,7 @@ export function useTheme() {
          */
         toggleTheme: (source?: HTMLElement | null) => {
             const next: ThemeName = theme.value === 'dark' ? 'light' : 'dark';
+            playSfx(next === 'light' ? 'theme-light' : 'theme-dark');
             runThemeTransition(async () => {
                 theme.value = next;
                 await nextTick();

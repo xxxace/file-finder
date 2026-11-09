@@ -7,9 +7,13 @@
  */
 import { pushToast } from '@/components/Overlay/store';
 import type { OverlayKind } from '@/components/Overlay/store';
+import { playSfx } from '@/utils/sfx';
 
 export default function useNotify() {
     return function (type: OverlayKind, title?: string, message?: string): void {
+        // toast 的唯一出口 ⇒ 音效也只在这里挂一次，6 个页面自动全覆盖
+        //（error 暂不配声：扫描里的偶发失败 toast 较多，等真机确认频率再定）
+        if (type === 'success') playSfx('success');
         pushToast(type, title, message ?? '');
     };
 }
