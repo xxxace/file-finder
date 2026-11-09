@@ -38,12 +38,13 @@ const EVENT_RECIPE: Record<SfxEvent, SfxRecipe> = {
     success: SFX_RECIPES.bloom,
     pick: SFX_RECIPES.bead,
     done: SFX_RECIPES.ping,
-    hover: SFX_RECIPES.nib,
+    hover: SFX_RECIPES.hover,
     warn: SFX_RECIPES.nudge,
 };
 
-/** 个别事件在配方响度之上再压一档：hover 是高频动作，必须比点击轻 */
-const EVENT_VOLUME_DB: Partial<Record<SfxEvent, number>> = { hover: -8 };
+/** 个别事件在配方响度之上再压一档。Hover 配方本身已是 -23dB 的"微光"（官方按 hover 调的），
+ *  不再额外压低 —— 要更轻先调这里。 */
+const EVENT_VOLUME_DB: Partial<Record<SfxEvent, number>> = {};
 
 const STORAGE_KEY = 'ff.sfx';
 const DEBOUNCE_MS = 60;
