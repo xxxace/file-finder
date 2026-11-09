@@ -4218,12 +4218,13 @@ body>.n-image-preview-container .n-image-preview-toolbar {
 
 /* ════ 右键菜单（2026-11-09 重构：横排小按钮 → Apple 式纵向菜单）══════
    内容被 n-popover teleport 到 body，scoped 够不到 ⇒ 非 scoped + .ctx- 前缀兜作用域。
-   语言与全站一族：圆角 8 灰底悬浮、发丝分隔线、图标与文字同色。 */
+   比例对齐 Apple PC 菜单（Big Sur+ 实测量级）：行高 24 紧凑档、图标-文字 8px、
+   菜单内衬 4px、分隔线短且细、圆角 6 —— 密度上去"设计感"才出得来。 */
 .ctx-menu {
     display: flex;
     flex-direction: column;
-    gap: 2px;
-    min-width: 208px;
+    gap: 1px;
+    min-width: 188px;
     padding: 4px;
     box-sizing: border-box;
     outline: none;
@@ -4237,11 +4238,11 @@ body>.n-popover:has(>.ctx-menu) {
 .ctx-item {
     display: flex;
     align-items: center;
-    gap: 10px;
-    height: 32px;
-    padding: 0 10px;
+    gap: 8px;
+    height: 26px;
+    padding: 0 8px;
     border: 0;
-    border-radius: var(--ff-r-ctl);
+    border-radius: 6px;
     background: transparent;
     color: var(--ff-text-1);
     font: inherit;
@@ -4271,7 +4272,7 @@ body>.n-popover:has(>.ctx-menu) {
 
 .ctx-sep {
     height: 1px;
-    margin: 4px 6px;
+    margin: 3px 8px;
     background: var(--ff-line);
 }
 
