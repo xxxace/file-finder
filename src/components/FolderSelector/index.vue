@@ -12,28 +12,21 @@
 
          ⚠️ 「清除起点」仍然是**这颗图标上的 ×**：悬停才出现、绝对定位（不占宽度、
          不推面包屑）。`directory-changed` 里那条"取消 ≠ 清空"的历史坑没变。 -->
-    <n-tooltip>
-        <template #trigger>
-            <div class="fs-root">
-                <button type="button" class="fs-icon-btn" :aria-label="String(label)" @click="handleClick">
-                    <img class="fs-pick-icon" :src="folderPng" alt="" />
-                </button>
-                <button v-if="modelValue" type="button" class="fs-clear" aria-label="清除起点"
-                    @click.stop="onClear">×</button>
-            </div>
-        </template>
-        <span class="fs-tip">{{ modelValue || label }}</span>
-    </n-tooltip>
+    <div class="fs-root" v-tip="String(modelValue || label)">
+        <button type="button" class="fs-icon-btn" :aria-label="String(label)" @click="handleClick">
+            <img class="fs-pick-icon" :src="folderPng" alt="" />
+        </button>
+        <button v-if="modelValue" type="button" class="fs-clear" aria-label="清除起点"
+            @click.stop="onClear">×</button>
+    </div>
 </template>
 
 <script lang="ts">
 import { computed, defineComponent, ref } from 'vue';
 import FolderPng from '@/assets/folder.png';
-import { NTooltip } from 'naive-ui';
 import { ipcRenderer } from 'electron';
 
 export default defineComponent({
-    components: { NTooltip },
     emits: ['change', 'update:modelValue'],
     props: {
         modelValue: String,

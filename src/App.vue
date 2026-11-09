@@ -20,6 +20,8 @@
             <AppShell />
             <!-- 提示类浮层（toast / confirm / banner）的唯一宿主，内部 Teleport 到 body -->
             <OverlayHost />
+            <!-- 功能页 Fluid Tip 的全局宿主（全局唯一一颗胶囊，左轨 RailTip 不走这里） -->
+            <FluidTipHost />
           </n-loading-bar-provider>
         </n-message-provider>
       </n-notification-provider>
@@ -31,6 +33,7 @@
 import { ref } from 'vue';
 import AppShell from './views/Shell/index.vue';
 import OverlayHost from './components/Overlay/OverlayHost.vue';
+import FluidTipHost from './components/FluidTip/FluidTipHost.vue';
 import {
   NConfigProvider, NLoadingBarProvider, NMessageProvider, NNotificationProvider, NDialogProvider,
   zhCN, dateZhCN, darkTheme,

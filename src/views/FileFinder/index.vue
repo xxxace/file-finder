@@ -23,32 +23,23 @@
                  它一出现/消失就会把整条面包屑推走 ~60px，正是这次要修的那类跳动。 -->
             <div class="nav-btns">
                 <FolderSelector ref="folderSelector" v-model="dir" label="请选择文件夹(D)" @change="setRoot" />
-                <n-tooltip>
-                    <template #trigger>
-                        <n-button size="small" :disabled="!history.length" :aria-label="navBtnText"
-                            @click="onNavBtn">
-                            <template #icon>
-                                <n-icon :component="navBtnIcon" />
-                            </template>
-                        </n-button>
+                <n-button size="small" :disabled="!history.length" :aria-label="navBtnText"
+                    v-tip="navBtnTip"
+                    @click="onNavBtn">
+                    <template #icon>
+                        <n-icon :component="navBtnIcon" />
                     </template>
-                    {{ navBtnTip }}
-                </n-tooltip>
+                </n-button>
                 <!-- 刷新住在导航区、不搬去动作区：它重读的是**当前这个位置**，
                      与「返回」同属位置动作。tooltip 只为说清它和「重读这一片」的分工。
                      扫描期间禁掉：它带 noCache、会真的再读一次盘，与整片扫描并发就是两路读盘。
                      只读层 / 清单屏也禁掉：那两种屏的源就是缓存，没有"重读"这回事。 -->
-                <n-tooltip>
-                    <template #trigger>
-                        <n-button size="small" :disabled="scanning || readOnlyLevel || playlistLevel"
-                            aria-label="重新读取当前文件夹" @click="onRefresh">
-                            <template #icon>
-                                <n-icon :component="RefreshOutline" />
-                            </template>
-                        </n-button>
+                <n-button size="small" :disabled="scanning || readOnlyLevel || playlistLevel"
+                    aria-label="重新读取当前文件夹" v-tip="'重新读取当前文件夹'" @click="onRefresh">
+                    <template #icon>
+                        <n-icon :component="RefreshOutline" />
                     </template>
-                    重新读取当前文件夹
-                </n-tooltip>
+                </n-button>
             </div>
 
             <!-- 地址槽（外层只管"一块面"，里层才是面包屑列表）—— 2026-11-08 第二轮。
@@ -137,43 +128,35 @@
                     </n-input>
                     <!-- 快捷键键帽（原来在输入框内做 `kbd S`）挪进 tooltip：键帽只在"看得见输入框"时
                          才有意义，而收起态根本没有框。提示没丢，也不再占输入框的右侧空间。 -->
-                    <n-tooltip>
-                        <template #trigger>
-                            <n-button class="search-btn" size="small" aria-label="搜索（S）" @click="openSearch">
-                                <template #icon>
-                                    <n-icon :component="SearchOutline" />
-                                </template>
-                            </n-button>
+                    <n-button class="search-btn" size="small" aria-label="搜索（S）" @click="openSearch"
+                        v-tip="{ text: '搜索', keys: 'S' }">
+                        <template #icon>
+                            <n-icon :component="SearchOutline" />
                         </template>
-                        搜索（S）
-                    </n-tooltip>
+                    </n-button>
                 </div>
                 <!-- 视图密度：与下面「平铺」同属视图类动作，紧挨着放。
                      常驻（任何目录都能切），与 flat 互不影响 —— flat 决定"摊开哪些条目"，
                      密度决定"一屏铺几列"，两者正交。 -->
                 <GridDensityMenu v-model="density" :menu-props="moreMenuProps" />
                 <!-- 平铺视图切换：仅在根缓存目录可用，跳过女优/父文件夹直接平铺全部作品 -->
-                <n-tooltip>
-                    <template #trigger>
-                        <!-- 激活态见样式 `.toolbar :deep(.is-on)`（灰底 + text-1）。
-                             **不用 `type="primary"`**：那会让一个视图开关变成整条工具栏最响的东西
-                             （2026-11-07 截图里那块白方块就是它）。 -->
-                        <n-button class="icon-lg" size="small" :class="{ 'is-on': isFlatView }"
-                            :disabled="scanning || !canToggleFlat" @click="toggleFlatView">
-                            <template #icon>
-                                <!-- 2 列 × 3 行的**横向卡片** ⇒ "作品摊开成一片"，这就是平铺本身。
-                                     ⚠️ 换过四版才有定论：`Layers` 画的是"层"、是**被摊的对象**而不是
-                                     摊完的样子，当场被否；Fluent `GridDots` 是 3×3 **实心点**，与密度
-                                     那颗的方格读起来像同一档。现在改为自绘、且刻意用**宽高比 1.65 的
-                                     卡片**而不是正方形 —— 形状语言与密度三档（方格阵）分开，并排也
-                                     不会再被读成"第四档密度"。画法与尺寸见 `components/icons/grid.ts`。
-                                     旁边密度那颗也一并换成自绘方块阵（`GridDensityMenu.vue`）。 -->
-                                <n-icon :component="FlatCards24" />
-                            </template>
-                        </n-button>
+                <!-- 激活态见样式 `.toolbar :deep(.is-on)`（灰底 + text-1）。
+                     **不用 `type="primary"`**：那会让一个视图开关变成整条工具栏最响的东西
+                     （2026-11-07 截图里那块白方块就是它）。 -->
+                <n-button class="icon-lg" size="small" :class="{ 'is-on': isFlatView }"
+                    :disabled="scanning || !canToggleFlat" @click="toggleFlatView"
+                    v-tip="isFlatView ? '当前为平铺视图（点击切回正常视图）' : (canToggleFlat ? '切换为平铺视图（摊开所有子目录作品）' : '仅在根缓存目录可开启平铺视图')">
+                    <template #icon>
+                        <!-- 2 列 × 3 行的**横向卡片** ⇒ "作品摊开成一片"，这就是平铺本身。
+                             ⚠️ 换过四版才有定论：`Layers` 画的是"层"、是**被摊的对象**而不是
+                             摊完的样子，当场被否；Fluent `GridDots` 是 3×3 **实心点**，与密度
+                             那颗的方格读起来像同一档。现在改为自绘、且刻意用**宽高比 1.65 的
+                             卡片**而不是正方形 —— 形状语言与密度三档（方格阵）分开，并排也
+                             不会再被读成"第四档密度"。画法与尺寸见 `components/icons/grid.ts`。
+                             旁边密度那颗也一并换成自绘方块阵（`GridDensityMenu.vue`）。 -->
+                        <n-icon :component="FlatCards24" />
                     </template>
-                    {{ isFlatView ? '当前为平铺视图（点击切回正常视图）' : (canToggleFlat ? '切换为平铺视图（摊开所有子目录作品）' : '仅在根缓存目录可开启平铺视图') }}
-                </n-tooltip>
+                </n-button>
                 <span class="toolbar-sep" aria-hidden="true"></span>
                 <n-dropdown trigger="click" :options="moreOptions" :disabled="scanning" :menu-props="moreMenuProps"
                     @select="onMoreSelect">
@@ -466,7 +449,7 @@ import { SearchOutline, RefreshOutline, ArrowBackOutline, CloseOutline } from '@
 import { MoreVertical28Filled } from '@/components/icons/fluent';
 import { FlatCards24 } from '@/components/icons/grid';
 import { playSfx } from '@/utils/sfx';
-import { NButton, NInput, NIcon, NImage, NImageGroup, NTag, NPopover, NSpin, NTooltip, NDropdown, useLoadingBar } from 'naive-ui';
+import { NButton, NInput, NIcon, NImage, NImageGroup, NTag, NPopover, NSpin, NDropdown, useLoadingBar } from 'naive-ui';
 import FolderSelector from '@/components/FolderSelector/index.vue';
 import ScanGlow from './ScanGlow.vue';
 import AssistantCoverModal from './AssistantCoverModal.vue';

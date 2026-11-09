@@ -49,3 +49,17 @@ src/utils/sfx/
 - 音效**未真机试听**（合成引擎为 react-bits 逐字代码，参数未改动；风险主要在首次 AudioContext 建立时机——由首次用户手势触发，浏览器策略天然合规）
 - Settings 音效条**未真机目视**；待主人重启 dev 后验收
 - `engine.ts` 为 vendored 第三方代码（1069 行，超项目 250 行规矩）：**不许手改**，升级 = 重新拷贝上游文件重新去壳；头部已标注
+
+## 五、第二批 · Fluid Tip 落地记录（同日）
+
+```
+src/components/FluidTip/
+  fluidTip.ts       ← 状态单例：同簇判定(≤160px 相邻→滑动) / 孤立→snap / 75ms 离开缓冲
+  directive.ts      ← v-tip 指令（全局注册）：v-tip="'文案'" 或 v-tip="{ text, keys: 'S' }"
+  FluidTipHost.vue  ← 全局唯一宿主（App.vue 与 OverlayHost 并排，Teleport body, z 4000）
+```
+
+- **已替换**（顶栏工具簇 = 演示滑动的主场景，7 锚点）：FolderSelector、返回/前进、刷新、搜索(S 带真键帽)、密度、平铺。`NTooltip` 已从 index.vue / FolderSelector 摘除。
+- **保留 naive 的**：Cache 盘条 chip 的多行明细提示（富内容非单行胶囊的工种）；其余 `title=` 原生提示待后续顺手换。
+- 交互动效：滑动 = transform 200ms `--ff-ease-move`（一拍），snap = 只淡入；触屏不显示；disabled 按钮无 hover 事件（与 n-tooltip 行为一致）。
+- typecheck 0 error；**未真机目视** —— 待主人验收：顶栏从「选择文件夹」滑到「刷新/搜索/平铺」应看到同一颗胶囊滑动换字，跳到网格内任意 title= 处应是 snap 落位。
