@@ -6,7 +6,7 @@
  */
 import { computed, h, nextTick, onMounted, ref, watch, withDirectives } from 'vue';
 import { NIcon } from 'naive-ui';
-import { LocateOutline } from '@vicons/ionicons5';
+import { GridOutline } from '@vicons/ionicons5';
 import { vTip } from '@/components/FluidTip/directive';
 import type { ImgHTMLAttributes } from 'vue';
 import type { WiredFileInfo } from '../../../electron/server/index';
@@ -588,7 +588,8 @@ export function usePreview(deps: {
         const barNow = document.querySelector<HTMLElement>('.n-image-preview-toolbar');
         if (barNow) lastBarW = barNow.getBoundingClientRect().width;
         // 定位：准星 = "我在这儿"。Enter 是真快捷键（index.vue keyup：预览开着时 Enter=定位）
-        const locate = h(NIcon, { size: 20, component: LocateOutline, onClick: locateInGrid });
+        // 定位：准星（Locate）读作"GPS 定位"，而这个动作的目的地是**网格** ⇒ 直接画网格
+        const locate = h(NIcon, { size: 20, component: GridOutline, onClick: locateInGrid });
         const out: any[] = [
             h('span', { class: 'ptb-info' }, [
                 h('span', { class: 'ptb-name', title: previewFile.value?.name ?? '' },
