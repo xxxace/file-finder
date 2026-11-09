@@ -4262,7 +4262,7 @@ body>.n-image-preview-container .n-image-preview-toolbar {
     left: 0;
     width: 0;
     border-radius: var(--ff-r-ctl);
-    background: rgba(255, 255, 255, 0.14);
+    background: var(--ff-media-bar-sel);
     opacity: 0;
     pointer-events: none;
     transition:
