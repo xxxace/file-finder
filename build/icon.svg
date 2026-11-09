@@ -1,20 +1,29 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024" width="1024" height="1024">
   <defs>
-    <linearGradient id="tile" x1="0" y1="0" x2="1" y2="1">
-      <stop offset="0" stop-color="#4F7CF7"/>
-      <stop offset="1" stop-color="#8B5CF6"/>
+    <linearGradient id="tile" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#525866"/>
+      <stop offset="0.55" stop-color="#3A3F49"/>
+      <stop offset="1" stop-color="#2E323A"/>
     </linearGradient>
   </defs>
 
-  <rect x="38" y="38" width="948" height="948" rx="231" fill="url(#tile)"/>
+  <rect width="1024" height="1024" rx="250" fill="url(#tile)"/>
+  <rect x="1.5" y="1.5" width="1021" height="1021" rx="248.5" fill="none"
+        stroke="#FFFFFF" stroke-opacity="0.15" stroke-width="3"/>
 
-  <g fill="#FFFFFF">
-    <rect x="362" y="362" width="96" height="96" rx="22"/>
-    <rect x="490" y="362" width="96" height="96" rx="22"/>
-    <rect x="362" y="490" width="96" height="96" rx="22"/>
-    <rect x="490" y="490" width="96" height="96" rx="22"/>
+  <g transform="translate(-100.6 -100.6) scale(1.2)">
+    <!-- ⚠️ 手柄必须画在圆环**之前**（下层）。手柄起点 (627,627) 落在环带里
+         （距圆心 216.4，环带 179.5~256.5），画在环上面就会有一截蓝骑在白环上。
+         全白时看不出来，2026-11-09 把手柄改成蓝色才暴露。 -->
+    <line x1="627" y1="627" x2="762" y2="762" stroke="#049EFF" stroke-width="83" stroke-linecap="round"/>
+
+    <g fill="#FFFFFF">
+      <rect x="362" y="362" width="96" height="96" rx="22"/>
+      <rect x="490" y="362" width="96" height="96" rx="22"/>
+      <rect x="362" y="490" width="96" height="96" rx="22"/>
+      <rect x="490" y="490" width="96" height="96" rx="22"/>
+    </g>
+
+    <circle cx="474" cy="474" r="218" fill="none" stroke="#FFFFFF" stroke-width="77"/>
   </g>
-
-  <circle cx="474" cy="474" r="218" fill="none" stroke="#FFFFFF" stroke-width="77"/>
-  <line x1="627" y1="627" x2="762" y2="762" stroke="#FFFFFF" stroke-width="83" stroke-linecap="round"/>
 </svg>

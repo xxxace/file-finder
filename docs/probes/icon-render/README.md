@@ -5,7 +5,12 @@
 ```
 bash docs/probes/icon-render/run.sh          # 生成图标（证据写 out.txt）
 node docs/probes/icon-render/ico-read-check.cjs   # 反向验证：读回来的 ICO 还能不能解码
+node docs/probes/icon-render/bbox-check.cjs       # 量各档 PNG 的 alpha bbox 占比（判"图标是不是真的小"）
 ```
+
+> `bbox-check.cjs` 是 2026-11-09 加的：主人报「任务栏/dock 里比别的应用小」。
+> 实测七档全是 100% 满画布 ⇒ **图标没小，是深底融进了深色 dock**，眼睛只看得见里面的白环（68.7%）。
+> 判据写进 `docs/AUDIT-UNSLOP-2026-11-09.md`。
 
 ## 为什么要跑真 Chromium
 
