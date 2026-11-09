@@ -1866,6 +1866,7 @@ onMounted(() => {
     void refreshIndex().catch(() => undefined);
     // 主进程的移动硬盘插拔通知（事件驱动，零轮询 —— 见 electron/main/diskWatch.ts）
     ipcRenderer.on('ff-disks-changed', onDisksChangedIpc);
+    ipcRenderer.on('ff-device-change', onDeviceChangeIpc);
 });
 
 // 必须写在 setup 顶层。注册在 onMounted 回调**内部**的 onUnmounted 永远不会被调用 ——
@@ -1875,6 +1876,7 @@ onUnmounted(() => {
     window.removeEventListener('keyup', onKeyup);
     document.removeEventListener('click', onDocClickBlurButton, true);
     ipcRenderer.off('ff-disks-changed', onDisksChangedIpc);
+    ipcRenderer.off('ff-device-change', onDeviceChangeIpc);
     // 预览层那个"停住 0.3s 才换清晰版"的挂起计时器：组件没了就别再起来
     disposePreview();
     // 网格选择器：摘掉它的 keydown（方向键/回车）与 resize 监听。
@@ -1977,20 +1979,15 @@ const onDisksChanged = async (disks: { serial: string; drive: string }[]) => {
     notify('success', '盘已插回', '列表已切换到实时内容');
 };
 
+/** 插拔音走**设备消息**（主进程 `ff-device-change`），不走盘列表差分：
+ *  盘列表要等系统挂好卷才变（实测 ~1.2s），拿它触发音效必然比手上的动作晚半拍到一秒多。 */
+const onDeviceChangeIpc = (_e: unknown, dir: 'in' | 'out') => {
+    playSfx(dir === 'in' ? 'drive-in' : 'drive-out');
+};
+
 /** IPC 监听器的**稳定引用**：`off` 必须拿到同一个函数，否则卸不掉、组件重建后会重复响应 */
-let prevSerials: Set<string> | null = null; // null = 首次事件（只建基线，不响 —— 启动不是"接入"）
 const onDisksChangedIpc = (_e: unknown, disks: { serial: string; drive: string }[]) => {
-    const list = disks || [];
-    // 插拔音：payload 只有"现在的盘列表"，插/拔靠与上一次的差分。KeepAlive 住 ⇒ 全会话有效。
-    const now = new Set(list.map((d) => d.serial));
-    if (prevSerials) {
-        const added = list.some((d) => !prevSerials!.has(d.serial));
-        const removed = [...prevSerials].some((s) => !now.has(s));
-        if (added) playSfx('drive-in');
-        else if (removed) playSfx('drive-out');
-    }
-    prevSerials = now;
-    void onDisksChanged(list);
+    void onDisksChanged(disks || []);
 };
 
 </script>

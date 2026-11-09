@@ -23,6 +23,14 @@ import type { DriveInfo } from '../utils/driveIdentity';
 
 const WM_DEVICECHANGE = 0x0219;
 
+/** `WM_DEVICECHANGE` 的 wParam：只有这两个码代表"设备接入 / 设备移出" */
+const DBT_DEVICEARRIVAL = 0x8000;
+const DBT_DEVICEREMOVECOMPLETE = 0x8004;
+
+/** 同向消息的合并窗：一次插拔会连发 5~8 条，且"卷到达"可能比"设备到达"晚几百毫秒
+ *  ⇒ 窗口给到 1.2s；反向（插 vs 拔）不受限，立刻各响各的 */
+const CLUSTER_MS = 1200;
+
 /** 去抖窗口：滤掉一簇消息，同时给系统留出"开始挂卷"的时间 */
 const DEBOUNCE_MS = 400;
 
@@ -65,8 +73,25 @@ export function watchDiskChanges(win: BrowserWindow): void {
         }
     };
 
-    /** 收到任何设备变化消息：只重置定时器，不当场干活（一簇消息会被并成一次） */
-    win.hookWindowMessage(WM_DEVICECHANGE, () => {
+    /** 插拔音的方向**只能**从消息里拿：盘列表要等系统挂好卷（实测 ~1.2s）才看得见，
+     *  那时候再响早就跟手上的动作脱节了 —— 所以音效走消息，界面刷新仍走盘列表。
+     *  ⚠️ 其余码（尤其 0x0007 DBT_DEVNODES_CHANGED）对所有设备节点都发，必须忽略。
+     *  ⚠️ Electron 把 wParam 递成 **Buffer**，得自己读低 32 位。 */
+    let lastKindAt = 0;
+    let lastKind = 0;
+    win.hookWindowMessage(WM_DEVICECHANGE, (wParam: Buffer) => {
+        if (wParam && wParam.length >= 4) {
+            const kind = wParam.readUInt32LE(0);
+            const now = Date.now();
+            if (kind === DBT_DEVICEARRIVAL || kind === DBT_DEVICEREMOVECOMPLETE) {
+                // 同向合并：一串到达消息只响一次；拔/插交替则各响一次
+                if (kind !== lastKind || now - lastKindAt > CLUSTER_MS) {
+                    lastKind = kind;
+                    lastKindAt = now;
+                    if (!win.isDestroyed()) win.webContents.send('ff-device-change', kind === DBT_DEVICEARRIVAL ? 'in' : 'out');
+                }
+            }
+        }
         if (timer) clearTimeout(timer);
         timer = setTimeout(() => { timer = null; void check(0); }, DEBOUNCE_MS);
     });
