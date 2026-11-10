@@ -60,6 +60,15 @@ export interface SearchCache {
     count: number;
     data: FileInfo[];
     create_at: string;
+    /**
+     * 这份缓存产出时，**目录自己**的 mtime（`stat(dir).mtimeMs`）。
+     *
+     * 用途：「更新读取」拿它做**零内容读**的陈旧探测 —— 每层只 `stat` 一次目录，
+     * 同一层内增 / 删 / 改名 / 加一层文件夹都会更新它，于是没变的层连 `readdir` 都不用做。
+     * 老缓存没有这个字段 ⇒ 判为"不知道" ⇒ 当它变了、重读一次并补上（不需要升 `CACHE_VERSION`，
+     * 与 `srcMtime` 的处理同一条思路）。
+     */
+    dirMtime?: number;
 }
 
 /** 不含 data 的轻量视图。列表和按盘统计只用得到这些 */

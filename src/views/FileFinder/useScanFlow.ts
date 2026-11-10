@@ -8,7 +8,7 @@
  * 后台扫到哪个目录就往那儿写一次，网格会被反复顶掉（方案 §16.1 第 1 条点名的坑）。
  * ⚠️ 与页面只通过 deps 交换：`refreshScreen` 是页面的事（它知道清单屏/目录屏怎么重取）。
  */
-import { ref } from 'vue';
+import { computed, ref } from 'vue';
 import { API_BASE, getAction, postAction } from '@/utils/request';
 import type { WiredFileInfo } from '../../../electron/server/index';
 import type { OpenMode } from 'electron/server/nedb';
@@ -23,14 +23,25 @@ export interface ScanFlowDeps {
     fullPathOf: (item: WiredFileInfo) => string;
 }
 
-export function useScanFlow(deps: ScanFlowDeps) {
+/** 绝对路径拼接（只用于把"缓存里的子目录名"变成待探测的路径，不参与下发给渲染层） */
+const joinAbs = (base: string, name: string) =>
+    `${base.replace(/[\\/]+$/, '')}${/[\\]/.test(base) ? '\\' : '/'}${name}`;
 
+/** 三种扫描。见 `startScan` 的注释 */
+export type ScanMode = 'update' | 'reload' | 'fill';
+
+export function useScanFlow(deps: ScanFlowDeps) {
     /**
-     * 批量扫描「这一片」（P1）。两个入口共用它，`rescan` 是唯一差别：
-     *   · 「补全这一片」→ 只扫还没缓存的目录
-     *   · 「重读这一片」→ 忽略缓存，整片重读一遍
+     * 批量扫描「这一片」（P1）。三个入口共用它，`mode` 是唯一差别：
+     *   · `'update'`「更新读取」→ 当前层逐条精准比对；其余层先探测（每层 1 次 stat），变了才真读
+     *   · `'reload'`「重新读取」→ 忽略缓存，整片每层都真读（改名/大改之后的兜底）
+     *   · `'fill'`  → 已废弃的「补全这一片」，只为兼容旧调用点保留：整片缓存优先
      *
-     * 一句话：把「还没缓存的目录」排队扫完 —— 串行、可取消、带进度、每批让一次。
+     * 一句话：把「还没缓存 / 已经变了的目录」排队扫完 —— 串行、可取消、带进度、每批让一次。
+     *
+     * ⚠️ 为什么 `'update'` 的当前层**总是**真读（noCache）：目录 mtime 只在"条目增删改名"时变，
+     *    就地覆盖同名文件（重新下一个同名片）它是不动的。而当前层是用户此刻正盯着的那一层，
+     *    盲区只在这一层被察觉 ⇒ 把"逐条 stat 对比"这份贵活儿只花在这里，其它层用便宜的 mtime。
      *
      * 为什么要有它：目标树是「80+ 子目录、还嵌套、合计 500–1000 部片子」，一个个点开不现实。
      * 但"主动读"必须**串行 + 分批** —— 这不是性能优化，是硬件保护：2.5″ 移动盘铭牌
@@ -53,6 +64,12 @@ export function useScanFlow(deps: ScanFlowDeps) {
     const SCAN_BATCH = 20;
 
     const scanning = ref(false);
+    /**
+     * 本轮模式。状态条据此说"已扫"还是"已检查" —— 只 `stat` 一层和真读一层是两件事，
+     * 混着说就是骗人（他会拿"已扫 37 个"当成"37 个目录都被重读过"）。
+     */
+    const scanMode = ref<ScanMode>('fill');
+    const scanVerb = computed(() => (scanMode.value === 'update' ? '检查' : '扫'));
     /** 已真扫的目录数。**缓存命中的不算** —— 那种没有碰盘 */
     const scanDone = ref(0);
     /** 待扫的目录数。**动态的**：每展开一层，新发现的子目录就加进来 */
@@ -156,11 +173,13 @@ export function useScanFlow(deps: ScanFlowDeps) {
      * 已缓存的目录下面**仍然可能有没缓存的子目录**，把子树剪掉就永远补不全。
      * （实测：某一层已缓存，而它自己下面还有 2 个子目录从未被扫过。）
      */
-    const startScan = async (rescan: boolean) => {
+    const startScan = async (mode: ScanMode) => {
+        const rescan = mode === 'reload';
         const root = deps.currentPath.value;
         if (!root || scanning.value) return;
 
         scanning.value = true;
+        scanMode.value = mode;
         scanCancelled = false;
         scanOk.value = false;
         cancelling.value = false;
@@ -187,6 +206,8 @@ export function useScanFlow(deps: ScanFlowDeps) {
          * 本轮有没有"因为缺大图而真扫过"某一层 —— 有的话当前屏要重新取一次（走缓存，不碰盘）。
          */
         let retouched = false;
+        /** 本轮真正重读了几层（只有 update 用得上：结束时要报"更新了几个目录"） */
+        let updatedLayers = 0;
         scanPending.value = 1;
         let processed = 0;
 
@@ -198,6 +219,46 @@ export function useScanFlow(deps: ScanFlowDeps) {
 
         try {
             const { serialOf, keys, subtreeRecords } = await fetchScanContext(rootDrive, rootRel);
+
+            /**
+             * 本盘根序列号。只有同一块盘上的目录才走"探针捷径"：跨盘的（junction 指到别的盘）
+             * 序列号对不上，那边直接真读，免得拿错盘的身份去查缓存。
+             */
+            const rootSerial = rootDrive ? serialOf[rootDrive] ?? '' : '';
+            /** abs(小写) → 探测结果。批量预取，每次请求覆盖队列里接下来的一小批 */
+            const probeCache = new Map<string, { changed: boolean; missing: boolean; dirs?: string[]; needsPreview?: boolean }>();
+            const PROBE_BATCH = 24;
+
+            /**
+             * 预取接下来 `PROBE_BATCH` 个目录的"变没变"。
+             * 一次请求探一批（本地回环一次往返几十微秒），比每层发一次请求省得多；
+             * 而每一次探测在服务端只是**一个 stat**，不是读目录内容。
+             */
+            const prefetchProbes = async () => {
+                if (mode !== 'update' || !rootSerial) return;
+                const want: { abs: string; rel: string }[] = [];
+                for (const d of queue) {
+                    if (d === root || probeCache.has(d.toLowerCase())) continue;
+                    const p = splitDrive(d);
+                    if (!p || serialOf[p.drive] !== rootSerial) continue;
+                    want.push({ abs: d, rel: p.relPath });
+                    if (want.length >= PROBE_BATCH) break;
+                }
+                if (!want.length) return;
+                try {
+                    const res = await postAction(`${API_BASE}/probeLayers`, {
+                        serial: rootSerial, mode: 'cover', rels: want.map(w => w.rel),
+                    }) as { rel: string; changed: boolean; missing: boolean; dirs?: string[]; needsPreview?: boolean }[];
+                    const byRel = new Map(want.map(w => [w.rel, w.abs.toLowerCase()]));
+                    for (const r of res ?? []) {
+                        const abs = byRel.get(r.rel);
+                        if (abs) probeCache.set(abs, r);
+                    }
+                } catch {
+                    // 探测失败不影响正确性：没探到就走真读那条路（只是慢一点）
+                }
+            };
+
             const keyOf = (dir: string) => {
                 const parts = splitDrive(dir);
                 if (!parts) return null;
@@ -210,16 +271,49 @@ export function useScanFlow(deps: ScanFlowDeps) {
                 // 半途中断只会留下一个写了一半的缓存
                 if (scanCancelled) break;
 
+                await prefetchProbes();
                 const dir = queue.shift()!;
                 // +1：正在扫的这个也算"待扫"，否则会短暂显示成"待扫 0"
                 scanPending.value = queue.length + 1;
 
                 try {
-                    // 补全模式不带 noCache：命中缓存时服务端只回缓存，不碰盘
-                    let items = await requestFolder(dir, rescan);
                     const dirParts = splitDrive(dir);
                     if (dirParts) {
                         visitedRel.add(dirParts.relPath);
+                    }
+
+                    /**
+                     * 「更新读取」的深层捷径：先探一次（**每层 1 次 stat**），没变就连 readdir 都不做。
+                     * 子目录名单从缓存里拿（服务端 probeLayers 顺带带回来），否则"跳过这一层"
+                     * 就等于"跳过整棵子树"，下面那些没缓存的层永远补不到。
+                     * 当前层不走这条：目录 mtime 探不到"就地覆盖同名文件"，那一层必须逐条比对。
+                     */
+                    const probe = mode === 'update' && dir !== root
+                        ? probeCache.get(dir.toLowerCase())
+                        : undefined;
+
+                    /** 走捷径时它的子目录（绝对路径）；null = 这一层要真读 */
+                    let childPaths: string[] | null = null;
+                    /** 没变但缺大图：补扫一次（旧的「补全」职责，搬到 update 里，否则那批层永远是残的） */
+                    const needPreviewFix = !probe?.changed && !probe?.missing && probe?.needsPreview
+                        && !retried.has(dir.toLowerCase());
+                    if (needPreviewFix) retried.add(dir.toLowerCase());
+
+                    /** 这一层是否已经计入"核对过"—— 三个分支只许数一次，数两遍进度就虚高 */
+                    let counted = false;
+                    if (probe && probe.missing) {
+                        scanDone.value += 1; counted = true; // 目录已经不在，不算失败，只是没东西可扫
+                    } else if (probe && !probe.changed) {
+                        childPaths = (probe.dirs ?? []).map(n => joinAbs(dir, n));
+                        scanDone.value += 1; counted = true; // 只 stat 过，但"核对过"这件事是真的
+                    }
+
+                    if (needPreviewFix) childPaths = null; // 缺大图 ⇒ 放弃捷径，真读这一层
+                    let items: WiredFileInfo[] = [];
+                    if (!childPaths && !(probe && probe.missing)) {
+                        updatedLayers += 1;
+                        // 更新模式/重读模式在这一层都要真读；只有旧的 'fill' 才允许吃缓存
+                        items = await requestFolder(dir, rescan || mode === 'update');
                     }
 
                     // 「补全」现在还欠一样东西：**预览大图**。
@@ -231,22 +325,23 @@ export function useScanFlow(deps: ScanFlowDeps) {
                     // 代价是一次读盘，换来这一层的大图齐全；扫过之后 `previewReady` 就是 true，
                     // 下一轮补全不会再盯上它（而服务端那道闸门也会因此不再重出）。
                     // ⚠️ 每层只补一次：否则"就是生成不出大图"的那些条目会让它被反复重扫。
-                    if (!rescan && !retried.has(dir.toLowerCase())
+                    if (needPreviewFix) retouched = true;
+                    if (mode === 'fill' && !retried.has(dir.toLowerCase())
                         && items.some(it => (it.thumb || it.avatar) && !it.previewReady)) {
                         retried.add(dir.toLowerCase());
                         items = await requestFolder(dir, true);
                         retouched = true;
                     }
 
+                    // 已经数过的（探针那两支）不再数第二遍
                     const key = keyOf(dir);
-                    if (rescan || key === null || !keys.has(key)) scanDone.value += 1;
+                    if (!counted && (rescan || key === null || !keys.has(key))) scanDone.value += 1;
 
-                    for (const item of items) {
-                        // 只认 `type`：是不是目录由服务端用 stat 判定过，不靠名字里有没有点猜
-                        if (item.type !== 'folder') continue;
-
+                    /** 统一的入队口：走捷径时来自缓存名单，走读盘时来自 items */
+                    const children = childPaths
+                        ?? items.filter(it => it.type === 'folder').map(it => deps.fullPathOf(it));
+                    for (const child of children) {
                         // 成环保护：见过的不再入队（见上面 visited）
-                        const child = deps.fullPathOf(item);
                         const norm = child.toLowerCase();
                         if (visited.has(norm)) continue;
                         visited.add(norm);
@@ -294,7 +389,7 @@ export function useScanFlow(deps: ScanFlowDeps) {
         } catch (err) {
             // 连已缓存集合/盘列表都取不到（服务没起来）—— 再往下扫也没意义，直接报错收工
             console.error('[批量扫描] 准备失败:', err);
-            deps.notify('error', rescan ? '重读失败' : '补全失败', String(err));
+            deps.notify('error', rescan ? '重新读取失败' : (mode === 'update' ? '更新读取失败' : '补全失败'), String(err));
             scanOk.value = false;
         } finally {
             scanning.value = false;
@@ -305,12 +400,24 @@ export function useScanFlow(deps: ScanFlowDeps) {
             // 只有"跑到底且没人按取消"才算完成 —— 这两件事在 finally 里都还读得到
             if (!scanCancelled) scanOk.value = true;
 
+            // 「更新读取」必须有回音：他会问"跑了没、跑了多少"。零变化也说一句，
+            // 因为"什么都没变"本身就是一个结论，不是没反应。
+            if (mode === 'update' && !scanCancelled && scanOk.value) {
+                deps.notify(
+                    updatedLayers ? 'success' : 'info',
+                    updatedLayers ? `更新了 ${updatedLayers} 个目录` : '没有需要更新的目录',
+                    `核对了 ${scanDone.value} 个目录${updatedLayers ? `，重读 ${updatedLayers} 个` : ''}`,
+                );
+            }
+
             // 「重读这一片」扫的恰好包含**你正在看的这一层** —— 不刷一下的话网格还是旧的，
             // 看起来像"这个按钮没生效"。
             // ⚠️ 这里**不带 noCache**：刚写好的新缓存就在库里，再真读一次盘是纯浪费，
             // 而"少碰移动硬盘"是这一整批的硬要求。补全模式下当前层本来就有缓存、不会变，所以不刷。
             // 「为了补大图而真扫过」也算内容变了 —— 当前屏不刷一下就看不到新的大图
-            if (rescan || retouched) deps.refreshScreen();
+            // 更新读取也刷：当前层是**逐条比对**过的，改名/覆盖同名盘之后视图必须对上。
+            // 这一下不带 noCache（读的就是刚写好的缓存），零读盘。
+            if (mode !== 'fill' || retouched) deps.refreshScreen();
         }
     };
 
@@ -340,5 +447,5 @@ export function useScanFlow(deps: ScanFlowDeps) {
     const glowKey = ref(0);
 
 
-    return { scanning, scanDone, scanPending, cancelling, scanOk, glow, glowKey, startScan, onScanCancel };
+    return { scanning, scanDone, scanPending, cancelling, scanOk, glow, glowKey, startScan, onScanCancel, scanVerb };
 }

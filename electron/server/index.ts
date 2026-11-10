@@ -1013,6 +1013,9 @@ async function scanAndCache(serial: string, drive: string, relPath: string, mode
         count: data.length,
         data,
         create_at: dayjs().format('YYYY-MM-DD HH:mm:ss'),
+        // 目录自己的 mtime：读完之后再取一次，取到的是"这一轮读期间"的值 ——
+        // 若读的中途有人在往里放文件，这个值会让下一轮判定为"又变了"，宁可多读一次也不漏。
+        dirMtime: await fsasync.stat(fullPath).then(s => s.mtimeMs, () => undefined),
     };
 
     // 如果请求的大小写和真实磁盘大小写不同，先清理旧大小写的缓存
@@ -1040,6 +1043,55 @@ function sendJson(res: http.ServerResponse, body: unknown, status = 200) {
         'Content-Length': Buffer.byteLength(text),
     });
     res.end(text);
+}
+
+/**
+ * 批量陈旧探测（「更新读取」用）：**每层只 `stat` 一次目录**，回答"这层要不要重读"。
+ *
+ * 为什么值得单独一个端点：`openFolder` 是"给我这一层的全部条目"，它必然 `readdir` + 逐条 `stat`
+ * + 可能抽帧。而"这一层变了没"只需要一个目录 mtime —— 拿不到它，整片扫描就只能盲读。
+ * NTFS 上同一目录内增 / 删 / 改名 / 加一层文件夹都会更新目录 mtime，所以这一条信号覆盖了
+ * 绝大多数真实改动，代价是每层 1 次 stat。
+ *
+ * 没变的层顺便把**子目录名单**带回去（来自缓存，零读盘）—— 调用方还要靠它继续往下走，
+ * 否则"跳过这一层"就等于"跳过整棵子树"，那几层永远补不到。
+ *
+ * @returns `[{ rel, changed, missing, dirs? }]`
+ */
+export async function probeLayersController(req: Req, res: http.ServerResponse) {
+    const body = (req.body || {}) as { serial?: string; mode?: OpenMode; rels?: string[] };
+    const serial = body.serial || '';
+    const mode = (body.mode || 'cover') as OpenMode;
+    const rels = (body.rels ?? []).filter(r => typeof r === 'string');
+    if (!serial || !rels.length) return sendJson(res, []);
+
+    // serial → 当前盘符：盘符不是身份（拔了再插会变），所以每次现查，不缓存映射
+    const drive = (await getDrives()).find(d => d.serial === serial);
+    if (!drive) return sendJson(res, rels.map(rel => ({ rel, changed: false, missing: true })));
+
+    const out: { rel: string; changed: boolean; missing: boolean; dirs?: string[]; needsPreview?: boolean }[] = [];
+    for (const rel of rels) {
+        // 纯内存查询：nedb 启动时整库已载入，这里不碰盘
+        const doc = await findCache(serial, rel, mode);
+        const st = await fsasync.stat(toFullPath(drive.drive, rel)).catch(() => null);
+        if (!st) {
+            // 目录已经不在了（或盘刚拔）—— 不当成"变了"，让调用方别再往下钻
+            out.push({ rel, changed: false, missing: true });
+            continue;
+        }
+        // 老缓存没有 dirMtime ⇒ 判"不知道，当它变了"，重读一次就把字段补上（不需要升版本）
+        const changed = !doc || doc.dirMtime === undefined || doc.dirMtime !== st.mtimeMs;
+        out.push({
+            rel, changed, missing: false,
+            dirs: changed ? undefined : doc!.data.filter(i => i.isDirectory).map(i => i.name),
+            // 没变的层里若有"有图但没大图"的条目，调用方要补一手 —— 这个判断在内存里做，零读盘。
+            // 不补的话，2026-10-04 图片出库留下的那批旧层，大图永远补不齐（旧「补全」就是干这个的）。
+            // 判据与 `wire()` 里那个 `previewReady` **同源**：`hasBin` 查的是内存索引（零读盘），
+            // 而 `previewReady` 本身只是下发时算出来的，缓存里并不存它 —— 存的是 `sig`。
+            needsPreview: !changed && doc!.data.some(i => i.sig && !hasBin(previewNameOf(i.sig))),
+        });
+    }
+    return sendJson(res, out);
 }
 
 export async function openFolderController(req: Req, res: http.ServerResponse) {
@@ -2000,6 +2052,7 @@ function route(path: string, handler: (req: Req, res: http.ServerResponse) => un
 
 route('/getHistory', getHistory);
 route('/openFolder', openFolderController);
+route('/probeLayers', probeLayersController);
 route('/thumb', thumbController);
 route('/preview', previewController);
 route('/raw', rawController);

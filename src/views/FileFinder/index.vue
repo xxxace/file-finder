@@ -362,7 +362,7 @@
                         </div>
                     </template>
                     <template v-else>
-                        <span class="scan-progress">已扫 {{ scanDone }} / 待扫 {{ scanPending }}</span>
+                        <span class="scan-progress">{{ scanVerb }} {{ scanDone }} · 待 {{ scanPending }}</span>
                         <n-button size="small" :disabled="cancelling" @click="onScanCancel">
                             {{ cancelling ? '正在取消…' : '取消' }}
                         </n-button>
@@ -489,7 +489,7 @@ import type { Density } from './density';
 import { buildCrumbLayout } from './crumbRows';
 import { dissolveGrid } from './gridDissolve';
 import { decideOpen, isMultiFileCard } from './openDecision';
-import { SearchOutline, RefreshOutline, ArrowBackOutline, CloseOutline, CopyOutline, StarOutline, ChevronForwardOutline, LinkOutline, FolderOpenOutline, CloudDownloadOutline, ImageOutline, PersonOutline, SettingsOutline, ImagesOutline } from '@vicons/ionicons5';
+import { SearchOutline, RefreshOutline, SyncOutline, ArrowBackOutline, CloseOutline, CopyOutline, StarOutline, ChevronForwardOutline, LinkOutline, FolderOpenOutline, CloudDownloadOutline, ImageOutline, PersonOutline, SettingsOutline, ImagesOutline } from '@vicons/ionicons5';
 import { MoreVertical28Filled } from '@/components/icons/fluent';
 import { FlatCards24 } from '@/components/icons/grid';
 import { playSfx } from '@/utils/sfx';
@@ -1523,7 +1523,7 @@ const openHistory = (path: string) => {
  * 批量扫描「这一片」的全部状态与流程 —— 见 useScanFlow.ts。
  * 这里只留一条"扫完怎么刷当前屏"的实现（页面才知道清单屏与目录屏的差别）。
  */
-const { scanning, scanDone, scanPending, cancelling, scanOk, glow, glowKey, startScan, onScanCancel } =
+const { scanning, scanDone, scanPending, cancelling, scanOk, glow, glowKey, scanVerb, startScan, onScanCancel } =
     useScanFlow({
         currentPath,
         notify,
@@ -1575,8 +1575,13 @@ const DIR_ACTIONS: DirAction[] = [
     // ⚠️ 扫描类动作在「挑封面」模式下**也禁用**：它们会把网格重扫一遍，
     // 而状态条那边是 `v-if="scanning || picking"` 且扫描优先 —— 扫描条会把挑选 UI
     // 顶掉（选中的东西还在、但你看不见那个计数和处理按钮了）。
-    { key: 'fill', label: () => '补全这一片', icon: CloudDownloadOutline, disabled: scanLocked },
-    { key: 'rescan', label: () => '重读这一片', icon: RefreshOutline, disabled: scanLocked },
+    // 通用读写操作，按"从轻到重"排。三个名字各说一件事，别让它们互相暗示：
+    //   刷新     = 只重读**你眼前这一层**（F5 同一个动作）
+    //   更新读取 = 整片核对一遍，只重读**变了的**层（每层 1 次 stat；当前层逐条比对）
+    //   重新读取 = 整片每层都真读（兜底：改名/换盘/大改之后）
+    { key: 'refresh', label: () => '刷新', icon: RefreshOutline, disabled: () => scanning.value || !history.value.length || !!readOnlyLevel.value },
+    { key: 'update', label: () => '更新读取', icon: CloudDownloadOutline, disabled: scanLocked },
+    { key: 'reload', label: () => '重新读取', icon: SyncOutline, disabled: scanLocked },
     { key: 'cover', label: () => '补封面', icon: ImageOutline, disabled: () => scanning.value },
     { key: 'avatar-recovery', label: () => '头像回收', icon: PersonOutline, disabled: scanLocked },
     // 「站点规则」= 抓取规则的编辑器（入口 / 动作 / 抽取三段）。它是**系统盘上的配置**，
@@ -1620,15 +1625,19 @@ const runDirAction = (key: string) => {
  * 的理由是"高频动作弹窗会警报疲劳"，而重读是低频 ⇒ 那条理由在这里不成立，门槛没降。
  */
 const onMoreSelect = (key: string) => {
-    if (key === 'fill') {
-        startScan(false);
-    } else if (key === 'rescan') {
+    if (key === 'refresh') {
+        onRefresh();
+    } else if (key === 'update') {
+        void startScan('update');
+    } else if (key === 'fill') {
+        void startScan('fill');
+    } else if (key === 'reload') {
         dialog.warning({
             title: '重读这一片？',
             content: '忽略缓存，把这一片重新读一遍硬盘。',
             positiveText: '重读',
             negativeText: '取消',
-            onPositiveClick: () => { startScan(true); },
+            onPositiveClick: () => { void startScan('reload'); },
         });
     } else if (key === 'cover') {
         // 带上当前路径：多盘机器上「补封面」能直接把正在看的那块盘选好（离线则留空）
