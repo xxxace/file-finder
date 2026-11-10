@@ -30,7 +30,8 @@
  * ## `fileList` 变了怎么办（切目录 / 刷新 / 搜索）
  *
  * **什么都不做**，判据全部派生：
- * -格子不在当前 `fileList` 里 ⇒ `cursorItem` 算出来是 `undefined` ⇒ 模板不画高亮
+ * -格子不在当前 `fileList` 里 ⇒ DOM 里找不到那一格 ⇒ `data-cursor` 打不上 ⇒ 高亮自动消失
+ *  （2026-11-10 起高亮是命令式标记，不再由模板读 `cursorKey` 算 class，见 `cursorMark.ts`）
  * - 这种"野 key"状态下按方向键 ⇒ `posOf` 返回 null ⇒ 走首次激活，落回视口第一行
  *
  * 写成派生而不是"切目录时清空"，是因为**清空是同步代码**：新增第 6 个导航入口
@@ -38,6 +39,7 @@
  */
 import { computed, nextTick, onMounted, onUnmounted, ref, watch } from 'vue';
 import { isGridKeyBlocked } from '@/utils';
+import { useCursorMark } from './cursorMark';
 import { firstVisibleKey, groupRows, posOf, stepPos } from './gridGeometry';
 import type { CellBox, Dir, Pos } from './gridGeometry';
 import type { WiredFileInfo } from '../../../electron/server/index';
@@ -126,12 +128,22 @@ export function useGridCursor(deps: {
     /**
      * 当前格（`keyOf` 的值）。空串 = 未激活。
      *
-     * ⚠️ 它**不需要**在 `fileList` 变化时被清：模板读的是 `cursorItem`，
-     * 野 key 算不出item ⇒ 高亮自动消失（见文件头§「fileList 变了怎么办」）。
+     * ⚠️ 它**不需要**在 `fileList` 变化时被清：高亮是 `data-cursor` 标记（见 `cursorMark.ts`），
+     * 野 key 在 DOM 里找不到那一格 ⇒ 打不上标记 ⇒ 高亮自动消失（见文件头§「fileList 变了怎么办」）。
      */
     const cursorKey = ref('');
 
-    /** 当前格对应的条目。`undefined` = 这一格不在当前这一屏里（含未激活）⇒ **不画高亮** */
+    /**
+     * 光标标记（`data-cursor`）。**这是"高亮画在哪"的唯一出口**。
+     * ⚠️ 2026-11-10 起，模板**不再**读 `cursorKey` 来画高亮 —— 那样每按一次方向键
+     * 都要重渲染整屏卡片；改由这里命令式打标，一个属性写就完了。理由见 `cursorMark.ts` 文件头。
+     */
+    const mark = useCursorMark(() => imageBox.value);
+
+    // 光标一动就搬标记。`flush: 'post'`：等这一拍的 DOM 变更落定再打，避免打到即将被替换的元素上
+    watch(cursorKey, (k) => mark.apply(k), { flush: 'post' });
+
+    /** 当前格对应的条目。`undefined` = 这一格不在当前这一屏里（含未激活）⇒ **不高亮、也没有可打开的东西** */
     const cursorItem = computed(() =>
         cursorKey.value ? fileList.value.find(f => keyOf(f) === cursorKey.value) : undefined,
     );
@@ -532,6 +544,8 @@ export function useGridCursor(deps: {
         // ⚠️ 这个监听挂在 `imageBox` 上（不是 window）⇒ 摘的必须是**同一个元素**。
         // `imageBox.value` 若在卸载时已变成 null，就抓不到那个元素了 ⇒ 缓存引用。
         scrollHost?.removeEventListener('scroll', invalidateRowTops);
+        // 标记也要摘：`KeepAlive` 会把 DOM 留着，不摘会带着旧环进下一次渲染
+        mark.dispose();
     };
 
     // ⚠️ 注册 `onUnmounted` **必须**写在 setup 顶层。写在 `onMounted` 回调内部的那个
@@ -540,7 +554,16 @@ export function useGridCursor(deps: {
     onUnmounted(dispose);
 
     // 列表变了 ⇒ 行结构作废（同一个 key 的坐标可能变了；条目增减也改变了行数）
-    watch(() => fileList.value, invalidateLayout);
+    watch(() => fileList.value, () => {
+        invalidateLayout();
+        /**
+         * ⚠️ 列表换了 ⇒ 元素可能被**整批重建**（换目录、过滤后整屏换掉），
+         * 重建的元素身上没有 `data-cursor` ⇒ 必须补打一次，否则"光标还在、环不见了"。
+         * `nextTick`：此刻 DOM 还是旧的一批。
+         * 幂等：同一格还在时 `refresh` 只是多一次 `querySelector`，无副作用。
+         */
+        void nextTick(() => mark.refresh(cursorKey.value));
+    });
 
     // 列数变了 ⇒ 行结构必然变 ⇒ 整块作废。与上面那条并列，理由见 deps.cols 的注释。
     // 切密度档同理：列数变 ⇒ 每行装几个变 ⇒ 除了失效缓存，还要把光标滚回视口

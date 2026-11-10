@@ -216,17 +216,18 @@
                 <!-- ⚠️ `v-memo`：532 项时每次方向键都会把**整列 vnode** patch 一遍（卡片不是子组件，
                      所有状态都在同一渲染作用域）⇒ 长按发涩、滚动条一顿一顿。memo 里列的是
                      **影响这一格渲染的全部值**，光标移动时只有旧/新两张的数组会变，其余 530 个直接跳过。
-                     ⚠️ 漏依赖的后果是"某处 UI 不跟着变" —— 以后给卡片加新状态时，必须同步加进这个数组。 -->
+                     ⚠️ 漏依赖的后果是"某处 UI 不跟着变" —— 以后给卡片加新状态时，必须同步加进这个数组。
+                     ⚠️⚠️ 2026-11-10：`cursorKey` **已从这个数组里删掉**（连同下面的 `cursor` 类）。
+                     光标现在是 `data-cursor` 标记（`cursorMark.ts`）—— 只要模板还读 `cursorKey`，
+                     每按一次方向键就要重渲染整屏卡片；那笔开销在平铺几千格时是每键 1–3ms，
+                     而屏幕上其实只动了两张卡。**别再加回来**。 -->
                 <div v-for="(item) in fileList" :key="item.dir + '/' + item.name" v-memo="[
                     item, picking && isPickable(item), isPicked(item),
-                    cursorKey === keyOf(item), opening === keyOf(item), plMember.has(keyOf(item)),
+                    opening === keyOf(item), plMember.has(keyOf(item)),
                 ]" class="image-box-item" :class="{
                         pickable: picking && isPickable(item), picked: isPicked(item),
-                        // 焦点（选择器）= 灰白；定位闪烁 = 蓝。三套颜色互不重叠，
-                        // 理由与手法见 `docs/DESIGN-GRID-CURSOR-2026-10-04.md` §五。
-                        // ⚠️ 判据读 `cursorItem`（派生）而不是 `cursorKey` —— `fileList` 一变
-                        // key 就成了野值，读派生量自动不画高亮，不需要任何同步代码去清它。
-                        cursor: cursorItem !== undefined && cursorKey === keyOf(item),
+                        // 光标（选择器）的环**不在这里**：它由 `data-cursor` 属性驱动（CSS 侧写
+                        // `[data-cursor]`），由 `useGridCursor` 命令式打标。见上方 v-memo 那段。
                         opening: opening !== '' && opening === keyOf(item),
                     }" :data-key="keyOf(item)" @click="onItemClick(item)" @dblclick="handleOpen($event, item)"
                     @contextmenu.prevent="onContextMenu($event, item)" :title="item.name + ' ' + getSize(item.size)">
@@ -1789,7 +1790,7 @@ watch([dataSource, gridCols], () => dissolveGrid(imageBox.value), { flush: 'post
 // （传 `Ref` 会拿到创建那一刻的快照恒为 `false`，于是"预览开着时回车要 bail"
 //   静默失效、且没有任何报错）。
 const {
-    cursorKey, cursorItem,
+    cursorKey,
     focusCursor, setCursorKey, noteIntent, dispose: disposeGridCursor,
 } = useGridCursor({
     fileList, keyOf, imageBox,
