@@ -61,7 +61,27 @@ function mkRslt(arr: string[]) {
     return arrRslt;
 }
 
+/**
+ * 结果缓存（按**输入串**记）。
+ *
+ * ⚠️ 为什么非有不可：`filterByName` 在**每个按键**上对它里面的**每一条**调一次
+ * （搜索词以字母开头时走拼音那条判据）。平铺把一屏从几十条变成几千条之后，
+ * 无缓存的 `makePy` 就是"每敲一个字母 × N 次逐字 charCode + 数组拼接 + 笛卡尔展开"。
+ * 命中率很高：键是"名字的前 1~3 个字符"，而搜索词长度在打字过程中不变 ⇒ 同一批
+ * 名字往往共用一个键（`SS` 一个键能覆盖一整屏）。
+ *
+ * ⚠️ 表满就**整表丢掉重建**，不做淘汰算法：键是短字符串、数量级几百，
+ * 重建比维护 LRU 便宜，而且"忘了淘汰"不会变成内存缓慢泄漏。
+ */
+const CACHE_LIMIT = 2048;
+const pyCache = new Map<string, string[]>();
+
 export default function usePinYin(str: string): string[] {
-    return makePy(str);
+    const hit = pyCache.get(str);
+    if (hit) return hit;
+    const out = makePy(str);
+    if (pyCache.size >= CACHE_LIMIT) pyCache.clear();
+    pyCache.set(str, out);
+    return out;
 }
 

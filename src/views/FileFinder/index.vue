@@ -235,26 +235,32 @@
                         <n-spin :size="20" />
                     </div>
                     <!-- 「换封面」模式下单击格子 = 选中/取消（见 onItemClick）。
-                         同时**关掉图片预览** —— 否则一下点下去既弹放大图、又切换选中，两个动作打架。
                          判断"这张糊不糊"靠格子里的图本身（宽松档 310px、紧凑档 147px），不靠点开大图。
-                         ⚠️ 2026-10-04：预览层改由下面那个 `n-image-group` 统一渲染（它才拿得到
-                         prev/next，见组节点的注释）。所以这里**不再传** preview-src /
-                         previewed-img-props / render-toolbar，改成 preview-disabled —— 它是
-                         srcList 模式下**必须**的（有 n-image 子节点就会 throwError）。
-                         "点图才开"的语义靠 `img-props.onClick` 原样保留：n-image 的
-                         `onImgClick` 会先 showPreview()（被 preview-disabled 挡住），再转给 imgProps.onClick
-                         （naive-ui `Image.mjs:99-102`）⇒ 不会双开、也不是 CSS 藏节点。 -->
+                         ⚠️ 2026-10-04 那条"预览层由 n-image-group 统一渲染、所以这里要
+                         `preview-disabled`"的约束**已随 2026-11-10 换原生 `<img>` 消失**：
+                         不再有 `n-image` 子节点，也就没有"srcList 模式下会 throwError"这回事。 -->
                     <!-- 封面块：16:9 定比例、圆角走 `--ff-radius-card`（换回直角只改 token）。
                          比例定死 ⇒ 同一行所有格子等高 —— 这是 `gridGeometry` 分行算法的前提，
                          ⚠️ 绝不能换成"由内容撑高"。 -->
                     <div class="card-cover" :style="coverBackdrop(item)">
-                        <!-- ⚠️ 必须同时判 `thumb`：`thumbUrl(undefined)` 是空串，而 `<img src="">`
-                             会被浏览器当成"当前页面地址"去加载 HTML ⇒ 失败 ⇒ **裂开的图标**。
-                             这正是 webp / 抽帧失败的视频在界面上暴露出来的样子，
-                             缺图不是这张卡的问题，它应该退到下面的类型图标。 -->
-                        <n-image v-if="(item.type === 'image' || item.type === 'video') && !!item.thumb" class="can-preview"
-                            :src="thumbUrl(item.thumb)" :img-props="{ onClick: () => openPreview(item) }" :alt="item.dir"
-                            :lazy="true" objectFit="contain" preview-disabled />
+                        <!-- ⚠️ 2026-11-10 渲染层优化：图片/视频封面改用**原生 `<img>`**。
+                             原来这里是 `n-image`：一张卡 = 一个组件实例 + 一套 props/watch +
+                             一个 `IntersectionObserver`。平铺（从任意层向下）把卡片数从"几十"
+                             变成"几千"时，这一项是挂载与内存里最贵的部分；而原生
+                             `loading="lazy" decoding="async"` 干的是**同一件事**（进视口才解码），
+                             还不占 Vue 实例。
+                             ⚠️ **不挂 `.stop`**：点封面 = 开大图 + **继续冒泡给卡片**
+                             （`.image-box-item` 的 `@click` 在「换封面」模式里是选中/取消，
+                             它顺手把刚弹出的预览关掉 —— 那正是"两个动作打架"的既有解法）。
+                             加了 `.stop` 会让"此刻正在挑封面"静默失效。
+                             ⚠️ 目录的脸（`.card-avatar`）**仍是 `n-image`**：它那套
+                             `preview-disabled` + 70%/100% `transform` 语义不值得为它重写，
+                             而且平铺结果里根本没有目录条目（只摊叶子），换了是零收益。
+                             ⚠️ 必须同时判 `item.thumb`：`thumbUrl(undefined)` 是空串，而
+                             `<img src="">` 会被浏览器当成"当前页面地址"去加载 HTML ⇒ 裂图。 -->
+                        <img v-if="(item.type === 'image' || item.type === 'video') && !!item.thumb"
+                            class="card-img can-preview" :src="thumbUrl(item.thumb)" :alt="item.dir"
+                            loading="lazy" decoding="async" @click="openPreview(item)" />
                         <!-- 目录的脸：不挑封面时缩到 70%（密网格里 100% 太抢眼），
                              「换封面」模式下放到 100% 才看得清。缩放走 `.card-avatar` 的
                              `transform`（不是内联宽高）—— 理由见样式里那段注释：

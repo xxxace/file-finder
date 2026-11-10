@@ -119,10 +119,24 @@
             pointer-events: none;
         }
 
-        /* ⚠️ 必须 `:deep()`：`<img>` 是 naive-ui 的 `n-image` 内部节点，**拿不到本组件的
-           scoped 属性** ⇒ 写成 `.card-cover img` 会编译成 `img[data-v-x]`，一条都命中不了，
-           图片就按原始尺寸贴在左上角（主人 2026-10-21 截图报的"图片没居中"就是这个）。
-           旧代码用的是 `&:deep(img)`，我重写时丢了这层。 */
+        /* ⚠️ 2026-11-10：图片/视频封面已换成原生 `<img class="card-img">`（见模板注释），
+           尺寸规则于是**直接写在这个类上**，不再需要 `:deep` —— 它是本组件的节点，带 scoped 属性。
+           宽高都撑满 + `contain` + `object-position:center`：
+           比例不一致时**上下或左右留白，但图始终居中**（留白由封面底色兜住）。 */
+        .card-img {
+            position: relative;
+            z-index: var(--z-cover-img);
+            display: block;
+            width: 100%;
+            height: 100%;
+            object-fit: contain;
+            object-position: center;
+            transition: transform .25s ease;
+        }
+
+        /* 目录的脸**仍然是 `n-image`**（它要 `preview-disabled` + 70%/100% 那套 `transform`），
+           而 naive 内部的 `<img>` 拿不到本组件的 scoped 属性 ⇒ 下面两条必须留 `:deep`。
+           ⚠️ 别再给图片/视频封面写 `:deep(.n-image)`：那类卡片里已经没有这个节点了。 */
         :deep(.n-image) {
             position: relative;
             z-index: var(--z-cover-img);
@@ -130,8 +144,6 @@
             height: 100%;
         }
 
-        /* 宽高都撑满 + `contain` + `object-position:center`：
-           比例不一致时**上下或左右留白，但图始终居中**（留白由封面底色兜住）。 */
         :deep(.n-image img) {
             display: block;
             width: 100%;
@@ -220,6 +232,8 @@
 
     /* hover：图轻微放大 + 标题变蓝，**不加边框不加底色** */
     &:hover {
+        /* 两条都要：`.card-img` = 图片/视频封面（原生 img），`:deep(.n-image img)` = 目录的脸 */
+        .card-img,
         :deep(.n-image img) {
             transform: scale(1.03);
         }
@@ -254,13 +268,11 @@
 
     /*
      * 可预览的图（模板里挂 `class="can-preview"`）要保留"能点"的手势提示。
-     * 为什么得补这一行：预览层改由 `n-image-group` 渲染后，网格里的 n-image 一律
-     * `preview-disabled`，而 naive-ui 的 `.n-image` 只在**没** disabled 时给 `cursor: pointer`
-     * （`image/src/styles/index.cssr.mjs` 的 `cNotM("preview-disabled", "cursor: pointer")`）。
-     * 点开预览的行为本身由 `img-props.onClick` 接走（见模板注释），这里只补回视觉。
-     * 目录的脸不该有这行 —— 它本来就不给点开，所以靠 `can-preview` 这个类区分，不是全靠 disabled。
+     * ⚠️ 2026-11-10：这个类现在挂在**原生 img** 上（图片/视频封面），不再是 `.n-image`
+     * —— 原来的 `.n-image.can-preview` 已经一条都命中不到了。
+     * 目录的脸不该有这行 —— 它本来就不给点开，靠 `can-preview` 这个类区分。
      */
-    .n-image.can-preview {
+    .card-img.can-preview {
         cursor: pointer;
     }
 

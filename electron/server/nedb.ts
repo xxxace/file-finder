@@ -632,7 +632,12 @@ export function mergeSubtreeBytes(
  * 1. 路径边界：baseRel 为空表示盘根（包含所有该盘记录）；非空时匹配 relPath === baseRel 或 relPath.startsWith(baseRel + '/')
  * 2. 过滤目录：it.type !== 'folder' && !it.isDirectory
  * 3. 去重：按 `${it.dir}/${diskNameOf(it)}`（不区分大小写）
- * 4. 排序：按 name 自然序升序（数字分段排序，如 SSNI-01 排在 SSNI-02 之前）
+ * 4. 顺序：**不排序**。按每个目录**自己的条目顺序**（= 读盘时那一层的原序）**原地**展开 ——
+ *    父层第 k 条是目录，就当场把它下面的摊完、再回父层继续（in-place DFS：
+ *    `[3, [1,2,4], [5,7], 9]` → `3,1,2,4,5,7,9`）。
+ *    这就是"按它们实际原本的位置排队"：谁在盘上排第几，平铺出来还是第几。
+ *    ⚠️ 原来这一条写的是"按 name 自然序升序（数字分段排序）"——**实现里从来没有排序**，
+ *    那是文档说谎。2026-11-10 业主核对：要的就是盘上原序，**不要**按名字重排。
  */
 export function mergeSubtreeLeafItems(
     rows: SearchCache[],
