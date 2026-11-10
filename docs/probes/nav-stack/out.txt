@@ -1,0 +1,19 @@
+PASS  空栈：current 为 undefined
+PASS  空栈：hasAny / canBack / canForward 全 false
+PASS  push 三屏：当前是最后一屏 C
+PASS  push 后 canBack=true / canForward=false
+PASS  step(-1) 两次回到 A
+PASS  A 处再 step(-1) 返回 undefined（越界）
+PASS  越界后当前屏仍是 A（index 没被压坏）
+PASS  step(1) 两次回到 C
+PASS  C 处 step(1) 返回 undefined（尾巴尽头）
+PASS  在 A 处 push X 后当前是 X
+PASS  截断：canForward 立刻变 false
+PASS  截断：step(1) 落到 undefined（B / C 真的没了）
+PASS  截断：A 仍在（step(-1) 回到 A）
+PASS  replaceCurrent 改 path 且不新增历史
+PASS  reset 后回到空栈
+PASS  离开 Q 后：P 是当前，Q 在前进尾巴里
+PASS  离开 Q 那一刻的快照记在 Q 上（不是记在 P 上）
+
+PASS  全部 17 条断言通过
