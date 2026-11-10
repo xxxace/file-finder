@@ -242,7 +242,14 @@
                     <!-- 封面块：16:9 定比例、圆角走 `--ff-radius-card`（换回直角只改 token）。
                          比例定死 ⇒ 同一行所有格子等高 —— 这是 `gridGeometry` 分行算法的前提，
                          ⚠️ 绝不能换成"由内容撑高"。 -->
-                    <div class="card-cover" :style="coverBackdrop(item)">
+                    <!-- ⚠️ 2026-11-10：**不再**用 `:style="coverBackdrop(item)"` 预置模糊底。
+                         那一行把 `--cover-src: url(...)` 写进每一张卡，而它是 CSS
+                         `background-image` —— **背景图没有 lazy**：样式一解析就发请求，
+                         一屏 500 张卡就在打开瞬间打 500 个 `/thumb`（业主在 DevTools 里看到的）。
+                         `loading="lazy"` 省下的全被它抵消。
+                         现在由 `onCoverLoad`（图片自己加载完之后）再写这个变量，
+                         而同一张图的字节已经在 HTTP 缓存里 ⇒ **零额外请求**。 -->
+                    <div class="card-cover">
                         <!-- ⚠️ 2026-11-10 渲染层优化：图片/视频封面改用**原生 `<img>`**。
                              原来这里是 `n-image`：一张卡 = 一个组件实例 + 一套 props/watch +
                              一个 `IntersectionObserver`。平铺（从任意层向下）把卡片数从"几十"
@@ -260,13 +267,14 @@
                              `<img src="">` 会被浏览器当成"当前页面地址"去加载 HTML ⇒ 裂图。 -->
                         <img v-if="(item.type === 'image' || item.type === 'video') && !!item.thumb"
                             class="card-img can-preview" :src="thumbUrl(item.thumb)" :alt="item.dir"
-                            loading="lazy" decoding="async" @click="openPreview(item)" />
+                            loading="lazy" decoding="async" @load="onCoverLoad" @click="openPreview(item)" />
                         <!-- 目录的脸：不挑封面时缩到 70%（密网格里 100% 太抢眼），
                              「换封面」模式下放到 100% 才看得清。缩放走 `.card-avatar` 的
                              `transform`（不是内联宽高）—— 理由见样式里那段注释：
                              这是**布局动画 vs 合成动画**的区别，一屏几百个目录时差一整条街。 -->
                         <n-image v-else-if="!!item.avatar" class="card-avatar" :src="thumbUrl(item.avatar)"
-                            :alt="item.dir || ''" :lazy="true" objectFit="contain" preview-disabled />
+                            :alt="item.dir || ''" :lazy="true" objectFit="contain" preview-disabled
+                            :img-props="{ onLoad: onCoverLoad }" />
                         <img v-else-if="item.type === 'folder'" :src="folderIcon" :alt="item.dir || ''" class="folder-face">
                         <!-- 类名必须小写：`fiv-icon-*` 是**大小写敏感**的 CSS 类，
                              而盘上有大写扩展名的文件（实测库里有 `.MOV`）⇒ `fiv-icon-MOV` 匹配不到任何图标。 -->
@@ -928,10 +936,24 @@ const getSize = (size: number | undefined) => formatBytes(size);
  *
  * 走 CSS 变量 + `::before`（见样式块）：不新增 DOM 节点，同一张图命中浏览器缓存、**不额外请求**。
  * 没有图的目录不设这个变量 ⇒ 保持原来的底色 + 文件夹图标。
+ *
+ * ⚠️⚠️ **2026-11-10 的关键修正：这个变量必须在图片本身加载完之后才写，不能预置。**
+ * 原来模板里是 `:style="coverBackdrop(item)"` —— 也就是给**每一张**卡都提前写上
+ * `--cover-src: url(...)`。而它是 CSS `background-image`，**背景图没有 `loading="lazy"`**：
+ * 样式一解析浏览器就发请求 ⇒ 打开一屏 500 张卡 = **瞬间 500 个 `/thumb`**，
+ * 不管它们在不在视口里（业主在 DevTools 网络面板里数出来的）。
+ * `<img loading="lazy">` 省下的请求被这一行全部抵消，而且它还多占一份解码内存。
+ * ⇒ 现在由 `@load` 把**已经下载完的那张**写回去：字节已在 HTTP 缓存里 ⇒ **零额外请求**；
+ *    没进视口的卡连 `<img>` 都不加载，自然也就没有模糊底（那片显示卡片底色，正确）。
+ * ⚠️ 直接改 DOM（`style.setProperty`）而不是动响应式状态：一屏几百张卡，每张过一次
+ *    重渲染毫无必要；这个变量也没有第二个读者。
  */
-const coverBackdrop = (item: WiredFileInfo) => {
-    const key = item.thumb || item.avatar;
-    return key ? `--cover-src: url("${thumbUrl(key)}")` : undefined;
+const onCoverLoad = (e: Event) => {
+    const img = e.target as HTMLImageElement | null;
+    // 走 closest：目录的脸是 `n-image`，它的 `<img>` 外面还套一层 `.n-image`
+    const cover = img?.closest<HTMLElement>('.card-cover');
+    if (!img || !cover) return;
+    cover.style.setProperty('--cover-src', `url("${img.currentSrc || img.src}")`);
 };
 
 /**
