@@ -55,6 +55,31 @@ const go = (key: RailKey) => {
     overflow: hidden;
     background: var(--ff-bg);
     color: var(--ff-text-1);
+    /* 启动入场：与 preload 覆盖层的淡出（320ms）交叉成一次溶解。
+       .shell 是 App 根、只挂载一次 ⇒ 天然只跑一次，KeepAlive 切页不触发。
+       ⚠️ transform 只在动画期间存在，结束帧是 none —— 不给子元素留下
+       fixed 定位的 containing block（浮层都 teleport 到 body，本就够不着，双保险）。 */
+    animation: shell-enter 420ms cubic-bezier(0.19, 1, 0.22, 1) both;
+}
+
+@keyframes shell-enter {
+    /* ⚠️ 只能从上方落下（-8px）：transform 后的元素仍参与可滚动溢出计算，
+       且溢出只向正方向（下/右）累积 —— .shell 恰好 100vh，向下位移 8px
+       会让 body 短暂多出可滚区 ⇒ 载入时滚动条一闪而过。向上不算溢出。 */
+    from {
+        opacity: 0;
+        transform: translateY(-8px) scale(0.985);
+    }
+    to {
+        opacity: 1;
+        transform: none;
+    }
+}
+
+@media (prefers-reduced-motion: reduce) {
+    .shell {
+        animation: none;
+    }
 }
 
 .shell-body {
