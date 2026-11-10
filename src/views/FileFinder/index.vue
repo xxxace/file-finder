@@ -10,24 +10,34 @@
                  同一个 key（`key: 1`），而这一组的子元素个数是**会变**的（v-for + 折叠占位），
                  一变就会重复 key、错位复用节点（docs/FIX-2026-09-24-nspace-duplicate-keys.md）。
                  ⚠️ 槽里每个子项都必须有 key（TransitionGroup 的进出场按 key 认人）。 -->
-            <!-- 左侧三颗：起点 / 返回·清空 / 刷新（2026-11-08 顶栏升级）。
-                 ⚠️ 它们**刻意不放进 TransitionGroup** —— 本版最重要的一条结构决定：
-                 面包屑"零位移"的前提是「排在变动点右边的东西必然被推着走」；
-                 把常驻按钮挪出槽之后，槽里只剩面包屑，这条约束就退化成"只多一段 / 只少一段"，
-                 干扰源被直接删掉。顺序抄 Windows 资源管理器 / Chrome：`[←][→][↻][地址栏]`。
+            <!-- 左侧四颗：起点 / 后退 / 前进 / 刷新（2026-11-10 双向导航）。
+                 ⚠️ 它们**刻意不放进 TransitionGroup** —— 面包屑"零位移"的前提是
+                 「排在变动点右边的东西必然被推着走」；常驻按钮挪出槽之后，槽里只剩面包屑，
+                 这条约束就退化成"只多一段 / 只少一段"，干扰源被直接删掉。
+                 顺序抄 Windows 资源管理器 / Chrome：`[←][→][↻][地址栏]`。
 
-                 ⚠️ 返回/清空 = **一颗按钮，只换图标**（原来是"两个同宽的中文词"）。
-                 换成图标反而更稳：28px 方格定宽 ⇒ 换字形连 1px 都不动。
-                 栈底（history === 1）画 `⨯` 走 `clearNav`（业主 2026-10-05：栈底也得有出口）；
-                 history === 0（还没选根）**置灰常驻**，不再 `v-if` 消失 ——
-                 它一出现/消失就会把整条面包屑推走 ~60px，正是这次要修的那类跳动。 -->
+                 ⚠️ 后退 / 前进**两颗都常驻、不 `v-if`**，只在无路可走时置灰：
+                 按钮一出现/消失就把整条面包屑推走 ~32px，正是 2026-11-08 修掉的那类跳动。
+                 28px 方格定宽 ⇒ 换字形（`←` / `⨯`）连 1px 都不动。
+
+                 ⚠️ 2026-11-10 裁决：原来那套"末尾一颗按 `history.length` 三态变形
+                 （`←` 返回 → `⨯` 清空 → 空栈置灰）"**已撤**。加了前进之后
+                 "后退不可用"与"该清空了"是两件事，一颗按钮表达不了。
+                 ⇒ 「清空导航历史」搬到 `⋯` 菜单（出口没消失，只是搬家）。 -->
             <div class="nav-btns">
                 <FolderSelector ref="folderSelector" v-model="dir" label="请选择文件夹" keys="D" @change="setRoot" />
-                <n-button size="small" :disabled="!history.length" :aria-label="navBtnText"
-                    v-tip="navBtnTip"
-                    @click="onNavBtn">
+                <n-button size="small" :disabled="!canBack" aria-label="返回上一屏"
+                    v-tip="canBack ? '返回上一屏（Backspace）' : '没有上一屏了'"
+                    @click="onBack">
                     <template #icon>
-                        <n-icon :component="navBtnIcon" />
+                        <n-icon :component="ArrowBackOutline" />
+                    </template>
+                </n-button>
+                <n-button size="small" :disabled="!canForward" aria-label="前进到下一屏"
+                    v-tip="canForward ? '前进到下一屏（Alt+→）' : '没有下一屏'"
+                    @click="onForward">
+                    <template #icon>
+                        <n-icon :component="ArrowForwardOutline" />
                     </template>
                 </n-button>
                 <!-- 刷新住在导航区、不搬去动作区：它重读的是**当前这个位置**，
@@ -487,9 +497,11 @@ import './crumb-motion.css';
 import { colsOf, loadDensity, saveDensity } from './density';
 import type { Density } from './density';
 import { buildCrumbLayout } from './crumbRows';
+import { useNavStack } from './useNavStack';
+import type { NavEntry } from './useNavStack';
 import { dissolveGrid } from './gridDissolve';
 import { decideOpen, isMultiFileCard } from './openDecision';
-import { SearchOutline, RefreshOutline, SyncOutline, ArrowBackOutline, CloseOutline, CopyOutline, StarOutline, ChevronForwardOutline, LinkOutline, FolderOpenOutline, CloudDownloadOutline, ImageOutline, PersonOutline, SettingsOutline, ImagesOutline } from '@vicons/ionicons5';
+import { SearchOutline, RefreshOutline, SyncOutline, ArrowBackOutline, ArrowForwardOutline, CopyOutline, StarOutline, ChevronForwardOutline, LinkOutline, FolderOpenOutline, CloudDownloadOutline, ImageOutline, PersonOutline, SettingsOutline, ImagesOutline } from '@vicons/ionicons5';
 import { MoreVertical28Filled } from '@/components/icons/fluent';
 import { FlatCards24 } from '@/components/icons/grid';
 import { playSfx } from '@/utils/sfx';
@@ -514,47 +526,6 @@ import type { OpenMode } from 'electron/server/nedb';
  * ⚠️ 路径**必须带 `.mjs`**：本项目 `resolve.extensions` 没有 `.mjs` ⇒ 不带连 dev 都解析不了。
  */
 import { imageContextKey } from 'naive-ui/es/image/src/interface.mjs';
-
-/**
- * 一屏的历史条目。
- *
- * ⚠️ 这三样原来分散在**三个地方**：`openStack` 的元素（`name`/`mode`/`scrollY`）、
- * `searchStack` 数组（搜索词），以及"两个数组长度必须差 1"这个**没有任何类型约束的隐式不变量**。
- * 合并成一个对象之后，"索引对齐错"在结构上不可能发生。
- *
- * **位置不进这里** —— 面包屑由 `ancestorsOf(currentPath)` 现算（纯函数）。
- * 这是本轮的核心：位置可推导、历史不可推导，两者共用一个数组时，
- * 逐层下钻看不出问题，**一旦跳转就必然分叉**（详见 `docs/DESIGN-NAV-2026-09-30.md` §2）。
- */
-export interface NavEntry {
-    path: string;
-    /**
-     * 三层入口（选根 / 网格下钻 / 缓存跳转）**一律用 `'cover'`**。
-     * 保留这个字段是为了不动 `fetchFolder` 的签名 —— 服务端的 `folder`（无封面收敛）模式
-     * 是真实存在的能力，删它是删能力，不是删死代码。
-     */
-    mode: OpenMode;
-    /** 坐在这一屏时搜索框里的词 —— 返回时恢复（原来的 `searchStack`） */
-    searchText: string;
-    /** 离开这一屏时的滚动位置 —— 返回时恢复（原来是挂在 `openStack` 元素上的可选字段） */
-    scrollY: number;
-    /**
-     * 离开这一屏时选择器停在哪一格（keyOf 值）—— 返回时恢复。
-     * ⚠️ 存 key 不存坐标：坐标随布局 / 列数变，存坐标得跟着窗口宽度同步（会漏）。
-     * ⚠️ key 不在这一屏里 ⇒ cursorItem 为 undefined、不画高亮，
-     * 下一��方向键自动重新激活 —— 这条派生链已经在了（`useGridCursor` 文件头）。
-     */
-    cursorKey: string;
-    /**
-     * 清单屏标识（2026-10-21 收藏分类）。非空 = 这一屏是某个清单的详情。
-     *
-     * 为什么不复用 `mode`：`OpenMode` 是**服务端缓存模式**的枚举（'cover' | 'folder'），
-     * 清单不是一种缓存模式，混进去会污染那个类型、也会让 `fetchFolder` 的签名说谎。
-     * path 同时写成 `@pl:<id>` —— 两者**同进同退**：取数按 `pl` 分派，
-     * 面包屑/返回只认 path（nav 栈里流动的只有 path 一个字符串的既有纪律不变）。
-     */
-    pl?: { id: string; name: string };
-}
 
 // 与 electron/server/videoExt.ts 的 VIDEO_EXT 保持一致（渲染层不能 import server，保留正则副本）。
 // 改了 videoExt.ts 这里要同步改。
@@ -671,21 +642,37 @@ const dataSource = ref<WiredFileInfo[]>([]);
  */
 const fileList = computed(() => filterByName(dataSource.value, searchText.value));
 /**
- * 导航的**唯一状态**：历史（去过哪些屏）。每屏一个对象。
+ * 导航的**唯一状态**：历史（去过哪些屏）+ 游标。模型在 `useNavStack.ts`，本页只消费。
  * 为什么不留 `name`：面包屑的文字由 `ancestorsOf(currentPath)` 给（见 utils），
  * 一份数据只留一个来源。
+ *
+ * ⚠️ `snapshot` 传**函数**：`scrollY` 要读容器 DOM、另两样是本页的 ref，
+ * 而本行的位置比 `cursorKey`（`useGridCursor` 那块，在文件后半）更靠前 ——
+ * 传值会当场 TDZ。它在"离开某一屏那一刻"才求值。
  */
-const history = ref<NavEntry[]>([]);
+const nav = useNavStack({
+    snapshot: () => ({
+        scrollY: imageBox.value?.scrollTop ?? 0,
+        searchText: searchText.value,
+        cursorKey: cursorKey.value,
+    }),
+});
+/**
+ * ⚠️ 模板**不会**解包 `nav.canBack` 这种成员访问：`:disabled="!nav.canBack"` 里
+ * `!ComputedRef` 恒为 false ⇒ 两颗按钮永远置灰。所以模板只读下面这三个顶层名
+ *（顶层 ref 才会被 `<script setup>` 展开）；脚本里仍然用 `nav.step()` 那一组方法。
+ */
+const { canBack, canForward, hasAny } = nav;
 /**
  * 当前这一屏的路径 —— 「位置」的一切都从它派生。
  * 因为它就是路径本身，所以**不可能**和界面显示的位置不一致（不存状态 ⇒ 不会不一致）。
  */
-const currentPath = computed(() => history.value[history.value.length - 1]?.path ?? '');
+const currentPath = computed(() => nav.current.value?.path ?? '');
 /** 面包屑：从起点到当前的完整链。**纯推导** ⇒ 跳转后自动正确，不需要任何同步代码。 */
 const crumbs = computed(() => {
     // 清单屏：面包屑是「清单 / 名称」两段，不是磁盘路径 —— ancestorsOf 会把
     // `@pl:` 当 UNC 拆成物理上不存在的层级。根段不可点（点它开货架，见 onCrumbClick）。
-    const top = history.value[history.value.length - 1];
+    const top = nav.current.value;
     if (top?.pl) {
         return [
             { name: '收藏', path: '', kind: 'root' as const },
@@ -813,7 +800,7 @@ const emptyTip = computed(() => {
      * 但它同样不该什么都不说 —— 2026-10-05 加了「清空」之后，这条路径是**用户主动点出来**的，
      * 落在纯空白页上会像是把程序点坏了 ⇒ 给"下一步做什么"。
      */
-    if (!history.value.length) return '还没选文件夹 —— 点左上角那个图标选一个';
+    if (!hasAny.value) return '还没选文件夹 —— 点左上角那个图标选一个';
     // 清单屏的空态说的是另一件事：不是"目录里没东西"，是"还没收录过"，
     // 且要告诉用户下一步做什么（照 emptyTip 的既有原则：空态给动作，不给空白）
     if (playlistLevel.value) return '这个收藏夹还是空的 —— 在网格里右键卡片「加入收藏」即可收录';
@@ -842,7 +829,7 @@ const readOnlyLevel = computed(() => isReadOnlyPath(currentPath.value));
  * 判据看 `NavEntry.pl`（导航栈里的显式标记）而不是解析 path 前缀 ——
  * 栈里流动的只有 path 一个字符串，清单屏的身份跟着 entry 走，两边不会不一致。
  */
-const playlistLevel = computed(() => !!history.value[history.value.length - 1]?.pl);
+const playlistLevel = computed(() => !!nav.current.value?.pl);
 
 /**
  * 已收录进**任意**清单的卡片 key 集合 —— 网格左上角星标用。
@@ -957,7 +944,7 @@ const snapshotOf = (item: WiredFileInfo): CardSnapshot => ({
  * 右键菜单的「从收藏夹移除」和扫描收尾都用它：**一份实现**，别各写一遍。
  */
 const reloadCurrentScreen = () => {
-    const cur = history.value[history.value.length - 1];
+    const cur = nav.current.value;
     if (cur) loadScreen(cur);
 };
 
@@ -974,7 +961,7 @@ const {
     fileNameOf,
     fullPathOf,
     // 清单屏才有 pl（NavEntry 派生），非清单屏返回空串 ⇒ 菜单里不出「移除」
-    currentPlaylistId: () => history.value[history.value.length - 1]?.pl?.id ?? '',
+    currentPlaylistId: () => nav.current.value?.pl?.id ?? '',
     reloadCurrent: reloadCurrentScreen,
 });
 
@@ -985,7 +972,7 @@ const {
  * 盘不在（只读层）时 apply 根本写不了，不用刷。
  */
 const refreshAfterApply = () => {
-    const cur = history.value[history.value.length - 1];
+    const cur = nav.current.value;
     // loadScreen 分派：目录屏重取（apply 只可能发生在目录屏），清单屏原样重取（幂等）
     if (cur && !readOnlyLevel.value) loadScreen(cur);
 }
@@ -1070,34 +1057,17 @@ const onCursorConfirm = (item: WiredFileInfo) => {
     }
 };
 /**
- * 离开当前屏之前，把"这一屏的样子"记在**它自己**身上。
- *
- * 记三样：**滚动位置 + 搜索词 + 选择器停在哪**。
- * 原来是"滚动位置写进 `openStack` 的元素、搜索词压进另一个平行的 `searchStack`"，
- * 两处必须同步、长度还得差 1。现在都写在同一个对象上，不可能错位。
- *
- * ⚠️ 2026-10-04 补 `cursorKey`：只恢复滚动、不恢复选择器时，返回后屏幕停在
- * 原来那一屏的中间、选择器却跳回视口第一行 ⇒ **自相矛盾**，比"丢失"更糟
- * （用户会以为程序随机跳格）。见 `NavEntry.cursorKey` 的注释。
- */
-const rememberCurrentScreen = () => {
-    const cur = history.value[history.value.length - 1];
-    if (!cur) return;
-    cur.scrollY = imageBox.value?.scrollTop ?? 0;
-    cur.searchText = searchText.value;
-    cur.cursorKey = cursorKey.value;
-}
-
-/**
  * 进入某一屏：所有导航动作都必须从这里过（记旧屏 → 压新屏 → 归零视口 → 取数 → 词跟着数据落地）。
+ * ⚠️ "记旧屏"已不在本函数里：它和后退/前进共用 `useNavStack` 的 `snapshot`（一份实现，两个方向都适用），
+ * 所以这里只剩 `nav.push()` 一句 —— 别再单独写一遍快照，两份必然漂移。
  * ⚠️ 必须显式归零滚动：NavEntry.scrollY=0 只是数字，容器 scrollTop 不会自己归零 ⇒ 进新屏会停在上一屏的偏移（与面包屑矛盾）。
  * ⚠️ 归零要在取数之前（内容没渲染时 scrollTo 会被 clamp 或作用在旧内容上）。
  */
 const enterScreen = (path: string, mode: OpenMode = 'cover', pl?: NavEntry['pl'], keepFlat?: boolean) => {
-    rememberCurrentScreen();
     // 新的一屏**从零开始**：选择器不继承上一屏的（它属于那一屏，不属于这一屏）
     // pl = 清单屏标记（2026-10-21）：与 path 上的 `@pl:<id>` 前缀同进同退
-    history.value.push({ path, mode, pl, searchText: '', scrollY: 0, cursorKey: '' });
+    // ⚠️ `push` 内部会先拍上一屏的快照，再砍掉"前进尾巴"（在中间位置进新屏的浏览器语义）
+    const entry = nav.push({ path, mode, pl, searchText: '', scrollY: 0, cursorKey: '' });
     isFlatView.value = !!keepFlat;
     isCurrentCacheRoot.value = false;
     /**
@@ -1131,7 +1101,7 @@ const enterScreen = (path: string, mode: OpenMode = 'cover', pl?: NavEntry['pl']
     // 取数（内部会 `++fetchSeq`）⇒ **之后**才读序号，读到的才是"我这次"的号
     // 经 loadScreen 分派：目录屏 /openFolder，清单屏 /playlistItems（唯一出口，见那边注释）
     // `adoptSearch`：这一屏的词由它自己接管，与数据**同一拍**落地（理由见上面那段）
-    const done = loadScreen(history.value[history.value.length - 1], {
+    const done = loadScreen(entry, {
         flat: isFlatView.value, adoptSearch: true,
     });
     const myFetchSeq = getFetchSeq();
@@ -1292,10 +1262,20 @@ const openFile = async (item: WiredFileInfo | string) => {
     if (err) notify('error', '打开失败', err);
 }
 
-const onBack = async () => {
-    if (history.value.length <= 1) return;
-    history.value.pop();
-    const to = history.value[history.value.length - 1];
+/**
+ * 后退 / 前进的**唯一实现** —— 两个方向只差 `delta` 的符号，恢复逻辑一份。
+ *
+ * 原来这里叫 `onBack`，且第一句是 `history.pop()`：**那一屏当场销毁**，
+ * 于是它的 scrollY / 选择器 / 过滤词全没了，"前进"无处可去（2026-11-10 双向导航）。
+ * 现在 `nav.step(±1)` 只移动游标，且**在移动前**替"离开的那一屏"拍快照
+ * ⇒ 后退与前进天然对称，两个方向不必各写一遍。
+ *
+ * ⚠️ 越界（栈底 / 尾巴尽头）时 `step` 返回 `undefined`：静默，什么都不做。
+ *    不许在这里自己算 `index` 边界 —— 那是模型的事。
+ */
+const goStep = async (delta: 1 | -1) => {
+    const to = nav.step(delta);
+    if (!to) return;
     // 恢复这一屏的搜索词 —— **不在这里写**。这是同一个病的方向相反那一半：
     // 提前把词写回去 = 拿**子目录的数据** × **父目录的词** 渲染一次，等数据到了再换。
     // 词与列表必须同一拍 ⇒ 交给 `loadScreen(to, { adoptSearch: true })`，由 `useScreenData.commit()`
@@ -1308,8 +1288,8 @@ const onBack = async () => {
     //
     // ⚠️⚠️ **必须声明"这一屏需要焦点"**（业主 2026-10-04 真机报"回来就不对，没记住"）。
     // `dataSource` 换新会触发 `useGridCursor` 里的指纹 watch，那个 watch 只在
-    // `armed` 为真时才落焦点。而 `armed` 是**一次性**的 —— 进子目录时 `enterScreen`
-    // 调过一次 `noteIntent()`，**返回时没有人再调** ⇒ `armed` 已是 false
+    // `armed` 为真时才落焦点。而 `armed` 是**一次性**的 —— 进子目录那一刻
+    // `noteIntent()` 已经把它消费掉了 ⇒ 走到这里 `armed` 已是 false
     // ⇒ 恢复出来的 key 若不在这屏（`cursorItem` 为 undefined），就**没人补一个焦点**
     // ⇒ 键盘用户在这一屏上完全失能（按方向键会激活，但那得先知道要按方向键）。
     //
@@ -1331,7 +1311,7 @@ const onBack = async () => {
     const myFetchSeq = getFetchSeq();
     await done;
     /**
-     * 恢复滚动位置 —— **无条件执行**，包括恢复成 0（onBack 绕过 enterScreen，
+     * 恢复滚动位置 —— **无条件执行**，包括恢复成 0（goStep 绕过 enterScreen，
      * 容器偏移会一直带着上一屏的）。归零不用等 DOM；恢复非 0 必须先等新屏铺好
      * （判据见 waitForGridOf），否则旧内容上滚成功、回读还一致，新内容一铺上来白搭。
      */
@@ -1364,8 +1344,13 @@ const onBack = async () => {
     }
 }
 
+/** 后退一格（顶栏 ← / Backspace） */
+const onBack = () => goStep(-1);
+/** 前进一格（顶栏 → / Alt+→） */
+const onForward = () => goStep(1);
+
 /**
- * 等新屏真的铺到 DOM 上（onBack 恢复滚动的前置条件）。
+ * 等新屏真的铺到 DOM 上（goStep 恢复滚动的前置条件）。
  *
  * 判据 = **数据第一条 与 DOM 第一条是同一条**：fetchFolder 只保证数据换新，
  * 那一刻量 scrollHeight 还在旧内容上 —— 而旧内容也能滚到那个位置、回读也一致，
@@ -1395,7 +1380,7 @@ const waitForGridOf = async (path: string, maxFrames = 20) => {
          * **返回到哪都停在上一屏的滚动位置**（业主报的"A 返回后停在 B 的高度"）。
          *
          * 孤立证据（探针 `docs/probes/onback-real/` 复现）：
-         * `history` 里记的值是对的（800），但诊断报"未就位" ⇒ 说明问题在判据，不在记录。
+         * `NavEntry` 里记的值是对的（800），但诊断报"未就位" ⇒ 说明问题在判据，不在记录。
          */
         if (first && el && el.dataset.key === keyOf(first)) return true;
     }
@@ -1407,7 +1392,7 @@ const toggleFlatView = async () => {
     if (!canToggleFlat.value || scanning.value) return;
     isFlatView.value = !isFlatView.value;
     playSfx(isFlatView.value ? 'switch-on' : 'switch-off');
-    const cur = history.value[history.value.length - 1];
+    const cur = nav.current.value;
     if (cur) {
         await fetchFolder(cur.path, cur.mode, { flat: isFlatView.value });
     }
@@ -1417,8 +1402,11 @@ const onRefresh = () => {
     // 只读层没有"重读"这回事：它的源就是缓存，盘不在，F5 也读不出新东西。
     // 拦住而不是让服务端静默回一份缓存 —— 静默最坏（用户以为他重读过了）。
     // 清单屏同理：它的源是系统盘上的收录快照，没有"重读硬盘"这个动作。
-    if (loading.value || !history.value.length || readOnlyLevel.value || playlistLevel.value) return;
-    const cur = history.value[history.value.length - 1];
+    // ⚠️ 判据直接问"有没有当前屏"，不再分开写 `!hasAny` —— `hasAny` 是真值判据，
+    //    TS 不会用它收窄 `nav.current.value` ⇒ 那会逼出一处 `cur!`（非空断言掩盖真分支）。
+    if (loading.value || readOnlyLevel.value || playlistLevel.value) return;
+    const cur = nav.current.value;
+    if (!cur) return;
     // F5 = 重新扫盘，要带 noCache 让服务端把这条缓存删掉真去读盘，
     // 不然"刷新"只是把同一份缓存又发了一遍。
     // 搜索词不用管：不带 `search` 就是"同一屏重取" ⇒ 词原样不动（见 useScreenData.commit）
@@ -1435,7 +1423,7 @@ const setRoot = (value: string) => {
     isCurrentCacheRoot.value = false;
     if (!value) {
         dir.value = '';
-        history.value = [];
+        nav.reset();
         // 清掉文件夹选择就该把这个文件夹的内容也清掉，
         // 否则界面上留着上一个目录的东西，而选择框已经空了
         // ⚠️ 这两个写**必须留在同一个块里**（与 useScreenData.commit 同一条纪律：
@@ -1446,10 +1434,10 @@ const setRoot = (value: string) => {
          * ⚠️ `failKind` **必须一起清**（2026-10-05 code review 抓到）。
          *
          * 它描述的是"**当前这一屏**取数失败了"，而上面刚把"当前这一屏"整个拿掉
-         *（`history = []`）⇒ 留着它就是在陈述一个已经不存在的对象。两处后果：
+         *（`nav.reset()`）⇒ 留着它就是在陈述一个已经不存在的对象。两处后果：
          *  ① `banner` 继续显示"移动硬盘不在…插好后按 F5 重读"，而 F5 已因
-         *     `!history.value.length` 被拦掉（见 `onRefresh`）⇒ **文案指向一个不存在的操作**；
-         *  ② `emptyTip` 的守卫把 `loadFailed` 排在 `!history.length` **前面**
+         *     `!hasAny.value` 被拦掉（见 `onRefresh`）⇒ **文案指向一个不存在的操作**；
+         *  ② `emptyTip` 的守卫把 `loadFailed` 排在 `!hasAny` **前面**
          *     ⇒ 那句"还没选文件夹"永远显示不出来 ⇒ 用户落在**纯空白页**上。
          *
          * 缓解面：这条路以前只有 chip 上的 × 走得到；2026-10-05 加了「清空」按钮之后，
@@ -1459,7 +1447,7 @@ const setRoot = (value: string) => {
         return;
     }
     dir.value = value;
-    history.value = [];
+    nav.reset();
     // 首层也用 cover。cover 模式才会对子目录调 handleCover（收敛成封面条目）；
     // 原来首层写的是 folder，而 folder 模式**根本不会调用 handleCover** ——
     // 结果是「封面收敛」只在点进去之后的第二层生效，第一层永远只看到一堆文件夹图标，
@@ -1468,33 +1456,14 @@ const setRoot = (value: string) => {
 }
 
 /**
- * 栈底按钮：清空导航历史，回到"还没选文件夹"的界面。
- * ⚠️ 走既有出口 setRoot('')，别自己发明清栈逻辑；代价是当前视图 + 整个历史 + 搜索词一起重置、不可撤销。
- * ⚠️ 只挂这个显式按钮，绝不绑 Backspace（门槛 ∝ 不可逆 × 波及面）；只重置导航态，不删缓存 / 缩略图 / 扫描结果。
+ * 清空导航历史，回到"还没选文件夹"的界面。
+ * ⚠️ 走既有出口 `setRoot('')`，别自己发明清栈逻辑；代价是当前视图 + 整个历史 + 搜索词一起重置、不可撤销。
+ * ⚠️ 入口是 `⋯` 菜单里那一条（2026-11-10 双向导航之后搬的家，见 `moreOptions`）。
+ *    2026-10-05「栈底也得有出口」那条**没有撤销**：出口还在，只是不再占顶栏那一格 ——
+ *    加了「前进」以后，"后退不可用"与"该清空了"是两件事，一颗按钮表达不了。
+ * ⚠️ 只挂显式入口，绝不绑 Backspace（门槛 ∝ 不可逆 × 波及面）；只重置导航态，不删缓存 / 缩略图 / 扫描结果。
  */
 const clearNav = () => setRoot('');
-
-/* ── 「返回 / 清空」= 同一颗按钮，只换**图标**（2026-11-08 顶栏升级）────────────
- * 原来是"两个同宽的中文词"（`返回` / `清空`），靠字数相同保证宽度不变。
- * 换成 28px 固定方格的图标按钮之后这条约束**更强**：换字形连 1px 都不动，
- * 而 `←` / `⨯` 的形状差异比两个汉字更容易在余光里分辨。
- *
- * 三态（判据是 `history.length` 这个**事实**，不是 `dir` 那个"曾经选过根"的快照）：
- *   >1 → `←` 返回上一屏（`onBack`）
- *   =1 → `⨯` 清空导航历史（`clearNav`）—— 栈底也得有出口（业主 2026-10-05）
- *   =0 → `←` **置灰常驻**：还没选根，无屏可谈。不再 `v-if` 消失 ——
- *        它一出现/消失就把整条面包屑推走 ~60px，正是本版要修掉的那类跳动。
- * ⚠️ Backspace **仍然只走 `onBack`**（栈底是空操作）——
- *    不把清空挂上去，就不会出现"在根层误按退格把视图清掉"。
- */
-const navBtnText = computed(() => (history.value.length > 1 ? '返回' : history.value.length === 1 ? '清空' : '返回'));
-const navBtnIcon = computed(() => (history.value.length === 1 ? CloseOutline : ArrowBackOutline));
-const navBtnTip = computed(() => (history.value.length > 1
-    ? '返回上一屏（Backspace）'
-    : history.value.length === 1
-        ? '清空导航历史，回到选文件夹的界面（缓存不动）'
-        : '还没选文件夹'));
-const onNavBtn = () => (history.value.length > 1 ? onBack() : clearNav());
 
 /**
  * 从缓存记录打开一个目录。**这是一次「跳转」，不是"以它为根"**。
@@ -1570,7 +1539,7 @@ interface DirAction {
     icon: Component;
     disabled: () => boolean;
 }
-const scanLocked = () => scanning.value || picking.value || !history.value.length || !!readOnlyLevel.value;
+const scanLocked = () => scanning.value || picking.value || !hasAny.value || !!readOnlyLevel.value;
 const DIR_ACTIONS: DirAction[] = [
     // ⚠️ 扫描类动作在「挑封面」模式下**也禁用**：它们会把网格重扫一遍，
     // 而状态条那边是 `v-if="scanning || picking"` 且扫描优先 —— 扫描条会把挑选 UI
@@ -1579,7 +1548,7 @@ const DIR_ACTIONS: DirAction[] = [
     //   刷新     = 只重读**你眼前这一层**（F5 同一个动作）
     //   更新读取 = 整片核对一遍，只重读**变了的**层（每层 1 次 stat；当前层逐条比对）
     //   重新读取 = 整片每层都真读（兜底：改名/换盘/大改之后）
-    { key: 'refresh', label: () => '刷新', icon: RefreshOutline, disabled: () => scanning.value || !history.value.length || !!readOnlyLevel.value },
+    { key: 'refresh', label: () => '刷新', icon: RefreshOutline, disabled: () => scanning.value || !hasAny.value || !!readOnlyLevel.value },
     { key: 'update', label: () => '更新读取', icon: CloudDownloadOutline, disabled: scanLocked },
     { key: 'reload', label: () => '重新读取', icon: SyncOutline, disabled: scanLocked },
     { key: 'cover', label: () => '补封面', icon: ImageOutline, disabled: () => scanning.value },
@@ -1596,12 +1565,15 @@ const DIR_ACTIONS: DirAction[] = [
 /**
  * 「更多」下拉的项：disabled 条件与改造前平铺按钮逐条一致，不放宽门槛。
  * 扫描中整组不可用由触发按钮的 :disabled="scanning" 挡住（下拉不弹 = 三项都点不到）。
+ *
+ * ⚠️ 最后一条「清空导航历史」**刻意不进 `DIR_ACTIONS`**：那份清单叫"目录工具动作"，
+ * 与网格右键菜单**共用**同一个数组 —— 把导航动作混进去，右键卡片时就会多出一条
+ * 「清空导航」；那不是"顺带"，那是把两件事缝在一起（2026-11-10 双向导航）。
  */
-const moreOptions = computed(() => DIR_ACTIONS.map((a) => ({
-    label: a.label(),
-    key: a.key,
-    disabled: a.disabled(),
-})));
+const moreOptions = computed(() => [
+    ...DIR_ACTIONS.map((a) => ({ label: a.label(), key: a.key, disabled: a.disabled() })),
+    { label: '清空导航历史', key: 'clearNav', disabled: !hasAny.value },
+]);
 
 /** 右键菜单的目录工具组：label/disabled 求值成普通值供模板渲染 */
 const dirActions = computed(() => DIR_ACTIONS.map((a) => ({
@@ -1651,6 +1623,9 @@ const onMoreSelect = (key: string) => {
         // 再点一次 = 退出（下拉项的文案会跟着变成「退出换封面」）
         if (picking.value) exitPick();
         else enterPick();
+    } else if (key === 'clearNav') {
+        // 不可撤销 × 波及整个历史（当前视图 + 历史 + 搜索词一起重置）⇒ 走既有出口，不自己拼清栈
+        clearNav();
     }
 };
 
@@ -1964,19 +1939,21 @@ const onDisksChanged = async (disks: { serial: string; drive: string }[]) => {
     // 2026-10-21 清单屏：插拔盘只影响"条目在线/离线"与星标 key 的当前形态
     // ⇒ 重取清单 + 刷新收录索引。静默 —— 徽标翻转本身即反馈（不像目录屏那样弹通知，
     // 那一侧是因为"列表内容降级"需要解释，这里没有内容丢失）。
-    const topPl = history.value[history.value.length - 1]?.pl;
+    const topPl = nav.current.value?.pl;
     if (topPl) {
         try { await refreshIndex(); } catch { /* 索引刷新失败不挡着重取清单 */ }
         await fetchPlaylistItems(topPl.id);
         return;
     }
 
-    const top = history.value[history.value.length - 1];
+    const top = nav.current.value;
     if (!top) return;
 
     /** 换掉栈顶那一屏。**替换**而不是 push —— 用户眼里还是同一层，只是它的地址变了 */
     const swapTop = async (path: string) => {
-        history.value.splice(history.value.length - 1, 1, { ...top, path });
+        // 替换**当前这一屏**的地址，不新增历史（用户眼里还是同一层）⇒ 走模型的 replaceCurrent，
+        // 别在这里手写 splice：游标一旦和数组长度分开，任何"按下标改数组"的代码都会让 index 失步。
+        nav.replaceCurrent({ path });
         await fetchFolder(path, top.mode);
     };
 
