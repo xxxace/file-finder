@@ -158,7 +158,25 @@ export function usePreview(deps: {
             .filter(e => !!e.src),
     );
 
-    const previewSrcList = computed(() => previewEntries.value.map(e => e.src));
+    /**
+     * 交给 `n-image-group` 的 `src-list` —— **快照**，不是实时 computed。
+     *
+     * 两条约束同时成立，所以只能这么做：
+     * ① **关着的时候一个都用不上**：实时 computed 挂在模板上 ⇒ 每次换屏、每次按键过滤
+     *    都要把整屏扫三遍（entries / src / index）。平铺几千条时那是纯白干。
+     * ② **关掉的瞬间绝对不能清空**：naive 在淡出那 0.2s 里还要按 `current` 把图算出来，
+     *    空列表 ⇒ `currentUrl=undefined` ⇒ **`<img src=undefined>`** ⇒ 浏览器画那个
+     *    「裂开的图片图标」（2026-11-10 业主报"关预览最后蹦出裂图后"，
+     *    与 `previewOpenState` 那段说的是**同一个**不变量：关只改"开不开"，不毁"第几条"）。
+     *
+     * ⇒ 只在**开**（以及开着时列表变了）的时候刷快照；关时原样留着。
+     */
+    const previewSrcList = ref<string[]>([]);
+    /** 把当前这一屏的图序列拍下来给预览层用 */
+    const snapshotSrcList = () => { previewSrcList.value = previewEntries.value.map(e => e.src); };
+    // 开着的时候列表变了（刷新 / 重扫 / 盘插拔）⇒ 快照跟着换，否则 `current` 会指到错的一格。
+    // ⚠️ 只在**开着**时重拍：关着时去算 `previewEntries` 就是白扫整屏（那正是改成快照的原因）
+    watch(() => fileList.value, () => { if (previewOpenState.value) snapshotSrcList(); });
     /** 当前索引。算不出来（条目没了）= -1 ⇒ 预览层自动关 */
     const previewIndex = computed(() => previewEntries.value.findIndex(e => e.key === previewKey.value));
     /** 正在看的那一条（`{ file, key, src }`） */
@@ -274,6 +292,9 @@ export function usePreview(deps: {
         if (!e) return;
         previewKey.value = e.key;
         syncCursor(e.key);
+        // ⚠️ 必须在翻开关**之前**拍快照：组件的这一拍就会去读 `previewSrcList`，
+        //    晚一步就是"预览打开、图是空的"。**不靠 watch 兜底**，那是两处事实。
+        snapshotSrcList();
         // 开关在这里翻，而不是靠"key 从空变成有值"派生 —— 关的时候 key 是**故意留着**的
         previewOpenState.value = true;
         // 同一条重开也要重新排升级：`watch(previewKey)` 只在 key **变化**时跑，而重开同一条

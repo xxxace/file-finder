@@ -486,11 +486,11 @@
             <PlaylistPicker v-if="plPicker.card" :card="plPicker.card" :item-key="plPicker.key" @added="onPickerAdded"
                 @failed="onPickerFailed" />
         </n-popover>
-        <!-- ⚠️ `previewOpen ? previewSrcList : []` 这个三元不是装饰：预览序列是
-             "对整屏再扫三遍"（entries / src 数组 / 当前索引），而它**关着的时候一个都用不上**。
-             直接绑 `previewSrcList` 会让每次换屏、每一次按键过滤都白扫三遍 ——
-             平铺几千条时那是纯粹的可见延迟。绑空数组时 n-image-group 什么都不做。 -->
-        <n-image-group :src-list="previewOpen ? previewSrcList : []" :current="previewIndex" :show="previewOpen"
+        <!-- ⚠️ `src-list` 绑的是 `usePreview` 里的**快照 ref**（打开预览那一刻拍一张），
+             不是实时 computed —— 预览关着时不必扫整屏三遍（换屏 / 每次按键都省）。
+             ⚠️⚠️ 但**关的时候绝不能清空**：naive 在淡出那 0.2s 里还要按 `current` 算图，
+             空列表 ⇒ `src=undefined` ⇒ 原生裂图（2026-11-10 踩回来的坑，见 `previewSrcList` 的注释）。 -->
+        <n-image-group :src-list="previewSrcList" :current="previewIndex" :show="previewOpen"
             :render-toolbar="previewToolbar" @update:show="onPreviewShowChange"
             @update:current="onPreviewCurrentChange" />
         <!-- 清单 / 缓存 / 站点规则 2026-10-21 起是**独立页**（左轨切换），不再挂在这里。

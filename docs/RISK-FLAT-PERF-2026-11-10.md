@@ -123,7 +123,7 @@ nedb 的 `find` 返回的是副本 ⇒ 6 万条规模下每次平铺多一次十
 |---|---|---|
 | ⑧ | `thumbUrl()` 在模板里每条目每次全量渲染都跑 `encodeURIComponent`（逐字符扫描） | 有界 Map 缓存（4 096，满则整表丢）。缓存整条 URL 安全：`API_BASE` 是常量、`TOKEN` 在模块加载时 `sendSync` 一次取定 |
 | ⑨ | `getSize()` 每张卡每次渲染被调**两次**（`:title` + 角标），每次 `formatBytes` 要循环除 1024 + `toFixed` | 按字节数缓存（2 048） |
-| ⑩ | 预览序列（`previewEntries` / `previewSrcList` / `previewIndex`，三个 O(N)）**预览关着也常驻计算** | 模板绑成 `previewOpen ? previewSrcList : []` ⇒ 关着时不求值 |
+| ⑩ | 预览序列（`previewEntries` / `previewSrcList` / `previewIndex`，三个 O(N)）**预览关着也常驻计算** | **第一版改错了**：把 `src-list` 绑成 `previewOpen ? previewSrcList : []` —— 关的瞬间列表变空，而 naive 在淡出那 0.2s 里还要按 `current` 算图 ⇒ `src=undefined` ⇒ **原生裂图**（业主当晚报回）。**正解**：改成**打开时拍快照**的 ref，关时**原样留着**（同一时刻刷新只在"开着且列表变了"）。见 `usePreview.previewSrcList` 与 §2⑦ 同一条不变量：关只改"开不开"，不毁"第几条" |
 
 ### 5.3 剩下的唯一结构性成本（不是 bug）
 
