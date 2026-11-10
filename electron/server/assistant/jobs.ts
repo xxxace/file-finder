@@ -28,7 +28,7 @@ import { randomUUID } from 'node:crypto';
  * 与 `apply` 分开而不是复用：两者的行形状、并发度、缓存失效口径都不同，
  * 塞进一个 kind 只会让下游到处 `if`。
  */
-export type JobKind = 'grab' | 'challenge' | 'apply' | 'avatar';
+export type JobKind = 'grab' | 'challenge' | 'apply' | 'avatar' | 'frame';
 export type JobStatus = 'running' | 'paused' | 'done' | 'cancelled' | 'error';
 
 export interface JobProgress {
