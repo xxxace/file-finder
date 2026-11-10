@@ -37,6 +37,15 @@ export function useAssistantJob(
             clearInterval(timer);
             timer = null;
         }
+        /**
+         * ⚠️ 谁在 `await trackAndWait(...)`，谁就靠这个 promise 往下走。停轮询时若只是
+         * 把 resolver 丢掉，那个 `async` 会**永远悬挂** —— 人工过验证流程里
+         * `challengeRunning` 会永远停在 true，面板重开按钮还写着"等待人工过验证…"。
+         * 用一个"已取消"的快照收尾，让调用方照常往下走。
+         */
+        const pending = resolveSettled;
+        resolveSettled = null;
+        if (pending && job.value) pending({ ...job.value, status: 'cancelled' });
     };
 
     const apply = (next: JobSnapshot) => {
