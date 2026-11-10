@@ -203,6 +203,13 @@ export function usePreview(deps: {
     const previewOpenState = ref(false);
     const previewOpen = computed(() => previewOpenState.value && previewIndex.value >= 0);
 
+    // ⚠️ 2026-11-11 业主报"停住后预览不再变清晰"（回归）：src-list 快照化时把这条链剪断了 ——
+    // 旧实现绑实时 computed，sharpKey 一变 naive 拿到的就是大图地址；改快照后 sharpKey
+    // 变了快照不知道 ⇒ 永远停在缩略图。补法：升级成大图那一刻（且开着）重拍快照。
+    // 只在"升到非空 sharpKey"时拍：换条目归零不拍（openPreview 本来就拍过，重拍是白扫）；
+    // 关着不拍（快照化的初衷就是关着不扫整屏）。关闭不变量（关时不清快照）不受影响。
+    watch(sharpKey, k => { if (k && previewOpenState.value) snapshotSrcList(); });
+
     /**
      * 关预览层。**只翻开关，不清 `previewKey`** —— 淡出动画那 0.2s 里 naive-ui 还要
      * 照着 `previewKey` 把图算出来（见 `previewOpenState` 那段）。
