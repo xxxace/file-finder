@@ -400,14 +400,29 @@ export function useScanFlow(deps: ScanFlowDeps) {
             // 只有"跑到底且没人按取消"才算完成 —— 这两件事在 finally 里都还读得到
             if (!scanCancelled) scanOk.value = true;
 
-            // 「更新读取」必须有回音：他会问"跑了没、跑了多少"。零变化也说一句，
-            // 因为"什么都没变"本身就是一个结论，不是没反应。
-            if (mode === 'update' && !scanCancelled && scanOk.value) {
-                deps.notify(
-                    updatedLayers ? 'success' : 'info',
-                    updatedLayers ? `更新了 ${updatedLayers} 个目录` : '没有需要更新的目录',
-                    `核对了 ${scanDone.value} 个目录${updatedLayers ? `，重读 ${updatedLayers} 个` : ''}`,
-                );
+            /**
+             * 结束回音。三个动作里**只有「刷新」不需要**：它一层、很快，改完屏幕当场就变了，
+             * 屏幕本身就是回音。另外两个要跑几秒到几分钟，不说话就等于没跑
+             * （主人 2026-11-10：「点了不知道有没有执行」）。
+             *
+             * 三种结局都要说：跑完 / 零变化 / 被取消。零变化也是一句结论，不是没反应。
+             */
+            if (mode !== 'fill') {
+                const isReload = mode === 'reload';
+                if (scanCancelled) {
+                    deps.notify('info', '已终止',
+                        `${isReload ? '重读' : '核对'}了 ${scanDone.value} 个目录，剩下的没动`);
+                } else if (scanOk.value) {
+                    deps.notify(
+                        !isReload && !updatedLayers ? 'info' : 'success',
+                        isReload
+                            ? `重读了 ${updatedLayers} 个目录`
+                            : (updatedLayers ? `更新了 ${updatedLayers} 个目录` : '没有需要更新的目录'),
+                        isReload
+                            ? `整片共 ${scanDone.value} 个目录，已按盘上实况重写`
+                            : `核对了 ${scanDone.value} 个目录${updatedLayers ? `，重读 ${updatedLayers} 个` : ''}`,
+                    );
+                }
             }
 
             // 「重读这一片」扫的恰好包含**你正在看的这一层** —— 不刷一下的话网格还是旧的，
