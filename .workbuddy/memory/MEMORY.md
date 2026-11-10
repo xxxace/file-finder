@@ -34,8 +34,9 @@
 - **没有测试框架** ⇒ 验证三件套：`typecheck` 0 error + `docs/probes/` 只读探针 + 真机目视（**别写 TDD 式假测试**）；证据**必须 `.txt`**；`@media (max-width)` 看 viewport ⇒ 须 `win.setSize()`
 
 ## 五、当前状态（长清单 → appendix-10-05 §二）
+- **11-10 换屏"过滤失效/整份数据闪一下"已修**：`fileList = filterByName(dataSource, searchText)` 两边写入不在一拍（导航同步清词、数据等接口）⇒ 中间渲染「上一屏全量 × 空词」。唯一落点改为 `useScreenData.commit()` 同块写两者，词只由 `loadScreen(entry,{adoptSearch:true})` 携带（仅 enter/back）。`docs/FIX-FILTER-FLASH-ON-NAV-2026-11-10.md`。⚠️ 两个状态决定一个视图 ⇒ 写入必须同拍。
 - **galaxy 进度层（11-08 二轮已从窗口顶部搬进地址槽 `.nav-zone`、铺满整盒；顶部 `n-loading-bar` 保留只加 `visibility:hidden` —— ⚠️ **不能用 display:none／height:0**，否则 `rect` 全归零、进度比例读不到）**：`components/GalaxyLoadingBar/`（Canvas 照抄 `drawPixels`+`drawSparks`；**不接管进度**，每帧读 `.n-loading-bar` 的 rect.width，naive 仍是唯一真相源；ResizeObserver 启停 RAF）+ `tokens.css` 的 `--ff-bar-*`。判据：**空格 + 明暗不一 + 左稀右密**，CSS 每格一样永远不像（前两版 4px 渐变 / 14px 点阵都被否）；光晕必须三层且亮心偏白，否则"死紫"。探针 `probes/galaxy-bar/pattern.mjs`。全文 `docs/FIX-LOADING-BAR-GALAXY-2026-11-08.md`
-- **11-08 面包屑换层"零位移"+ 节奏统一**（八轮，全部探针实测）：详见 `docs/FIX-CRUMB-MOTION-2026-11-08.md`（**万字，改头部件必读**）。要点：角标槽上移 `.nav-zone` 常驻 48px · 退场抄 rect 钉 absolute 再线性淡出 · 当前段删 `n-spin`（顶文字 7px）· `.scan-bar` 挂卸用 `grid-template-rows: minmax(0,1fr)↔minmax(0,0fr)` · 一拍 **200ms + `cubic-bezier(0.19,1,0.22,1)`**（不过冲）+ 拍内分带 · 目录脸用 `transform: scale(.7↔1)` 不用改宽高 · 网格换内容=只动 opacity（`gridDissolve.ts`，绝不碰几何）· 筛选刻意不做 · 帧级探针用 `nextTick` 同步读 `getComputedStyle`（rAF 会丢帧）· 方向键边界滚动单次 smooth/长按瞬时（`e.repeat`），**禁止 CSS `scroll-behavior:smooth`**
+- **11-08 面包屑换层"零位移"+ 节奏统一**（八轮，全部探针实测）：详见 `docs/FIX-CRUMB-MOTION-2026-11-08.md`（**万字，改头部件必读**）。要点：角标槽上移 `.nav-zone` 常驻 48px · 退场抄 rect 钉 absolute 再线性淡出 · 当前段删 `n-spin`（顶文字 7px）· `.scan-bar` 挂卸用 `grid-template-rows: minmax(0,1fr)↔minmax(0,0fr)` · 一拍 **200ms + `cubic-bezier(0.19,1,0.22,1)`**（不过冲）+ 拍内分带 · 目录脸用 `transform: scale(.7↔1)` 不用改宽高 · 网格换内容=只动 opacity（`gridDissolve.ts`，绝不碰几何）· 筛选刻意不做 · 帧级探针用 `nextTick` 同步读 `getComputedStyle`（rAF 会丢帧）· 方向键边界滚动单次 smooth/长按瞬时（`e.repeat`），**禁止 CSS `scroll-behavior:smooth`**。⚠️ **11-10 已取消段数折叠**（`max=4` 是按"槽只占半条顶栏"定的过期常量）：改成全显 + CSS 逐段省略，`docs/DESIGN-CRUMB-NO-FOLD-2026-11-10.md`
 - **11-08 顶栏升级已落地**：44px 单行三段 `[▤][←/⨯][↻] │ 地址槽(--ff-field 填充,30高,flex:1) │ [⌕][▦][⊞] | [⋯]`，全 28×28；搜索 28 图标⇄220 输入（挤压地址槽，两向 transition 走拍内分带）；返回常驻置灰、栈底变 ⨯；刷新搬进导航区；更多移到最右；密度去文字靠 `.is-on` 表档位。⚠️ **Less `.is-open &` 会编译成 `.is-open .toolbar …`（祖先顺序反、静默失效）**，修饰类一律另起全路径规则；⚠️ 槽上的 hover 只能用 `--ff-ctl-on`（深色下 `--ff-ctl-hover` == `--ff-field`）。全文 `docs/DESIGN-HEADER-UPGRADE-2026-11-08.md`
 - **10-29 网格密度三档**（6/8/12，localStorage）：唯一真相源 `FileFinder/density.ts` → `--ff-grid-cols`；`grid` + `repeat(N,minmax(0,1fr))`，列数必须**精确 = N**；窄窗不降档；切档**必须**失效 `useGridCursor` 行缓存（走 `deps.cols`）。`docs/DESIGN-GRID-DENSITY-2026-10-29.md`
 - **10-22 补/换封面暂停·终止·试跑中断**：`jobs.ts` 加 Gate + pause/resume/reopen。`docs/FIX-COVER-PAUSE-2026-10-22.md`
@@ -56,6 +57,7 @@
 视觉去重/以图搜图**砍掉**；盘舰队看板、常驻增量索引**短期不做**；走「功能完善」路线。
 
 ## 八、管理助手（active，只做 JAV）
+- **11-10 补封面两铁律**：「命中」= 能下载且能解码成真 JPEG（`coverImage.ts` 的 `getVerifiedCover()` 是**唯一判据**，grab/preview/apply 共用）；`runApply` **封面落盘成功后才搬视频**，失败⇒盘上零改动。⚠️ 旧版先搬视频后下图 ⇒ 产出 `A/A.mp4` 没封面。`docs/FIX-COVER-FALSE-HIT-2026-11-10.md`
 - 隐藏 BrowserWindow 抓取（不引 puppeteer/cheerio）；站点规则=JSON 候选链；接口 `/assistant/*`；UI=全屏 `n-modal`；apply 后**必须 `removeCache`**；`tmp→rename` 原子写 + `apply.log`
 - `cf_clearance` 绑 IP+UA+TLS ⇒ **不能**走 Node `fetch`，全程 Chromium 网络栈
 - `avatar.jpg`/`cover.jpg` 是**保留名，助手永不写**。降级链：番号→站点封面；认不出→**视频抽帧**；都不行→手动 URL。**禁止**对"认不出"自动乱搜

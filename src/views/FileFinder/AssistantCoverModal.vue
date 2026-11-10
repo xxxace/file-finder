@@ -65,6 +65,7 @@
                         :locked="selLocked"
                         :cover-src="item.coverUrl ? previewSrc(item.coverUrl) : ''"
                         @toggle="toggleCard(item)"
+                        @broken="onCoverBroken(item.key)"
                     />
                 </div>
 
@@ -245,6 +246,20 @@ const scan = ref<ScanResult | null>(null);
 const sel = ref(new Set<string>());
 /** 本批次已写成功的 writeRel —— 跨多次写入累积，重扫才清 */
 const writtenRels = ref(new Set<string>());
+/**
+ * 预览图在浏览器里**加载失败**的卡（`@error`）。
+ *
+ * 抓取时服务端已验过一次，但渲染是另一个时刻（网络/CDN 会变）⇒ 浏览器是唯一能
+ * 观测"这张图此刻能不能显示"的地方。坏掉的卡不许再显示碎图图标、不许报"已抓到"、
+ * 更不许进写入名单（`startApply` 只收 `state==='ok'` 的卡）。
+ */
+const brokenCovers = ref(new Set<string>());
+const onCoverBroken = (key: string) => {
+    if (brokenCovers.value.has(key)) return;
+    const next = new Set(brokenCovers.value);
+    next.add(key);
+    brokenCovers.value = next;
+};
 
 /**
  * 「换封面」入口带来的选中位置。空 = 走「补封面」（扫描找"没有封面的"）；
@@ -292,17 +307,24 @@ const applyRows = computed<ApplyRowLike[]>(() => {
     return out;
 });
 
-const items = computed<CoverItem[]>(() => buildCoverItems(
-    targets.value,
-    grabRows.value,
-    applyRows.value,
-    /**
-     * ⚠️ 这里要的是「**正在**抓」，不是 `isLiveJob`。
-     * `isLiveJob` 把 `paused` 也算活着 ⇒ 暂停后未处理的卡仍停在 `pending` ⇒
-     * 点阵继续转，看起来像"暂停根本没生效"（2026-11-08 主人："暂停没用，loading 依旧播动画"）。
-     */
-    { live: grabJob.value?.status === 'running', selected: sel.value },
-));
+const items = computed<CoverItem[]>(() => {
+    const base = buildCoverItems(
+        targets.value,
+        grabRows.value,
+        applyRows.value,
+        /**
+         * ⚠️ 这里要的是「**正在**抓」，不是 `isLiveJob`。
+         * `isLiveJob` 把 `paused` 也算活着 ⇒ 暂停后未处理的卡仍停在 `pending` ⇒
+         * 点阵继续转，看起来像"暂停根本没生效"（2026-11-08 主人："暂停没用，loading 依旧播动画"）。
+         */
+        { live: grabJob.value?.status === 'running', selected: sel.value },
+    );
+    if (!brokenCovers.value.size) return base;
+    // 只降级"刚抓到"的卡：已写入 / 已失败 / 被拦的卡各有自己的状态，别覆盖
+    return base.map(i => brokenCovers.value.has(i.key) && i.state === 'ok'
+        ? { ...i, state: 'error' as const, badge: '封面取不到', coverUrl: null }
+        : i);
+});
 
 const counts = computed(() => summarize(items.value, sel.value));
 const task = computed(() => buildCoverTask(grabJob.value, applyJob.value, counts.value));
@@ -353,6 +375,7 @@ const applyScanResult = (result: ScanResult) => {
     scan.value = result;
     sel.value = new Set(result.targets.map(t => t.writeRel)); // 默认全选（已锁决策）
     writtenRels.value = new Set();
+    brokenCovers.value = new Set(); // 新的一批 = 新的一批链接，旧的失败标记不许带过来
     detachGrab();
     detachApply();
 };
@@ -428,6 +451,7 @@ const startGrab = async (list?: ScanTargetLike[], appendTo?: string) => {
     const picked = list ?? targets.value.filter(t => sel.value.has(t.writeRel));
     if (!picked.length) return;
 
+    brokenCovers.value = new Set(); // 重抓会拿新链接，旧的"取不到"标记一律作废
     if (!appendTo) {
         detachApply();
         writtenRels.value = new Set();

@@ -19,7 +19,7 @@ export interface ScanTargetLike {
 /** 抓取行的最小集（服务端字段更多，这里只认用得上的） */
 export interface GrabRowLike {
     writeRel: string;
-    status: 'ok' | 'no-id' | 'no-match' | 'blocked' | 'error';
+    status: 'ok' | 'no-id' | 'no-match' | 'blocked' | 'bad-cover' | 'error';
     coverUrl: string | null;
     hitSite?: string | null;
     /** 被哪个站点拦的（「人工过验证」要按站点开窗） */
@@ -92,8 +92,12 @@ export function buildCoverItems(
         cards.set(key, {
             key,
             kind: t.kind,
-            title: t.kind === 'file' ? `${t.query ?? t.name}/`
-                : t.kind === 'cover' ? (t.query || t.name) : `${t.name}/`,
+            // ⚠️ 标题就是名字本身：原来给 dir/file 拼了尾部 `/` 当"这是文件夹"的标记，
+            //    形态本来就由 kindText（新建 / 裸文件 / 覆盖）在说，这个 `/` 冗余且会把
+            //    番号渲染成 `FC2-PPV-1001424/`，像路径片段、像解析错了。它只是显示串：
+            //    query / writeRel 从来不带斜杠（番号来自 t.query 或 parseTitle(t.name)）。
+            title: t.kind === 'file' ? (t.query ?? t.name)
+                : t.kind === 'cover' ? (t.query || t.name) : t.name,
             path: t.dir,
             kindText: kindTextOf(t.kind, 1),
             writeRels: [t.writeRel],
@@ -117,12 +121,17 @@ export function buildCoverItems(
         } else if (!grabs.length) {
             const waiting = opts.live && rels.some(r => opts.selected.has(r));
             card.state = waiting ? 'pending' : 'idle';
-        } else if (grabbed) {
+        // 「命中」必须真的带一张可用链接：服务端已用 getVerifiedCover 验过，
+        // 这里再守一次派生的完整性 —— `ok` 却没有 URL 的行不该被算进 ready（可写入数）。
+        } else if (grabbed && card.coverUrl) {
             card.state = 'ok';
             card.badge = grabbed.hitSite || '已抓到';
         } else if (grabs.some(g => g.status === 'blocked')) {
             card.state = 'blocked';
             card.badge = '被拦';
+        } else if (grabs.some(g => g.status === 'bad-cover')) {
+            card.state = 'error';
+            card.badge = '封面取不到';
         } else if (grabs.some(g => g.status === 'no-id')) {
             card.state = 'noid';
             card.badge = '认不出番号';

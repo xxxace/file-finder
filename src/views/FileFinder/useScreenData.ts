@@ -7,8 +7,9 @@
  *
  * ⚠️ 请求序号只在这里写：过期响应不许写 dataSource、也不许关 loading，
  *    否则最新那次还在飞、转圈却停了。页面读它只走 `getFetchSeq()`。
- * ⚠️ dataSource / loading / failKind 三个 ref 由页面持有（界面到处在读它们），
+ * ⚠️ dataSource / searchText / loading / failKind 四个 ref 由页面持有（界面到处在读它们），
  *    这里只负责写 —— 单一写入点仍然是本模块。
+ *    ⚠️ `searchText` 为什么也归这里写：它必须与 `dataSource` **同一拍**落地，见 `commit()`。
  */
 import { useLoadingBar } from 'naive-ui';
 import { API_BASE, ApiError, getAction } from '@/utils/request';
@@ -18,11 +19,44 @@ import type { WiredFileInfo } from '../../../electron/server/index';
 import { getPlaylistItems } from './playlist';
 import type { PlaylistDetail } from './playlist';
 
-/** 与页面 `NavEntry` 同形（这里只读这三样，别把整个导航条目搬进来） */
+/** 与页面 `NavEntry` 同形（这里只读这四样，别把整个导航条目搬进来） */
 export interface ScreenTarget {
     path: string;
     mode: OpenMode;
     pl?: { id: string };
+    /** 这一屏自己的过滤词。**只在 `adoptSearch` 时被采用**（见 `ScreenLoadOpts`） */
+    searchText?: string;
+}
+
+/**
+ * 换屏时"过滤词要变成什么"，连同"它此刻是什么"一起带上。
+ *
+ * `from` 是**发出这次换屏那一刻**输入框里的词：落地时要拿它确认用户在这段等待里
+ * 没动过输入框 —— 视频抽帧时这段等待以秒计，他完全可能已经打了新词，那时的词
+ * 是对着"他眼下看到的旧屏"打的，我们没有理由把它吞掉。
+ */
+interface SearchAdopt { from: string; to: string }
+
+/** `fetchFolder` 的附加开关（原来第 3、4 个是位置参数；再加一个就没人读得懂调用了） */
+export interface FetchOpts {
+    /** 真去读盘、不用缓存（F5） */
+    noCache?: boolean;
+    /** Flat 平铺视图 */
+    flat?: boolean;
+    /** 换屏：过滤词与列表**同一拍**换掉。不传 = 同一屏重取（刷新 / apply / 换盘降级），词原样不动 */
+    search?: SearchAdopt;
+}
+
+export interface ScreenLoadOpts {
+    /** Flat 平铺视图（只有 `enterScreen` 会传） */
+    flat?: boolean;
+    /**
+     * 这一屏**接管**过滤词：数据落地时与列表同一拍写入 `entry.searchText`。
+     *
+     * ⚠️ 只有「换屏」传（进入 / 返回）；刷新 / apply / 换盘降级是**同一屏重取**，不传
+     *    —— 那几处让词跟着"原地重取"跳一下，等于把用户正在用的筛选抹掉。
+     */
+    adoptSearch?: boolean;
 }
 
 export interface ScreenDataDeps {
@@ -30,6 +64,8 @@ export interface ScreenDataDeps {
     dataSource: { value: WiredFileInfo[] };
     loading: { value: boolean };
     failKind: { value: string };
+    /** 过滤词。写入见 `commit()` —— **不要**在任何导航入口提前写它 */
+    searchText: { value: string };
     /** Flat 视图的两个开关：fetchFolder 会**写**它们（换到非根目录要自动复位） */
     isCurrentCacheRoot: { value: boolean };
     isFlatView: { value: boolean };
@@ -51,7 +87,25 @@ export function useScreenData(deps: ScreenDataDeps) {
      */
     let fetchSeq = 0;
 
-    const fetchFolder = (path: string, mode: OpenMode, noCache?: boolean, flat?: boolean) => {
+    /**
+     * 一屏数据的落点 —— `dataSource` 与 `searchText` 在**同一个同步块**里写完。
+     *
+     * ⚠️⚠️ 为什么必须同一拍（业主 2026-11-10 报「过滤凭空失效、整份数据闪一下」）：
+     *   `fileList = computed(filterByName(dataSource, searchText))`。
+     *   导航时若**先把词清掉**、数据随后才到，中间那段（接口慢就几百毫秒，含视频抽帧时
+     *   以秒计）渲染的是「**上一屏的整份数据 + 空关键词**」⇒ 过滤凭空失效、几百个格子
+     *   刷地铺满，然后才换成新屏。这跟"接口快慢"无关 —— 那段时间**必然存在**，
+     *   只是抽帧把它拉长到肉眼可辨。
+     *   两个写落在同一拍 ⇒ Vue 按组件批一层 ⇒ 只渲染一次（新数据 + 新词），
+     *   中间态**在结构上不存在**。⇒ 所以词不归导航层写，只归这里写。
+     */
+    const commit = (data: WiredFileInfo[], search?: SearchAdopt) => {
+        // 用户在这段等待里改过词 ⇒ 那是他对着**眼下这屏**打的，别覆盖
+        if (search && deps.searchText.value === search.from) deps.searchText.value = search.to;
+        deps.dataSource.value = data;
+    };
+
+    const fetchFolder = (path: string, mode: OpenMode, opts: FetchOpts = {}) => {
         const seq = ++fetchSeq;
         deps.loading.value = true;
         deps.failKind.value = '';
@@ -71,8 +125,8 @@ export function useScreenData(deps: ScreenDataDeps) {
 
         // path 必须编码：中文/空格/&/#/+ 会让 query 被截断或误解析
         let url = `${API_BASE}/openFolder?path=${encodeURIComponent(path)}&mode=${mode}`;
-        if (noCache) url += '&noCache=true';
-        const useFlat = flat ?? (deps.canToggleFlat.value && deps.isFlatView.value);
+        if (opts.noCache) url += '&noCache=true';
+        const useFlat = opts.flat ?? (deps.canToggleFlat.value && deps.isFlatView.value);
         if (useFlat) url += '&flat=true';
 
         // 必须 return：调用方要等数据真的落地才能做后面的事（恢复滚动位置）
@@ -80,7 +134,7 @@ export function useScreenData(deps: ScreenDataDeps) {
             // 过期响应：已经不是最新那次请求了 —— 什么都不做。
             // `loadingBar` 的收尾也要跳过，否则它会替最新那次提前收尾
             if (seq !== fetchSeq) return;
-            deps.dataSource.value = data;
+            commit(data, opts.search);
             loadingBar.finish();
         }).catch(err => {
             if (seq !== fetchSeq) return;
@@ -92,7 +146,8 @@ export function useScreenData(deps: ScreenDataDeps) {
                 : 'other';
             loadingBar.error();
             if (deps.failKind.value === 'notFound') {
-                deps.dataSource.value = [];
+                // 走同一条落地：这一屏已经不存在了，词也不该留成"这一屏的"
+                commit([], opts.search);
             }
             // 取数失败**必须说出来**：原来只有顶部进度条闪一下红，而 dataSource 会保留
             // 上一个目录的列表 —— 面包屑已经切到新目录、格子里却是旧内容，
@@ -113,7 +168,7 @@ export function useScreenData(deps: ScreenDataDeps) {
      * 数据来自系统盘的 playlists.json（服务端逐条判盘在不在，在线给实时路径、
      * 离线给锚点）⇒ **零读盘**。错误形状与 fetchFolder 逐字同构（failKind + 同一条 toast）。
      */
-    const fetchPlaylistItems = (id: string) => {
+    const fetchPlaylistItems = (id: string, search?: SearchAdopt) => {
         const seq = ++fetchSeq;
         deps.loading.value = true;
         deps.failKind.value = '';
@@ -121,7 +176,7 @@ export function useScreenData(deps: ScreenDataDeps) {
 
         return getPlaylistItems(id).then((data: PlaylistDetail) => {
             if (seq !== fetchSeq) return;
-            deps.dataSource.value = data.items ?? [];
+            commit(data.items ?? [], search);
             loadingBar.finish();
         }).catch(err => {
             if (seq !== fetchSeq) return;
@@ -143,9 +198,13 @@ export function useScreenData(deps: ScreenDataDeps) {
      * 责任收在唯一出口之后，第 7 个入口也忘不掉。
      * （onRefresh 有 playlistLevel 守卫、永不到清单屏；onDisksChanged 自己已按屏型分派。）
      */
-    const loadScreen = (entry: ScreenTarget, flat?: boolean) => {
-        if (entry.pl) return fetchPlaylistItems(entry.pl.id);
-        return fetchFolder(entry.path, entry.mode, false, flat);
+    const loadScreen = (entry: ScreenTarget, opts: ScreenLoadOpts = {}) => {
+        // 换屏才携带词（同一拍落地的那个值，见 commit）；同一屏重取不带 ⇒ 词原样不动
+        const search = opts.adoptSearch
+            ? { from: deps.searchText.value, to: entry.searchText ?? '' }
+            : undefined;
+        if (entry.pl) return fetchPlaylistItems(entry.pl.id, search);
+        return fetchFolder(entry.path, entry.mode, { flat: opts.flat, search });
     };
 
 

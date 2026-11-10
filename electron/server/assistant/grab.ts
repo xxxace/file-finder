@@ -16,22 +16,29 @@
  *
  *  3. **多站点顺序 fallback 到第一个命中为止**。规则里 `enabled:false` 的站直接跳过
  *     （Phase 1 的预置规则里只有 javbus 启用，其余等 Phase 3 校准后再开）。
+ *
+ *  4. **⚠️「命中」= 拿到了一张能解码成 JPEG 的图，不是抽到一个字符串**（2026-11-10）。
+ *     原来 `if (f && f.cover)` 就记 `status:'ok'`，空链接 / 404 / HTML 错误页 / 0 字节
+ *     一路绿灯 ⇒ 界面碎图却报"已抓到"，点了写入还把视频搬进没封面的新文件夹。
+ *     现在所有来源（真抓 + 落盘命中缓存）都过 `getVerifiedCover()` 这一个判据；
+ *     验不过就继续走下一个站点，绝不记命中、也绝不写进命中缓存。
  */
 import { CancelledError, enqueueWithRetry, hostOf } from './queue';
 import { runExtract } from './siteFetch';
 import type { FetchResult } from './siteFetch';
+import { getVerifiedCover } from './coverImage';
 import { runSteps } from './siteActions';
 import type { StepsResult } from './siteActions';
 import { buildExtractScript, buildStepScript } from './rules';
 import { expandUrl } from './urlTemplate';
 import type { ExtractedFields, SiteRule } from './rules';
 import { parseTitle } from './match';
-import { loadHits, appendHit } from './hits';
+import { loadHits, appendHit, appendTombstone } from './hits';
 import type { ScanTarget, TargetKind } from './scan';
 import type { Job } from './jobs';
 import { bumpProgress, finishJob, pushRow } from './jobs';
 
-export type GrabStatus = 'ok' | 'no-id' | 'no-match' | 'blocked' | 'error';
+export type GrabStatus = 'ok' | 'no-id' | 'no-match' | 'blocked' | 'bad-cover' | 'error';
 
 export interface GrabActor {
     name: string;
@@ -96,6 +103,8 @@ interface MatchOutcome {
     blocked: boolean;
     blockedSite?: string;
     why: string;
+    /** 站点给了链接、但链接取不到真图 —— 与"站点没有这部片"是两件事 */
+    badCover?: boolean;
 }
 
 export async function runGrab(
@@ -147,10 +156,11 @@ export async function runGrab(
         let blocked = false;
         let blockedSite: string | undefined;
         let why = '所有站点都没抽到封面';
+        let badCover = false;
         let match: GrabMatch | null = null;
 
         for (const rule of active) {
-            if (job.cancelled) return { match, blocked, blockedSite, why };
+            if (job.cancelled) return { match, blocked, blockedSite, why, badCover };
 
             bumpProgress(job, { current: `${id} → ${rule.id}` });
             // ⚠️ 与试跑走**同一个**模板引擎 —— 两边拼法必须永远一致（否则"试跑通了、抓取反而错"）
@@ -192,45 +202,68 @@ export async function runGrab(
 
             const f = res.data as ExtractedFields | undefined;
             if (f && f.cover) {
-                match = {
-                    hitSite: rule.id,
-                    coverUrl: f.cover,
-                    title: f.title || null,
-                    // javbus 这类站的选择器只取第一个演员节点 —— 先给一个，
-                    // 多演员拆解是 Phase 4「演员聚合」的事
-                    actresses: f.actress ? [{ name: f.actress, link: f.actressLink || undefined }] : [],
-                };
-                // 立刻进命中缓存（追加一行，fire-and-forget）：中断/重启后这里直接复用
-                appendHit(dataDir, { id, at: new Date().toISOString(), ...match });
-                break;
+                // 抽到链接不等于拿到封面。验不过就继续下一个站点 —— fallback 链不因
+                // 一条死链断掉；验过了才写命中缓存（`appendHit`），坏 URL 永不入库。
+                // 图片是 CDN 静态资源，不是页面浏览 ⇒ 不占 runPaced 的 1.5s 限速额度
+                //（预览代理本来也是直接发的）。整条链路的**图片**请求数反而比改前少：
+                // 验过的字节进 coverImage 缓存，预览和写盘都直接复用，不再各下一次。
+                const check = await getVerifiedCover(f.cover, job.controller.signal);
+                if (check.ok) {
+                    match = {
+                        hitSite: rule.id,
+                        coverUrl: f.cover,
+                        title: f.title || null,
+                        // javbus 这类站的选择器只取第一个演员节点 —— 先给一个，
+                        // 多演员拆解是 Phase 4「演员聚合」的事
+                        actresses: f.actress ? [{ name: f.actress, link: f.actressLink || undefined }] : [],
+                    };
+                    // 立刻进命中缓存（追加一行，fire-and-forget）：中断/重启后这里直接复用
+                    appendHit(dataDir, { id, at: new Date().toISOString(), ...match });
+                    break;
+                }
+                why = `抽到的封面不可用：${check.why}`;
+                badCover = true;
+                continue;
             }
             why = '页面打开了，但没抽到封面（规则可能过期）';
         }
-        return { match, blocked, blockedSite, why };
+        return { match, blocked, blockedSite, why, badCover };
     }
 
     /**
      * 取番号的尝试结果，三级递进：
-     *   ① 落盘命中缓存（以前抓到过的，秒回、零网络）→
-     *   ② 本次任务的 memo（并发撞同一番号复用同一个 Promise）→
-     *   ③ 真打站点。
+     *   ① 落盘命中缓存（以前抓到过）→ ② 本次任务 memo → ③ 真打站点。
+     *
+     * ⚠️ ① 也要验：命中缓存里可能躺着**以前误记的坏 URL**（正是这次要修的病）。
+     *    秒回一个坏链接等于把 bug 永久化。验不过 ⇒ 立墓碑 + 本次内存表删掉
+     *    ⇒ 回落到 ③ 真抓一次，有机会拿到新 URL（新 URL 会覆盖墓碑）。
      */
-    function outcomeOf(id: string): Promise<MatchOutcome> {
+    async function outcomeOf(id: string): Promise<MatchOutcome> {
         // `force` 时跳过命中缓存（理由见 `runGrab` 的形参注释）；`force` 下抓到的**新 URL
         // 仍然照常 `appendHit`**（在 `fetchOnce` 里），所以缓存不会因此失效。
         const hit = force ? undefined : hits.get(id);
         if (hit) {
-            return Promise.resolve({
-                match: {
-                    hitSite: hit.hitSite,
-                    coverUrl: hit.coverUrl,
-                    title: hit.title,
-                    actresses: hit.actresses,
-                },
-                blocked: false,
-                why: '',
-            });
+            const check = await getVerifiedCover(hit.coverUrl, job.controller.signal);
+            if (check.ok) {
+                return {
+                    match: {
+                        hitSite: hit.hitSite,
+                        coverUrl: hit.coverUrl,
+                        title: hit.title,
+                        actresses: hit.actresses,
+                    },
+                    blocked: false,
+                    why: '',
+                };
+            }
+            if (check.urlBad) appendTombstone(dataDir, id);
+            hits.delete(id);
         }
+        return fresh(id);
+    }
+
+    /** 真抓（并发撞同一番号时复用同一个 Promise，天然只发一次请求） */
+    function fresh(id: string): Promise<MatchOutcome> {
         let p = memo.get(id);
         if (!p) {
             p = fetchOnce(id).catch(e => {
@@ -311,7 +344,7 @@ export async function runGrab(
                 coverUrl: null,
                 title: null,
                 actresses: [],
-                status: outcome.blocked ? 'blocked' : 'no-match',
+                status: outcome.blocked ? 'blocked' : outcome.badCover ? 'bad-cover' : 'no-match',
                 message: outcome.why,
                 blockedSite: outcome.blockedSite,
             });

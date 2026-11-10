@@ -57,13 +57,19 @@
                      为什么不按导航栈渲染：跳转到达的目录**不是"栈顶的子级"**，用栈拼会拼出
                      一条物理上不存在的路径（`videos › a › y`）——
                      见 docs/DESIGN-NAV-2026-09-30.md §12.3 的反证推演。
-                     折叠规则：保首段 + `…` + 父 + 当前（Apple HIG 与 Fluent 2 两家官方默认行为）。 -->
+                     ⚠️ 2026-11-10 主人裁决：**不再按段数折叠**（原 `max = 4`，第 5 段起就折成
+                     `盘符 › … › 当前`）。那个 4 是「地址槽只占半条顶栏」时代定的常量，
+                     而 11-08 顶栏升级已经把 `max-width: 50%` 取消、槽变成"吃掉全部剩余宽度"
+                     ⇒ 常量活着，它服务的那个预算早死了。现在**能放几段放几段**：
+                     放不下时由 CSS 逐段收窄 + 省略号（历史段先让路，当前段 `flex: 0 0 auto`
+                     永不被压），与 11-09「不设 max-width」是同一条裁决的延伸。
+                     ⇒ 顺带修强了 11-08 的一条验收：结构不再随宽度变 ⇒ 搜索框展开挤压时
+                     **不可能**引起整排重新折叠。 -->
                 <!-- ⚠️ 2026-11-08 重构：原来是 `v-if="crumbFold"` / `v-else` **两棵互斥的树**。
-                     层级跨过 4 的那一下，Vue 会销毁整棵子树、再重建另一棵 ⇒ 视觉上是
-                     "整排地址重新渲染一次"（主人原话）。折叠只是"列表里多一项 `…`"，
-                     **不是换一套模板** ⇒ 现在统一由 `crumbRows` 这一个数组驱动。
-                     首段 / 折叠占位 / 其余段拆成三段渲染，是为了避开
-                     `<template v-for>` + `v-if` 混用（TransitionGroup 的 FLIP 拿不到 fragment）。 -->
+                     层级跨过阈值的那一下，Vue 会销毁整棵子树、再重建另一棵 ⇒ 视觉上是
+                     "整排地址重新渲染一次"（主人原话）。现在统一由 `crumbRows` 这一个数组驱动。
+                     首段 / 其余段拆成两段渲染，是为了避开 `<template v-for>` + `v-if` 混用
+                     （TransitionGroup 的 FLIP 拿不到 fragment）。 -->
                 <TransitionGroup name="fx" tag="div" class="crumbs" @before-leave="pinLeaving">
                 <n-tag v-if="crumbLayout.head" :key="crumbLayout.head.key" class="crumb"
                     :class="{ 'crumb-root': crumbLayout.head.kind === 'root', 'crumb-current': crumbLayout.headCurrent }"
@@ -71,23 +77,10 @@
                     @click="onCrumbClick(crumbLayout.head)">
                     <!-- ⚠️ 首段必须绑 `@click`（2026-11-08 code review 找回的回归）：
                          `onCrumbClick` 里 `kind === 'root'` 那支是**清单屏点根段回货架**的捷径。
-                         统一成三段渲染后首段独立成 `head`，当时没绑 ⇒ 那支变死代码。
+                         head / tail 拆成两段渲染后首段独立成 `head`，当时没绑 ⇒ 那支变死代码。
                          磁盘根不必担心：`onCrumbClick` 自己会 return（点它不读盘）。 -->
                     <span class="crumb-text">{{ crumbLayout.head.name }}</span>
                 </n-tag>
-                <!-- 被折起来的中间层：**每一层都还能点** —— 折叠只牺牲「常显」，不牺牲任何能力 -->
-                <n-popover v-if="crumbLayout.fold" key="fold" trigger="click" placement="bottom-start">
-                    <template #trigger>
-                        <n-tag class="crumb crumb-more" title="展开被折叠的层级">
-                            <span class="crumb-text">…</span>
-                        </n-tag>
-                    </template>
-                    <div class="hstack">
-                        <n-button v-for="c in crumbHidden" :key="c.path" size="small" @click="onCrumbClick(c)">
-                            {{ c.name }}
-                        </n-button>
-                    </div>
-                </n-popover>
                 <n-tag v-for="(row, i) in crumbLayout.tail" :key="row.key" class="crumb"
                     :class="{ 'crumb-root': row.kind === 'root', 'crumb-current': i === crumbLayout.tail.length - 1 }"
                     :title="row.path" :data-count="i === crumbLayout.tail.length - 1 ? crumbCount : null"
@@ -113,7 +106,8 @@
                  原来它在最左、紧挨搜索框，等于"最不常用的东西占了最顺手的位置"。 -->
             <div class="toolbar">
                 <!-- 搜索：一颗图标 ⇄ 一个输入框（主人 2026-11-08 裁决：宽度从**地址槽**里挤，不做浮层）。
-                     为什么敢挤：折叠判据 `foldCrumbList(crumbs, max = 4)` 是**按段数**的、不看宽度；
+                     为什么敢挤：面包屑**结构只跟路径走、不跟宽度走**（2026-11-10 起连段数折叠也去掉，
+                     见上面 `.crumbs` 那段）⇒ 挤压只会让各段文字收窄/省略，**绝不触发整排重排**；
                      而右侧从 ~420px（⋯ + 搜索 260 + 3×28）降到 ~137px ⇒ 收起态面包屑多 +181px、
                      展开态仍 ≈ 今天 ⇒ **没有任何一个状态比现状更挤**。
                      账与前提：docs/DESIGN-HEADER-UPGRADE-2026-11-08.md §三。
@@ -465,7 +459,7 @@
 </template>
 
 <script setup lang="ts">
-import { formatBytes, ancestorsOf, foldCrumbList, isGridKeyBlocked, ANCHOR_PREFIX } from '@/utils';
+import { formatBytes, ancestorsOf, isGridKeyBlocked, ANCHOR_PREFIX } from '@/utils';
 import type { PathCrumb } from '@/utils';
 import type { Component } from 'vue';
 import { API_BASE, apiUrl, getAction } from '@/utils/request';
@@ -706,18 +700,19 @@ const isFlatView = ref(false);
 const isCurrentCacheRoot = ref(false);
 /** 仅在导航处于根缓存目录（是采集源头、非清单屏、且有有效路径）时允许开启 Flat 视图 */
 const canToggleFlat = computed(() => isCurrentCacheRoot.value && !playlistLevel.value && !!currentPath.value);
-/** 折叠决策（保首尾）。`null` = 全显。规则在 `@/utils` 的 `foldCrumbList` 里，可单独验证。 */
-const crumbFold = computed(() => foldCrumbList(crumbs.value));
 /**
- * 面包屑的**渲染布局**（head / `…` / tail）—— 折叠与不折叠都走这一份。
+ * 面包屑的**渲染布局**（head + tail）。
+ *
+ * ⚠️ 2026-11-10：**不再折叠**（原 `foldCrumbList(crumbs, max = 4)`，第 5 段起折成
+ * `盘符 › … › 当前`）。判据从"段数常量"撤掉的理由写在模板 `.crumbs` 那段；
+ * 放不下由 CSS 逐段省略兜底，`foldCrumbList` / `buildCrumbLayout` 的 fold 形参仍在
+ * （纯函数、有探针），只是这里不再传。
  *
  * ⚠️ 2026-11-08：原来模板里是 `v-if="crumbFold"` / `v-else` 两棵互斥的树，
- * 层级跨过 `max=4` 的那一下整棵子树被销毁重建 ⇒ 观感是"整排地址重新渲染"。
+ * 阈值一跨整棵子树被销毁重建 ⇒ 观感是"整排地址重新渲染"。
  * 推导逻辑在 `crumbRows.ts`（纯函数，可被 `docs/probes/crumbs/layout.mjs` 直接跑）。
  */
-const crumbLayout = computed(() => buildCrumbLayout(crumbs.value, crumbFold.value));
-/** 被折掉的中间层（给 `…` 的弹层用） */
-const crumbHidden = computed(() => crumbFold.value?.hidden ?? []);
+const crumbLayout = computed(() => buildCrumbLayout(crumbs.value));
 /**
  * 离场那一格的"幽灵"：把它**钉在最后的屏幕位置上**，再交给 CSS 淡出。
  *
@@ -894,7 +889,7 @@ const banner = computed(() => {
 const notify = useNotify();
 /** 取数三个入口（目录 / 清单 / 统一出口）+ 请求序号 —— 见 useScreenData.ts */
 const { fetchFolder, fetchPlaylistItems, loadScreen, getFetchSeq } = useScreenData({
-    notify, dataSource, loading, failKind,
+    notify, dataSource, loading, failKind, searchText,
     isCurrentCacheRoot, isFlatView, canToggleFlat,
 });
 const dialog = useConfirm();
@@ -1094,7 +1089,7 @@ const rememberCurrentScreen = () => {
 }
 
 /**
- * 进入某一屏：所有导航动作都必须从这里过（记旧屏 → 压新屏 → 归零视口 → 取数 → 清搜索词只写一遍）。
+ * 进入某一屏：所有导航动作都必须从这里过（记旧屏 → 压新屏 → 归零视口 → 取数 → 词跟着数据落地）。
  * ⚠️ 必须显式归零滚动：NavEntry.scrollY=0 只是数字，容器 scrollTop 不会自己归零 ⇒ 进新屏会停在上一屏的偏移（与面包屑矛盾）。
  * ⚠️ 归零要在取数之前（内容没渲染时 scrollTo 会被 clamp 或作用在旧内容上）。
  */
@@ -1105,19 +1100,20 @@ const enterScreen = (path: string, mode: OpenMode = 'cover', pl?: NavEntry['pl']
     history.value.push({ path, mode, pl, searchText: '', scrollY: 0, cursorKey: '' });
     isFlatView.value = !!keepFlat;
     isCurrentCacheRoot.value = false;
-    // 进新的一屏不带上一屏的搜索词（原有行为，不动）
-    searchText.value = '';
     /**
-     * 声明"用户在这一屏需要焦点" ⇒ 加载完自动落焦点。
+     * 进新的一屏不带上一屏的搜索词（原有行为，不动）。
      *
-     * ⚠️⚠️ **必须放在 `searchText.value = ''` 之后**（业主 2026-10-04 二次报"还是要点一下"）。
-     * 原因：`fileList` 是 `computed(… filterByName(dataSource, searchText))` ——
-     * 清空搜索词**本身就会让列表变一次**（从"筛过的 N 条"变成"全部 M 条"）⇒ 指纹变了
-     * ⇒ `useGridCursor` 里那个 watch 触发 ⇒ **`takeIntent()` 把 armed 消费掉了**。
-     * 于是等真正的 `dataSource` 换新（fetchFolder 成功）时 armed 已是 false
-     * ⇒ **焦点永远不落**。而"点一下"能用，是因为 `onItemClick → focusCursor` 直写 `cursorKey`。
+     * ⚠️⚠️ 但**不许在这里写 `searchText`**（业主 2026-11-10 报：过滤出的几个文件夹，
+     * 点进去等待期间"过滤失效、整份数据闪一下"，抽帧完才进新屏）。原因：
+     * `fileList = computed(filterByName(dataSource, searchText))`，而此刻 `dataSource`
+     * 还是**上一屏**的数据 ⇒ 提前清词 = 立刻渲染"上一屏整份数据 × 空关键词"。
+     * 这段窗口的长度就是**接口的耗时**（含视频抽帧时以秒计）⇒ 不是闪一下，是杵在那儿。
+     * ⇒ 词的切换与数据的落地**同一拍**发生，唯一写入点是 `useScreenData.commit()`；
+     *   这里只声明"这一屏接管自己的词"（`adoptSearch`）。
      *
-     * ⇒ 顺序即依赖：任何**会引起列表变化**的动作做完之后，才声明意图。
+     * ⚠️ `noteIntent()`（= 「这一屏需要焦点」）仍必须在**任何会改列表的动作之后**才声明
+     * —— 那个 watch 是一次性消费 `armed` 的。现在本函数不再改列表，顺序自然满足；
+     * 别再把词的写入搬回来。
      */
     noteIntent();
     /**
@@ -1134,7 +1130,10 @@ const enterScreen = (path: string, mode: OpenMode = 'cover', pl?: NavEntry['pl']
 
     // 取数（内部会 `++fetchSeq`）⇒ **之后**才读序号，读到的才是"我这次"的号
     // 经 loadScreen 分派：目录屏 /openFolder，清单屏 /playlistItems（唯一出口，见那边注释）
-    const done = loadScreen(history.value[history.value.length - 1], isFlatView.value);
+    // `adoptSearch`：这一屏的词由它自己接管，与数据**同一拍**落地（理由见上面那段）
+    const done = loadScreen(history.value[history.value.length - 1], {
+        flat: isFlatView.value, adoptSearch: true,
+    });
     const myFetchSeq = getFetchSeq();
 
     /**
@@ -1297,9 +1296,11 @@ const onBack = async () => {
     if (history.value.length <= 1) return;
     history.value.pop();
     const to = history.value[history.value.length - 1];
-    // 恢复这一屏的搜索词。fileList 是 computed，词一变列表自己会重新筛——
-    // 不需要（也不能）再手动调一次过滤
-    searchText.value = to.searchText;
+    // 恢复这一屏的搜索词 —— **不在这里写**。这是同一个病的方向相反那一半：
+    // 提前把词写回去 = 拿**子目录的数据** × **父目录的词** 渲染一次，等数据到了再换。
+    // 词与列表必须同一拍 ⇒ 交给 `loadScreen(to, { adoptSearch: true })`，由 `useScreenData.commit()`
+    // 在数据落地那一刻一起写（与 `enterScreen` 共用一份实现）。
+    //
     // 恢复选择器。⚠️ **必须与scrollY 一起恢复** —— 只恢复滚动会让屏幕停在原来那一屏的
     // 中间、选择器却跳回视口第一行（自相矛盾）。见 `NavEntry.cursorKey` 的注释。
     // 那个 key 若不在这一屏里，`cursorItem` 是 undefined ⇒ 不画高亮，
@@ -1312,8 +1313,8 @@ const onBack = async () => {
     // ⇒ 恢复出来的 key 若不在这屏（`cursorItem` 为 undefined），就**没人补一个焦点**
     // ⇒ 键盘用户在这一屏上完全失能（按方向键会激活，但那得先知道要按方向键）。
     //
-    // ⇒ 顺序即依赖：必须在**会引起列表变化**的动作（`searchText` 赋值）**之后**才声明，
-    // 否则会被那个 watch 提前消费掉（同 `enterScreen` 里那条纪律）。
+    // ⇒ 顺序即依赖：必须在**会引起列表变化**的动作**之后**才声明，
+    //    否则会被那个 watch 提前消费掉（同 `enterScreen` 里那条纪律）。
     noteIntent();
     setCursorKey(to.cursorKey);
     /**
@@ -1326,7 +1327,7 @@ const onBack = async () => {
      * ⇒ 判据对着**新屏**成立 ⇒ 把**上一个 `to` 的偏移**滚到**另一屏**上。
      * 序号来源同 `enterScreen`：`getFetchSeq()`，写完 `loadScreen()` 才读。
      */
-    const done = loadScreen(to);
+    const done = loadScreen(to, { adoptSearch: true });
     const myFetchSeq = getFetchSeq();
     await done;
     /**
@@ -1408,7 +1409,7 @@ const toggleFlatView = async () => {
     playSfx(isFlatView.value ? 'switch-on' : 'switch-off');
     const cur = history.value[history.value.length - 1];
     if (cur) {
-        await fetchFolder(cur.path, cur.mode, false, isFlatView.value);
+        await fetchFolder(cur.path, cur.mode, { flat: isFlatView.value });
     }
 };
 
@@ -1420,8 +1421,8 @@ const onRefresh = () => {
     const cur = history.value[history.value.length - 1];
     // F5 = 重新扫盘，要带 noCache 让服务端把这条缓存删掉真去读盘，
     // 不然"刷新"只是把同一份缓存又发了一遍。
-    // 搜索词不用管：fetchFolder 已经不碰它了
-    fetchFolder(cur.path, cur.mode, true);
+    // 搜索词不用管：不带 `search` 就是"同一屏重取" ⇒ 词原样不动（见 useScreenData.commit）
+    fetchFolder(cur.path, cur.mode, { noCache: true });
 }
 
 /**
@@ -1437,6 +1438,8 @@ const setRoot = (value: string) => {
         history.value = [];
         // 清掉文件夹选择就该把这个文件夹的内容也清掉，
         // 否则界面上留着上一个目录的东西，而选择框已经空了
+        // ⚠️ 这两个写**必须留在同一个块里**（与 useScreenData.commit 同一条纪律：
+        //    `fileList = filterByName(dataSource, searchText)`，拆开就有一帧"旧数据 × 新词"）。
         dataSource.value = [];
         searchText.value = '';
         /**

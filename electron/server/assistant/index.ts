@@ -46,8 +46,9 @@ import type { Job } from './jobs';
 import { CappedPreviewCache } from './previewCache';
 import { loadMeta } from '../nedb';
 import type { OpenMode } from '../nedb';
-import { runApply, readWrittenDirs, download } from './apply';
+import { runApply, readWrittenDirs } from './apply';
 import type { ApplyRow } from './apply';
+import { getVerifiedCover, isUsableCoverUrl } from './coverImage';
 import { scanMissingCovers, deepScanMissingCovers, collectFaces } from './scan';
 import type { ScanTarget, FacePick } from './scan';
 import { getDrives } from '../../utils/driveIdentity';
@@ -492,9 +493,9 @@ export function createAssistantRoutes(deps: AssistantDeps): AssistantRoute[] {
             sendJson(res, { code: 409, error: '抓取还没跑完，等它结束再写入' });
             return;
         }
-        // 只写命中的行。`ok` 行可能因为番号 memo 有重复（同一部片多个分卷共用一张），
-        // 那是刻意的：每个 writeRel 都要有自己的文件。
-        const rows = (grabJob.rows as GrabRow[]).filter(r => r.status === 'ok' && r.coverUrl);
+        // 只写命中的行，且 URL 必须过同一个形态判据（空链接 / blob / 相对地址不许进写盘）。
+        // `ok` 行可能因为番号 memo 有重复（同一部片多个分卷共用一张），那是刻意的。
+        const rows = (grabJob.rows as GrabRow[]).filter(r => r.status === 'ok' && isUsableCoverUrl(r.coverUrl));
         if (!rows.length) {
             sendJson(res, { code: 200, jobId: null, total: 0, message: '没有可写入的封面（这一批没有命中）' });
             return;
@@ -658,30 +659,31 @@ export function createAssistantRoutes(deps: AssistantDeps): AssistantRoute[] {
     }
 
     /**
-     * 封面预览代理（GET，`?url=`）：渲染层直接 <img> 外站图片会被防盗链拦
+     * 封面 / 头像预览代理（GET，`?url=`）：渲染层直接 <img> 外站图片会被防盗链拦
      * （真机 2026-09-25），而写盘走的是带 session 的 Chromium 下载 —— 预览改走
      * **同一条通道**，预览能显示的就一定能写入，所见即所得。
-     * 带预算的 FIFO 内存缓存：面板重渲染时同一张图不重复出网。
-     * 64MB / 500 条：条数闸挡不住"一条一张原图"，字节预算才是真上限（见 previewCache.ts）。
+     *
+     * ⚠️ 2026-11-10：这里原先把上游字节**原样**回给浏览器 —— HTTP 200 的 HTML 错误页、
+     *    0 字节、改后缀的假图都会变成碎图图标，而卡片还在说"已抓到"。
+     *    现在与抓取、写盘共用 `getVerifiedCover()` 这一个判据：只回**已解码成真 JPEG**
+     *    的字节，取不到就明确报错（前端 `<img @error>` 把卡标成"封面取不到"）。
+     *    验证过的字节按 URL 缓存在 coverImage 里 ⇒ 抓取验过一次，这里 0 网络开销。
+     *
+     * `previewCache` 仍留着给「批量换头像」用（`fetchAndTranscode` 会读它）：
+     * 这里顺手回填，**省掉一次重复下载**。它与 coverImage 的缓存刻意分开 ——
+     * 那边只放已验证的 JPEG，这边混放头像原图，语义不同不能共用一个 Map。
      */
     const previewCache = new CappedPreviewCache(64 * 1024 * 1024, 500);
 
     async function preview(req: ReqLike, res: http.ServerResponse) {
         const raw = req.params?.get('url') || '';
-        let parsed: URL;
-        try {
-            parsed = new URL(raw);
-        } catch {
-            sendJson(res, { code: 400, error: 'url 不合法' }, 400);
-            return;
-        }
-        if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') {
-            sendJson(res, { code: 400, error: '只支持 http/https' }, 400);
+        if (!isUsableCoverUrl(raw)) {
+            sendJson(res, { code: 400, error: 'url 不合法（只收 http/https 绝对地址）' }, 400);
             return;
         }
 
         const cached = previewCache.get(raw);
-        if (cached) {
+        if (cached?.buf?.length) {
             res.writeHead(200, { 'Content-Type': cached.type || 'image/jpeg', 'Content-Length': cached.buf.length });
             res.end(cached.buf);
             return;
@@ -689,16 +691,15 @@ export function createAssistantRoutes(deps: AssistantDeps): AssistantRoute[] {
 
         const timeout = AbortSignal.timeout(20_000);
         try {
-            const r = await download(raw, timeout);
-            if (r.status !== 200 || !r.buf.length) {
-                sendJson(res, { code: 404, error: `取不到预览图（HTTP ${r.status}）` }, 404);
+            const cover = await getVerifiedCover(raw, timeout);
+            if (!cover.ok) {
+                sendJson(res, { code: 404, error: cover.why }, 404);
                 return;
             }
-            // 上游给的 content-type 可能带 charset 之类的尾巴，只留主类型
-            const type = r.type?.split(';')[0]?.trim() || 'image/jpeg';
-            previewCache.set(raw, { buf: r.buf, type });
-            res.writeHead(200, { 'Content-Type': type, 'Content-Length': r.buf.length });
-            res.end(r.buf);
+            const jpg = cover.jpg!;
+            previewCache.set(raw, { buf: jpg, type: 'image/jpeg' });
+            res.writeHead(200, { 'Content-Type': 'image/jpeg', 'Content-Length': jpg.length });
+            res.end(jpg);
         } catch {
             sendJson(res, { code: 502, error: '预览图下载失败' }, 502);
         }

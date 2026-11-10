@@ -14,6 +14,7 @@
                 referrerpolicy="no-referrer"
                 alt=""
                 loading="lazy"
+                @error="emit('broken')"
             />
             <DotField v-if="item.state === 'pending'" :active="true" />
             <span v-if="item.badge" class="ffw-card__badge">{{ item.badge }}</span>
@@ -51,7 +52,10 @@ import type { CoverItem } from './coverModel';
  * `locked` = 任务在跑/暂停：这时**禁止改勾选**。
  * 抓取队列在发起时就已经定好，此时点勾选既不会让它停下、也不影响它抓谁，
  * 只会让"选中数"变来变去 —— 点了有反馈却没效果，比禁用更糟（2026-11-08 主人裁决）。
+ *
+ * `broken` = 预览图在浏览器里加载失败。抓取时验证过 ≠ 渲染时还能取到（网络会变），
+ * 这是**唯一**能观测到"这张图此刻显示不出来"的地方 ⇒ 交给父层把卡标成不可写。
  */
 defineProps<{ item: CoverItem; coverSrc: string; selected: boolean; locked: boolean; index: number }>();
-const emit = defineEmits<{ toggle: [] }>();
+const emit = defineEmits<{ toggle: []; broken: [] }>();
 </script>

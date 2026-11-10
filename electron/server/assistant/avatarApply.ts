@@ -20,7 +20,7 @@ import type { OpenMode } from '../nedb';
 import { queueCacheWrite } from '../index';
 import { bumpProgress, finishJob, pushRow } from './jobs';
 import type { Job } from './jobs';
-import { toJpeg, download } from './apply';
+import { toJpeg, download } from './coverImage';
 import { GFRIENDS_MIRRORS } from './gfriends';
 
 export interface AvatarApplyItem {

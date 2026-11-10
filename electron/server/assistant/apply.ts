@@ -31,6 +31,13 @@
  *
  *  3. **转真 JPEG**。站点给的"jpg"实际常是 WebP/PNG 改后缀（thumbnail.ts 里有实测记录）。
  *     直接落盘，缩略图链路（nativeImage）解不开 → 空白卡片。所以写之前一律转成真 JPEG。
+ *     ⚠️ 判据本体在 `coverImage.ts`：抓取 / 预览 / 写盘共用一份 `getVerifiedCover()`。
+ *
+ *  5. **⚠️ 先拿到封面，再动盘**（2026-11-10 主人报「点了写入多了一堆没封面的
+ *     `A/A.mp4`」）：原顺序是「建文件夹 + rename 搬视频 → 再下载封面」，下载或解码
+ *     一失败，视频已经进了新建的文件夹、封面却没有 ⇒ 盘上多出一批永远没脸的作品，
+ *     而且 rename 不可逆。现在下载 + 解码 + 封面落盘全部成功之后才搬视频；
+ *     任何一步失败 ⇒ **盘上一个字节都不动**（本次新建的空文件夹也会收掉）。
  *
  *  4. **写完必须失效目录缓存**。写完不失效，UI 命中缓存直接下发旧脸 —— "界面没变"
  *     会被当成"没写成功"。文件形态失效所在层（视频搬走了 + 新文件夹长脸，都在这一层
@@ -41,16 +48,15 @@
  */
 import * as fsasync from 'node:fs/promises';
 import path from 'node:path';
-import os from 'node:os';
 import crypto from 'node:crypto';
-import { net, nativeImage, session } from 'electron';
 import { getDrives } from '../../utils/driveIdentity';
 import { findCache, removeCache } from '../nedb';
 import type { OpenMode } from '../nedb';
 import { patchItemByLocation } from '../playlistStore';
-import { transcodeImage } from '../../utils/thumbnail';
-import { enqueue, hostOf } from './queue';
+import { enqueue, CancelledError } from './queue';
 import { appendTombstone } from './hits';
+import { getVerifiedCover, isUsableCoverUrl } from './coverImage';
+import type { CoverCheck } from './coverImage';
 import type { GrabRow } from './grab';
 import type { Job } from './jobs';
 import { bumpProgress, finishJob, pushRow } from './jobs';
@@ -102,6 +108,11 @@ function dirOf(rel: string): string {
     return i === -1 ? '' : rel.slice(0, i);
 }
 
+/** 目录在不在。只用来判断"这个空文件夹是不是本次新建的"，不读内容、不递归 */
+async function exists(abs: string): Promise<boolean> {
+    try { await fsasync.access(abs); return true; } catch { return false; }
+}
+
 /**
  * 把命中行折成"一部片"分组。分卷（`AAA-123-A`/`TST-014-01…08`）在 scan/parse 阶段
  * 就归一到同一番号了，这里按 `(所在层, 番号)` 再收拢一次：同一部的所有分卷
@@ -117,7 +128,9 @@ function dirOf(rel: string): string {
 export function buildGroups(rows: GrabRow[]): ApplyGroup[] {
     const groups = new Map<string, ApplyGroup>();
     for (const r of rows) {
-        if (r.status !== 'ok' || !r.coverUrl) continue;
+        // `isUsableCoverUrl` 与抓取 / 预览是同一判据：空链接、blob/data、相对路径
+        // 一律进不了写盘分组（它们根本下载不回来，进来了只会产出没封面的文件夹）
+        if (r.status !== 'ok' || !isUsableCoverUrl(r.coverUrl)) continue;
 
         if (r.kind === 'dir' || r.kind === 'cover') {
             // 两者都是「**只写封面、不搬任何东西**」，区别只在写哪、有没有破坏：
@@ -193,6 +206,21 @@ export async function runApply(
 
     let written = 0;
     const affectedDirs = new Set<string>();
+    /** 只有真正写成了的组才能进「同步收藏夹」——失败的组盘上什么都没变 */
+    const okGroups: ApplyGroup[] = [];
+
+    /** 一条失败的统一记账口：三个失败分支不许各写一遍 */
+    const fail = (g: ApplyGroup, why: string, notes: string[], urlBad: boolean) => {
+        appendLog(dataDir, `${new Date().toISOString()}\t${serial}\t${g.coverWriteRel}\tfail\t${why}\t${notes.join('；')}`);
+        // URL 永久坏 → 命中缓存立墓碑，下次抓取重新真抓
+        if (urlBad && g.query) appendTombstone(dataDir, g.query);
+        pushRow(job, {
+            writeRel: g.coverWriteRel, ok: false,
+            message: `${notes.join('；')}；封面没写成：${why}`,
+        });
+        bumpProgress(job, { processed: job.progress.processed + 1, current: '' });
+    };
+
     try {
         for (const g of groups) {
             if (job.cancelled) break;
@@ -204,45 +232,76 @@ export async function runApply(
             bumpProgress(job, { current: g.folderRel || g.layerDir });
             const notes: string[] = [];
 
-            // ── ⓪ 覆盖前备份（只 `cover` 形态 = 换封面）────────────────────────
+            // ── ① 判据先行：拿到能解码成 JPEG 的字节，**此刻盘上一个字节都没动** ──
+            // 与 grab / preview 共用 `getVerifiedCover`（形态 → 下载 → 非空 → 解码）。
+            // 抓取时验过的字节大多已在 `verifiedBytes` 里 ⇒ 这里连网络都不出。
+            let cover: CoverCheck;
+            try {
+                cover = await getVerifiedCover(g.coverUrl, job.controller.signal, enqueue);
+            } catch (e) {
+                // 取消是控制流，不是"这一部写失败"
+                if (job.cancelled || e instanceof CancelledError) break;
+                throw e;
+            }
+            if (!cover.ok) {
+                fail(g, cover.why, notes, cover.urlBad);
+                continue;
+            }
+            const jpg = cover.jpg!;
+
+            // ── ② 覆盖前备份（只 `cover` 形态 = 换封面）────────────────────────
             // PRD D7 明文「覆盖前先备份」。备份落**系统盘**的数据目录 ——
             // 刻意**不在移动硬盘上留 `.bak`**（多一个文件、脏，而写盘本身就在碰盘）。
-            //
-            // ⚠️ 备份失败 ⇒ **放弃覆盖**。宁可这一条记失败，也绝不在"没有退路"的情况下
-            // 覆盖用户自己的文件。源文件不存在（缓存过期 / 已被手动删）**不算失败** ——
-            // 本来就没有东西可毁，让流程照常走。
+            // ⚠️ 备份失败 ⇒ 放弃覆盖：宁可记失败，也不在"没有退路"时覆盖用户的文件。
             if (g.overwrite) {
                 const b = await backupCover(root, g.coverWriteRel, dataDir, serial);
                 if (!b.ok) {
-                    appendLog(dataDir, `${new Date().toISOString()}\t${serial}\t${g.coverWriteRel}\tfail\t原图备份失败，已跳过（没有覆盖）`);
-                    pushRow(job, {
-                        writeRel: g.coverWriteRel,
-                        ok: false,
-                        message: '原图备份失败，这条没写（你的文件没被动过）',
-                    });
-                    bumpProgress(job, { processed: job.progress.processed + 1, current: '' });
+                    fail(g, '原图备份失败，这条没写（你的文件没被动过）', notes, false);
                     continue;
                 }
-                // ⚠️ 备份路径必须**留下痕迹**：PRD D7 说的"覆盖前先备份"只有配上"备份在哪"
-                // 才真的可还原。只记数据目录内的**相对路径** —— 绝对路径又长又带用户名，
-                // 日志里没必要（数据目录本身就是固定的）。
+                // D7 的"可还原"靠这条兑现：日志里留下备份在数据目录内的相对路径
                 if (b.file) notes.push(`原图已备份：${b.file}`);
+                notes.push('覆盖原封面（已备份到数据目录）');
+            } else {
+                notes.push(g.kind === 'dir' ? '已有文件夹，只补封面' : '新建番号文件夹');
             }
 
-            // ── ① 建番号文件夹 + 搬分卷（只文件形态；同卷 rename，瞬时、不复制数据） ──
+            // ── ③ 封面落盘：目标目录内 tmp → rename 原子写 ──────────────────────
+            // ⚠️ 只在这里建文件夹，且只在「本次新建」时记下来 —— 万一封面写失败，
+            //    要能把这空文件夹收掉（非递归 rmdir，非空就失败，不会碰用户文件）。
+            const abs = `${root}${g.coverWriteRel}`;
+            const absDir = path.dirname(abs);
+            const tmp = path.join(absDir, `.cover-${process.pid}-${Date.now()}.tmp`);
+            let createdFolder = false;
+            let ok = false;
+            let why = '';
+            try {
+                createdFolder = g.kind === 'file' && !(await exists(absDir));
+                await fsasync.mkdir(absDir, { recursive: true });
+                await fsasync.writeFile(tmp, jpg);
+                await fsasync.rename(tmp, abs);
+                ok = true;
+            } catch (e) {
+                why = e instanceof Error ? e.message : String(e);
+            } finally {
+                // rename 成功后 tmp 已不存在；失败时把半截文件清掉（不是删盘上旧文件）
+                fsasync.unlink(tmp).catch(() => {});
+            }
+            if (!ok) {
+                if (createdFolder) await fsasync.rmdir(absDir).catch(() => {});
+                fail(g, why, notes, false);
+                continue;
+            }
+
+            // ── ④ 搬分卷（只文件形态；同卷 rename，瞬时、不复制数据）────────────
+            // 封面已经躺在文件夹里了 —— 从这里开始，就算某一卷 rename 失败，
+            // 也只会是"少搬了一卷"，绝不会是"多了一部没脸的作品"。
             if (g.kind === 'file') {
-                const absFolder = `${root}${g.folderRel}`;
-                try {
-                    // 文件夹可能已存在（用户手动建过 / 上次搬过一半）—— 直接往里搬
-                    await fsasync.mkdir(absFolder, { recursive: true });
-                } catch (e) {
-                    notes.push(`建文件夹失败：${e instanceof Error ? e.message : e}`);
-                }
                 let moved = 0;
                 for (const src of g.srcRels) {
                     if (job.cancelled) break;
-                    // 搬迁时把视频主名的英文字母转大写（用户 2026-09-25 拍板：
-                    // a1b1.mp4 → A1B1.mp4；只转主名，扩展名不动；仅此一处转，不做别的改名）
+                    // 视频主名的英文字母转大写（用户 2026-09-25 拍板：a1b1.mp4 → A1B1.mp4；
+                    // 只转主名，扩展名不动；仅此一处转，不做别的改名）
                     const base = baseOf(src);
                     const dot = base.lastIndexOf('.');
                     const newName =
@@ -257,84 +316,27 @@ export async function runApply(
                     }
                 }
                 notes.unshift(`搬入 ${moved}/${g.srcRels.length} 个分卷`);
+            }
+
+            // ── ⑤ 失效目录缓存（写完不失效，UI 永远是旧脸） ──
+            written += 1;
+            okGroups.push(g);
+            // 文件形态：视频搬走 + 新文件夹长脸，都发生在**层目录**的缓存文档里；
+            // 目录形态：影片目录自己多了 cover.jpg，父目录的缓存里它长了脸 —— 两边都要失效。
+            const targetDir = g.kind === 'dir' ? dirOf(g.layerDir) : g.layerDir;
+            if (scanAndCache) {
+                affectedDirs.add(targetDir);
+                if (g.layerDir) removeCache(serial, g.layerDir, 'cover').catch(() => {});
             } else {
-                notes.push(g.overwrite ? '覆盖原封面（已备份到数据目录）' : '已有文件夹，只补封面');
+                removeCache(serial, g.layerDir, 'cover').catch(() => {});
             }
-
-            // ── ② 下载封面（Chromium 网络栈 + 抓取用的同一个 session） ──
-            let buf: Buffer | null = null;
-            let why = '';
-            // URL 本身永久坏了（404 / 返回的不是图）。真坏了就给命中缓存立墓碑，
-            // 否则下次抓取还会复用这条死链，永远失败。
-            let urlBad = false;
-            try {
-                const res = await enqueue(hostOf(g.coverUrl), () =>
-                    download(g.coverUrl, job.controller.signal),
-                );
-                if (res.status === 200) {
-                    buf = res.buf;
-                } else {
-                    why = `下载失败（HTTP ${res.status}）`;
-                    urlBad = true;
-                }
-            } catch (e) {
-                // abort 是控制流：整批直接收尾，不记成"这条失败"
-                if (job.cancelled) break;
-                // 网络错误不算 URL 坏（可能只是暂时断网），不立墓碑
-                why = e instanceof Error ? e.message : String(e);
-            }
-
-            // ── ③ 转 JPEG → 目标目录内 tmp → rename 原子写 ──
-            let ok = false;
-            if (buf) {
-                const abs = `${root}${g.coverWriteRel}`;
-                const absDir = path.dirname(abs);
-                const jpg = await toJpeg(buf);
-                if (!jpg) {
-                    why = '图片解不出来（可能不是图），没写';
-                    urlBad = true;
-                } else {
-                    const tmp = path.join(absDir, `.cover-${process.pid}-${Date.now()}.tmp`);
-                    try {
-                        // 目标目录理论上必然存在（file 形态刚建过、dir 形态来自缓存）。
-                        // recursive 兜一下"目录被用户手动删了"的情况，省得整批死在这。
-                        await fsasync.mkdir(absDir, { recursive: true });
-                        await fsasync.writeFile(tmp, jpg);
-                        await fsasync.rename(tmp, abs);
-                        ok = true;
-                    } catch (e) {
-                        why = e instanceof Error ? e.message : String(e);
-                    } finally {
-                        // rename 成功后 tmp 已不存在；失败时把半截文件清掉（不是删盘上旧文件）
-                        fsasync.unlink(tmp).catch(() => {});
-                    }
-                }
-            }
-
-            // ── ④ 失效目录缓存（写完不失效，UI 永远是旧脸） ──
-            if (ok) {
-                written += 1;
-                // 文件形态：视频搬走 + 新文件夹长脸，都发生在**层目录**的缓存文档里；
-                // 目录形态：影片目录自己多了 cover.jpg，父目录的缓存里它长了脸 —— 两边都要失效。
-                const targetDir = g.kind === 'dir' ? dirOf(g.layerDir) : g.layerDir;
-                if (scanAndCache) {
-                    affectedDirs.add(targetDir);
-                    if (g.layerDir) removeCache(serial, g.layerDir, 'cover').catch(() => {});
-                } else {
-                    removeCache(serial, g.layerDir, 'cover').catch(() => {});
-                }
-                if (!scanAndCache && g.kind === 'dir') removeCache(serial, dirOf(g.layerDir), 'cover').catch(() => {});
-                appendLog(dataDir, `${new Date().toISOString()}\t${serial}\t${g.coverWriteRel}\tok\t${notes.join('；')}`);
-            } else {
-                appendLog(dataDir, `${new Date().toISOString()}\t${serial}\t${g.coverWriteRel}\tfail\t${why}\t${notes.join('；')}`);
-                // URL 永久坏 → 命中缓存立墓碑，下次抓取重新真抓
-                if (urlBad && g.query) appendTombstone(dataDir, g.query);
-            }
+            if (!scanAndCache && g.kind === 'dir') removeCache(serial, dirOf(g.layerDir), 'cover').catch(() => {});
+            appendLog(dataDir, `${new Date().toISOString()}\t${serial}\t${g.coverWriteRel}\tok\t${notes.join('；')}`);
 
             pushRow(job, {
                 writeRel: g.coverWriteRel,
                 ok,
-                message: ok ? notes.join('；') : `${notes.join('；')}；封面没写成：${why}`,
+                message: notes.join('；'),
             });
             bumpProgress(job, { processed: job.progress.processed + 1, hits: written, current: '' });
         }
@@ -349,9 +351,9 @@ export async function runApply(
             }
         }
 
-        // ── ⑤ 主动同步收藏夹（若涉及的条目被收藏，即刻更新路径与新封面） ──
+        // ── ⑥ 主动同步收藏夹（只把**真写成了**的组交过去） ──
         try {
-            await syncPlaylistsAfterApply(dataDir, serial, groups, (s, r, m) => findCache(s, r, m));
+            await syncPlaylistsAfterApply(dataDir, serial, okGroups, (s, r, m) => findCache(s, r, m));
         } catch (e) {
             console.error('[apply] 同步收藏夹失败:', e);
         }
@@ -407,97 +409,6 @@ export async function syncPlaylistsAfterApply(
             }
         }
     }
-}
-
-/**
- * 任意图片字节 → 真 JPEG。
- *   JPEG 本尊 → 原样返回（零损耗零转码）；
- *   PNG / 其它 nativeImage 认的 → 解码后重编；
- *   nativeImage 解不开（典型：改后缀的 WebP）→ ffmpeg 兜底转 PNG 再编（复用
- *   thumbnail.ts 的 `transcodeImage`，中转文件在系统盘临时目录，用完即删）。
- * 都失败返回 null —— 调用方把这一行记成失败，不写半截文件。
- */
-export async function toJpeg(buf: Buffer): Promise<Buffer | null> {
-    if (isJpeg(buf)) return buf;
-
-    const img = nativeImage.createFromBuffer(buf);
-    if (!img.isEmpty()) return img.toJPEG(COVER_JPEG_QUALITY);
-
-    // ffmpeg 兜底：源写系统盘临时目录（不碰移动硬盘），转 PNG → 解码 → 编 JPEG
-    const rand = Math.random().toString(36).slice(2, 8);
-    const src = path.join(os.tmpdir(), `ff-cover-src-${process.pid}-${Date.now()}-${rand}.bin`);
-    const out = path.join(os.tmpdir(), `ff-cover-out-${process.pid}-${Date.now()}-${rand}.png`);
-    try {
-        await fsasync.writeFile(src, buf);
-        if (!(await transcodeImage(src, out))) return null;
-        const png = await fsasync.readFile(out);
-        const decoded = nativeImage.createFromBuffer(png);
-        return decoded.isEmpty() ? null : decoded.toJPEG(COVER_JPEG_QUALITY);
-    } catch {
-        return null;
-    } finally {
-        fsasync.unlink(src).catch(() => {});
-        fsasync.unlink(out).catch(() => {});
-    }
-}
-
-/** 是不是 JPEG 本尊（FF D8 FF）。是的话原样落盘，不再走一遍有损编码 */
-function isJpeg(buf: Buffer): boolean {
-    return buf.length > 2 && buf[0] === 0xff && buf[1] === 0xd8 && buf[2] === 0xff;
-}
-
-/** 写入 JPEG 的质量。封面本来就是有损的再分发，90 在体积和观感上是常见的稳态点 */
-const COVER_JPEG_QUALITY = 90;
-
-/**
- * 经 Chromium 网络栈下载一张图。
- *
- * 为什么不用 `net.fetch`：Electron 44 的 RequestInit 类型只放行了
- * `bypassCustomProtocolHandlers`，`session` 选项不在类型里；而 `net.request`
- * 的 options 从类型到运行时都明确支持 `session` + `useSessionCookies` ——
- * 用它才能把「和抓取页面同一个 session（CF cookie 自动带上）」写成类型保证。
- *
- * 导出给「预览代理」复用（index.ts 的 /assistant/preview）：预览和写盘必须走
- * **同一条下载通道**，预览能显示的就一定能写入。
- */
-export function download(
-    url: string,
-    signal: AbortSignal,
-): Promise<{ status: number; buf: Buffer; type: string | null }> {
-    return new Promise((resolve, reject) => {
-        const req = net.request({
-            url,
-            session: session.fromPartition('persist:assistant'),
-            useSessionCookies: true,
-        });
-        if (/javbus|buscdn|\/pics\/|dmm/i.test(url)) {
-            req.setHeader('Referer', 'https://www.javbus.com/');
-        }
-        req.setHeader('User-Agent', 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36');
-        let settled = false;
-        const done = (fn: () => void) => {
-            if (settled) return;
-            settled = true;
-            fn();
-        };
-
-        signal.addEventListener('abort', () => {
-            try { req.abort(); } catch { /* 已结束 */ }
-        }, { once: true });
-
-        req.on('response', res => {
-            const chunks: Buffer[] = [];
-            res.on('data', (chunk: Buffer) => chunks.push(chunk));
-            res.on('end', () => done(() => resolve({
-                status: res.statusCode ?? 0,
-                buf: Buffer.concat(chunks),
-                type: (res.headers['content-type'] as string | undefined) ?? null,
-            })));
-            res.on('error', (e: Error) => done(() => reject(e)));
-        });
-        req.on('error', (e: Error) => done(() => reject(e)));
-        req.end();
-    });
 }
 
 /**
@@ -571,7 +482,8 @@ export async function readWrittenDirs(dataDir: string, serial: string): Promise<
     for (const line of text.split('\n')) {
         const f = line.split('\t');
         if (f.length < 3 || f[1] !== serial) continue;
-        // 失败行也收：分组可能已经搬完了分卷才在封面这步失败，层目录同样变过样
+        // 失败行也收（无害）：2026-11-10 起「先拿封面再动盘」，失败时盘上零改动，
+        // 但日志里仍有这条路径；多重扫一个目录只是把缓存刷成盘上现状。
         const a = dirOf(f[2]);
         if (a) dirs.add(a);
         const b = dirOf(a);
