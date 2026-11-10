@@ -1811,15 +1811,29 @@ const onKeyup = (e: KeyboardEvent) => {
     // 理由：模式态下用户手一直放在键盘上（点格子挑），误触 S / D / Backspace
     // 会当场跳到搜索框、文件夹选择器、上一屏 —— 而屏幕上看不出是"跑偏了"。
     // ⚠️ F5 刷新**不短路**：它是"我挑完想看看盘上现在什么样"，模式态里照样有用。
+    // ⚠️ `Alt+←/→` 也短路（2026-11-10 双向导航）：它是"跳屏"，与 Backspace 同族 ——
+    //    在挑选过程中把屏换掉，选中的那批格子还在、但你看不见它们了。
     if (picking.value) {
         if (e.key === 'Escape') {
             exitPick();
             return;
         }
         if (e.key.toUpperCase() === 'S' || e.key.toUpperCase() === 'D' || e.key === 'Backspace') return;
+        if (e.altKey && (e.key === 'ArrowLeft' || e.key === 'ArrowRight')) return;
     }
 
-    if (e.key.toUpperCase() === 'S') {
+    if (e.altKey && (e.key === 'ArrowLeft' || e.key === 'ArrowRight')) {
+        /**
+         * `Alt+←` / `Alt+→` = 后退 / 前进（资源管理器、浏览器的通用手势）。
+         *
+         * ⚠️ 必须在 `useGridCursor` 里挡掉同一组键的 keydown：那边不看修饰键，
+         *    `Alt+→` 会先被它吃成"选择器右移一格"；而 keydown 里 `preventDefault`
+         *    **挡不住 keyup** ⇒ 不加那条守卫就是"移动一格 + 跳屏"同时发生。
+         * ⚠️ 越界由 `goStep` 静默处理（栈底 / 尾巴尽头什么都不做），这里不判。
+         */
+        e.preventDefault();
+        void (e.key === 'ArrowLeft' ? onBack() : onForward());
+    } else if (e.key.toUpperCase() === 'S') {
         // 收起态它只是一颗图标 —— 先展开再聚焦（`openSearch` 内部 nextTick 才 focus）
         openSearch();
     } else if (e.key === 'F5') {

@@ -488,6 +488,14 @@ export function useGridCursor(deps: {
         }
         const dir = DIR_KEYS[e.key];
         if (!dir) return;                             // 其余按键一律不碰
+        /**
+         * ⚠️ 带 Alt 的方向键**不是网格导航**（2026-11-10 双向导航）：
+         * `Alt+←/→` 是后退 / 前进，由 `index.vue` 的 keyup 接手。
+         * 不加这条守卫的后果不是"少移动一格"，而是**两个动作都发生** ——
+         * keydown 里 `preventDefault` 挡不住 keyup ⇒ 选择器动一格 + 整屏跳走，
+         * 而屏换掉之后那"一格"已经没人看得见了（最难查的那种）。
+         */
+        if (e.altKey) return;
         if (isGridKeyBlocked(e)) return;              // 焦点在会吃方向键的控件上 ⇒ 键归它
         if (isPreviewOpen()) return;                  // 预览层开着：← → 翻页 / ↑ ↓ 缩放都是它的
         e.preventDefault();                           // 别让方向键滚页面
