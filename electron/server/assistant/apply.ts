@@ -56,8 +56,9 @@ import { patchItemByLocation } from '../playlistStore';
 import { enqueue, CancelledError } from './queue';
 import { appendTombstone } from './hits';
 import { cardKeyOf } from './cardKey';
-import { getVerifiedCover, isUsableCoverUrl } from './coverImage';
+import { getVerifiedCover, isUsableCoverUrl, toJpeg } from './coverImage';
 import type { CoverCheck } from './coverImage';
+import { framePath } from './frame';
 import type { GrabRow } from './grab';
 import type { Job } from './jobs';
 import { bumpProgress, finishJob, pushRow } from './jobs';
@@ -86,6 +87,11 @@ interface ApplyGroup {
     /** 要搬进番号文件夹的源视频（盘内相对路径，含扩展名） */
     srcRels: string[];
     coverUrl: string;
+    /**
+     * 帧缓存文件名（`frame.ts` 的 `FrameRow.frameFile`）。非空 ⇒ 这一组的封面字节来自
+     * **本地抽帧**，不下载。两者互斥：帧行没有 coverUrl，抓取行没有 frameFile。
+     */
+    frameFile: string | null;
     /**
      * `true` = 目标是**用户已有的那个封面文件**（`kind:'cover'`）⇒ 写入前必须先备份。
      * `false` = 写的是**新文件** `<目录名>.jpg`（`kind:'dir'`）⇒ 无破坏、不备份。
@@ -129,9 +135,9 @@ async function exists(abs: string): Promise<boolean> {
 export function buildGroups(rows: GrabRow[]): ApplyGroup[] {
     const groups = new Map<string, ApplyGroup>();
     for (const r of rows) {
-        // `isUsableCoverUrl` 与抓取 / 预览是同一判据：空链接、blob/data、相对路径
-        // 一律进不了写盘分组（它们根本下载不回来，进来了只会产出没封面的文件夹）
-        if (r.status !== 'ok' || !isUsableCoverUrl(r.coverUrl)) continue;
+        // 门槛两条腿：站点行要有能下载的 URL，帧行要有本地字节来源（`frame === true`）。
+        // 帧行的 coverUrl 恒为 null —— 只判 URL 会把抽帧结果整批挡在写盘之外。
+        if (r.status !== 'ok' || (!isUsableCoverUrl(r.coverUrl) && !r.frame)) continue;
 
         if (r.kind === 'dir' || r.kind === 'cover') {
             // 两者都是「**只写封面、不搬任何东西**」，区别只在写哪、有没有破坏：
@@ -148,7 +154,7 @@ export function buildGroups(rows: GrabRow[]): ApplyGroup[] {
                 groups.set(key, {
                     key, kind: 'dir', query: r.query, coverWriteRel: r.writeRel,
                     layerDir: dirOf(r.writeRel), folderRel: '', srcRels: [],
-                    coverUrl: r.coverUrl, overwrite,
+                    coverUrl: r.coverUrl ?? '', frameFile: r.frameFile ?? null, overwrite,
                 });
             }
             continue;
@@ -165,7 +171,10 @@ export function buildGroups(rows: GrabRow[]): ApplyGroup[] {
                 layerDir,
                 folderRel: joinRel(layerDir, r.query),
                 srcRels: [],
-                coverUrl: r.coverUrl,
+                coverUrl: r.coverUrl ?? '',
+                // 文件形态取**该组第一条带帧的行**：同一张卡的分卷行共用一张脸，
+                // 只要有一行带 frameFile，整组（连同全部 srcRels）就走本地字节。
+                frameFile: r.frameFile ?? null,
                 overwrite: false,
             };
             groups.set(key, g);
@@ -173,6 +182,26 @@ export function buildGroups(rows: GrabRow[]): ApplyGroup[] {
         if (r.srcRel && !g.srcRels.includes(r.srcRel)) g.srcRels.push(r.srcRel);
     }
     return [...groups.values()];
+}
+
+/**
+ * 帧行的字节来源：读系统盘缓存文件，**不出网**。
+ *
+ * 形状与 `getVerifiedCover` 的返回值一致（`CoverCheck`），让 `runApply` 只保留一个分支点：
+ * 走到这里之后，站点封面与抽帧封面完全同路（备份 / 原子写 / 搬迁 / 日志都不分叉）。
+ * `urlBad` 恒 false：没有 URL 可怪，缓存没了就让用户重抽一次。
+ */
+async function localCover(dataDir: string, serial: string, file: string): Promise<CoverCheck> {
+    let raw: Buffer;
+    try {
+        raw = await fsasync.readFile(framePath(dataDir, serial, file));
+    } catch {
+        return { ok: false, jpg: null, urlBad: false, why: '抽帧缓存不在了，重抽一次' };
+    }
+    if (!raw.length) return { ok: false, jpg: null, urlBad: false, why: '抽帧缓存是空文件' };
+    const jpg = await toJpeg(raw);
+    if (!jpg) return { ok: false, jpg: null, urlBad: false, why: '抽帧图解不出来' };
+    return { ok: true, jpg, urlBad: false, why: '' };
 }
 
 /**
@@ -238,7 +267,9 @@ export async function runApply(
             // 抓取时验过的字节大多已在 `verifiedBytes` 里 ⇒ 这里连网络都不出。
             let cover: CoverCheck;
             try {
-                cover = await getVerifiedCover(g.coverUrl, job.controller.signal, enqueue);
+                cover = g.frameFile
+                    ? await localCover(dataDir, serial, g.frameFile)
+                    : await getVerifiedCover(g.coverUrl, job.controller.signal, enqueue);
             } catch (e) {
                 // 取消是控制流，不是"这一部写失败"
                 if (job.cancelled || e instanceof CancelledError) break;
@@ -320,6 +351,9 @@ export async function runApply(
             }
 
             // ── ⑤ 失效目录缓存（写完不失效，UI 永远是旧脸） ──
+            // 帧缓存到此已落盘到移动硬盘，系统盘那一份没人再引用 ⇒ 立刻回收。
+            // 放这里而不是更早：写失败时要留着它给用户重试。
+            if (g.frameFile) fsasync.unlink(framePath(dataDir, serial, g.frameFile)).catch(() => {});
             written += 1;
             okGroups.push(g);
             // 文件形态：视频搬走 + 新文件夹长脸，都发生在**层目录**的缓存文档里；

@@ -1,0 +1,14 @@
+  ✅ 8 个分卷 → **1 组**（同层同番号收拢）
+  ✅ 8 个 srcRel **一个不少**
+  ✅ 封面路径 = 番号文件夹同名图
+  ✅ 整组共用同一份帧缓存
+  ✅ 帧行不被 URL 门槛挡掉（coverUrl 为 null 也要进组）
+  ✅ 文件形态仍标记为要搬卷
+  ✅ 目录形态 → 1 组、不搬任何文件
+  ✅ 目录形态 `overwrite:false`（写的是新文件，不备份）
+  ✅ 目录形态也带上 frameFile
+  ✅ 混批 → 2 组
+  ✅ 帧行那组带 frameFile
+  ✅ 没有 frameFile 的行 → 仍走 URL（不被帧分支吞掉）
+
+frame-apply probe: 12 passed, 0 failed

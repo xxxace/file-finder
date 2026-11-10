@@ -51,6 +51,8 @@ import type { ApplyRow } from './apply';
 import { getVerifiedCover, isUsableCoverUrl } from './coverImage';
 import { scanMissingCovers, deepScanMissingCovers, collectFaces } from './scan';
 import type { ScanTarget, FacePick } from './scan';
+import { runFrameJob, readFrameIndex, framePath } from './frame';
+import type { FrameRow } from './frame';
 import { getDrives } from '../../utils/driveIdentity';
 import { ensureGfriendsIndex, matchGfriends, getAvatarUrl } from './gfriends';
 import { scanActorFolders } from './avatarScan';
@@ -392,6 +394,8 @@ export function createAssistantRoutes(deps: AssistantDeps): AssistantRoute[] {
             force?: boolean;
             /** 只对 `kind:'grab'` 有意义：把这一批追加到已有 job（重抓失败项用） */
             jobId?: string;
+            /** 只对 `kind:'frame'` 有意义：单卡「换一帧」把新行并进同一个 job */
+            appendTo?: string;
             /** 只对 `kind:'avatar'` 有意义：要写入头像的目录与图片地址 */
             items?: AvatarApplyItem[];
         };
@@ -399,11 +403,24 @@ export function createAssistantRoutes(deps: AssistantDeps): AssistantRoute[] {
         if (body.kind === 'challenge') return startChallenge(body, res);
         if (body.kind === 'apply') return startApply(body, res);
         if (body.kind === 'avatar') return startAvatarApply(body, res);
+        if (body.kind === 'frame') return startFrame(body, res);
         if (body.kind !== 'grab') {
             sendJson(res, { code: 400, error: `未知任务类型：${body.kind ?? '(空)'}` });
             return;
         }
         return startGrab(body, res);
+    }
+
+    /**
+     * 「这块盘现在能不能动」的**唯一判据**（抓取 / 抽帧 / 写入都要先过它）。
+     *
+     * 为什么收成一个函数：离线盘上抓取和抽帧都是白费力气 —— 抽帧读不到视频，抓取到的封面
+     * 也写不进去（写入那边本来就判了盘在线）。三处各写一遍 `find(d => d.serial === serial)`
+     * 只会漂成三种口径，而漂错的那一种的表现是"点了没反应"。
+     */
+    async function assertOnline(serial: string): Promise<string> {
+        const drive = (await getDrives(true)).find(d => d.serial === serial);
+        return drive ? '' : '这块盘现在不在线，插上盘再操作';
     }
 
     async function startGrab(
@@ -415,6 +432,13 @@ export function createAssistantRoutes(deps: AssistantDeps): AssistantRoute[] {
         },
         res: http.ServerResponse,
     ) {
+        if (body.serial) {
+            const why = await assertOnline(body.serial);
+            if (why) {
+                sendJson(res, { code: 409, error: why });
+                return;
+            }
+        }
         const targets = body.targets?.length
             ? body.targets
             : body.serial
@@ -475,27 +499,140 @@ export function createAssistantRoutes(deps: AssistantDeps): AssistantRoute[] {
     }
 
     /**
-     * 写盘：把一个已完成 grab job 里的命中结果真正写进盘。
-     * 输入 `{serial, jobId, picks?}` —— 封面 URL 在 grab 行里，不信任前端转发的第二份；
-     * `picks` 是确认弹窗勾选的 writeRel 白名单（不传 = 全写）。
+     * 抽帧：把"抓取没拿到封面"的卡用视频关键帧补上。
+     *
+     * 与 `startGrab` 的形状刻意一致（建 job → 立刻回 id → 异步跑），差别只有：
+     *   · 目标必须真的在盘上（要抽帧就得读到视频）⇒ 先过 `assertOnline`
+     *   · `appendTo` 让单卡「换一帧」把新行并进同一个 job，卡不会因为换了 job 丢回 idle
+     *   · 同一时刻只允许一个抽帧任务（机械盘并发寻道只会更慢）
      */
-    async function startApply(body: { serial?: string; jobId?: string; picks?: string[] }, res: http.ServerResponse) {
+    async function startFrame(
+        body: { serial?: string; targets?: ScanTarget[]; appendTo?: string },
+        res: http.ServerResponse,
+    ) {
         if (!body.serial) {
             sendJson(res, { code: 400, error: '缺少 serial' });
             return;
         }
-        const grabJob = body.jobId ? getJob(body.jobId) : undefined;
-        if (!grabJob || grabJob.kind !== 'grab') {
-            sendJson(res, { code: 404, error: '找不到这个抓取任务（任务可能在内存里被回收了，重新抓一次）' });
+        const why = await assertOnline(body.serial);
+        if (why) {
+            sendJson(res, { code: 409, error: why });
             return;
         }
-        if (grabJob.status === 'running') {
-            sendJson(res, { code: 409, error: '抓取还没跑完，等它结束再写入' });
+        const targets = (body.targets ?? []).filter(t => t?.writeRel);
+        if (!targets.length) {
+            sendJson(res, { code: 200, jobId: null, total: 0, message: '没有可抽帧的目标' });
             return;
         }
-        // 只写命中的行，且 URL 必须过同一个形态判据（空链接 / blob / 相对地址不许进写盘）。
-        // `ok` 行可能因为番号 memo 有重复（同一部片多个分卷共用一张），那是刻意的。
-        const rows = (grabJob.rows as GrabRow[]).filter(r => r.status === 'ok' && isUsableCoverUrl(r.coverUrl));
+
+        if (body.appendTo) {
+            const job = getJob<FrameRow>(body.appendTo);
+            if (!job || job.kind !== 'frame') {
+                sendJson(res, { code: 404, error: '找不到那个抽帧任务（可能已被回收），重新抽一次' });
+                return;
+            }
+            if (job.status === 'running' || job.status === 'paused') {
+                sendJson(res, { code: 409, error: '这个任务还在跑，先暂停或终止它' });
+                return;
+            }
+            reopenJob(job);
+            void runFrameJob(body.serial, targets, job, dataDir);
+            sendJson(res, { code: 200, jobId: job.id, total: targets.length, appended: true });
+            return;
+        }
+
+        const running = listJobs().find(j => j.kind === 'frame' && (j.status === 'running' || j.status === 'paused'));
+        if (running) {
+            sendJson(res, {
+                code: 200, jobId: running.id, total: running.progress.total, reused: true,
+                message: running.status === 'paused' ? '这个任务正暂停着，先继续或终止它' : '已接上正在跑的那个抽帧任务',
+            });
+            return;
+        }
+
+        const job = createJob<FrameRow>('frame', targets.length);
+        void runFrameJob(body.serial, targets, job, dataDir);
+        sendJson(res, { code: 200, jobId: job.id, total: targets.length });
+    }
+
+    /** 帧缓存回填：这块盘上已经抽过的帧（零读盘，只 readdir + 算卡键） */
+    async function frameIndex(req: ReqLike, res: http.ServerResponse) {
+        const body = (req.body || {}) as { serial?: string; targets?: ScanTarget[] };
+        if (!body.serial) {
+            sendJson(res, { code: 400, error: '缺少 serial' });
+            return;
+        }
+        // targets 由前端带过来（就是它刚扫出来的那批）：避免这里为了回填再跑一次全盘缓存扫描，
+        // 也保证"回填的卡"与"界面上的卡"是同一批。
+        const targets = body.targets ?? (await scanMissingCovers(body.serial, '')).targets;
+        sendJson(res, { code: 200, frames: await readFrameIndex(dataDir, body.serial, targets) });
+    }
+
+    /**
+     * 帧预览。文件名一律过白名单正则 —— 这是本项目**唯一**一个把调用方给的字符串拼进
+     * 文件系统路径的地方，不挡就是目录穿越。
+     */
+    async function framePreview(req: ReqLike, res: http.ServerResponse) {
+        const serial = req.params?.get('serial') || '';
+        const file = req.params?.get('f') || '';
+        if (!serial || !/^[0-9a-f]{16}_a\d{1,2}_p\d{1,3}_s\d_n[0-9a-z]+\.jpg$/.test(file)) {
+            sendJson(res, { code: 400, error: '文件名不合法' });
+            return;
+        }
+        try {
+            const buf = await fsp.readFile(framePath(dataDir, serial, file));
+            res.writeHead(200, { 'Content-Type': 'image/jpeg', 'Cache-Control': 'no-store' });
+            res.end(buf);
+        } catch {
+            sendJson(res, { code: 404, error: '帧缓存不在了' }, 404);
+        }
+    }
+
+    /**
+     * 写盘：把已完成任务里的命中结果真正写进盘。
+     * 输入 `{serial, jobId, picks?}` —— 封面 URL 在 grab 行里，不信任前端转发的第二份；
+     * `picks` 是确认弹窗勾选的 writeRel 白名单（不传 = 全写）。
+     */
+    async function startApply(
+        body: { serial?: string; jobId?: string; jobIds?: string[]; picks?: string[] },
+        res: http.ServerResponse,
+    ) {
+        if (!body.serial) {
+            sendJson(res, { code: 400, error: '缺少 serial' });
+            return;
+        }
+        /**
+         * 收**多个** job 的结果：一条主流程可能是"抓取没抓到 → 抽帧补上"，
+         * 两边各有一个 job。原来只收一个 grab job ⇒ 抽帧的结果永远写不进去。
+         * 旧单值 `jobId` 保留，兼容已打开的旧面板。
+         */
+        const ids = body.jobIds?.length ? body.jobIds : (body.jobId ? [body.jobId] : []);
+        const jobs = ids.map(id => getJob(id)).filter((j): j is Job => !!j);
+        if (!jobs.length) {
+            sendJson(res, { code: 404, error: '找不到这个任务（任务可能在内存里被回收了，重新抓一次）' });
+            return;
+        }
+        const badKind = jobs.find(j => j.kind !== 'grab' && j.kind !== 'frame');
+        if (badKind) {
+            sendJson(res, { code: 400, error: `这个任务不能写入（${badKind.kind}）` });
+            return;
+        }
+        if (jobs.some(j => j.status === 'running')) {
+            sendJson(res, { code: 409, error: '任务还没跑完，等它结束再写入' });
+            return;
+        }
+        // 只写命中的行：站点行要有能下载的 URL，帧行要有本地字节（`frame === true`）。
+        // 同一个 writeRel 在多个 job 里出现时**后者说了算**（抽帧是用户的后续动作）；
+        // `ok` 行本身可能重复（同一部片多个分卷共用一张），那是刻意的。
+        const byRel = new Map<string, GrabRow>();
+        for (const j of jobs) {
+            for (const r of j.rows as GrabRow[]) {
+                if (r.status !== 'ok') continue;
+                if (!isUsableCoverUrl(r.coverUrl) && !r.frame) continue;
+                byRel.set(r.writeRel, r);
+            }
+        }
+        const rows = [...byRel.values()];
         if (!rows.length) {
             sendJson(res, { code: 200, jobId: null, total: 0, message: '没有可写入的封面（这一批没有命中）' });
             return;
@@ -838,6 +975,16 @@ export function createAssistantRoutes(deps: AssistantDeps): AssistantRoute[] {
         ['/assistant/rebuild', (req, res) => {
             const method = req.method?.toUpperCase();
             if (method === 'POST') return deepScan(req, res);
+            return sendJson(res, { code: 405, error: 'method not allowed' }, 405);
+        }],
+        ['/assistant/frames', (req, res) => {
+            const method = req.method?.toUpperCase();
+            if (method === 'POST') return frameIndex(req, res);
+            return sendJson(res, { code: 405, error: 'method not allowed' }, 405);
+        }],
+        ['/assistant/frame', (req, res) => {
+            const method = req.method?.toUpperCase();
+            if (method === 'GET') return framePreview(req, res);
             return sendJson(res, { code: 405, error: 'method not allowed' }, 405);
         }],
         ['/assistant/preview', (req, res) => {
