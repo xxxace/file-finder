@@ -322,6 +322,9 @@ async function probeDuration(filepath: string): Promise<number | null> {
     return probeSeconds(filepath, ['-show_entries', 'format=duration']);
 }
 
+/** 时长（秒）—— 抽帧批量的调用方拿它 probe 一次、之后只换秒数。取不到返回 null */
+export const probeVideoSeconds = probeDuration;
+
 /**
  * 取一帧（视频缩略图用）。⚠️ 不能用 `timestamps: ['1%']`：百分比会触发 fluent-ffmpeg 内部再起一个够不着的 ffprobe 子进程，超时 kill 杀不到 ⇒ 孤儿进程攥着源视频句柄；须先自己带超时拿时长、传数字秒。
  * ⚠️ 抽帧位置取时长 1% 躲片头黑场；取不到时长直接返回 false，别退化成固定时间点。
@@ -375,11 +378,23 @@ export const FRAME_LONG_EDGE = 1280;
 export async function frameJpeg(file: string, pct: number, maxEdge = FRAME_LONG_EDGE): Promise<Buffer | null> {
     const duration = await probeDuration(file);
     if (duration === null) return null;
+    return frameJpegAt(file, (duration * pct) / 100, maxEdge);
+}
 
-    // 钳到 [0, duration-0.1]：duration 本身可能是 0.5s 的短片，
-    // pct 再大也不能越过流末尾（越界时 ffmpeg 会 exit 0 却不写文件）
-    const at = Math.min(Math.max((duration * pct) / 100, 0), Math.max(duration - 0.1, 0));
+/** 百分比 → 秒（钳到 `[0, duration-0.1]`）。越界时 ffmpeg 会 exit 0 却不写文件 */
+export function secondsOf(duration: number, pct: number): number {
+    return Math.min(Math.max((duration * pct) / 100, 0), Math.max(duration - 0.1, 0));
+}
 
+/**
+ * 取**指定秒**处的一帧。
+ *
+ * ⚠️ 与 `frameJpeg` 的分工：「换一帧」会在一部片上连抽 4 档，每档都重新 probe 一次时长
+ *    = 移动硬盘上多出 4 次（format 兜底时 8 次）头部读、最多 12 个子进程 ——
+ *    2.5″ 盘最怕的形态（寻道 + 供电峰值）。所以调用方**先 probe 一次**，循环里只换秒数。
+ */
+export async function frameJpegAt(file: string, atSec: number, maxEdge = FRAME_LONG_EDGE): Promise<Buffer | null> {
+    const at = Math.max(atSec, 0);
     const frame = path.join(
         os.tmpdir(),
         `ff-cover-frame-${process.pid}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}.jpg`,
