@@ -729,7 +729,18 @@ async function wire(items: FileInfo[], serial = '', relPath = '', live = true): 
     //
     // ⚠️ 必须**构造新对象**（`{ ...it, size }`），绝不原地改 `items[i].size` ——
     //    `items` 就是 nedb 内存里那个文档的 `data`，原地改会把 size 写进库里、污染 `bytes`。
-    const subBytes = await safeSubtreeBytes(serial, relPath);
+    /**
+     * ⚠️ 只有**含目录条目**时才值得去算子树大小。
+     *
+     * `safeSubtreeBytes` 内部是 `loadMeta({ withBytes: true })` = **全库**（所有盘）克隆一遍
+     * 再按 serial 归并。平铺视图下发的**全是叶子**（`findSubtreeLeafItems` 只收非目录项），
+     * 一张子目录表根本用不上 ⇒ 那片开销是纯白干的，而且它随库大小线性涨。
+     * 2026-11-10 放开"任意层级平铺"之后平铺变成常用视图，这条才从"偶尔白干"变成"每次都白干"。
+     * 判据是**这批数据里有没有目录条目**，不是"是不是平铺" —— 一个只有文件的普通目录同样不需要。
+     */
+    const subBytes = items.some(it => it.type === 'folder')
+        ? await safeSubtreeBytes(serial, relPath)
+        : new Map<string, number>();
     const sized = subBytes.size
         ? items.map(it => (it.type === 'folder'
             ? { ...it, size: subBytes.get(diskNameOf(it)) ?? it.size }
