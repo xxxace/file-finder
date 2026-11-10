@@ -20,6 +20,7 @@ import { frameJpeg } from '../../utils/thumbnail';
 import { cardKeyOf, key16Of } from './cardKey';
 import { FLAT_RATIO, FLAT_SAMPLE, PCT_LADDER, flatRatio, pctOf } from './frameMath';
 import { isVideo } from '../videoExt';
+import { loadMeta } from '../nedb';
 import { scanMissingCovers } from './scan';
 import type { ScanTarget } from './scan';
 import type { GrabRow } from './grab';
@@ -315,10 +316,148 @@ export async function readFrameIndex(
 /**
  * 帧缓存盘点用的辅助：把这块盘"仍缺封面"的卡键集合算出来（纯缓存，零读盘）。
  * 集合外的帧 = 没人引用了（作品已删/改名/换盘/后来补上了正式封面）。
+ *
+ * ⚠️ `maxDocs: Infinity` 不是可选项 —— 默认 3000 截断会让超出上限的卡"消失"，
+ *    它们的帧被判成孤儿，用户点清理就真删了还能用的东西。
  */
 export async function liveKeysOf(serial: string): Promise<Map<string, ScanTarget[]>> {
-    const res = await scanMissingCovers(serial, '');
+    const res = await scanMissingCovers(serial, '', { maxDocs: Infinity });
     return groupByCard(res.targets);
+}
+
+/** 帧缓存里的一项（设置页列表用） */
+export interface FrameCacheItem {
+    file: string;
+    serial: string;
+    bytes: number;
+    mtime: number;
+    pct: number;
+    attempt: number;
+    /** `true` = 系统判定为"没有引用"，可以清 */
+    orphan: boolean;
+}
+
+export interface FrameInventory {
+    /** 全部帧（张数 / 字节），用来显示区块头 */
+    total: number;
+    bytes: number;
+    /** 其中被判为无引用的（只列这些给用户看） */
+    orphans: FrameCacheItem[];
+    /** 仍被引用的张数（不列，只用于"共 N 张 / M 张在用"这种说明） */
+    live: number;
+    /** 因为盘不在线而没核实到的张数（级二跳过的那批） */
+    offlineSkipped: number;
+}
+
+/** 帧目录下的盘序列号（一个子目录一块盘）。没有帧就返回空数组 */
+async function serialsWithFrames(dataDir: string): Promise<string[]> {
+    const entries = await fsasync.readdir(path.join(dataDir, 'frames'), { withFileTypes: true }).catch(() => []);
+    return entries.filter(e => e.isDirectory()).map(e => e.name);
+}
+
+/**
+ * 盘点（级一，**零读盘**）：只读系统盘 + 缓存记录，移动硬盘一个字节都不碰。
+ *
+ * 判据只有一条：帧的卡键还在不在"仍缺封面"的集合里。已经补上正式封面的卡不在集合里，
+ * 它的抽帧帧自然判废 —— 这就是主人说的"有封面且有抽帧封面，指定是要废弃的"。
+ *
+ * @param verify 级二：对仍判"在用"的项，按盘上真实路径 stat 一次。**只 stat 有帧的那几项**，
+ *   不是扫盘；盘离线就整批跳过并计入 `offlineSkipped`。
+ */
+export async function inventoryFrames(dataDir: string, verify = false): Promise<FrameInventory> {
+    const serials = await serialsWithFrames(dataDir);
+
+    // 只有**有缓存记录**的盘才敢判"没人要了"：缓存库被清空/重建时，
+    // 所有盘都会"没有任何卡"，那种情况下把帧全判成孤儿就是一场灾难。
+    const known = new Set((await loadMeta()).map(m => m.serial));
+
+    const out: FrameInventory = { total: 0, bytes: 0, orphans: [], live: 0, offlineSkipped: 0 };
+    const drives = verify ? await getDrives(true) : [];
+
+    for (const serial of serials) {
+        const dir = frameDirOf(dataDir, serial);
+        const files = await fsasync.readdir(dir, { withFileTypes: true }).catch(() => []);
+        const jpgs = files.filter(e => e.isFile() && FRAME_NAME_RE.test(e.name)).map(e => e.name);
+        if (!jpgs.length) continue;
+
+        const sizes = new Map<string, { bytes: number; mtime: number }>();
+        for (const f of jpgs) {
+            const st = await fsasync.stat(path.join(dir, f)).catch(() => null);
+            if (st) sizes.set(f, { bytes: st.size, mtime: st.mtimeMs });
+        }
+
+        const canJudge = known.has(serial);
+        const liveByKey16 = new Map<string, ScanTarget[]>();
+        if (canJudge) {
+            for (const [k, v] of await liveKeysOf(serial)) liveByKey16.set(key16Of(k), v);
+        }
+        const drive = drives.find(d => d.serial === serial);
+        const root = drive ? (drive.root.endsWith('/') || drive.root.endsWith('\\') ? drive.root : `${drive.root}/`) : '';
+
+        for (const file of jpgs) {
+            const meta = parseFrameName(file)!;
+            const size = sizes.get(file);
+            out.total += 1;
+            out.bytes += size?.bytes ?? 0;
+
+            const targets = liveByKey16.get(meta.k16);
+            // 判不了的盘（没有缓存记录）一律算"在用"：宁可不列，也不能让用户误删
+            if (!canJudge || targets?.length) {
+                // 级二：盘在线才核实"缓存说的还在"是不是真的还在
+                if (verify && targets?.length && drive && root) {
+                    const t = targets[0];
+                    const rel = t.kind === 'file' ? t.srcRel : t.writeRel.slice(0, t.writeRel.lastIndexOf('/'));
+                    if (rel) {
+                        const alive = await fsasync.stat(path.join(root, rel.replace(/\//g, path.sep)))
+                            .then(() => true, () => false);
+                        if (!alive) {
+                            out.orphans.push({ file, serial, bytes: size?.bytes ?? 0, mtime: size?.mtime ?? 0, pct: meta.pct, attempt: meta.attempt, orphan: true });
+                            continue;
+                        }
+                    }
+                } else if (verify && targets?.length && !drive) {
+                    out.offlineSkipped += 1;
+                }
+                out.live += 1;
+                continue;
+            }
+
+            out.orphans.push({
+                file, serial, bytes: size?.bytes ?? 0, mtime: size?.mtime ?? 0,
+                pct: meta.pct, attempt: meta.attempt, orphan: true,
+            });
+        }
+    }
+
+    return out;
+}
+
+/**
+ * 清掉无引用的帧。**不信任前端传的文件名**：重算一遍盘点，只删确实落在孤儿集合里的。
+ * 重算是零读盘的一遍扫描，不引入"清理列表过期"的窗口。
+ */
+export async function purgeFrames(
+    dataDir: string,
+    files: string[],
+): Promise<{ removed: number; freed: number; skipped: number }> {
+    const want = new Set(files.filter(f => FRAME_NAME_RE.test(f)));
+    if (!want.size) return { removed: 0, freed: 0, skipped: 0 };
+
+    const inv = await inventoryFrames(dataDir, false);
+    let removed = 0;
+    let freed = 0;
+    for (const item of inv.orphans) {
+        if (!want.has(item.file)) continue;
+        try {
+            await fsasync.unlink(framePath(dataDir, item.serial, item.file));
+            removed += 1;
+            freed += item.bytes;
+        } catch {
+            // 删不掉（被占用 / 已不在）—— 最后按 want.size - removed 统计算作 skipped，不打断整批
+        }
+    }
+    // 想删但已经不在孤儿集合里的（期间被重抽了 / 盘插回来了）一个都不动
+    return { removed, freed, skipped: want.size - removed };
 }
 
 /** 写盘成功后回收那一张帧（已落盘，不再需要） */

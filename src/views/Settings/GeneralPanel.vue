@@ -32,6 +32,19 @@
             <BackupPanel />
         </section>
 
+        <!-- 卡 · 抽帧缓存：补封面抽出来的关键帧是可重建的中间产物。
+             作品补上正式封面 / 改名 / 换盘之后它们就没人引用了 ⇒ 这里负责找出来、看过再清。
+             ⚠️ 不自动删：删之前一定有一个列表给用户看（回收站语义）。 -->
+        <section class="set-card">
+            <div class="set-row set-row-head">
+                <div class="set-text">
+                    <span class="set-title">抽帧缓存</span>
+                    <span class="set-desc">抽帧封面的原件，放在系统盘；已补上正式封面的那些可以清掉</span>
+                </div>
+            </div>
+            <FrameCacheBlock />
+        </section>
+
         <!-- 卡 · 关于：设置页的固定收尾（Microsoft 指南建议）。
              「打开数据目录」不在这里 —— BackupPanel 里已有同一动作，不复制第二个入口。 -->
         <section class="set-card">
@@ -49,6 +62,7 @@
 import { NSwitch, NSlider } from 'naive-ui';
 import { playSfx, sfxPrefs, setSfxEnabled, setSfxVolume } from '@/utils/sfx';
 import BackupPanel from '@/views/Cache/BackupPanel.vue';
+import FrameCacheBlock from './FrameCacheBlock.vue';
 import pkg from '../../../package.json';
 
 const version = pkg.version;

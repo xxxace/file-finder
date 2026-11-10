@@ -240,7 +240,7 @@ function evaluateDocs(
 }
 
 /** 从缓存收集文档（零读盘） */
-async function gatherCacheDocs(serial: string, scope: string): Promise<Map<string, FileInfo[]>> {
+async function gatherCacheDocs(serial: string, scope: string, maxDocs: number): Promise<Map<string, FileInfo[]>> {
     const metas = (await loadMeta()).filter(
         m => m.serial === serial && m.mode === 'cover' && inScope(m.relPath, scope),
     );
@@ -250,7 +250,7 @@ async function gatherCacheDocs(serial: string, scope: string): Promise<Map<strin
     const docs = new Map<string, FileInfo[]>();
     let scannedDocs = 0;
     for (const m of metas) {
-        if (scannedDocs >= MAX_DOCS) break;
+        if (scannedDocs >= maxDocs) break;
         const doc = await findCache(m.serial, m.relPath, m.mode);
         if (doc) docs.set(doc.relPath, doc.data as FileInfo[]);
         scannedDocs += 1;
@@ -258,8 +258,17 @@ async function gatherCacheDocs(serial: string, scope: string): Promise<Map<strin
     return docs;
 }
 
-export async function scanMissingCovers(serial: string, scope: string): Promise<ScanResult> {
-    const docs = await gatherCacheDocs(serial, scope);
+/**
+ * @param opts.maxDocs 缓存文档上限。**默认 3000**（拦截超大库，扫描接口是界面同步调的）。
+ *   ⚠️ 帧缓存盘点（`frame.ts` 的 inventory）必须传 `Infinity`：一截断，超出上限的卡就不在
+ *   "仍缺封面"集合里 ⇒ 还能用的帧被误判成孤儿 ⇒ 用户点清理就真删了。
+ */
+export async function scanMissingCovers(
+    serial: string,
+    scope: string,
+    opts?: { maxDocs?: number },
+): Promise<ScanResult> {
+    const docs = await gatherCacheDocs(serial, scope, opts?.maxDocs ?? MAX_DOCS);
     return { serial, scope, ...evaluateDocs(scope, docs) };
 }
 
@@ -406,7 +415,7 @@ export async function deepScanMissingCovers(
     scope: string,
     dirs: string[],
 ): Promise<ScanResult & { refreshed: number }> {
-    const docs = await gatherCacheDocs(serial, scope);
+    const docs = await gatherCacheDocs(serial, scope, MAX_DOCS);
 
     let refreshed = 0;
     if (dirs.length) {
@@ -533,7 +542,7 @@ function relOfPath(dir: string): string {
 export async function collectFaces(serial: string, picks: FacePick[]): Promise<ScanTarget[]> {
     if (!picks.length) return [];
 
-    const docs = await gatherCacheDocs(serial, '');
+    const docs = await gatherCacheDocs(serial, '', MAX_DOCS);
 
     /** 要整体展开的目录（盘内相对路径；`relOfPath` 负责把主界面的完整路径归一） */
     const scopes = picks

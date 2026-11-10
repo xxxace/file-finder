@@ -51,7 +51,7 @@ import type { ApplyRow } from './apply';
 import { getVerifiedCover, isUsableCoverUrl } from './coverImage';
 import { scanMissingCovers, deepScanMissingCovers, collectFaces } from './scan';
 import type { ScanTarget, FacePick } from './scan';
-import { runFrameJob, readFrameIndex, framePath } from './frame';
+import { runFrameJob, readFrameIndex, framePath, inventoryFrames, purgeFrames } from './frame';
 import type { FrameRow } from './frame';
 import { getDrives } from '../../utils/driveIdentity';
 import { ensureGfriendsIndex, matchGfriends, getAvatarUrl } from './gfriends';
@@ -589,6 +589,27 @@ export function createAssistantRoutes(deps: AssistantDeps): AssistantRoute[] {
     }
 
     /**
+     * 帧缓存盘点 / 核实 / 清理（设置 → 通用 → 抽帧缓存）。
+     *
+     * 级一（inventory）= 只读缓存 + 系统盘，**零读盘、离线也能做**；
+     * 级二（verify）= 对仍判在用的项按真实路径 stat 一次，盘离线就整批跳过。
+     * 清理不信前端：服务端重算一遍再删。
+     */
+    async function frameInventory(req: ReqLike, res: http.ServerResponse, verify: boolean) {
+        const inv = await inventoryFrames(dataDir, verify || (req.body || {}).verify === true);
+        sendJson(res, { code: 200, ...inv });
+    }
+
+    async function framePurge(req: ReqLike, res: http.ServerResponse) {
+        const files = ((req.body || {}).files ?? []) as string[];
+        if (!Array.isArray(files) || !files.length) {
+            sendJson(res, { code: 400, error: '没有要清理的文件' });
+            return;
+        }
+        sendJson(res, { code: 200, ...(await purgeFrames(dataDir, files)) });
+    }
+
+    /**
      * 写盘：把已完成任务里的命中结果真正写进盘。
      * 输入 `{serial, jobId, picks?}` —— 封面 URL 在 grab 行里，不信任前端转发的第二份；
      * `picks` 是确认弹窗勾选的 writeRel 白名单（不传 = 全写）。
@@ -986,6 +1007,18 @@ export function createAssistantRoutes(deps: AssistantDeps): AssistantRoute[] {
             const method = req.method?.toUpperCase();
             if (method === 'GET') return framePreview(req, res);
             return sendJson(res, { code: 405, error: 'method not allowed' }, 405);
+        }],
+        ['/assistant/frames/inventory', (req, res) => {
+            if (req.method?.toUpperCase() !== 'POST') return sendJson(res, { code: 405, error: 'method not allowed' }, 405);
+            return frameInventory(req, res, false);
+        }],
+        ['/assistant/frames/verify', (req, res) => {
+            if (req.method?.toUpperCase() !== 'POST') return sendJson(res, { code: 405, error: 'method not allowed' }, 405);
+            return frameInventory(req, res, true);
+        }],
+        ['/assistant/frames/purge', (req, res) => {
+            if (req.method?.toUpperCase() !== 'POST') return sendJson(res, { code: 405, error: 'method not allowed' }, 405);
+            return framePurge(req, res);
         }],
         ['/assistant/preview', (req, res) => {
             const method = req.method?.toUpperCase();

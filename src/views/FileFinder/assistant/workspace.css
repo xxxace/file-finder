@@ -416,6 +416,26 @@
     cursor: default;
 }
 
+/**
+ * 顶栏 meta 里的可点小字（目前只有「旧帧 N」）。
+ * 用下划线而不是按钮：它是**提示 + 跳转**，不是一个动作入口。
+ */
+.ffw-meta-link {
+    padding: 0;
+    border: 0;
+    background: none;
+    font: inherit;
+    font-size: inherit;
+    color: var(--ff-text-2);
+    text-decoration: underline;
+    text-underline-offset: 2px;
+    cursor: pointer;
+}
+
+.ffw-meta-link:hover {
+    color: var(--ff-text-1);
+}
+
 /* 任务进行中：勾选禁用（点了没效果的事，不如不让点） */
 .ffw-card__check:disabled,
 .ffw-row__check:disabled {

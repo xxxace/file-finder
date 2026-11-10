@@ -18,6 +18,13 @@
                     认不出番号 {{ scan?.unmatched.length ?? 0 }}
                     <i />
                     分类目录跳过 {{ scan?.skippedCategory ?? 0 }}
+                    <!-- 系统盘上没人引用的抽帧帧：只给一条去设置清理的入口，不在工作流里插动作 -->
+                    <template v-if="orphanCount">
+                        <i />
+                        <button type="button" class="ffw-meta-link" :title="`抽帧缓存里有 ${orphanCount} 张已无引用（${mb(orphanBytes)}），在设置里处理`" @click="goFrameCache">
+                            旧帧 {{ orphanCount }}
+                        </button>
+                    </template>
                 </template>
             </template>
 
@@ -229,6 +236,7 @@
 
 <script setup lang="ts">
 import { computed, ref } from 'vue';
+import { useRouter } from 'vue-router';
 import { NModal, NSelect, NIcon } from 'naive-ui';
 import useConfirm from '@/hooks/useConfirm';
 import {
@@ -288,6 +296,7 @@ interface ScanResult {
 const emit = defineEmits<{ refresh: [] }>();
 const notify = useNotify();
 const dialog = useConfirm();
+const router = useRouter();
 
 const visible = ref(false);
 const disks = ref<DiskRow[]>([]);
@@ -414,6 +423,42 @@ const loadFrameIndex = async () => {
     } catch {
         frameIndex.value = [];
     }
+};
+
+// ── 抽帧缓存的"没人要了"提醒（只提醒，不在工作流里插动作） ────────────
+const orphanCount = ref(0);
+const orphanBytes = ref(0);
+const mb = (n: number) => (n >= 1024 * 1024 ? `${(n / 1024 / 1024).toFixed(1)} MB` : `${Math.max(1, Math.round(n / 1024))} KB`);
+
+/**
+ * 后台盘一次"无引用的帧"（零读盘：缓存 + 系统盘 readdir），有就提醒一次。
+ * ⚠️ 节流是**全局每天一次**，不按盘 —— 缓存是整机一件事，一块一块提醒很烦。
+ * ⚠️ 不阻塞面板打开：它是提醒，不是工作流的一环。
+ */
+const checkOrphans = async () => {
+    try {
+        const res = await postAction(`${API_BASE}/assistant/frames/inventory`, {});
+        const list = (res.orphans ?? []) as { bytes: number }[];
+        orphanCount.value = list.length;
+        orphanBytes.value = list.reduce((n, o) => n + (o.bytes ?? 0), 0);
+        if (!orphanCount.value) return;
+
+        const today = new Date().toISOString().slice(0, 10);
+        let last = '';
+        try { last = localStorage.getItem('ff.frameCleanupNotified') ?? ''; } catch { /* 存不下就每次都提醒（可接受） */ }
+        if (last === today) return;
+        try { localStorage.setItem('ff.frameCleanupNotified', today); } catch { /* 同上 */ }
+        notify('warning', `抽帧缓存有 ${orphanCount.value} 张用不到了`,
+            `设置 → 通用 可清理 · ${mb(orphanBytes.value)}`);
+    } catch {
+        // 统计失败不影响补封面
+    }
+};
+
+/** 去设置里处理：先关面板（任务在主进程里活着，回来会挂上） */
+const goFrameCache = () => {
+    void setShowModal(false);
+    void router.push('/settings');
 };
 
 /** 写入行 = 累积的「已写入」+ 当前 apply job 的行（后者排在后面，覆盖前者） */
@@ -558,6 +603,7 @@ const runScan = async () => {
         // 与头像面板同一条时间线：骨架留满一拍再换内容（见 assistant/scanBeat.ts）
         await holdScanBeat(startedAt);
         scanLoading.value = false;
+        void checkOrphans(); // 提醒类动作，不阻塞面板
     }
 };
 
