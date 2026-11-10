@@ -45,7 +45,7 @@
                      扫描期间禁掉：它带 noCache、会真的再读一次盘，与整片扫描并发就是两路读盘。
                      只读层 / 清单屏也禁掉：那两种屏的源就是缓存，没有"重读"这回事。 -->
                 <n-button size="small" :disabled="scanning || readOnlyLevel || playlistLevel"
-                    aria-label="重新读取当前文件夹" v-tip="{ text: '重新读取当前文件夹', keys: 'F5' }" @click="onRefresh">
+                    aria-label="刷新" v-tip="{ text: '刷新', keys: 'F5' }" @click="onRefresh">
                     <template #icon>
                         <n-icon :component="RefreshOutline" />
                     </template>
@@ -150,7 +150,7 @@
                      （2026-11-07 截图里那块白方块就是它）。 -->
                 <n-button class="icon-lg" size="small" :class="{ 'is-on': isFlatView }"
                     :disabled="scanning || !canToggleFlat" @click="toggleFlatView"
-                    v-tip="isFlatView ? { text: '当前为平铺视图，点击切回' } : (canToggleFlat ? { text: '平铺：摊开这一层下面所有作品' } : { text: '收藏清单里没有「向下摊开」这回事' })">
+                    v-tip="isFlatView ? { text: '平铺视图' } : (canToggleFlat ? { text: '平铺这一层' } : { text: '清单不支持平铺' })">
                     <template #icon>
                         <!-- 2 列 × 3 行的**横向卡片** ⇒ "作品摊开成一片"，这就是平铺本身。
                              ⚠️ 换过四版才有定论：`Layers` 画的是"层"、是**被摊的对象**而不是
@@ -859,7 +859,7 @@ const emptyTip = computed(() => {
     if (playlistLevel.value) return '这个收藏夹还是空的 —— 在网格里右键卡片「加入收藏」即可收录';
     // 平铺摊的是**缓存里已有的**子树（纯内存、零读盘）⇒ 深层没扫过时"空"是缓存态，
     // 不是"这个目录空"。不说清就成了"程序把东西弄丢了"，所以要给下一步动作。
-    if (isFlatView.value) return '这一层下面还没扫到作品 —— 平铺只摊缓存里已有的，「更新读取」扫一遍再看';
+    if (isFlatView.value) return '这一层下面还没扫到作品（平铺只摊缓存里已有的）';
     return '这个目录是空的';
 });
 

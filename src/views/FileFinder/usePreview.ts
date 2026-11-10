@@ -259,6 +259,18 @@ export function usePreview(deps: {
      * 不同步的话"翻到第 12 张、按回车定位"会落回第 1 格 —— 用户以为在定位刚看的那张。
      * 这是 `previewKey → cursorKey` 单向同步的**第三个也是最后一个**口子。
      */
+    /**
+     * 慢翻才做 View Transition 的门槛（ms）。
+     *
+     * ⚠️ 2026-11-10 业主报"工具条左右箭头像被锁了频率，点多快都一个节奏"：
+     * 一次 VT 的代价是「截旧帧 → 改 DOM → 交叉淡化 180ms」，**连点时每一拍都在等上一条**，
+     * 于是鼠标再快，画面也只按 180ms 的节拍走。
+     * ⇒ 只有**间隔 ≥ 这个值**（= 上一段 VT 肯定已经跑完）才做过渡；
+     *    连点则裸切 —— 一次都不丢，只是不加过场。键盘连发另有 100ms 节流（见 `onStepKeyThrottle`）。
+     */
+    const VT_MIN_GAP_MS = 250;
+    let lastNavAt = 0;
+
     const onPreviewCurrentChange = (i: number) => {
         const e = previewEntries.value[i];
         if (!e) return;
@@ -269,9 +281,12 @@ export function usePreview(deps: {
             syncCursor(e.key);
         };
         // 切图溶解（View Transitions）：换 src = 同一位置换 `<img>`，裸切是硬剪。
-        // VT 把新旧两帧做交叉淡化（CSS 压到 .18s）；快速连按会自动跳过在飞的旧 VT
-        // （连按永不排队），reduced-motion 直接走裸切。
-        if (document.startViewTransition && !window.matchMedia('(prefers-reduced-motion: reduce)').matches) {
+        // VT 把新旧两帧做交叉淡化（CSS 压到 .18s）；连点会跳过在飞的旧 VT，但那一次截帧
+        // 本身也要时间 ⇒ 仍然按 VT 的节拍走（所以上面加了间隔门槛）。
+        const now = performance.now();
+        const rapid = now - lastNavAt < VT_MIN_GAP_MS;
+        lastNavAt = now;
+        if (!rapid && document.startViewTransition && !window.matchMedia('(prefers-reduced-motion: reduce)').matches) {
             document.startViewTransition(apply);
         } else {
             apply();

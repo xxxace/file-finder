@@ -8,7 +8,7 @@
          而"一屏铺几列"是视图偏好、不是主操作。 -->
     <n-dropdown trigger="click" :options="options" :menu-props="menuProps" @select="onSelect">
         <n-button size="small" :class="['icon-lg', { 'is-on': isCustom }]"
-            v-tip="`视图密度：${currentLabel}（点击切换）`" :aria-label="`视图密度：${currentLabel}`">
+            v-tip="`视图密度：${currentLabel}`" :aria-label="`视图密度：${currentLabel}`">
             <template #icon>
                 <!-- 图标随档位换。三颗都是自绘的同族方块阵（见 components/icons/grid.ts）：
                      块越来越少、越来越大 = 越来越松，这个递进关系比"三颗不同画法的库图标"清楚。
