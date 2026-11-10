@@ -347,6 +347,76 @@ async function extractFrame(filepath: string, frame: string): Promise<boolean> {
 }
 
 /**
+ * 封面 JPEG 质量。**写进盘的那张封面**用的就是它（抽帧封面与站点封面同一档）。
+ * 定义在这里而不是 `coverImage.ts`：那边 import 本模块（`transcodeImage`），反过来 import 会成环。
+ */
+export const COVER_JPEG_QUALITY = 90;
+
+/**
+ * 抽帧出来的封面图长边上限。
+ *
+ * 视频关键帧是原分辨率的（4K 一帧几十 MB 的 JPEG），而封面在网格里最大也就铺满一列、
+ * 点开预览也到不了 4K ⇒ 按长边 1280 收，体积降一个量级，观感无损。
+ * 与 `PREVIEW_LONG_EDGE`（2048）刻意不同：那是"给人放大看的图"，这是"给格子当脸"。
+ */
+export const FRAME_LONG_EDGE = 1280;
+
+/**
+ * 「把视频某一时刻当封面」的唯一出口（补封面的抽帧用它）。
+ *
+ * 与 `videoRenditions` 的区别：那个固定取 1%、只给缩略图链路用；这里要**指定百分比**，
+ * 因为用户会一遍遍往后换帧，直到拿到一张能看的。所以抽帧的"取一帧"逻辑仍然只在本模块，
+ * 差别只在时间点和输出尺寸。
+ *
+ * 返回**已经编码好的 JPEG 字节**（不是文件路径）：调用方要把它写进系统盘缓存、
+ * 再交给写盘链路，字节比路径少一次读盘。
+ * 任一环失败返回 `null` —— 调用方据此记 `no-frame`，绝不产出半张图。
+ */
+export async function frameJpeg(file: string, pct: number, maxEdge = FRAME_LONG_EDGE): Promise<Buffer | null> {
+    const duration = await probeDuration(file);
+    if (duration === null) return null;
+
+    // 钳到 [0, duration-0.1]：duration 本身可能是 0.5s 的短片，
+    // pct 再大也不能越过流末尾（越界时 ffmpeg 会 exit 0 却不写文件）
+    const at = Math.min(Math.max((duration * pct) / 100, 0), Math.max(duration - 0.1, 0));
+
+    const frame = path.join(
+        os.tmpdir(),
+        `ff-cover-frame-${process.pid}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}.jpg`,
+    );
+    try {
+        const ok = await runFfmpeg(
+            ffmpeg(file).screenshots({
+                timestamps: [at],
+                filename: path.basename(frame),
+                folder: path.dirname(frame),
+            }),
+            '抽帧(封面)',
+            file,
+        );
+        if (!ok) return null;
+
+        const raw = await fsasync.readFile(frame).catch(() => null);
+        if (!raw?.length) return null;
+
+        const img = nativeImage.createFromBuffer(raw);
+        if (img.isEmpty()) return null;
+
+        const { width, height } = img.getSize();
+        const scaled = Math.max(width, height) <= maxEdge
+            ? img
+            : (width >= height
+                ? img.resize({ width: maxEdge, quality: 'good' })
+                : img.resize({ height: maxEdge, quality: 'good' })
+            );
+        return scaled.toJPEG(COVER_JPEG_QUALITY);
+    } finally {
+        // 中转帧写在系统盘临时目录，无论成败立刻删（一次抽帧可能重试 4 档，不删会堆一地）
+        fsasync.unlink(frame).catch(() => { });
+    }
+}
+
+/**
  * 中转图的最大宽度。
  *
  * **这不是最终缩略图尺寸**（那是 `THUMB_WIDTH`，由 `scaleToThumb` 唯一决定），
