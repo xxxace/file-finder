@@ -21,7 +21,7 @@ import type { DiskRegistry } from '../utils/driveIdentity';
 import { DIR_COVER_FILES, isDirCover } from './dirCover';
 import {
     BEFORE_RESTORE_PATH, CACHE_DB_PATH, CACHE_VERSION, beginRestore, cacheBackup, endRestore,
-    exportCompactSnapshot, exportSnapshotPlain, findCache, findSubtreeLeafItems, insertCache, isCacheRoot, loadMeta, loadSubtreeBytes,
+    exportCompactSnapshot, exportSnapshotPlain, findCache, findSubtreeLeafItems, insertCache, loadMeta, loadSubtreeBytes,
     migrateLegacyThumbs, readExternalCache, reloadFromDisk, removeCache,
 } from './nedb';
 import type { CacheMeta, OpenMode, SearchCache } from './nedb';
@@ -824,28 +824,6 @@ function toAnchorPath(serial: string, relPath: string): string {
 }
 
 /**
- * 判断指定路径是否为该盘的缓存采集源头（顶层根目录）。纯内存判定，零读盘。
- */
-async function isCacheRootController(req: Req, res: http.ServerResponse) {
-    const raw = req.params?.get('path') || '';
-    if (!raw) return sendJson(res, { isRoot: false });
-
-    const anchor = parseAnchor(raw);
-    if (anchor) {
-        return sendJson(res, { isRoot: await isCacheRoot(anchor.serial, anchor.relPath) });
-    }
-
-    const parts = splitPath(raw);
-    if (!parts) return sendJson(res, { isRoot: false });
-
-    const disk = await findDriveByLetter(parts.drive);
-    const serial = disk?.serial || serialOfDrive(parts.drive);
-    if (!serial) return sendJson(res, { isRoot: false });
-
-    return sendJson(res, { isRoot: await isCacheRoot(serial, parts.relPath) });
-}
-
-/**
  * 存储态 → 只读下发态。和 `toWire` 逐字同构，只是把盘符换成锚点。
  *
  * 前缀补的是**条目自己的 `dir`**（不是请求里那一层），和 `toWire` 用 `item.dir` 同一个理由：
@@ -1109,8 +1087,13 @@ export async function openFolderController(req: Req, res: http.ServerResponse) {
     //    更不能让它流到下面任何一支去（那支会拿它当 UNC 去真读盘）。
     const anchor = parseAnchor(raw);
     if (anchor) {
-        // Flat 视图：必须且仅在真正的缓存采集源头（根目录）开启，非源头坚决不 flat
-        if (flat && (await isCacheRoot(anchor.serial, anchor.relPath))) {
+        /**
+         * Flat 视图：**任意层级都能开**（2026-11-10 业主裁决）。
+         * `findSubtreeLeafItems` 本来就是"从传入路径向下合并**已缓存**的子树叶子"，
+         * 纯内存、零读盘 ⇒ 原来那道"必须是采集源头"的闸门只是限制，不是保护。
+         * ⚠️ 平铺只摊**缓存里已经有的**：没扫过的深层会是空的 —— 那是缓存态，不是 bug。
+         */
+        if (flat) {
             const items = await findSubtreeLeafItems(anchor.serial, anchor.relPath, mode);
             return sendJson(res, await toAnchor(items, anchor.serial, anchor.relPath));
         }
@@ -1155,8 +1138,8 @@ export async function openFolderController(req: Req, res: http.ServerResponse) {
     const { serial, drive } = disk;
     const relPath = parts.relPath;
 
-    // Flat 视图：必须且仅在真正的缓存采集源头（根目录）开启，非源头坚决不 flat
-    if (flat && (await isCacheRoot(serial, relPath))) {
+    // Flat 视图：任意层级都能开，理由与 ⓪ 那一段同一句（纯内存合并已缓存子树）
+    if (flat) {
         const items = await findSubtreeLeafItems(serial, relPath, mode);
         return sendJson(res, await toWire(items, drive, serial, relPath));
     }
@@ -2070,7 +2053,6 @@ route('/resolveAnchor', resolveAnchorController);
 // 反方向：实时路径 → 只读锚点。拔盘时把当前屏降级成只读用（见 anchorOfController）。
 route('/anchorOf', anchorOfController);
 // 判断是否为缓存采集源头（顶层根目录）
-route('/isCacheRoot', isCacheRootController);
 
 // 管理助手（Phase 1：规则 CRUD + 单站试跑，暂无写盘）。经同一 route() 咽喉点注册，
 // 自动受 token 校验与统一错误兜底；sendJson/dataDir 以依赖注入传入，避免循环引用。

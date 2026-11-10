@@ -143,13 +143,14 @@
                      常驻（任何目录都能切），与 flat 互不影响 —— flat 决定"摊开哪些条目"，
                      密度决定"一屏铺几列"，两者正交。 -->
                 <GridDensityMenu v-model="density" :menu-props="moreMenuProps" />
-                <!-- 平铺视图切换：仅在根缓存目录可用，跳过女优/父文件夹直接平铺全部作品 -->
+                <!-- 平铺视图切换：**任意层级**都能开（2026-11-10 放开，原来只许盘根）——
+                     跳过中间的女优/分类目录，把当前这一层下面所有作品摊开。 -->
                 <!-- 激活态见样式 `.toolbar :deep(.is-on)`（灰底 + text-1）。
                      **不用 `type="primary"`**：那会让一个视图开关变成整条工具栏最响的东西
                      （2026-11-07 截图里那块白方块就是它）。 -->
                 <n-button class="icon-lg" size="small" :class="{ 'is-on': isFlatView }"
                     :disabled="scanning || !canToggleFlat" @click="toggleFlatView"
-                    v-tip="isFlatView ? '当前为平铺视图（点击切回正常视图）' : (canToggleFlat ? '切换为平铺视图（摊开所有子目录作品）' : '仅在根缓存目录可开启平铺视图')">
+                    v-tip="isFlatView ? { text: '当前为平铺视图，点击切回' } : (canToggleFlat ? { text: '平铺：摊开这一层下面所有作品' } : { text: '收藏清单里没有「向下摊开」这回事' })">
                     <template #icon>
                         <!-- 2 列 × 3 行的**横向卡片** ⇒ "作品摊开成一片"，这就是平铺本身。
                              ⚠️ 换过四版才有定论：`Layers` 画的是"层"、是**被摊的对象**而不是
@@ -693,12 +694,18 @@ const crumbs = computed(() => {
     }
     return ancestorsOf(currentPath.value);
 });
-/** 平铺视图（Flat 模式）：跳过中间女优/父文件夹，单纯摊开所有子目录作品。限定根缓存目录开启。 */
+/**
+ * 平铺视图（Flat 模式）：**从当前这一层向下**摊开所有作品，跳过中间的女优/分类目录。
+ *
+ * ⚠️ 2026-11-10 放开限制（业主：原来"只许盘根开"很难用）：任意层级都能开。
+ * 服务端 `findSubtreeLeafItems` 本来就是"从传入路径向下合并**已缓存**的子树叶子"，
+ * 纯内存零读盘 ⇒ 原来那道 `isCacheRoot` 闸门只是限制，不是保护，已连同 `/isCacheRoot`
+ * 整个端点一起删掉（前提消失的死代码不留）。
+ * ⚠️ 平铺只摊**缓存里已经有的**：没扫过的深层会是空的 —— 那是缓存态，不是 bug。
+ */
 const isFlatView = ref(false);
-/** 当前路径是否为缓存采集源头（顶层根目录） */
-const isCurrentCacheRoot = ref(false);
-/** 仅在导航处于根缓存目录（是采集源头、非清单屏、且有有效路径）时允许开启 Flat 视图 */
-const canToggleFlat = computed(() => isCurrentCacheRoot.value && !playlistLevel.value && !!currentPath.value);
+/** 除清单屏外（清单不是目录，没有"向下"这回事）都允许切平铺；有没有路径也算判据 */
+const canToggleFlat = computed(() => !playlistLevel.value && !!currentPath.value);
 /**
  * 面包屑的**渲染布局**（head + tail）。
  *
@@ -816,6 +823,9 @@ const emptyTip = computed(() => {
     // 清单屏的空态说的是另一件事：不是"目录里没东西"，是"还没收录过"，
     // 且要告诉用户下一步做什么（照 emptyTip 的既有原则：空态给动作，不给空白）
     if (playlistLevel.value) return '这个收藏夹还是空的 —— 在网格里右键卡片「加入收藏」即可收录';
+    // 平铺摊的是**缓存里已有的**子树（纯内存、零读盘）⇒ 深层没扫过时"空"是缓存态，
+    // 不是"这个目录空"。不说清就成了"程序把东西弄丢了"，所以要给下一步动作。
+    if (isFlatView.value) return '这一层下面还没扫到作品 —— 平铺只摊缓存里已有的，「更新读取」扫一遍再看';
     return '这个目录是空的';
 });
 
@@ -889,7 +899,7 @@ const notify = useNotify();
 /** 取数三个入口（目录 / 清单 / 统一出口）+ 请求序号 —— 见 useScreenData.ts */
 const { fetchFolder, fetchPlaylistItems, loadScreen, getFetchSeq } = useScreenData({
     notify, dataSource, loading, failKind, searchText,
-    isCurrentCacheRoot, isFlatView, canToggleFlat,
+    isFlatView,
 });
 const dialog = useConfirm();
 
@@ -1081,7 +1091,6 @@ const enterScreen = (path: string, mode: OpenMode = 'cover', pl?: NavEntry['pl']
     // ⚠️ `push` 内部会先拍上一屏的快照，再砍掉"前进尾巴"（在中间位置进新屏的浏览器语义）
     const entry = nav.push({ path, mode, pl, searchText: '', scrollY: 0, cursorKey: '' });
     isFlatView.value = !!keepFlat;
-    isCurrentCacheRoot.value = false;
     /**
      * 进新的一屏不带上一屏的搜索词（原有行为，不动）。
      *
@@ -1441,7 +1450,6 @@ const onRefresh = () => {
  */
 const setRoot = (value: string) => {
     isFlatView.value = false;
-    isCurrentCacheRoot.value = false;
     if (!value) {
         dir.value = '';
         nav.reset();

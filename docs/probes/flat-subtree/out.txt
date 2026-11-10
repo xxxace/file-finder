@@ -1,0 +1,8 @@
+PASS  盘根：摊到整盘的叶子（含兄弟目录 trash）
+PASS  中间层 videos：只摊它下面的，**不含**兄弟 trash 的 x1
+PASS  三层 ActressA：只摊自己的两个作品
+PASS  兜底支路：父 data 没列 ActressC，也要摊到它的 c1
+PASS  大小写 / 反斜杠 / 尾斜杠都不影响判界
+PASS  别的盘的记录一律不进（serial 过滤）
+
+PASS  全部 6 条断言通过

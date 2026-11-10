@@ -66,10 +66,12 @@ export interface ScreenDataDeps {
     failKind: { value: string };
     /** 过滤词。写入见 `commit()` —— **不要**在任何导航入口提前写它 */
     searchText: { value: string };
-    /** Flat 视图的两个开关：fetchFolder 会**写**它们（换到非根目录要自动复位） */
-    isCurrentCacheRoot: { value: boolean };
+    /**
+     * Flat 平铺视图。本模块**只读**它（开关与"能不能开"都归页面）。
+     * ⚠️ 2026-11-10 起任意层级都能开 ⇒ 这里不再有"换到非根目录要自动复位"那一步；
+     *    原来那个 `/isCacheRoot` 探针（每次取数多一次往返）也随之删掉。
+     */
     isFlatView: { value: boolean };
-    canToggleFlat: { readonly value: boolean };
 }
 
 export function useScreenData(deps: ScreenDataDeps) {
@@ -111,22 +113,10 @@ export function useScreenData(deps: ScreenDataDeps) {
         deps.failKind.value = '';
         loadingBar.start();
 
-        // 纯内存异步查询当前目录是否为缓存采集源头（顶层根目录），非根目录自动复位 Flat 状态
-        getAction(`${API_BASE}/isCacheRoot?path=${encodeURIComponent(path)}`).then((res: { isRoot?: boolean }) => {
-            if (seq !== fetchSeq) return;
-            deps.isCurrentCacheRoot.value = !!res?.isRoot;
-            if (!deps.isCurrentCacheRoot.value && deps.isFlatView.value) {
-                deps.isFlatView.value = false;
-            }
-        }).catch(() => {
-            if (seq !== fetchSeq) return;
-            deps.isCurrentCacheRoot.value = false;
-        });
-
         // path 必须编码：中文/空格/&/#/+ 会让 query 被截断或误解析
         let url = `${API_BASE}/openFolder?path=${encodeURIComponent(path)}&mode=${mode}`;
         if (opts.noCache) url += '&noCache=true';
-        const useFlat = opts.flat ?? (deps.canToggleFlat.value && deps.isFlatView.value);
+        const useFlat = opts.flat ?? deps.isFlatView.value;
         if (useFlat) url += '&flat=true';
 
         // 必须 return：调用方要等数据真的落地才能做后面的事（恢复滚动位置）
