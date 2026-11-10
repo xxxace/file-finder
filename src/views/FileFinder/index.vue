@@ -485,7 +485,11 @@
             <PlaylistPicker v-if="plPicker.card" :card="plPicker.card" :item-key="plPicker.key" @added="onPickerAdded"
                 @failed="onPickerFailed" />
         </n-popover>
-        <n-image-group :src-list="previewSrcList" :current="previewIndex" :show="previewOpen"
+        <!-- ⚠️ `previewOpen ? previewSrcList : []` 这个三元不是装饰：预览序列是
+             "对整屏再扫三遍"（entries / src 数组 / 当前索引），而它**关着的时候一个都用不上**。
+             直接绑 `previewSrcList` 会让每次换屏、每一次按键过滤都白扫三遍 ——
+             平铺几千条时那是纯粹的可见延迟。绑空数组时 n-image-group 什么都不做。 -->
+        <n-image-group :src-list="previewOpen ? previewSrcList : []" :current="previewIndex" :show="previewOpen"
             :render-toolbar="previewToolbar" @update:show="onPreviewShowChange"
             @update:current="onPreviewCurrentChange" />
         <!-- 清单 / 缓存 / 站点规则 2026-10-21 起是**独立页**（左轨切换），不再挂在这里。
@@ -567,9 +571,24 @@ const PL_PREFIX = '@pl:';
 /**
  * 缩略图按需取，不再内嵌进 /openFolder 的响应里。
  * 渲染层拿到的是个短 key，图走 /thumb —— 一个目录的响应体因此从几百 KB 降到几十 KB，
- * 而且浏览器会并发拉图、缓存图，只请求真正进入视口的那些（:lazy 现在是真的懒加载了）。
+ * 而且 `loading="lazy"` 只让真正进入视口的那些发请求（2026-11-10 起是原生懒加载）。
+ *
+ * ⚠️ 带缓存：它在模板里**每条目每次全量渲染**都要算一遍（换屏、每次按键过滤），
+ * 而 `encodeURIComponent` 是逐字符扫描 ⇒ 平铺 5000 条就是 5000 次。
+ * 键是 `sig` 派生的短串，同一屏反复渲染时命中率 100%，缓存表几百条量级。
+ * ⚠️ 缓存整条 URL 是安全的：`API_BASE` 是常量、`TOKEN` 在模块加载时由 sendSync 一次取定
+ * （两者都不会在运行中变）⇒ 不会出现"缓存了旧端口/旧口令"导致裂图。
  */
-const thumbUrl = (key?: string) => (key ? apiUrl(`${API_BASE}/thumb?k=${encodeURIComponent(key)}`) : '');
+const thumbUrlCache = new Map<string, string>();
+const thumbUrl = (key?: string) => {
+    if (!key) return '';
+    const hit = thumbUrlCache.get(key);
+    if (hit) return hit;
+    const url = apiUrl(`${API_BASE}/thumb?k=${encodeURIComponent(key)}`);
+    if (thumbUrlCache.size > 4096) thumbUrlCache.clear();    // 有界：满了整表丢，不做淘汰算法
+    thumbUrlCache.set(key, url);
+    return url;
+};
 
 /**
  * 条目的真实文件名。
@@ -925,7 +944,22 @@ const dialog = useConfirm();
  * 2 TB 直接变 `0.00GB`（静默说错数字）。`formatBytes` 支持到 PB，并且 0 显示 `—` 而不是 `0`。
  * 函数名保留不变（不改调用点）。
  */
-const getSize = (size: number | undefined) => formatBytes(size);
+const getSizeRaw = (size: number | undefined) => formatBytes(size);
+/**
+ * 同上：`getSize` 在模板里每条目每次全量渲染被调**两次**（`:title` 与角标），
+ * 而 `formatBytes` 要循环除 1024 + `toFixed`（字符串格式化）⇒ 5000 条 = 1 万次。
+ * 按字节数缓存结果；文件大小重复度不低（同一批转码/同一批截图），命中率可观。
+ */
+const sizeTextCache = new Map<number, string>();
+const getSize = (size: number | undefined) => {
+    if (!size || size <= 0) return getSizeRaw(size);         // '—' 那条不占缓存
+    const hit = sizeTextCache.get(size);
+    if (hit) return hit;
+    const text = getSizeRaw(size);
+    if (sizeTextCache.size > 2048) sizeTextCache.clear();
+    sizeTextCache.set(size, text);
+    return text;
+};
 
 /**
  * 封面底色：把同一张图放大、模糊、压暗铺在下面。
