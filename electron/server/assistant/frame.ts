@@ -225,7 +225,19 @@ export async function runFrameJob(
                 );
 
                 const got = await extractCard(video.abs, start);
-                if (!got) {
+                // 重抽失败但**上一帧还在** ⇒ 继续用上一帧，别把已经拿到的好封面弄丢了
+                const prevFile = prev.find(f => parseFrameName(f)?.k16 === k16);
+                const prevMeta = prevFile ? parseFrameName(prevFile) : null;
+
+                if (!got && prevFile && prevMeta) {
+                    misses += 1;
+                    pushFor(list, {
+                        frame: true, frameFile: prevFile, pct: prevMeta.pct,
+                        attempt: prevMeta.attempt, skipped: prevMeta.skipped,
+                        status: 'ok', coverUrl: null, hitSite: null, title: null, actresses: [],
+                        message: '重抽失败，仍用上一帧',
+                    });
+                } else if (!got) {
                     misses += 1;
                     pushFor(list, {
                         frame: true, frameFile: '', pct: 0, attempt: 0, skipped: 0,

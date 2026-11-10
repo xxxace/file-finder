@@ -379,6 +379,43 @@
     border-color: var(--ff-text-2);
 }
 
+/**
+ * 卡片右上动作位（抽帧 / 换一帧）。
+ * 与左上勾选对称：**常驻**不靠悬停 —— 悬停才出现的东西他找不到。
+ * 用 `--ff-ctl-on` 那一档：深色主题下 `--ff-ctl-hover` 与卡片底色几乎同明度。
+ */
+.ffw-card__act {
+    position: absolute;
+    right: 6px;
+    top: 6px;
+    width: 22px;
+    height: 22px;
+    padding: 0;
+    border-radius: var(--ff-r-pill);
+    border: 1px solid var(--ff-line-strong);
+    background: var(--ff-popover);
+    color: var(--ff-text-2);
+    display: grid;
+    place-items: center;
+    cursor: pointer;
+    opacity: 0.92;
+    transition:
+        background-color var(--ff-dur-hover) ease,
+        color var(--ff-dur-hover) ease,
+        opacity var(--ff-dur-hover) ease;
+}
+
+.ffw-card__act:hover {
+    background: var(--ff-ctl-on);
+    color: var(--ff-text-1);
+    opacity: 1;
+}
+
+.ffw-card__act:disabled {
+    opacity: 0.35;
+    cursor: default;
+}
+
 /* 任务进行中：勾选禁用（点了没效果的事，不如不让点） */
 .ffw-card__check:disabled,
 .ffw-row__check:disabled {

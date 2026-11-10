@@ -16,8 +16,17 @@
                 loading="lazy"
                 @error="emit('broken')"
             />
-            <DotField v-if="item.state === 'pending'" :active="true" />
+            <DotField v-if="item.state === 'pending' || extracting" :active="true" />
             <span v-if="item.badge" class="ffw-card__badge">{{ item.badge }}</span>
+            <button
+                v-if="action !== 'none'"
+                type="button"
+                class="ffw-card__act"
+                :title="action === 'reframe' ? '换一帧（往后走一档）' : '抽一帧当封面'"
+                @click.stop="emit('frame')"
+            >
+                <n-icon :component="action === 'reframe' ? RepeatOutline : CameraOutline" :size="13" />
+            </button>
             <button
                 type="button"
                 class="ffw-card__check"
@@ -39,9 +48,9 @@
 
 <script setup lang="ts">
 import { NIcon } from 'naive-ui';
-import { CheckmarkOutline } from '@vicons/ionicons5';
+import { CameraOutline, CheckmarkOutline, RepeatOutline } from '@vicons/ionicons5';
 import DotField from '@/components/DotField/DotField.vue';
-import type { CoverItem } from './coverModel';
+import type { CoverAction, CoverItem } from './coverModel';
 
 /**
  * 一张封面卡 = 一部片（同番号的分卷收在一张卡里）。
@@ -56,6 +65,16 @@ import type { CoverItem } from './coverModel';
  * `broken` = 预览图在浏览器里加载失败。抓取时验证过 ≠ 渲染时还能取到（网络会变），
  * 这是**唯一**能观测到"这张图此刻显示不出来"的地方 ⇒ 交给父层把卡标成不可写。
  */
-defineProps<{ item: CoverItem; coverSrc: string; selected: boolean; locked: boolean; index: number }>();
-const emit = defineEmits<{ toggle: []; broken: [] }>();
+defineProps<{
+    item: CoverItem;
+    coverSrc: string;
+    selected: boolean;
+    locked: boolean;
+    index: number;
+    /** 右上动作位（抽帧 / 换一帧 / 无）。判据在 coverModel.actionOf */
+    action: CoverAction;
+    /** 这一张正在抽帧（点阵 + 动作位不出现），与整批 job 的 pending 不同：它是单卡的 */
+    extracting?: boolean;
+}>();
+const emit = defineEmits<{ toggle: []; broken: []; frame: [] }>();
 </script>

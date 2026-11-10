@@ -1631,7 +1631,8 @@ const onMoreSelect = (key: string) => {
             onPositiveClick: () => { startScan(true); },
         });
     } else if (key === 'cover') {
-        assistantModal.value?.setShowModal(true);
+        // 带上当前路径：多盘机器上「补封面」能直接把正在看的那块盘选好（离线则留空）
+        assistantModal.value?.setShowModal(true, undefined, currentPath.value);
     } else if (key === 'avatar-recovery') {
         showAvatarModal.value = true;
     } else if (key === 'rules') {
