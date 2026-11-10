@@ -8,12 +8,14 @@
     <div class="fc">
         <div class="fc__head">
             <span class="fc__stat">
-                <b>{{ inv.total }}</b> 张 · {{ mb(inv.bytes) }}
+                <template v-if="inv.total"><b>{{ inv.total }}</b> 张 · {{ mb(inv.bytes) }}</template>
+                <template v-else>还没有抽过帧</template>
             </span>
             <span v-if="inv.orphans.length" class="fc__warn">{{ inv.orphans.length }} 张无引用</span>
             <span v-else-if="inv.total" class="fc__hint">都在用</span>
-            <span v-else class="fc__hint">还没抽过帧</span>
             <span v-if="inv.offlineSkipped" class="fc__hint">· {{ inv.offlineSkipped }} 张因盘离线未核实</span>
+            <!-- 「刚才到底跑了没」必须有落点：一个时间戳比任何动画都直接 -->
+            <span v-if="atText" class="fc__hint">· {{ atText }}</span>
 
             <span class="fc__ops">
                 <n-select
@@ -24,18 +26,36 @@
                     :options="diskOptions"
                     @update:value="v => (disk = v)"
                 />
-                <button type="button" class="fc__btn" :disabled="loading" @click="load(false)">重新统计</button>
                 <button
                     type="button"
                     class="fc__btn"
-                    :disabled="loading || !onlineAny"
-                    :title="onlineAny ? '对仍判在用的帧按盘上真实路径核实一次（只 stat 有帧的那几项）' : '插上盘才能核实'"
+                    :disabled="!!busy"
+                    title="只重算系统盘上的缓存与记录，不碰移动硬盘"
+                    @click="load(false)"
+                >
+                    {{ busy === 'inv' ? '刷新中…' : '刷新' }}
+                </button>
+                <button
+                    type="button"
+                    class="fc__btn"
+                    :disabled="!!busy || !inv.total"
+                    :title="!inv.total
+                        ? '还没有帧可核实'
+                        : (onlineAny ? '对仍判在用的帧按盘上真实路径各 stat 一次（会碰一下移动硬盘）' : '这些盘都不在线，插上盘再核实')"
                     @click="load(true)"
                 >
-                    用实时清单核实
+                    {{ busy === 'ver' ? '核实中…' : '用实时清单核实' }}
                 </button>
             </span>
         </div>
+
+        <!-- 在途说明：一句话讲清"在干什么、要多久、会不会动我的文件" -->
+        <p v-if="busy" class="fc__running">
+            {{ busy === 'ver'
+                ? '正在核对盘上是否还有这些作品（只 stat 有帧的那几项，通常一两秒）…'
+                : busy === 'purge' ? '正在清除选中的缓存文件…' : '正在统计系统盘上的帧缓存…' }}
+            <em class="fc__safe">可以随时离开，不会写坏或丢失任何东西</em>
+        </p>
 
         <details v-if="inv.orphans.length" class="fc__box" open>
             <summary class="fc__sum">查看无引用的 {{ shown.length }} 张</summary>
@@ -47,7 +67,7 @@
                 </label>
             </div>
             <div class="fc__foot">
-                <button type="button" class="fc__btn fc__btn--danger" :disabled="!selShown.length || loading" @click="purge">
+                <button type="button" class="fc__btn fc__btn--danger" :disabled="!selShown.length || !!busy" @click="purge">
                     清除选中 {{ selShown.length }} 张（释放 {{ mb(selBytes) }}）
                 </button>
                 <span class="fc__hint">只删系统盘的缓存，盘上的文件一个不动</span>
@@ -63,17 +83,25 @@ import { API_BASE, apiUrl, getAction, postAction } from '@/utils/request';
 import useNotify from '@/hooks/useNotify';
 
 interface Item { file: string; serial: string; bytes: number; mtime: number; pct: number; attempt: number }
-interface Inv { total: number; bytes: number; orphans: Item[]; live: number; offlineSkipped: number }
+interface Inv { total: number; bytes: number; orphans: Item[]; live: number; offlineSkipped: number; checked: number }
 
 const notify = useNotify();
 
-const inv = ref<Inv>({ total: 0, bytes: 0, orphans: [], live: 0, offlineSkipped: 0 });
-const loading = ref(false);
+const inv = ref<Inv>({ total: 0, bytes: 0, orphans: [], live: 0, offlineSkipped: 0, checked: 0 });
+/** 在途状态：'' = 空闲。两个按钮共用这一个 —— 谁在跑，谁的文案就变成"…中" */
+const busy = ref<'' | 'inv' | 'ver' | 'purge'>('');
+/** 上次跑完的时刻。用户点了按钮却看不到任何数字变化时，这是唯一的"我确实跑过" */
+const at = ref<number | null>(null);
 const sel = ref(new Set<string>());
 const disk = ref('');
 const disks = ref<{ serial: string; label: string; online: boolean }[]>([]);
 
-const mb = (n: number) => (n >= 1024 * 1024 ? `${(n / 1024 / 1024).toFixed(1)} MB` : `${Math.max(1, Math.round(n / 1024))} KB`);
+/** 0 张就说 0 B —— 原来 `Math.max(1, …)` 会把 0 说成 1 KB，等于在说谎 */
+const mb = (n: number) => {
+    if (!n) return '0 B';
+    if (n >= 1024 * 1024) return `${(n / 1024 / 1024).toFixed(1)} MB`;
+    return `${Math.max(1, Math.round(n / 1024))} KB`;
+};
 const day = (t: number) => {
     const d = new Date(t);
     return `${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
@@ -91,6 +119,14 @@ const diskOptions = computed(() => {
 });
 
 const onlineAny = computed(() => disks.value.some(d => d.online));
+
+const atText = computed(() => {
+    if (!at.value) return '';
+    const d = new Date(at.value);
+    const hh = String(d.getHours()).padStart(2, '0');
+    const mm = String(d.getMinutes()).padStart(2, '0');
+    return `${hh}:${mm} 跑过一遍`;
+});
 
 /** 帧预览走本地端点；文件名里的 nonce 保证每次重抽都是新 URL */
 const srcOf = (o: Item) =>
@@ -110,26 +146,39 @@ const toggle = (file: string) => {
 };
 
 async function load(verify: boolean) {
-    loading.value = true;
+    if (busy.value) return;
+    busy.value = verify ? 'ver' : 'inv';
+    const before = inv.value.orphans.length;
     try {
         const res = await postAction(`${API_BASE}/assistant/frames/${verify ? 'verify' : 'inventory'}`, {});
         inv.value = {
             total: res.total ?? 0, bytes: res.bytes ?? 0, orphans: (res.orphans ?? []) as Item[],
-            live: res.live ?? 0, offlineSkipped: res.offlineSkipped ?? 0,
+            live: res.live ?? 0, offlineSkipped: res.offlineSkipped ?? 0, checked: res.checked ?? 0,
         };
+        at.value = Date.now();
         // 无引用的全选：判据已经限定死了，用户只需确认清单
         sel.value = new Set(inv.value.orphans.map(o => o.file));
+
+        // 核实必须有回音：光数字不变的话，用户无法区分"没执行"和"执行了没变化"
+        if (verify) {
+            const found = Math.max(0, inv.value.orphans.length - before);
+            const skip = inv.value.offlineSkipped;
+            notify('success', '核实完成',
+                inv.value.checked
+                    ? `核对了 ${inv.value.checked} 项${found ? `，新发现 ${found} 项盘上已不存在` : '，没有发现过期'}${skip ? `；${skip} 项因盘离线跳过` : ''}`
+                    : (skip ? `${skip} 项因盘离线跳过（插上盘再核实）` : '没有需要核实的项'));
+        }
     } catch (e) {
         notify('error', '统计抽帧缓存失败', String(e));
     } finally {
-        loading.value = false;
+        busy.value = '';
     }
 }
 
 async function purge() {
     const files = selShown.value;
     if (!files.length) return;
-    loading.value = true;
+    busy.value = 'purge';
     try {
         const res = await postAction(`${API_BASE}/assistant/frames/purge`, { files });
         notify('success', `已清理 ${res.removed ?? 0} 张`, `释放 ${mb(res.freed ?? 0)}`);
@@ -137,7 +186,7 @@ async function purge() {
     } catch (e) {
         notify('error', '清理失败', String(e));
     } finally {
-        loading.value = false;
+        busy.value = '';
     }
 }
 
@@ -189,6 +238,20 @@ onMounted(async () => {
     display: flex;
     align-items: center;
     gap: 6px;
+}
+
+/** 在途说明那一行：它回答"在干什么 / 会不会动我的文件"，不是装饰 */
+.fc__running {
+    margin: -4px 0 0;
+    font-size: 12px;
+    color: var(--ff-text-3);
+}
+
+/** "可以随时离开"这句必须比正文更轻：它是让人放心的，不是要读的重点 */
+.fc__safe {
+    margin-left: 8px;
+    font-style: normal;
+    opacity: 0.75;
 }
 
 .fc__disk {

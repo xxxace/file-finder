@@ -374,6 +374,8 @@ export interface FrameInventory {
     live: number;
     /** 因为盘不在线而没核实到的张数（级二跳过的那批） */
     offlineSkipped: number;
+    /** 级二**实际 stat 了几项**。用户点了"核实"必须知道它真的做了事、做了多少 */
+    checked: number;
 }
 
 /** 帧目录下的盘序列号（一个子目录一块盘）。没有帧就返回空数组 */
@@ -398,7 +400,7 @@ export async function inventoryFrames(dataDir: string, verify = false): Promise<
     // 所有盘都会"没有任何卡"，那种情况下把帧全判成孤儿就是一场灾难。
     const known = new Set((await loadMeta()).map(m => m.serial));
 
-    const out: FrameInventory = { total: 0, bytes: 0, orphans: [], live: 0, offlineSkipped: 0 };
+    const out: FrameInventory = { total: 0, bytes: 0, orphans: [], live: 0, offlineSkipped: 0, checked: 0 };
     const drives = verify ? await getDrives(true) : [];
 
     for (const serial of serials) {
@@ -435,6 +437,7 @@ export async function inventoryFrames(dataDir: string, verify = false): Promise<
                     const t = targets[0];
                     const rel = t.kind === 'file' ? t.srcRel : t.writeRel.slice(0, t.writeRel.lastIndexOf('/'));
                     if (rel) {
+                        out.checked += 1;
                         const alive = await fsasync.stat(path.join(root, rel.replace(/\//g, path.sep)))
                             .then(() => true, () => false);
                         if (!alive) {
