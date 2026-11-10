@@ -2,7 +2,7 @@
     <div class="file-finder">
         <div class="header-bar">
             <!-- 顶栏三段（2026-11-08 定稿）：
-                 `[▤ 起点][← 返回/⨯ 清空][↻ 刷新] │ [ 盘: › 段 › 当前段 ⑫ ] │ [⌕][▦][⊞] | [⋯]`
+                 `[▤ 起点][← 后退][→ 前进][↻ 刷新] │ [ 盘: › 段 › 当前段 ⑫ ] │ [⌕][▦][⊞] | [⋯]`
                  中间那条槽是头部**唯一的弹性槽位**（`flex: 1`）—— 它吃掉剩余宽度，
                  所以面包屑右边永远是空的：一次 append / remove 里，排在变动点右边的东西
                  必然被推着走；右边没东西，变化就只剩"多一段 / 少一段"。
@@ -1119,6 +1119,13 @@ const enterScreen = (path: string, mode: OpenMode = 'cover', pl?: NavEntry['pl']
      */
     void done.then(() => {
         if (getFetchSeq() !== myFetchSeq) return;   // 已被更新的请求接管 ⇒ 不碰别人的视口
+        /**
+         * ⚠️ `markShown()`：告诉导航模型"这一屏的数据真的画上去了"。
+         * 没有它，连按两次返回时中间那屏会被记上**上一屏**的滚动位与过滤词
+         *（取数还在飞、画面还停在旧屏）⇒ 以后前进回来停错高度。理由见 `useNavStack.shown`。
+         * 失败时**不许**标记：那时画面仍是上一屏的内容，给它拍快照就是记错人。
+         */
+        if (!failKind.value) nav.markShown();
         void nextTick(() => imageBox.value?.scrollTo(0, 0));
     });
 }
@@ -1310,6 +1317,8 @@ const goStep = async (delta: 1 | -1) => {
     const done = loadScreen(to, { adoptSearch: true });
     const myFetchSeq = getFetchSeq();
     await done;
+    // 同上（enterScreen 里那段）：只有数据真的落到这一屏，它的快照才作数
+    if (getFetchSeq() === myFetchSeq && !failKind.value) nav.markShown();
     /**
      * 恢复滚动位置 —— **无条件执行**，包括恢复成 0（goStep 绕过 enterScreen，
      * 容器偏移会一直带着上一屏的）。归零不用等 DOM；恢复非 0 必须先等新屏铺好
@@ -1435,8 +1444,8 @@ const setRoot = (value: string) => {
          *
          * 它描述的是"**当前这一屏**取数失败了"，而上面刚把"当前这一屏"整个拿掉
          *（`nav.reset()`）⇒ 留着它就是在陈述一个已经不存在的对象。两处后果：
-         *  ① `banner` 继续显示"移动硬盘不在…插好后按 F5 重读"，而 F5 已因
-         *     `!hasAny.value` 被拦掉（见 `onRefresh`）⇒ **文案指向一个不存在的操作**；
+         *  ① `banner` 继续显示"移动硬盘不在…插好后按 F5 重读"，而 F5 已因"没有当前屏"被拦掉
+         *     （见 `onRefresh`）⇒ **文案指向一个不存在的操作**；
          *  ② `emptyTip` 的守卫把 `loadFailed` 排在 `!hasAny` **前面**
          *     ⇒ 那句"还没选文件夹"永远显示不出来 ⇒ 用户落在**纯空白页**上。
          *
@@ -1963,7 +1972,7 @@ const onDisksChanged = async (disks: { serial: string; drive: string }[]) => {
     const top = nav.current.value;
     if (!top) return;
 
-    /** 换掉栈顶那一屏。**替换**而不是 push —— 用户眼里还是同一层，只是它的地址变了 */
+    /** 换掉当前这一屏的地址。**替换**而不是 push —— 用户眼里还是同一层，只是地址变了 */
     const swapTop = async (path: string) => {
         // 替换**当前这一屏**的地址，不新增历史（用户眼里还是同一层）⇒ 走模型的 replaceCurrent，
         // 别在这里手写 splice：游标一旦和数组长度分开，任何"按下标改数组"的代码都会让 index 失步。

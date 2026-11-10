@@ -108,8 +108,10 @@ try {
 
     /* ── ⑧ 快照写在「离开的那一屏」身上 ─────────────────────── */
     const nav2 = useNavStack({ snapshot: () => SNAP });
-    nav2.push(E('P')); nav2.push(E('Q'));
-    nav2.step(-1);                      // 离开 Q，去 P
+    nav2.push(E('P')); nav2.markShown();        // P 的数据落地了（页面在 loadScreen 成功后调）
+    nav2.push(E('Q'));                          // 离开 P
+    nav2.markShown();                           // Q 也落地了
+    nav2.step(-1);                              // 离开 Q，去 P
     ok('离开 Q 后：P 是当前，Q 在前进尾巴里', () => {
         assert.equal(nav2.current.value.path, 'P');
         assert.equal(nav2.canForward.value, true);
@@ -120,6 +122,30 @@ try {
         assert.equal(nav2.current.value.scrollY, 10);
         assert.equal(nav2.current.value.searchText, 's');
         assert.equal(nav2.current.value.cursorKey, 'k');
+    });
+
+    /* ── ⑨ 连按两次后退：中间那屏还没画上去 ⇒ 不许把上一屏的值记到它头上 ──
+       这是 code review 抓到的真问题：取数要等（视频抽帧以秒计），
+       画面还停在旧屏时给中间屏拍快照 ⇒ 以后前进回来停错高度。
+       ⚠️ 每屏给**不同的**滚动位，否则"记没记错"根本看不出来（§⑧ 那个常量 SNAP 就分辨不了）。 */
+    let live = 0;                                   // = 画面上那一屏的滚动位
+    const nav3 = useNavStack({ snapshot: () => ({ scrollY: live, searchText: '', cursorKey: '' }) });
+    nav3.push(E('A')); live = 100; nav3.markShown();     // A 显示过，滚到 100
+    nav3.push(E('B'));                                   // 离开 A ⇒ A 记 100
+    live = 200; nav3.markShown();                        // B 显示过，滚到 200
+    nav3.push(E('C'));                                   // 离开 B ⇒ B 记 200
+    live = 300; nav3.markShown();                        // C 显示过，滚到 300
+    nav3.step(-1);                                       // 离开 C ⇒ C 记 300
+    nav3.step(-1);                                       // B 还没画上去 ⇒ **不许**把 300 记到 B
+    ok('连按两次后退：B 仍是 200，不是 C 的 300', () => {
+        assert.equal(nav3.current.value.path, 'A');
+        nav3.step(1);                                    // 前进回 B
+        assert.equal(nav3.current.value.path, 'B');
+        assert.equal(nav3.current.value.scrollY, 200);
+    });
+    ok('C 仍记着自己离开时的 300（它真的显示过）', () => {
+        nav3.step(1);                                    // 前进回 C
+        assert.equal(nav3.current.value.scrollY, 300);
     });
 
     log(`\nPASS  全部 ${n} 条断言通过`);

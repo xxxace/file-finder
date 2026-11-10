@@ -626,7 +626,7 @@ export function useGridCursor(deps: {
         /**
          * 声明"用户在这一屏需要焦点"。
          *
-         * 由 `index.vue` 在**离开一屏**时调（`rememberCurrentScreen`）——
+         * 由 `index.vue` 的 `enterScreen` / `goStep` 在**换屏动作之前**调 ——
          * 那一刻还没进新屏，但用户显然是在用键盘/鼠标浏览 ⇒ 新屏加载完该给他焦点。
          * ⚠️ 为什么不放在 `moveCursor` 里自动置位：加载中按方向键那一次会被
          * `probeLayout()` 判空直接返回，**置位发生在返回之前**才有意义，

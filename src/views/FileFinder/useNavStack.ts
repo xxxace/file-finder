@@ -87,10 +87,25 @@ export function useNavStack(deps: NavStackDeps) {
     const canBack = computed(() => index.value > 0);
     const canForward = computed(() => index.value < entries.value.length - 1);
 
+    /**
+     * 游标指着的那一屏**是不是真的画上去了**。
+     *
+     * ⚠️ 为什么必须有这个开关（探针里的 "连按两次后退" 场景）：`snapshot()` 读的是
+     * **画面上**那一屏（容器 scrollTop / 输入框的词 / 选择器）。而取数是异步的 ——
+     * 从 C 连按两次退到 A、B 的数据还没落地时，画面上**仍然是 C**：
+     * 若此时给 B 拍快照，B 就会被记上 C 的滚动位与过滤词（选择器却是 B 自己的）
+     * ⇒ 以后前进回 B 会**停在 C 的高度**。这正是 2026-10-04 那个"返回后停错高度"的同族病。
+     * ⇒ 规则：**只有真的画上过的那一屏才配拥有快照**，没画上去的保持原样（= 它上次被看见时的样子）。
+     */
+    let shown = false;
+
+    /** 数据真的落到这一屏了（页面在 `loadScreen` 成功之后调；失败不调） */
+    const markShown = () => { shown = true; };
+
     /** 把"离开这一刻"的三样写到**当前这一屏自己**身上（不是写到要去的那一屏） */
     const snapshotCurrent = () => {
         const cur = current.value;
-        if (cur) Object.assign(cur, deps.snapshot());
+        if (cur && shown) Object.assign(cur, deps.snapshot());
     };
 
     /**
@@ -102,6 +117,7 @@ export function useNavStack(deps: NavStackDeps) {
         if (index.value < entries.value.length - 1) entries.value.splice(index.value + 1);
         entries.value.push(entry);
         index.value = entries.value.length - 1;
+        shown = false;                       // 新屏还没画上去
         return entry;
     };
 
@@ -115,6 +131,7 @@ export function useNavStack(deps: NavStackDeps) {
         if (next < 0 || next >= entries.value.length) return undefined;
         snapshotCurrent();
         index.value = next;
+        shown = false;                       // 目标屏的数据要等接口
         return entries.value[next];
     };
 
@@ -128,7 +145,8 @@ export function useNavStack(deps: NavStackDeps) {
     const reset = () => {
         entries.value = [];
         index.value = -1;
+        shown = false;
     };
 
-    return { current, hasAny, canBack, canForward, push, step, replaceCurrent, reset };
+    return { current, hasAny, canBack, canForward, push, step, replaceCurrent, reset, markShown };
 }

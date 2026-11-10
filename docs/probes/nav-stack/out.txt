@@ -15,5 +15,7 @@ PASS  replaceCurrent 改 path 且不新增历史
 PASS  reset 后回到空栈
 PASS  离开 Q 后：P 是当前，Q 在前进尾巴里
 PASS  离开 Q 那一刻的快照记在 Q 上（不是记在 P 上）
+PASS  连按两次后退：B 仍是 200，不是 C 的 300
+PASS  C 仍记着自己离开时的 300（它真的显示过）
 
-PASS  全部 17 条断言通过
+PASS  全部 19 条断言通过
