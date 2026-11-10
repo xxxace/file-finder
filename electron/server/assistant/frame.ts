@@ -396,9 +396,16 @@ async function serialsWithFrames(dataDir: string): Promise<string[]> {
 export async function inventoryFrames(dataDir: string, verify = false): Promise<FrameInventory> {
     const serials = await serialsWithFrames(dataDir);
 
-    // 只有**有缓存记录**的盘才敢判"没人要了"：缓存库被清空/重建时，
-    // 所有盘都会"没有任何卡"，那种情况下把帧全判成孤儿就是一场灾难。
-    const known = new Set((await loadMeta()).map(m => m.serial));
+    /**
+     * 只有**有缓存记录**的盘才敢判"没人要了"：缓存库被清空/重建时，所有盘都会"没有任何卡"，
+     * 那种情况下把帧全判成孤儿就是一场灾难。
+     *
+     * ⚠️ 惰性求值：没有帧的时候连 `loadMeta` 都不做。这一个函数被**补封面面板每次扫描**
+     * 调一次（`checkOrphans`），而"一张帧都没有"是最常见的状态 —— 为它把整库缓存文档
+     * 读进内存纯属白烧 CPU。`loadMeta` 本身不碰盘，但它会把全量文档搬进内存。
+     */
+    let known: Set<string> | null = null;
+    const knownSerials = async () => (known ??= new Set((await loadMeta()).map(m => m.serial)));
 
     const out: FrameInventory = { total: 0, bytes: 0, orphans: [], live: 0, offlineSkipped: 0, checked: 0 };
     const drives = verify ? await getDrives(true) : [];
@@ -415,7 +422,7 @@ export async function inventoryFrames(dataDir: string, verify = false): Promise<
             if (st) sizes.set(f, { bytes: st.size, mtime: st.mtimeMs });
         }
 
-        const canJudge = known.has(serial);
+        const canJudge = (await knownSerials()).has(serial);
         const liveByKey16 = new Map<string, ScanTarget[]>();
         if (canJudge) {
             for (const [k, v] of await liveKeysOf(serial)) liveByKey16.set(key16Of(k), v);
