@@ -47,8 +47,8 @@
                 </label>
             </div>
             <div class="fc__foot">
-                <button type="button" class="fc__btn fc__btn--danger" :disabled="!sel.size || loading" @click="purge">
-                    清除选中 {{ sel.size }} 张（释放 {{ mb(selBytes) }}）
+                <button type="button" class="fc__btn fc__btn--danger" :disabled="!selShown.length || loading" @click="purge">
+                    清除选中 {{ selShown.length }} 张（释放 {{ mb(selBytes) }}）
                 </button>
                 <span class="fc__hint">只删系统盘的缓存，盘上的文件一个不动</span>
             </div>
@@ -97,7 +97,10 @@ const srcOf = (o: Item) =>
     apiUrl(`${API_BASE}/assistant/frame?serial=${encodeURIComponent(o.serial)}&f=${encodeURIComponent(o.file)}`);
 
 const selBytes = computed(() =>
-    inv.value.orphans.filter(o => sel.value.has(o.file)).reduce((n, o) => n + o.bytes, 0));
+    shown.value.filter(o => sel.value.has(o.file)).reduce((n, o) => n + o.bytes, 0));
+
+/** 真正会被删的 = 勾选 ∩ **当前筛选后看得见的**。按盘筛过之后不许删掉看不见的那些 */
+const selShown = computed(() => shown.value.filter(o => sel.value.has(o.file)).map(o => o.file));
 
 const toggle = (file: string) => {
     const next = new Set(sel.value);
@@ -124,7 +127,7 @@ async function load(verify: boolean) {
 }
 
 async function purge() {
-    const files = [...sel.value];
+    const files = selShown.value;
     if (!files.length) return;
     loading.value = true;
     try {

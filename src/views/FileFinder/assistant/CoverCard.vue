@@ -22,7 +22,10 @@
                 v-if="action !== 'none'"
                 type="button"
                 class="ffw-card__act"
-                :title="action === 'reframe' ? '换一帧（往后走一档）' : '抽一帧当封面'"
+                :disabled="actionDisabled"
+                :title="actionDisabled
+                    ? '已经到中段了，再往后信息量不比这里高'
+                    : (action === 'reframe' ? '换一帧（往后走一档）' : '抽一帧当封面')"
                 @click.stop="emit('frame')"
             >
                 <n-icon :component="action === 'reframe' ? RepeatOutline : CameraOutline" :size="13" />
@@ -75,6 +78,8 @@ defineProps<{
     action: CoverAction;
     /** 这一张正在抽帧（点阵 + 动作位不出现），与整批 job 的 pending 不同：它是单卡的 */
     extracting?: boolean;
+    /** 动作位禁用（已到阶梯末档）—— 禁用而不是消失，用户才知道为什么点不动 */
+    actionDisabled?: boolean;
 }>();
 const emit = defineEmits<{ toggle: []; broken: []; frame: [] }>();
 </script>

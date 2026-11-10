@@ -579,6 +579,12 @@ export function createAssistantRoutes(deps: AssistantDeps): AssistantRoute[] {
             sendJson(res, { code: 400, error: '文件名不合法' });
             return;
         }
+        // ⚠️ `serial` 会被拼进路径：不校验就等于把目录穿越换了个参数送进来。
+        //    只认盘表里真实存在的序列号（不要求在线 —— 帧在系统盘，拔了盘也能看）。
+        if (!(await getDrives()).some(d => d.serial === serial)) {
+            sendJson(res, { code: 400, error: '未知的盘' });
+            return;
+        }
         try {
             const buf = await fsp.readFile(framePath(dataDir, serial, file));
             res.writeHead(200, { 'Content-Type': 'image/jpeg', 'Cache-Control': 'no-store' });
@@ -615,7 +621,7 @@ export function createAssistantRoutes(deps: AssistantDeps): AssistantRoute[] {
      * `picks` 是确认弹窗勾选的 writeRel 白名单（不传 = 全写）。
      */
     async function startApply(
-        body: { serial?: string; jobId?: string; jobIds?: string[]; picks?: string[] },
+        body: { serial?: string; jobId?: string; jobIds?: string[]; picks?: string[]; targets?: ScanTarget[] },
         res: http.ServerResponse,
     ) {
         if (!body.serial) {
@@ -629,7 +635,8 @@ export function createAssistantRoutes(deps: AssistantDeps): AssistantRoute[] {
          */
         const ids = body.jobIds?.length ? body.jobIds : (body.jobId ? [body.jobId] : []);
         const jobs = ids.map(id => getJob(id)).filter((j): j is Job => !!j);
-        if (!jobs.length) {
+        // 没有 job 也可能有活要干：关面板重开后 job 早被回收，盘上只有回填的帧
+        if (!jobs.length && !body.targets?.length) {
             sendJson(res, { code: 404, error: '找不到这个任务（任务可能在内存里被回收了，重新抓一次）' });
             return;
         }
@@ -653,7 +660,17 @@ export function createAssistantRoutes(deps: AssistantDeps): AssistantRoute[] {
                 byRel.set(r.writeRel, r);
             }
         }
-        const rows = [...byRel.values()];
+        const rows0 = [...byRel.values()];
+        /**
+         * 回填的帧不在任何 job 里（关面板重开后 job 已回收）—— 只靠 `jobIds` 会把它们**静默漏掉**，
+         * 而底栏已经承诺了"确认写入 N 部"。这里用 `targets` 现算一遍帧索引补上。
+         * 顺序上前插：job 行排在后面 = 更晚发生 ⇒ 后者说了算的规则对它们同样成立。
+         */
+        const covered = new Set(rows0.map(r => r.writeRel));
+        const fromIndex = body.targets?.length
+            ? (await readFrameIndex(dataDir, body.serial, body.targets)).filter(r => !covered.has(r.writeRel))
+            : [];
+        const rows = [...fromIndex, ...rows0];
         if (!rows.length) {
             sendJson(res, { code: 200, jobId: null, total: 0, message: '没有可写入的封面（这一批没有命中）' });
             return;

@@ -71,6 +71,7 @@
                         :selected="isSelected(item)"
                         :locked="selLocked"
                         :action="actionOf(item, frameBusy)"
+                        :action-disabled="!!item.frame && item.frame.pct >= FRAME_STOP_PCT"
                         :extracting="frameBusy.has(item.writeRels[0])"
                         :cover-src="srcOf(item)"
                         @toggle="toggleCard(item)"
@@ -96,26 +97,40 @@
                     :celebrate="celebrate"
                 >
                     <template #actions>
+                        <!-- 批量抽帧：放在模式分支**之外** —— 有失败卡的那些时刻（grab-done / frame-done）
+                             正是需要它的时候，塞进 idle 分支等于永远不出现 -->
+                        <button
+                            v-if="needFrameCount && !isLiveJob(frameJob) && !isLiveJob(applyJob)"
+                            type="button"
+                            class="ffw-btn ffw-btn--ghost"
+                            :disabled="!canOperate"
+                            :title="canOperate ? '把没有封面的用视频关键帧补上' : '这块盘现在不在线，插上盘再操作'"
+                            @click="startFrame()"
+                        >
+                            没封面的 {{ needFrameCount }} 部抽帧
+                        </button>
+
                         <template v-if="task.mode === 'idle'">
-                            <!-- 批量抽帧：抓取没拿到封面的那些，一次抽完（单卡的「抽帧」在卡右上角） -->
-                            <button
-                                v-if="needFrameCount"
-                                type="button"
-                                class="ffw-btn ffw-btn--ghost"
-                                :disabled="!canOperate || !!frameActing"
-                                :title="canOperate ? '把没有封面的用视频关键帧补上' : '这块盘现在不在线，插上盘再操作'"
-                                @click="startFrame()"
-                            >
-                                没封面的 {{ needFrameCount }} 部抽帧
-                            </button>
                             <button
                                 type="button"
                                 class="ffw-btn ffw-btn--primary"
                                 :disabled="!counts.selected || scanLoading || !canOperate"
+                                :title="canOperate ? '' : '这块盘现在不在线，插上盘再操作'"
                                 @click="startGrab()"
                             >
                                 开始抓取 {{ counts.selected }} 部
                                 <n-icon :component="ArrowForwardOutline" :size="13" />
+                            </button>
+                            <!-- 只有回填帧、没有任何 job 时（关面板重开）也得能写 -->
+                            <button
+                                v-if="counts.ready"
+                                type="button"
+                                class="ffw-btn"
+                                :disabled="!canOperate"
+                                :title="canOperate ? '' : '这块盘现在不在线，插上盘再操作'"
+                                @click="startApply"
+                            >
+                                确认写入 {{ counts.ready }} 部
                             </button>
                         </template>
 
@@ -152,6 +167,7 @@
                                 type="button"
                                 class="ffw-btn ffw-btn--primary"
                                 :disabled="!counts.ready || !canOperate"
+                                :title="canOperate ? '' : '这块盘现在不在线，插上盘再操作'"
                                 @click="startApply"
                             >
                                 确认写入 {{ counts.ready }} 部
@@ -173,7 +189,8 @@
                                 v-if="counts.ready"
                                 type="button"
                                 class="ffw-btn"
-                                :disabled="!!grabActing || !!applyActing"
+                                :disabled="!!grabActing || !!applyActing || !canOperate"
+                                :title="canOperate ? '' : '这块盘现在不在线，插上盘再操作'"
                                 @click="startApply"
                             >
                                 写入已抓到的 {{ counts.ready }} 部
@@ -207,6 +224,8 @@
                                 v-if="retryTargets.length"
                                 type="button"
                                 class="ffw-btn"
+                                :disabled="!canOperate"
+                                :title="canOperate ? '' : '这块盘现在不在线，插上盘再操作'"
                                 @click="startGrab(retryTargets, grabJob?.id)"
                             >
                                 补抓 {{ retryTargets.length }} 条
@@ -253,7 +272,7 @@ import AssistantShell from './assistant/AssistantShell.vue';
 import TaskDock from './assistant/TaskDock.vue';
 import CoverCard from './assistant/CoverCard.vue';
 import SkeletonList from './assistant/SkeletonList.vue';
-import { buildCoverItems, buildCoverTask, actionOf, summarize } from './assistant/coverModel';
+import { buildCoverItems, buildCoverTask, actionOf, summarize, FRAME_STOP_PCT } from './assistant/coverModel';
 import type { ApplyRowLike, CoverItem, GrabRowLike, ScanTargetLike } from './assistant/coverModel';
 import { resolveDriveContext } from './assistant/driveContext';
 import { isLiveJob } from './assistant/jobTypes';
@@ -400,8 +419,11 @@ const frameRows = computed<GrabRowLike[]>(() => {
         writeRel: f.writeRel, status: 'ok' as const, coverUrl: null,
         frame: true, frameFile: f.frameFile, pct: f.pct, attempt: f.attempt, skipped: f.skipped,
     }));
-    return [...fromIndex, ...((frameJob.value?.rows ?? []) as GrabRowLike[])];
+    return fromIndex;
 });
+
+/** 本次 job 的帧行（与回填分开：回填是**更早**的结果，不该压过之后抓到的封面） */
+const jobFrameRows = computed<GrabRowLike[]>(() => (frameJob.value?.rows ?? []) as GrabRowLike[]);
 
 /**
  * 正在抽的卡的 writeRel。`state:'pending'` 只覆盖"这张卡还没有任何结果行"的情形，
@@ -471,8 +493,9 @@ const applyRows = computed<ApplyRowLike[]>(() => {
 const items = computed<CoverItem[]>(() => {
     const base = buildCoverItems(
         targets.value,
-        // 帧行排在抓取行之后：同一 writeRel 后者说了算（换一帧必须压过旧结果）
-        [...grabRows.value, ...frameRows.value],
+        // 顺序 = 时间顺序（后者说了算）：回填帧（最早）→ 抓取行 → 本次抽帧行（最晚）。
+        // ⚠️ 帧行不能无条件压在抓取行后面：重开面板后抓到的好封面会被上一天的旧帧永久遮蔽。
+        [...frameRows.value, ...grabRows.value, ...jobFrameRows.value],
         applyRows.value,
         /**
          * ⚠️ 这里要的是「**正在**抓」，不是 `isLiveJob`。
@@ -560,6 +583,7 @@ const applyScanResult = (result: ScanResult) => {
     writtenRels.value = new Set();
     brokenCovers.value = new Set(); // 新的一批 = 新的一批链接，旧的失败标记不许带过来
     frameIndex.value = [];          // 先清空：回填是异步的，旧盘的帧绝不能挂在新清单上
+    frameBusy.value = new Set();    // 在途标记也是"上一批"的：重扫后不清会永久转圈
     detachGrab();
     detachApply();
     detachFrame();
@@ -701,6 +725,11 @@ const startFrame = async (list?: ScanTargetLike[]) => {
         notify('info', '这块盘现在不在线', '插上盘再抽帧');
         return;
     }
+    // 写盘正在动这块盘：这时候抽帧等于两个进程同时读同一个视频，也违反"写盘时不动盘"
+    if (isLiveJob(applyJob.value)) {
+        notify('info', '正在写入', '等写入结束再抽帧');
+        return;
+    }
     const picked = list ?? targets.value.filter(t =>
         items.value.some(i => actionOf(i, frameBusy.value) === 'frame' && i.writeRels.includes(t.writeRel)));
     if (!picked.length) return;
@@ -719,7 +748,12 @@ const startFrame = async (list?: ScanTargetLike[]) => {
             notify('info', '没有可抽帧的目标', res.message || '');
             return;
         }
-        if (res.reused) notify('info', '抽帧', res.message || '已接上正在跑的那个抽帧任务');
+        if (res.reused) {
+            // 接上的是**已有的**那个 job —— 这一批目标被服务端丢掉了，别假装它在抽
+            markBusy(picked.map(t => t.writeRel), false);
+            notify('info', '抽帧', res.message || '已接上正在跑的那个抽帧任务');
+            return;
+        }
         trackFrame(res.jobId);
     } catch (e) {
         markBusy(picked.map(t => t.writeRel), false);
@@ -739,15 +773,18 @@ const startApply = async () => {
         return;
     }
 
-    // 抓取与抽帧**各是一个 job**：两个都要交给服务端，否则抽帧的结果永远写不进去
+    // 抓取与抽帧**各是一个 job**：两个都要交给服务端，否则抽帧的结果永远写不进去。
+    // 也可以一个都没有（重开面板后 job 已回收、盘上只剩回填的帧）—— 那种情况靠 targets 兜底。
     const jobIds = [grabJob.value?.id, frameJob.value?.id].filter((x): x is string => !!x);
-    if (!jobIds.length) return;
+    if (!jobIds.length && !targets.value.length) return;
 
     try {
         const res = await postAction(`${API_BASE}/assistant/apply`, {
             serial: selectedSerial.value,
             jobIds,
             picks,
+            // 回填的帧（job 已回收的那种）服务端要靠 targets 自己捞出来，否则被静默漏掉
+            targets: targets.value,
         });
         if (!res.jobId) {
             notify('info', '没有可写入的封面', res.message || '');
@@ -783,6 +820,9 @@ const setShowModal = async (v: boolean, picks?: FacePick[], presetPath?: string)
         detachGrab();
         detachApply();
         detachFrame();
+        // 关面板时任务可能还在跑（job 在主进程）。在途标记必须一起清：
+        // 重开时它已经不是 live job，`onFrameSettled` 再也不会触发 ⇒ 那张卡会永久转圈。
+        frameBusy.value = new Set();
         facePicks.value = []; // 关面板就清掉挑选，否则下次从「补封面」进来会沿用
         return;
     }
@@ -791,9 +831,10 @@ const setShowModal = async (v: boolean, picks?: FacePick[], presetPath?: string)
 
     await loadDisks();
 
-    // 自动带盘：只在「补封面」（没有 picks）且当前盘在线时预选。
-    // 复用 `resolveDriveContext` —— 它同时认 `H:/x` 与离线锚点 `#serial/x`，是既有唯一实现。
-    if (!picks?.length && presetPath && !selectedSerial.value) {
+    // 自动带盘：只在「补封面」（没有 picks）时做。
+    // ⚠️ 不能加 `&& !selectedSerial` —— 那会让它只在本次会话第一次打开时成立，
+    //    之后从哪块盘右键都还停在上一次的盘上（对着 E 盘操作、动的却是 D 盘）。
+    if (!picks?.length && presetPath) {
         const ctx = await resolveDriveContext({ currentPath: presetPath });
         const online = ctx.serial && disks.value.find(d => d.serial === ctx.serial)?.online !== false;
         if (online) selectedSerial.value = ctx.serial;

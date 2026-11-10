@@ -76,7 +76,6 @@ function parseFrameName(file: string): { k16: string; attempt: number; pct: numb
 
 /** 盘内相对路径拼接 / 取父目录（本地实现，避免与 server/index.ts 成环） */
 const joinRel = (parent: string, name: string) => (parent ? `${parent}/${name}` : name);
-const baseOf = (rel: string) => rel.slice(rel.lastIndexOf('/') + 1);
 
 /** 卡 → 它的目标们（一张多分卷卡有多个 writeRel） */
 function groupByCard(targets: ScanTarget[]): Map<string, ScanTarget[]> {
@@ -283,12 +282,23 @@ export async function runFrameJob(
  * 回填：这块盘上**已经抽过的**帧，按 writeRel 列出来（打开/重扫面板后接着用）。
  *
  * 只 readdir + 算卡键，**零读盘**（移动盘一个字节都不碰）。卡键可复算 ⇒ 不需要 sidecar。
+ *
+ * 返回里带 `kind/query/srcRel/name`：写盘时这些帧可能**不在任何 job 里**
+ * （关面板重开后 job 已经回收），`/assistant/apply` 要能把它们补成完整的行喂给 `buildGroups`。
  */
+export interface FrameIndexEntry extends GrabRow {
+    frame: true;
+    frameFile: string;
+    pct: number;
+    attempt: number;
+    skipped: number;
+}
+
 export async function readFrameIndex(
     dataDir: string,
     serial: string,
     targets: ScanTarget[],
-): Promise<{ writeRel: string; frameFile: string; pct: number; attempt: number; skipped: number }[]> {
+): Promise<FrameIndexEntry[]> {
     const files = await fsasync.readdir(frameDirOf(dataDir, serial)).catch(() => [] as string[]);
     if (!files.length) return [];
 
@@ -304,14 +314,31 @@ export async function readFrameIndex(
     }
     if (!latest.size) return [];
 
-    const out: { writeRel: string; frameFile: string; pct: number; attempt: number; skipped: number }[] = [];
+    const out: FrameIndexEntry[] = [];
     for (const [key, list] of groupByCard(targets)) {
         const hit = latest.get(key16Of(key));
         if (!hit) continue;
-        for (const t of list) out.push({ writeRel: t.writeRel, frameFile: hit.file, pct: hit.pct, attempt: hit.attempt, skipped: hit.skipped });
+        for (const t of list) {
+            out.push({
+                writeRel: t.writeRel, query: t.query ?? t.name, hitSite: null, coverUrl: null,
+                title: null, actresses: [], status: 'ok', message: '',
+                kind: t.kind, name: t.name, srcRel: t.srcRel,
+                frame: true, frameFile: hit.file, pct: hit.pct, attempt: hit.attempt, skipped: hit.skipped,
+            });
+        }
     }
     return out;
 }
+
+/**
+ * 无引用的帧至少要多"老"才列出来。
+ *
+ * 为什么需要这个门槛（2026-11-10 复核发现）：引用判据只有一条 —— "这张卡还缺不缺封面"。
+ * 而「换封面」的卡**本来就有封面**（用户是要换掉），它永远不会出现在"仍缺封面"集合里，
+ * 于是刚抽出来的那张帧会被当场判成垃圾。24 小时是给它留的工作窗口：
+ * 换封面是当场就写完的动作，超过一天还没写的基本就是忘了。
+ */
+const ORPHAN_MIN_AGE_MS = 24 * 60 * 60 * 1000;
 
 /**
  * 帧缓存盘点用的辅助：把这块盘"仍缺封面"的卡键集合算出来（纯缓存，零读盘）。
@@ -422,6 +449,11 @@ export async function inventoryFrames(dataDir: string, verify = false): Promise<
                 continue;
             }
 
+            // 卡已经不需要这张帧了 —— 但刚抽出来的那张先留着（见 ORPHAN_MIN_AGE_MS）
+            if ((size?.mtime ?? 0) > Date.now() - ORPHAN_MIN_AGE_MS) {
+                out.live += 1;
+                continue;
+            }
             out.orphans.push({
                 file, serial, bytes: size?.bytes ?? 0, mtime: size?.mtime ?? 0,
                 pct: meta.pct, attempt: meta.attempt, orphan: true,
@@ -458,13 +490,4 @@ export async function purgeFrames(
     }
     // 想删但已经不在孤儿集合里的（期间被重抽了 / 盘插回来了）一个都不动
     return { removed, freed, skipped: want.size - removed };
-}
-
-/** 写盘成功后回收那一张帧（已落盘，不再需要） */
-export async function dropFrames(dataDir: string, serial: string, frameFiles: string[]): Promise<void> {
-    const dir = frameDirOf(dataDir, serial);
-    for (const f of frameFiles) {
-        if (!f) continue;
-        await fsasync.unlink(path.join(dir, baseOf(f))).catch(() => { });
-    }
 }

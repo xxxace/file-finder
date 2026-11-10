@@ -202,19 +202,22 @@ export function summarize(items: CoverItem[], selected: Set<string>): CoverCount
 export type CoverAction = 'frame' | 'reframe' | 'none';
 
 /** 阶梯末档（与 `frameMath.ts` 的 PCT_LADDER 末位同值）。到这儿就不再往后了 */
-const FRAME_STOP_PCT = 50;
+export const FRAME_STOP_PCT = 50;
 
 /**
  * 一张卡右上角能做什么。
  *
  * · 已经有脸（站点或帧）⇒ 只有帧能「换一帧」；站点封面不给抽帧入口（否则等于把好封面顶掉）
  * · 没有脸（未找到 / 认不出 / 抓取失败 / 被拦）⇒ 给「抽帧」
- * · 已写入、到阶梯末档、正在抽 ⇒ 什么都不给（点了没效果的事，不如不出现）
+ * · 已写入、正在抽 ⇒ 什么都不给（点了没效果的事，不如不出现）
+ *
+ * ⚠️ 到阶梯末档**仍然返回 `reframe`**，由卡片渲染成"禁用 + 已到中段" ——
+ *    直接返回 `none` 会让按钮凭空消失，用户分不清是到顶了还是坏了。
  */
 export function actionOf(item: CoverItem, busy: ReadonlySet<string> = new Set()): CoverAction {
     if (item.writeRels.some(r => busy.has(r))) return 'none';
     if (item.state === 'written' || item.state === 'writefail') return 'none';
-    if (item.frame) return item.frame.pct >= FRAME_STOP_PCT ? 'none' : 'reframe';
+    if (item.frame) return 'reframe';
     return item.state === 'miss' || item.state === 'noid' || item.state === 'error' || item.state === 'blocked'
         ? 'frame'
         : 'none';
@@ -352,6 +355,16 @@ export function buildCoverTask(
             ratio: ratioOf(frame),
             status: `抽帧已终止 ${frame.progress.hits} / ${frame.progress.total} 有封面`,
             detail: '已抽到的帧都留在卡上，写入后才会进盘',
+        };
+    }
+
+    if (frame?.status === 'error') {
+        return {
+            mode: 'frame-done',
+            phase: 'done',
+            ratio: ratioOf(frame),
+            status: `抽帧中断 ${frame.progress.processed} / ${frame.progress.total}`,
+            detail: frame.message || '抽帧没跑完，已经抽到的都留在卡上',
         };
     }
 
