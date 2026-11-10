@@ -55,6 +55,7 @@ import type { OpenMode } from '../nedb';
 import { patchItemByLocation } from '../playlistStore';
 import { enqueue, CancelledError } from './queue';
 import { appendTombstone } from './hits';
+import { cardKeyOf } from './cardKey';
 import { getVerifiedCover, isUsableCoverUrl } from './coverImage';
 import type { CoverCheck } from './coverImage';
 import type { GrabRow } from './grab';
@@ -142,7 +143,7 @@ export function buildGroups(rows: GrabRow[]): ApplyGroup[] {
             //（`演员A/` 下同时有 `TST-001/`、`TST-002/`…）。原版用 `dir|layerDir` 作键，
             // 后面同层的会被 `groups.has()` 吞掉、**静默丢失**。这里一并修掉。
             const overwrite = r.kind === 'cover';
-            const key = `${overwrite ? 'cover' : 'dir'}|${r.writeRel}`;
+            const key = cardKeyOf({ kind: overwrite ? 'cover' : 'dir', writeRel: r.writeRel });
             if (!groups.has(key)) {
                 groups.set(key, {
                     key, kind: 'dir', query: r.query, coverWriteRel: r.writeRel,
@@ -155,7 +156,7 @@ export function buildGroups(rows: GrabRow[]): ApplyGroup[] {
 
         // 文件形态：同层同番号的所有分卷 → 一个番号文件夹，封面与文件夹同名
         const layerDir = dirOf(r.writeRel);
-        const key = `file|${layerDir}|${r.query}`;
+        const key = cardKeyOf({ kind: 'file', writeRel: r.writeRel, query: r.query });
         let g = groups.get(key);
         if (!g) {
             g = {
