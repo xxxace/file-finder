@@ -16,7 +16,7 @@ import * as fsasync from 'node:fs/promises';
 import path from 'node:path';
 import { nativeImage } from 'electron';
 import { getDrives } from '../../utils/driveIdentity';
-import { frameJpeg } from '../../utils/thumbnail';
+import { frameJpegAt, probeVideoSeconds, secondsOf } from '../../utils/thumbnail';
 import { cardKeyOf, key16Of } from './cardKey';
 import { FLAT_RATIO, FLAT_SAMPLE, PCT_LADDER, flatRatio, pctOf } from './frameMath';
 import { isVideo } from '../videoExt';
@@ -136,12 +136,21 @@ function flatnessOf(jpg: Buffer): number {
 async function extractCard(
     videoAbs: string,
     start: number,
+    shouldStop: () => boolean,
 ): Promise<{ jpg: Buffer; attempt: number; pct: number; skipped: number } | null> {
+    // ⚠️ 时长**只 probe 一次**：每跳一档都重 probe 等于在移动硬盘上多读一遍文件头，
+    //    最多会变成 12 个子进程（2.5″ 盘最怕的形态）。之后循环里只换秒数。
+    const duration = await probeVideoSeconds(videoAbs);
+    if (duration === null) return null;
+
     let attempt = start;
     let skipped = 0;
     for (;;) {
+        // 终止也在这里看一眼：一张纯色卡最坏要抽 4 档，用户按了终止不该再跑完后三档
+        if (shouldStop()) return null;
+
         const pct = pctOf(attempt);
-        const jpg = await frameJpeg(videoAbs, pct);
+        const jpg = await frameJpegAt(videoAbs, secondsOf(duration, pct));
         if (!jpg) return null;
 
         const flat = flatnessOf(jpg) >= FLAT_RATIO;
@@ -162,13 +171,18 @@ export async function runFrameJob(
     targets: ScanTarget[],
     job: Job<FrameRow>,
     dataDir: string,
+    /** 调用方已经查过的盘根。给了就不再自己扫一遍盘表（一次动作只扫一趟） */
+    rootHint?: string,
 ): Promise<void> {
-    const drive = (await getDrives(true)).find(d => d.serial === serial);
-    if (!drive) {
-        finishJob(job, 'error', '这块盘现在不在线，插上盘再抽帧');
-        return;
+    let root = rootHint ?? '';
+    if (!root) {
+        const drive = (await getDrives(true)).find(d => d.serial === serial);
+        if (!drive) {
+            finishJob(job, 'error', '这块盘现在不在线，插上盘再抽帧');
+            return;
+        }
+        root = drive.root.endsWith('/') || drive.root.endsWith('\\') ? drive.root : `${drive.root}/`;
     }
-    const root = drive.root.endsWith('/') || drive.root.endsWith('\\') ? drive.root : `${drive.root}/`;
     const absOf = (rel: string) => path.join(root, rel.replace(/\//g, path.sep));
 
     const cards = groupByCard(targets);
@@ -180,6 +194,19 @@ export async function runFrameJob(
 
     const dir = frameDirOf(dataDir, serial);
     await fsasync.mkdir(dir, { recursive: true }).catch(() => { });
+
+    /**
+     * 帧目录里已有什么，**整个任务只 readdir 一次**。
+     * 原先是每张卡都 readdir 一遍再全表正则扫 —— N 张卡就是 N 次目录读 + N×M 次解析，
+     * 而目录在循环里还在增长，纯属自己给自己加活。
+     */
+    const existing = new Map<string, { file: string; attempt: number; pct: number; skipped: number }>();
+    for (const f of await fsasync.readdir(dir).catch(() => [] as string[])) {
+        const p = parseFrameName(f);
+        if (p && (!existing.has(p.k16) || p.attempt >= existing.get(p.k16)!.attempt)) {
+            existing.set(p.k16, { file: f, attempt: p.attempt, pct: p.pct, skipped: p.skipped });
+        }
+    }
 
     let hits = 0;
     let misses = 0;
@@ -218,22 +245,16 @@ export async function runFrameJob(
             } else {
                 // 上一次抽到第几档，由**已存在的帧文件名**告知（无需前端传状态）：
                 // 换一帧 = 往后一档；上次抽失败（没有帧文件）= 从 0 重来。
-                const prev = await fsasync.readdir(dir).catch(() => [] as string[]);
-                const start = Math.min(
-                    prev.map(parseFrameName).filter(f => f?.k16 === k16).reduce((m, f) => Math.max(m, f!.attempt + 1), 0),
-                    PCT_LADDER.length - 1,
-                );
+                const prevHit = existing.get(k16);
+                const start = Math.min(prevHit ? prevHit.attempt + 1 : 0, PCT_LADDER.length - 1);
 
-                const got = await extractCard(video.abs, start);
+                const got = await extractCard(video.abs, start, () => job.cancelled);
                 // 重抽失败但**上一帧还在** ⇒ 继续用上一帧，别把已经拿到的好封面弄丢了
-                const prevFile = prev.find(f => parseFrameName(f)?.k16 === k16);
-                const prevMeta = prevFile ? parseFrameName(prevFile) : null;
-
-                if (!got && prevFile && prevMeta) {
+                if (!got && prevHit) {
                     misses += 1;
                     pushFor(list, {
-                        frame: true, frameFile: prevFile, pct: prevMeta.pct,
-                        attempt: prevMeta.attempt, skipped: prevMeta.skipped,
+                        frame: true, frameFile: prevHit.file, pct: prevHit.pct,
+                        attempt: prevHit.attempt, skipped: prevHit.skipped,
                         status: 'ok', coverUrl: null, hitSite: null, title: null, actresses: [],
                         message: '重抽失败，仍用上一帧',
                     });
@@ -251,11 +272,10 @@ export async function runFrameJob(
                     await fsasync.writeFile(tmp, got.jpg);
                     await fsasync.rename(tmp, path.join(dir, file)); // 原子落位：读不到写一半的图
                     // 同一条逻辑对象的替换：同卡旧帧删掉，只留最新这一张
-                    for (const old of prev) {
-                        if (parseFrameName(old)?.k16 === k16 && old !== file) {
-                            fsasync.unlink(path.join(dir, old)).catch(() => { });
-                        }
+                    if (prevHit && prevHit.file !== file) {
+                        await fsasync.unlink(path.join(dir, prevHit.file)).catch(() => { });
                     }
+                    existing.set(k16, { file, attempt: got.attempt, pct: got.pct, skipped: got.skipped });
                     hits += 1;
                     pushFor(list, {
                         frame: true, frameFile: file, pct: got.pct, attempt: got.attempt, skipped: got.skipped,
@@ -393,8 +413,14 @@ async function serialsWithFrames(dataDir: string): Promise<string[]> {
  * @param verify 级二：对仍判"在用"的项，按盘上真实路径 stat 一次。**只 stat 有帧的那几项**，
  *   不是扫盘；盘离线就整批跳过并计入 `offlineSkipped`。
  */
-export async function inventoryFrames(dataDir: string, verify = false): Promise<FrameInventory> {
-    const serials = await serialsWithFrames(dataDir);
+export async function inventoryFrames(
+    dataDir: string,
+    opts: { verify?: boolean; serial?: string } = {},
+): Promise<FrameInventory> {
+    const verify = opts.verify === true;
+    // 只看某一块盘（补封面面板要的是"当前这块盘有没有垃圾"，不是全机器的账）
+    const all = await serialsWithFrames(dataDir);
+    const serials = opts.serial ? all.filter(x => x === opts.serial) : all;
 
     /**
      * 只有**有缓存记录**的盘才敢判"没人要了"：缓存库被清空/重建时，所有盘都会"没有任何卡"，
@@ -481,11 +507,13 @@ export async function inventoryFrames(dataDir: string, verify = false): Promise<
 export async function purgeFrames(
     dataDir: string,
     files: string[],
+    /** 与上一次「核实」同口径重算：级二发现的孤儿，只有带 verify 的盘点才认得出来 */
+    verify = false,
 ): Promise<{ removed: number; freed: number; skipped: number }> {
     const want = new Set(files.filter(f => FRAME_NAME_RE.test(f)));
     if (!want.size) return { removed: 0, freed: 0, skipped: 0 };
 
-    const inv = await inventoryFrames(dataDir, false);
+    const inv = await inventoryFrames(dataDir, { verify });
     let removed = 0;
     let freed = 0;
     for (const item of inv.orphans) {

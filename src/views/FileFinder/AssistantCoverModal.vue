@@ -254,7 +254,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed, ref } from 'vue';
+import { computed, onBeforeUnmount, ref } from 'vue';
 import { useRouter } from 'vue-router';
 import { NModal, NSelect, NIcon } from 'naive-ui';
 import useConfirm from '@/hooks/useConfirm';
@@ -322,6 +322,9 @@ const disks = ref<DiskRow[]>([]);
 const scanLoading = ref(false);
 const challengeRunning = ref(false);
 const celebrate = ref(false);
+/** 完成光雾那个 680ms 定时器。不清的话：连续两次写入会叠多个，面板关了它还在写 ref */
+let celebrateTimer: ReturnType<typeof setTimeout> | undefined;
+onBeforeUnmount(() => { if (celebrateTimer) clearTimeout(celebrateTimer); });
 
 const selectedSerial = ref<string | null>(null);
 const scan = ref<ScanResult | null>(null);
@@ -383,7 +386,8 @@ function onApplySettled(job: JobSnapshot): void {
     emit('refresh'); // 写完立即失效了对应目录缓存，主网格刷新就能看到新脸
     if (job.status === 'done') {
         celebrate.value = true;
-        setTimeout(() => (celebrate.value = false), 680);
+        if (celebrateTimer) clearTimeout(celebrateTimer);
+        celebrateTimer = setTimeout(() => (celebrate.value = false), 680);
     }
     if (job.status === 'error') notify('error', '写入失败', job.message);
     else if (job.status === 'cancelled') notify('info', '写入已终止', job.message);
@@ -459,7 +463,8 @@ const mb = (n: number) => (n >= 1024 * 1024 ? `${(n / 1024 / 1024).toFixed(1)} M
  */
 const checkOrphans = async () => {
     try {
-        const res = await postAction(`${API_BASE}/assistant/frames/inventory`, {});
+        // 只算**当前这块盘**：角标要回答的是"我手上这块有没有垃圾"，不是全机器的账
+        const res = await postAction(`${API_BASE}/assistant/frames/inventory`, { serial: selectedSerial.value });
         const list = (res.orphans ?? []) as { bytes: number }[];
         orphanCount.value = list.length;
         orphanBytes.value = list.reduce((n, o) => n + (o.bytes ?? 0), 0);
@@ -651,6 +656,10 @@ const deepRescan = async () => {
     try {
         const res = await postAction(`${API_BASE}/assistant/rebuild`, { serial: selectedSerial.value, relPath: '' });
         applyScanResult(res as ScanResult);
+        // ⚠️ 必须回填：`applyScanResult` 会把 frameIndex 清空，而只有 runScan 会重新拉。
+        //    漏了这一句，深度重扫之后已抽好的帧全从卡上消失、`counts.ready` 归零，
+        //    用户会再抽一遍 —— 那是一次次真读移动硬盘。
+        await loadFrameIndex();
         if (res.refreshed) notify('success', '深度重扫完成', `实时复核了 ${res.refreshed} 个目录`);
         else if (scan.value?.targets.length) notify('info', '深度重扫完成', '盘不在线或没有写入记录，结果来自缓存');
     } catch (e) {

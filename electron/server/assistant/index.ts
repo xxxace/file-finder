@@ -418,10 +418,19 @@ export function createAssistantRoutes(deps: AssistantDeps): AssistantRoute[] {
      * 也写不进去（写入那边本来就判了盘在线）。三处各写一遍 `find(d => d.serial === serial)`
      * 只会漂成三种口径，而漂错的那一种的表现是"点了没反应"。
      */
-    async function assertOnline(serial: string): Promise<string> {
+    async function onlineRoot(serial: string): Promise<{ why: string; root: string }> {
         const drive = (await getDrives(true)).find(d => d.serial === serial);
-        return drive ? '' : '这块盘现在不在线，插上盘再操作';
+        if (!drive) return { why: '这块盘现在不在线，插上盘再操作', root: '' };
+        const root = drive.root.endsWith('/') || drive.root.endsWith('\\') ? drive.root : `${drive.root}/`;
+        return { why: '', root };
     }
+
+    /**
+     * 兼容旧调用点：只问"能不能动"。
+     * ⚠️ 抽帧那条路要是再自己 `getDrives(true)` 一遍，一次动作会扫 24 个盘根两趟 ——
+     * 所以 `startFrame` 拿 `onlineRoot` 的 root 直接传给 worker。
+     */
+    const assertOnline = async (serial: string) => (await onlineRoot(serial)).why;
 
     async function startGrab(
         body: {
@@ -514,9 +523,9 @@ export function createAssistantRoutes(deps: AssistantDeps): AssistantRoute[] {
             sendJson(res, { code: 400, error: '缺少 serial' });
             return;
         }
-        const why = await assertOnline(body.serial);
-        if (why) {
-            sendJson(res, { code: 409, error: why });
+        const online = await onlineRoot(body.serial);
+        if (online.why) {
+            sendJson(res, { code: 409, error: online.why });
             return;
         }
         const targets = (body.targets ?? []).filter(t => t?.writeRel);
@@ -536,7 +545,7 @@ export function createAssistantRoutes(deps: AssistantDeps): AssistantRoute[] {
                 return;
             }
             reopenJob(job);
-            void runFrameJob(body.serial, targets, job, dataDir);
+            void runFrameJob(body.serial, targets, job, dataDir, online.root);
             sendJson(res, { code: 200, jobId: job.id, total: targets.length, appended: true });
             return;
         }
@@ -551,7 +560,7 @@ export function createAssistantRoutes(deps: AssistantDeps): AssistantRoute[] {
         }
 
         const job = createJob<FrameRow>('frame', targets.length);
-        void runFrameJob(body.serial, targets, job, dataDir);
+        void runFrameJob(body.serial, targets, job, dataDir, online.root);
         sendJson(res, { code: 200, jobId: job.id, total: targets.length });
     }
 
@@ -580,9 +589,11 @@ export function createAssistantRoutes(deps: AssistantDeps): AssistantRoute[] {
             return;
         }
         // ⚠️ `serial` 会被拼进路径：不校验就等于把目录穿越换了个参数送进来。
-        //    只认盘表里真实存在的序列号（不要求在线 —— 帧在系统盘，拔了盘也能看）。
-        if (!(await getDrives()).some(d => d.serial === serial)) {
-            sendJson(res, { code: 400, error: '未知的盘' });
+        //    但**不能**要求它"现在挂在盘表里" —— 帧住在系统盘，盘拔了也该看得见
+        //    （那正是设置页清理离线盘缓存的前提）。卷序列号恒为 8 位十六进制，
+        //    这条格式闸门足以杀掉 `..` 与分隔符。
+        if (!/^[0-9A-Fa-f]{8}$/.test(serial)) {
+            sendJson(res, { code: 400, error: '序列号不合法' });
             return;
         }
         try {
@@ -602,7 +613,11 @@ export function createAssistantRoutes(deps: AssistantDeps): AssistantRoute[] {
      * 清理不信前端：服务端重算一遍再删。
      */
     async function frameInventory(req: ReqLike, res: http.ServerResponse, verify: boolean) {
-        const inv = await inventoryFrames(dataDir, verify || (req.body || {}).verify === true);
+        const body = (req.body || {}) as { verify?: boolean; serial?: string };
+        const inv = await inventoryFrames(dataDir, {
+            verify: verify || body.verify === true,
+            serial: body.serial,
+        });
         sendJson(res, { code: 200, ...inv });
     }
 
@@ -612,7 +627,7 @@ export function createAssistantRoutes(deps: AssistantDeps): AssistantRoute[] {
             sendJson(res, { code: 400, error: '没有要清理的文件' });
             return;
         }
-        sendJson(res, { code: 200, ...(await purgeFrames(dataDir, files)) });
+        sendJson(res, { code: 200, ...(await purgeFrames(dataDir, files, (req.body || {}).verify === true)) });
     }
 
     /**

@@ -1067,7 +1067,8 @@ export async function probeLayersController(req: Req, res: http.ServerResponse) 
 
     // serial → 当前盘符：盘符不是身份（拔了再插会变），所以每次现查，不缓存映射
     const drive = (await getDrives()).find(d => d.serial === serial);
-    if (!drive) return sendJson(res, rels.map(rel => ({ rel, changed: false, missing: true })));
+    // 盘不在 ≠ 目录被删。分开报：前者要中止并叫用户插盘，后者是正常的"清掉了"
+    if (!drive) return sendJson(res, rels.map(rel => ({ rel, changed: false, missing: true, offline: true })));
 
     const out: { rel: string; changed: boolean; missing: boolean; dirs?: string[]; needsPreview?: boolean }[] = [];
     for (const rel of rels) {

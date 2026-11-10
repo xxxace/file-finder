@@ -92,6 +92,12 @@ const inv = ref<Inv>({ total: 0, bytes: 0, orphans: [], live: 0, offlineSkipped:
 const busy = ref<'' | 'inv' | 'ver' | 'purge'>('');
 /** 上次跑完的时刻。用户点了按钮却看不到任何数字变化时，这是唯一的"我确实跑过" */
 const at = ref<number | null>(null);
+/**
+ * 现在这份列表是「核实」得来的还是「刷新」得来的。
+ * 清理必须与它**同口径重算**：级二（核实）发现的孤儿，在只读缓存的重算里会变回"在用"⇒
+ * 用户看到"新发现 4 项"，点清理却提示"已清理 0 张"。
+ */
+const lastVerify = ref(false);
 const sel = ref(new Set<string>());
 const disk = ref('');
 const disks = ref<{ serial: string; label: string; online: boolean }[]>([]);
@@ -156,6 +162,7 @@ async function load(verify: boolean) {
             live: res.live ?? 0, offlineSkipped: res.offlineSkipped ?? 0, checked: res.checked ?? 0,
         };
         at.value = Date.now();
+        lastVerify.value = verify;
         // 无引用的全选：判据已经限定死了，用户只需确认清单
         sel.value = new Set(inv.value.orphans.map(o => o.file));
 
@@ -180,7 +187,7 @@ async function purge() {
     if (!files.length) return;
     busy.value = 'purge';
     try {
-        const res = await postAction(`${API_BASE}/assistant/frames/purge`, { files });
+        const res = await postAction(`${API_BASE}/assistant/frames/purge`, { files, verify: lastVerify.value });
         notify('success', `已清理 ${res.removed ?? 0} 张`, `释放 ${mb(res.freed ?? 0)}`);
         await load(false);
     } catch (e) {

@@ -128,8 +128,8 @@ export function useScanFlow(deps: ScanFlowDeps) {
      *
      * 拼不出序列号（UNC / 网络位置 / 虚拟盘）的目录一律当"没缓存"处理，见下面 `keyOf`。
      */
-    const fetchScanContext = async (targetDrive?: string, targetRootRel?: string) => {
-        const disks = await getAction(`${API_BASE}/getDisks`);
+    const fetchScanContext = async (targetDrive?: string, targetRootRel?: string, refreshDisks = false) => {
+        const disks = await getAction(`${API_BASE}/getDisks${refreshDisks ? '?refresh=true' : ''}`);
         const serialOf: Record<string, string> = {};
         for (const d of disks?.disks ?? []) {
             if (d.drive) serialOf[String(d.drive).toUpperCase()] = d.serial;
@@ -208,6 +208,11 @@ export function useScanFlow(deps: ScanFlowDeps) {
         let retouched = false;
         /** 本轮真正重读了几层（只有 update 用得上：结束时要报"更新了几个目录"） */
         let updatedLayers = 0;
+        /**
+         * "因为环境不对而中止"（盘不在 / 认不出盘）。与用户按取消分开：
+         * 这时已经给过一条具体原因，收尾不该再叠一句"已终止"。
+         */
+        let aborted = false;
         scanPending.value = 1;
         let processed = 0;
 
@@ -224,9 +229,24 @@ export function useScanFlow(deps: ScanFlowDeps) {
              * 本盘根序列号。只有同一块盘上的目录才走"探针捷径"：跨盘的（junction 指到别的盘）
              * 序列号对不上，那边直接真读，免得拿错盘的身份去查缓存。
              */
-            const rootSerial = rootDrive ? serialOf[rootDrive] ?? '' : '';
+            let rootSerial = rootDrive ? serialOf[rootDrive] ?? '' : '';
+
+            /**
+             * ⚠️ 拔插之后盘符会变，而 `getDisks` 默认用启动时的缓存 ⇒ 拿不到序列号时
+             * 「更新读取」会**静默退化**成"每层都真读"，读盘量直接翻十几倍，而提示语还在说
+             * "核对了 N 个目录"。所以这里先强制刷一次盘表再试；仍拿不到就明确中止。
+             */
+            if (mode === 'update' && rootDrive && !rootSerial) {
+                const retry = await fetchScanContext(rootDrive, rootRel, true).catch(() => null);
+                rootSerial = retry ? retry.serialOf[rootDrive] ?? '' : '';
+                if (!rootSerial) {
+                    deps.notify('warning', '认不出这块盘', '盘可能刚拔插过（盘符变了）。重新插好后再试，或用「重新读取」整片重扫');
+                    aborted = true;
+                    return;
+                }
+            }
             /** abs(小写) → 探测结果。批量预取，每次请求覆盖队列里接下来的一小批 */
-            const probeCache = new Map<string, { changed: boolean; missing: boolean; dirs?: string[]; needsPreview?: boolean }>();
+            const probeCache = new Map<string, { changed: boolean; missing: boolean; offline?: boolean; dirs?: string[]; needsPreview?: boolean }>();
             const PROBE_BATCH = 24;
 
             /**
@@ -248,7 +268,7 @@ export function useScanFlow(deps: ScanFlowDeps) {
                 try {
                     const res = await postAction(`${API_BASE}/probeLayers`, {
                         serial: rootSerial, mode: 'cover', rels: want.map(w => w.rel),
-                    }) as { rel: string; changed: boolean; missing: boolean; dirs?: string[]; needsPreview?: boolean }[];
+                    }) as { rel: string; changed: boolean; missing: boolean; offline?: boolean; dirs?: string[]; needsPreview?: boolean }[];
                     const byRel = new Map(want.map(w => [w.rel, w.abs.toLowerCase()]));
                     for (const r of res ?? []) {
                         const abs = byRel.get(r.rel);
@@ -301,6 +321,13 @@ export function useScanFlow(deps: ScanFlowDeps) {
 
                     /** 这一层是否已经计入"核对过"—— 三个分支只许数一次，数两遍进度就虚高 */
                     let counted = false;
+                    if (probe?.offline) {
+                        // 盘不在（或盘符映射失效）：这不是"目录删了"，别静默跳过 —— 静默跳过
+                        // 会让用户看到"没有需要更新的目录"，然后只能整片重扫一遍来找真相。
+                        deps.notify('warning', '这块盘现在不在线', '插好盘再点「更新读取」');
+                        aborted = true;
+                        break;
+                    }
                     if (probe && probe.missing) {
                         scanDone.value += 1; counted = true; // 目录已经不在，不算失败，只是没东西可扫
                     } else if (probe && !probe.changed) {
@@ -398,7 +425,7 @@ export function useScanFlow(deps: ScanFlowDeps) {
             cancelling.value = false;
             scanPending.value = 0;
             // 只有"跑到底且没人按取消"才算完成 —— 这两件事在 finally 里都还读得到
-            if (!scanCancelled) scanOk.value = true;
+            if (!scanCancelled && !aborted) scanOk.value = true;
 
             /**
              * 结束回音。三个动作里**只有「刷新」不需要**：它一层、很快，改完屏幕当场就变了，
@@ -407,7 +434,7 @@ export function useScanFlow(deps: ScanFlowDeps) {
              *
              * 三种结局都要说：跑完 / 零变化 / 被取消。零变化也是一句结论，不是没反应。
              */
-            if (mode !== 'fill') {
+            if (mode !== 'fill' && !aborted) {
                 const isReload = mode === 'reload';
                 if (scanCancelled) {
                     deps.notify('info', '已终止',
