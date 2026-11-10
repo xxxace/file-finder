@@ -8,7 +8,16 @@
             <component :is="tipState.body" v-if="tipState.body" />
             <template v-else>
                 <span class="ftip-text">{{ tipState.text }}</span>
-                <kbd v-if="tipState.keys" class="ftip-kbd">{{ tipState.keys }}</kbd>
+                <!-- 组合键拆成**多颗键帽**（`Alt+→` ⇒ [Alt] + [→]）。
+                     ⚠️ 别把 `Alt+→` 塞进一颗帽里：`+` 会贴住两边字形，读起来像"Alt 加号箭头"一个词
+                     （2026-11-10 业主："+ 两边能不能有些空隙，都挤一起了"）。
+                     `+` 只作分隔符，样式比键帽弱一档 —— 它是语法，不是要按的键。 -->
+                <span v-if="keyCaps.length" class="ftip-keys">
+                    <template v-for="(k, i) in keyCaps" :key="i">
+                        <span v-if="i" class="ftip-plus" aria-hidden="true">+</span>
+                        <kbd class="ftip-kbd">{{ k }}</kbd>
+                    </template>
+                </span>
             </template>
         </div>
     </Teleport>
@@ -22,8 +31,11 @@
  * 放不下翻上方，左右 clamp 进视口 12px），再 nextTick 复量一次 —— 文案变了宽度会变。
  * 动画：transform 200ms `--ff-ease-move`（一拍），透明度 150ms；snap 时位移不补间。
  */
-import { nextTick, onBeforeUnmount, reactive, ref, watch } from 'vue';
+import { computed, nextTick, onBeforeUnmount, reactive, ref, watch } from 'vue';
 import { hideTip, tipState } from './fluidTip';
+
+/** `'Alt+→'` → `['Alt', '→']`；单键（`S` / `F5` / `Backspace`）仍是一颗帽 */
+const keyCaps = computed(() => (tipState.keys || '').split('+').map((s) => s.trim()).filter(Boolean));
 
 const el = ref<HTMLElement | null>(null);
 const pos = reactive({ x: -1000, y: -1000 });
@@ -131,6 +143,22 @@ onBeforeUnmount(() => {
         max-width: 300px;
         white-space: normal;
     }
+}
+
+/* 组合键的一组键帽。gap 4px：比 `.ftip` 的 7px 紧一档 —— 它们属于同一个"按键"，
+   但两颗帽之间必须能看出缝，否则又变回"挤在一起"。 */
+.ftip-keys {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+}
+
+/* `+` 是语法不是键：不加底、不加沿，只保留一点点墨色 */
+.ftip-plus {
+    color: var(--ff-tooltip-kbd-text);
+    font-size: 0.8em;
+    font-weight: 400;
+    opacity: 0.55;
 }
 
 .ftip-kbd {
