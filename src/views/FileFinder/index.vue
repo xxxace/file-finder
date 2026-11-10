@@ -23,18 +23,18 @@
                  ⚠️ 2026-11-10 裁决：原来那套"末尾一颗按 `history.length` 三态变形
                  （`←` 返回 → `⨯` 清空 → 空栈置灰）"**已撤**。加了前进之后
                  "后退不可用"与"该清空了"是两件事，一颗按钮表达不了。
-                 ⇒ 「清空导航历史」搬到 `⋯` 菜单（出口没消失，只是搬家）。 -->
+                 ⇒ 「清空导航历史」搬到**右键菜单**末尾（出口没消失，只是搬家）。 -->
             <div class="nav-btns">
                 <FolderSelector ref="folderSelector" v-model="dir" label="请选择文件夹" keys="D" @change="setRoot" />
                 <n-button size="small" :disabled="!canBack" aria-label="返回上一屏"
-                    v-tip="canBack ? '返回上一屏（Backspace）' : '没有上一屏了'"
+                    v-tip="canBack ? { text: '返回上一屏', keys: 'Backspace' } : { text: '没有上一屏了' }"
                     @click="onBack">
                     <template #icon>
                         <n-icon :component="ArrowBackOutline" />
                     </template>
                 </n-button>
                 <n-button size="small" :disabled="!canForward" aria-label="前进到下一屏"
-                    v-tip="canForward ? '前进到下一屏（Alt+→）' : '没有下一屏'"
+                    v-tip="canForward ? { text: '前进到下一屏', keys: 'Alt+→' } : { text: '没有下一屏' }"
                     @click="onForward">
                     <template #icon>
                         <n-icon :component="ArrowForwardOutline" />
@@ -45,7 +45,7 @@
                      扫描期间禁掉：它带 noCache、会真的再读一次盘，与整片扫描并发就是两路读盘。
                      只读层 / 清单屏也禁掉：那两种屏的源就是缓存，没有"重读"这回事。 -->
                 <n-button size="small" :disabled="scanning || readOnlyLevel || playlistLevel"
-                    aria-label="重新读取当前文件夹" v-tip="'重新读取当前文件夹'" @click="onRefresh">
+                    aria-label="重新读取当前文件夹" v-tip="{ text: '重新读取当前文件夹', keys: 'F5' }" @click="onRefresh">
                     <template #icon>
                         <n-icon :component="RefreshOutline" />
                     </template>
@@ -450,6 +450,18 @@
                     <n-icon :size="16" :component="a.icon" />
                     <span class="ctx-label">{{ a.label }}</span>
                 </button>
+                <!-- 导航组：只此一条，单独一组压在末尾（2026-11-10 业主裁决：清空导航住右键菜单）。
+                     为什么不并进上面的目录工具组：那一组是"这一层的工具"（可反复做）；
+                     清空是**不可撤销**、波及整个前进/后退历史 ⇒ 按"门槛 ∝ 不可逆 × 波及面"
+                     单独一组 + 点击先弹确认（见 `onCtxClearNav`）。
+                     判据 `hasAny` = 有没有走过路；扫描 / 挑封面期间也禁掉 ——
+                     那两种状态下清空会把正在进行的活儿的舞台抽走（选中的格子还在、但看不见了）。 -->
+                <div class="ctx-sep" aria-hidden="true"></div>
+                <button type="button" class="ctx-item" :disabled="!hasAny || scanning || picking"
+                    @click="onCtxClearNav">
+                    <n-icon :size="16" :component="CloseOutline" />
+                    <span class="ctx-label">清空导航历史</span>
+                </button>
             </div>
         </n-popover>
         <!-- 「加入收藏夹…」选单：右键菜单的第二级，原地展开在同一坐标（同 submenu 手势） -->
@@ -501,7 +513,7 @@ import { useNavStack } from './useNavStack';
 import type { NavEntry } from './useNavStack';
 import { dissolveGrid } from './gridDissolve';
 import { decideOpen, isMultiFileCard } from './openDecision';
-import { SearchOutline, RefreshOutline, SyncOutline, ArrowBackOutline, ArrowForwardOutline, CopyOutline, StarOutline, ChevronForwardOutline, LinkOutline, FolderOpenOutline, CloudDownloadOutline, ImageOutline, PersonOutline, SettingsOutline, ImagesOutline } from '@vicons/ionicons5';
+import { SearchOutline, RefreshOutline, SyncOutline, ArrowBackOutline, ArrowForwardOutline, CloseOutline, CopyOutline, StarOutline, ChevronForwardOutline, LinkOutline, FolderOpenOutline, CloudDownloadOutline, ImageOutline, PersonOutline, SettingsOutline, ImagesOutline } from '@vicons/ionicons5';
 import { MoreVertical28Filled } from '@/components/icons/fluent';
 import { FlatCards24 } from '@/components/icons/grid';
 import { playSfx } from '@/utils/sfx';
@@ -1467,12 +1479,32 @@ const setRoot = (value: string) => {
 /**
  * 清空导航历史，回到"还没选文件夹"的界面。
  * ⚠️ 走既有出口 `setRoot('')`，别自己发明清栈逻辑；代价是当前视图 + 整个历史 + 搜索词一起重置、不可撤销。
- * ⚠️ 入口是 `⋯` 菜单里那一条（2026-11-10 双向导航之后搬的家，见 `moreOptions`）。
+ * ⚠️ 入口是**右键菜单末尾**那一条（2026-11-10 双向导航之后搬的家，见模板 `.ctx-menu` 的导航组）。
  *    2026-10-05「栈底也得有出口」那条**没有撤销**：出口还在，只是不再占顶栏那一格 ——
  *    加了「前进」以后，"后退不可用"与"该清空了"是两件事，一颗按钮表达不了。
  * ⚠️ 只挂显式入口，绝不绑 Backspace（门槛 ∝ 不可逆 × 波及面）；只重置导航态，不删缓存 / 缩略图 / 扫描结果。
  */
 const clearNav = () => setRoot('');
+
+/**
+ * 右键菜单里的「清空导航历史」。
+ *
+ * ⚠️ 与原来那颗"栈底 ⨯"的区别：那颗只在**历史只剩一屏**时出现（丢掉的东西很少）；
+ * 现在从任意一屏可达 ⇒ 波及面变成整条前进/后退历史 ⇒ 按"门槛 ∝ 不可逆 × 波及面"
+ * 补一次确认（与「重读这一片」同一个 `dialog.warning` 出口）。
+ * ⚠️ 必须先关菜单：`clearNav` 会把菜单背后的整屏一起重置，留着菜单就是"对着一张空页面"。
+ *    `closeCtxMenu` 顺带把焦点收回 body（否则方向键还停在已被隐藏的按钮上）。
+ */
+const onCtxClearNav = () => {
+    closeCtxMenu();
+    dialog.warning({
+        title: '清空导航历史？',
+        content: '回到选文件夹的界面。当前视图、后退与前进历史、搜索词一起重置；缓存、缩略图和扫描结果都不动。',
+        positiveText: '清空',
+        negativeText: '取消',
+        onPositiveClick: () => clearNav(),
+    });
+};
 
 /**
  * 从缓存记录打开一个目录。**这是一次「跳转」，不是"以它为根"**。
@@ -1575,14 +1607,15 @@ const DIR_ACTIONS: DirAction[] = [
  * 「更多」下拉的项：disabled 条件与改造前平铺按钮逐条一致，不放宽门槛。
  * 扫描中整组不可用由触发按钮的 :disabled="scanning" 挡住（下拉不弹 = 三项都点不到）。
  *
- * ⚠️ 最后一条「清空导航历史」**刻意不进 `DIR_ACTIONS`**：那份清单叫"目录工具动作"，
- * 与网格右键菜单**共用**同一个数组 —— 把导航动作混进去，右键卡片时就会多出一条
- * 「清空导航」；那不是"顺带"，那是把两件事缝在一起（2026-11-10 双向导航）。
+ * ⚠️ 这里**只有目录工具动作**。「清空导航历史」是**导航动作**且不可撤销 ⇒
+ * 2026-11-10 业主裁决放**右键菜单**末尾单独一组，不进这个下拉
+ *（下拉回答"这一层能做什么"，右键回答"对现在这个地方动手"）。
  */
-const moreOptions = computed(() => [
-    ...DIR_ACTIONS.map((a) => ({ label: a.label(), key: a.key, disabled: a.disabled() })),
-    { label: '清空导航历史', key: 'clearNav', disabled: !hasAny.value },
-]);
+const moreOptions = computed(() => DIR_ACTIONS.map((a) => ({
+    label: a.label(),
+    key: a.key,
+    disabled: a.disabled(),
+})));
 
 /** 右键菜单的目录工具组：label/disabled 求值成普通值供模板渲染 */
 const dirActions = computed(() => DIR_ACTIONS.map((a) => ({
@@ -1632,9 +1665,6 @@ const onMoreSelect = (key: string) => {
         // 再点一次 = 退出（下拉项的文案会跟着变成「退出换封面」）
         if (picking.value) exitPick();
         else enterPick();
-    } else if (key === 'clearNav') {
-        // 不可撤销 × 波及整个历史（当前视图 + 历史 + 搜索词一起重置）⇒ 走既有出口，不自己拼清栈
-        clearNav();
     }
 };
 

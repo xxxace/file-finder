@@ -259,34 +259,41 @@ git commit -m "feat(nav): useNavStack —— 数组+游标的导航模型（含�
 
 ```html
 <n-button size="small" :disabled="!canBack" aria-label="返回上一屏"
-    v-tip="canBack ? '返回上一屏（Backspace）' : '没有上一屏了'" @click="onBack">
+    v-tip="canBack ? { text: '返回上一屏', keys: 'Backspace' } : { text: '没有上一屏了' }" @click="onBack">
     <template #icon><n-icon :component="ArrowBackOutline" /></template>
 </n-button>
 <n-button size="small" :disabled="!canForward" aria-label="前进到下一屏"
-    v-tip="canForward ? '前进到下一屏（Alt+→）' : '没有下一屏'" @click="onForward">
+    v-tip="canForward ? { text: '前进到下一屏', keys: 'Alt+→' } : { text: '没有下一屏' }" @click="onForward">
     <template #icon><n-icon :component="ArrowForwardOutline" /></template>
 </n-button>
 ```
 
-左组顺序 `[▤][←][→][↻]`；`@vicons/ionicons5` 的 import（492 行）删 `CloseOutline`、加 `ArrowForwardOutline`。
+左组顺序 `[▤][←][→][↻]`；`@vicons/ionicons5` 的 import（492 行）加 `ArrowForwardOutline`。
+⚠️ **键帽不是装饰**：`v-tip` 的对象写法 `{ text, keys }` 才会渲染 FluidTip 的 `<kbd>`
+（`DESIGN-SFX-FLUIDTIP-SKIN-2026-11-09` §五把"返回/前进、刷新"都列进了这个工具簇）。
+写成「返回上一屏（Backspace）」是**降级成文字**，与旁边的搜索(`S`)不一致 —— 2026-11-10 被业主退回一次。
+刷新那颗顺手补 `keys: 'F5'`（它真的绑了 F5）。
 
-- [ ] **Step 6: 「清空导航历史」进 ⋯ 菜单**
+- [ ] **Step 6: 「清空导航历史」进**右键菜单**（业主第一版否决了 ⋯ 下拉）**
 
-- **不动** `DIR_ACTIONS`（那份与右键菜单共用，清空是**导航动作**不是目录工具动作）。
-- `moreOptions`（1600–1604）追加一条：
-  ```ts
-  const moreOptions = computed(() => [
-      ...DIR_ACTIONS.map((a) => ({ label: a.label(), key: a.key, disabled: a.disabled() })),
-      { label: '清空导航历史', key: 'clearNav', disabled: !hasAny.value },
-  ]);
+- **不动** `DIR_ACTIONS`（那份与「更多」下拉共用，清空是**导航动作**不是目录工具动作）。
+- 模板 `.ctx-menu` 里 `dirActions` 的 `v-for` **之后**追加一组：
+  ```html
+  <div class="ctx-sep" aria-hidden="true"></div>
+  <button type="button" class="ctx-item" :disabled="!hasAny" @click="onCtxClearNav">
+      <n-icon :size="16" :component="CloseOutline" />
+      <span class="ctx-label">清空导航历史</span>
+  </button>
   ```
-- `onMoreSelect` 加一支：`if (key === 'clearNav') { closeCtxMenu(); clearNav(); return; }` —— 排在既有分支之后；`clearNav()` 照旧走 `setRoot('')`。
-- `clearNav` 上方那段注释改写一句：入口从"栈底那颗 ⨯"改成"⋯ 菜单"，**2026-10-05 的"栈底也得有出口"没撤销，只是搬家**（业主要的就是这句可回溯）。
+- 页面加 `onCtxClearNav`：先 `closeCtxMenu()`，再 `dialog.warning({...onPositiveClick: () => clearNav()})`。
+  **必须带确认**：原来那颗 ⨯ 只在"历史只剩一屏"时出现，现在从任意一屏可达 ⇒ 按"门槛 ∝ 不可逆 × 波及面"补。
+- `clearNav` 上方那段注释改写一句：入口从"栈底那颗 ⨯"改成"右键菜单末尾"，
+  **2026-10-05 的"栈底也得有出口"没撤销，只是搬家**（业主要的就是这句可回溯）。
 
 - [ ] **Step 7: 全文件清理**
 
 `grep -n "history" src/views/FileFinder/index.vue`：只剩注释里允许出现的（如 1438 上那段历史说明）；
-凡是代码里的 `history` 一律 0 命中。`CloseOutline` 0 命中。
+凡是代码里的 `history` 一律 0 命中。（`CloseOutline` 仍被右键菜单那条用着，**别删 import**。）
 
 - [ ] **Step 8: typecheck**
 
@@ -402,3 +409,10 @@ git commit -m "docs(nav): 双向导航目视结论与记忆落档"
 | 6 | `Alt+←/→` 允许长按重复 | 浏览器/资源管理器都这样；配合 `shown` 不会写错快照 | 长按会连跳几屏（用户自己停） |
 | 7 | 探针产物落 `node_modules/.cache/`，不进 `os.tmpdir()` | `vue` 是 external，tmpdir 不在 node_modules 解析链上（实测 `ERR_MODULE_NOT_FOUND`） | 无 |
 | 8 | 注释占比不动：42.4% → 42.3% | 文件本来就超 30%，本批没恶化；治理注释是另一件事，不塞进来 | 仍然超线，需单独立项 |
+
+### 业主复核（2026-11-10 第二轮，两条纠正）
+
+| # | 我错在哪 | 改成 | 判据出处 |
+|---|---|---|---|
+| 9 | 快捷键提示写成「返回上一屏（Backspace）」—— 把键帽降级成括号文字 | `v-tip="{ text, keys }"`：`Backspace` / `Alt+→`，刷新补 `F5` | `DESIGN-SFX-FLUIDTIP-SKIN-2026-11-09` §五 把返回/前进/刷新都列进工具簇；`directive.ts` 纪律"keys 只许标真绑了的键" |
+| 10 | 「清空导航历史」放进了 ⋯ 下拉 | 挪到**右键菜单**末尾，单独一组 + `dialog.warning` 确认 | 业主原话："不要放在更多菜单里面，要放在右键菜单中"。连带：⋯ 下拉回归纯目录工具动作 |
