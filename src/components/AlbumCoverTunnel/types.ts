@@ -29,15 +29,12 @@ export function dedupeCovers(items: TunnelCover[]): TunnelCover[] {
     const seenWork = new Set<string>();
     return items.filter((it) => {
         const sig = it.sig || it.raw?.sig;
-        if (sig) {
-            if (seenSig.has(sig)) return false;
-            seenSig.add(sig);
-        }
         const wk = workKeyOf(it);
-        if (wk && wk !== 'untitled') {
-            if (seenWork.has(wk)) return false;
-            seenWork.add(wk);
-        }
+        if (sig && seenSig.has(sig)) return false;
+        if (wk && wk !== 'untitled' && seenWork.has(wk)) return false;
+
+        if (sig) seenSig.add(sig);
+        if (wk && wk !== 'untitled') seenWork.add(wk);
         return true;
     });
 }

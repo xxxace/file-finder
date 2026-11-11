@@ -209,28 +209,11 @@ export function createAlbumCoverTunnel(
     const covers: CoverItem[] = [];
     const layers: { k: number; z: number; items: CoverItem[] }[] = [];
 
-    const keyAt = (i: number, j: number, kAbs: number, len: number, slotIndex: number) => {
-        if (len <= 1) return 0;
-        // 中心焦点封面（i=0, j=0）按层顺序循环映射，确保沿漫游轴线每一层的中心封面都绝不重复
-        if (i === 0 && j === 0) {
-            return Math.floor(kAbs / 2) % len;
-        }
-        const centerTex = Math.floor(kAbs / 2) % len;
-        if (kAbs % 2 === 0) {
-            // 偶数层：中心封面为 centerTex，壁面卡片避开 centerTex 且各自分配不同槽位，数学保证 0 碰撞
-            const step = 1 + (Math.max(0, slotIndex) % (len - 1));
-            return (centerTex + step) % len;
-        } else {
-            // 奇数层：无中心卡片，壁面卡片整体对半偏移，展现不同封面群
-            const oddBase = (Math.floor(kAbs / 2) + Math.floor(len / 2)) % len;
-            return (oddBase + Math.max(0, slotIndex)) % len;
-        }
-    };
-
     for (let k = 0; k < NL; k++) {
         const L = { k, z: -k * D, items: [] as CoverItem[] };
         layers.push(L);
-        let wallSlot = 0;
+        const isEven = k % 2 === 0;
+        let wallSlot = isEven ? 1 : 0;
         for (let j = -5; j <= 5; j++) {
             for (let i = -7; i <= 7; i++) {
                 if ((((i + j + k) % 2) + 2) % 2) continue; // 三维棋盘格
@@ -238,7 +221,7 @@ export function createAlbumCoverTunnel(
                 if (Math.max(Math.abs(i), Math.abs(j)) > 1 && hh < 0.42) continue; // 随机镂空
 
                 const isCenter = i === 0 && j === 0;
-                const slotIndex = isCenter ? -1 : wallSlot++;
+                const slotIndex = isCenter ? 0 : wallSlot++;
 
                 const c: CoverItem = {
                     L,
@@ -267,6 +250,24 @@ export function createAlbumCoverTunnel(
             }
         }
     }
+
+    const layerSizes = layers.map((L) => L.items.length);
+    const totalCardsPerCycle = layerSizes.reduce((a, b) => a + b, 0);
+    const cumLayerOffsets: number[] = [0];
+    for (let i = 0; i < NL; i++) {
+        cumLayerOffsets.push(cumLayerOffsets[i] + layerSizes[i]);
+    }
+
+    function layerStart(kAbs: number): number {
+        const cycle = Math.floor(kAbs / NL);
+        const rem = kAbs % NL;
+        return cycle * totalCardsPerCycle + cumLayerOffsets[rem];
+    }
+
+    const keyAt = (kAbs: number, slotIndex: number, len: number) => {
+        if (len <= 1) return 0;
+        return (layerStart(kAbs) + slotIndex) % len;
+    };
 
     const N = covers.length;
     const TH = S * 0.045; // 超薄精致卡片厚度，消除粗厚积木边框感
@@ -724,7 +725,7 @@ export function createAlbumCoverTunnel(
                     c.x = c.hx;
                     c.y = c.hy;
                     c.fl = null;
-                    c.tex = keyAt(c.gridX, c.gridY, kAbs, len, c.slotIndex);
+                    c.tex = keyAt(kAbs, c.slotIndex, len);
                 }
             }
             const cCenter = centerOf(L);
@@ -1036,7 +1037,7 @@ export function createAlbumCoverTunnel(
             const len = Math.max(1, textureLayers);
             covers.forEach((c) => {
                 const kAbs = Math.max(0, Math.round(-c.L.z / D));
-                c.tex = keyAt(c.gridX, c.gridY, kAbs, len, c.slotIndex);
+                c.tex = keyAt(kAbs, c.slotIndex, len);
             });
 
             isLoaded = true;
