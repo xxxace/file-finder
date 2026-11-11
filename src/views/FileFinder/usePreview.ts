@@ -593,10 +593,68 @@ export function usePreview(deps: {
     };
 
     /**
-     * 工具条自身的「内容变了」动效（WAAPI，一次性）：条宽跟随内容（max-content），
-     * 换条目时名称/计数/宽度都变 —— 宽度从旧值 FLIP 到新值（过冲曲线，Q 弹），
-     * 名称与计数做「拍内分带」的小滑入。在 rAF 里做：此刻 naive 已把新内容 patch 完。
+     * 名称 / 计数换内容时新字的入场 —— **只动透明度，绝不位移**
+     * （业主 2026-11-11：「现在这种会主动位移的，我要原地不动的」）。
+     *
+     * 原来是从下方 5px 上浮 + `--ff-ease-enter`（过冲 1.28）。那一版的问题不是"不好看"，
+     * 是**两个运动叠在同一块区域**：这一层同时在跑宽度 FLIP（bar 变宽/变窄），
+     * 文字再自己往上飞 5px，眼睛不知道该跟哪一个 ⇒ 读起来"画面在动，文字却没在原地"。
+     * 与项目已有的同类裁决同一条：`gridDissolve.ts`「网格换内容只动 opacity，绝不碰几何」。
+     *
+     * ## 交叉淡出（业主同日选定）
+     *
+     * 旧字由 `crossFadeInfo` 的幽灵层负责淡出，这里只管新字。**两段错开**：
+     * 旧字 0~110ms 走完，新字 70ms 才起（合计 180ms，重叠只有 40ms）。
+     * 为什么不并排 linear（浏览器 VT 的默认做法）：那套是为"图像换图像"调的，
+     * 中间 50/50 时两张图看起来还是一件东西；换成**不同的文字**，50/50 就是重影，
+     * 12px 小字上尤其糊。
+     *
+     * ⚠️ `fill: 'backwards'` 必须给：延迟那 70ms 里元素必须保持 opacity 0，
+     * 否则会先露出新字再淡入（等于没有延迟）。`forwards` 不用 —— 结束后要交还给 CSS。
      */
+    const fadeInText = (el: HTMLElement, delay = 0) => {
+        el.animate(
+            [{ opacity: 0 }, { opacity: 1 }],
+            { duration: 110, delay, easing: 'ease-out', fill: 'backwards' },
+        );
+    };
+
+    /**
+     * 交叉淡出的"旧的一半"：把 render 阶段拍下的 `.ptb-info` 副本盖回原位淡出。
+     *
+     * ## 为什么必须插在 `.ptb-info` **内部**
+     *
+     * 工具条是 `justify-content: flex-end`（内容锚定右缘）⇒ 条变宽时整块信息段会**左移**。
+     * 幽灵若定位在工具栏上，它停在旧坐标，而新字随布局移动 —— 两个文件名会朝不同方向走，
+     * 正好毁掉"原地"这件事。插进 `.ptb-info` 并 `left/top: 0` ⇒ 它和真身**同一个坐标系**，
+     * 一起被挤动，永远重叠。
+     *
+     * ## 两个宽度陷阱
+     *
+     * · 幽灵要**钉死旧宽**：父级在新内容下会变窄/变宽，`inset: 0` 会让旧字重新算省略号
+     *   （显示出一段用户从没见过的文字）。
+     * · `.ptb-info` 没设 `box-sizing`（默认 content-box），而 `getBoundingClientRect()`
+     *   给的是 border-box 宽 ⇒ CSS 里必须给 `.ptb-ghost` 显式 `border-box`，
+     *   否则幽灵比真身宽出左右 padding 那 20px。
+     */
+    let ghostNode: HTMLElement | null = null;
+    const crossFadeInfo = (bar: HTMLElement, ghost: { el: HTMLElement; width: number }) => {
+        const info = bar.querySelector<HTMLElement>('.ptb-info');
+        if (!info) return;
+        // 快速连按时上一只幽灵还在淡出 —— 立刻撤掉，否则会叠成三层重影
+        ghostNode?.remove();
+        const node = ghost.el;
+        node.classList.add('ptb-ghost');
+        node.style.width = `${ghost.width}px`;
+        info.appendChild(node);
+        ghostNode = node;
+        const anim = node.animate([{ opacity: 1 }, { opacity: 0 }], { duration: 110, easing: 'ease-out' });
+        anim.onfinish = () => {
+            node.remove();
+            if (ghostNode === node) ghostNode = null;
+        };
+    };
+
     let lastBarW = 0;
     let lastName = '';
     let lastCount = '';
@@ -630,6 +688,28 @@ export function usePreview(deps: {
         //    若有宽度动画在飞，getBoundingClientRect 取到的是动画中的实时宽度 ⇒ 从它起飞 = 平滑重定向。
         const barNow = document.querySelector<HTMLElement>('.n-image-preview-toolbar');
         if (barNow) lastBarW = barNow.getBoundingClientRect().width;
+        /**
+         * 交叉淡出的「A 面」：**此刻 DOM 还是旧内容**，所以这一行之前拍的才是旧名字。
+         * （同一时刻也是量「旧宽」的唯一机会 —— 与 `lastBarW` 同一条理由。）
+         * 只有名字或序号真的变了才拍：每帧 `cloneNode` 一个 div 虽小，但没必要。
+         * `lastName` 为空 = 首次渲染（预览刚打开），那时没有"旧的"可淡出。
+         */
+        let ghostInfo: { el: HTMLElement; width: number } | null = null;
+        if (barNow && lastName) {
+            const oldInfo = barNow.querySelector<HTMLElement>('.ptb-info');
+            const nextName = previewFile.value?.name ?? '';
+            const nextCount = hasNav ? `${previewIndex.value + 1} / ${total}` : '';
+            if (oldInfo && (lastName !== nextName || lastCount !== nextCount)) {
+                const el = oldInfo.cloneNode(true) as HTMLElement;
+                /**
+                 * ⚠️ 上一只幽灵还在淡出时会被一起克隆进来。**动画状态不随 `cloneNode` 复制**
+                 * —— 它的 opacity 会恢复成 CSS 默认的 1，叠在下面就是第二层重影
+                 * （快速连按 `←/→` 时肉眼可见）。克隆完先把它们摘掉。
+                 */
+                el.querySelectorAll('.ptb-ghost').forEach((n) => n.remove());
+                ghostInfo = { el, width: oldInfo.getBoundingClientRect().width };
+            }
+        }
         // 定位：准星 = "我在这儿"。Enter 是真快捷键（index.vue keyup：预览开着时 Enter=定位）
         // 定位：准星（Locate）读作"GPS 定位"，而这个动作的目的地是**网格** ⇒ 直接画网格
         const locate = h(NIcon, { size: 20, component: Target24, onClick: locateInGrid });
@@ -657,12 +737,14 @@ export function usePreview(deps: {
                 cell(nodes.close, { text: '关闭', keys: 'Esc' }),
             ]),
         ];
-        // 内容变更动效（宽 FLIP + 名称/计数滑入）排到下一帧：此刻 naive 已把新内容 patch 完。
+        // 内容变更动效（宽 FLIP + 名称/计数淡入）排到下一帧：此刻 naive 已把新内容 patch 完。
         // ⚠️ 防打架三条：动画还在跑就不重启（快速连按时各自自然结束，绝不从 0 重来）；
         // 宽度动画结束回挂选框（动画期间 cell 位置在变）；重渲染抹掉的选框态在此请回。
         requestAnimationFrame(() => {
             const bar = document.querySelector<HTMLElement>('.n-image-preview-toolbar');
             if (!bar) return;
+            /** 首次渲染没有"旧字"可让位 —— 那 70ms 延迟此时只会让名字晚出现一下 */
+            const isFirstPaint = !lastName;
             const w = bar.getBoundingClientRect().width;
             if (lastBarW && Math.abs(w - lastBarW) >= 1) {
                 // 从当前实时宽度重定向（cancel 的瞬间跳到布局宽、同帧被新动画接住，无中间绘制）
@@ -677,22 +759,18 @@ export function usePreview(deps: {
             }
             lastBarW = w;
             reapplySel(bar);
+            if (ghostInfo) crossFadeInfo(bar, ghostInfo);
             const name = previewFile.value?.name ?? '';
             const nameEl = bar.querySelector('.ptb-name');
             if (nameEl && lastName !== name && !nameEl.getAnimations().length) {
-                (nameEl as HTMLElement).animate(
-                    [{ opacity: 0, transform: 'translateY(5px)' }, { opacity: 1, transform: 'none' }],
-                    { duration: 200, easing: 'cubic-bezier(0.34, 1.28, 0.42, 1)' },
-                );
+                // 延迟 70ms：让旧字先走，重叠只留 40ms（理由见 `fadeInText`）
+                fadeInText(nameEl as HTMLElement, isFirstPaint ? 0 : 70);
             }
             lastName = name;
             const count = hasNav ? `${previewIndex.value + 1} / ${total}` : '';
             const countEl = bar.querySelector('.ptb-count');
             if (countEl && lastCount !== count && !countEl.getAnimations().length) {
-                (countEl as HTMLElement).animate(
-                    [{ opacity: 0, transform: 'translateY(5px)' }, { opacity: 1, transform: 'none' }],
-                    { duration: 200, easing: 'cubic-bezier(0.34, 1.28, 0.42, 1)' },
-                );
+                fadeInText(countEl as HTMLElement, isFirstPaint ? 0 : 70);
             }
             lastCount = count;
         });

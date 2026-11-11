@@ -103,10 +103,32 @@ body>.n-image-preview-container .n-image-preview-toolbar {
 /* ── .ptb-* 工具条内部结构（usePreview.ts 的 previewToolbar 渲染）────────── */
 
 .ptb-info {
+    /* 交叉淡出的幽灵层以它为定位上下文：条是 `justify-content: flex-end`，变宽时整块
+       信息段会左移 —— 幽灵必须和真身同一个坐标系才不会被"走开"（见 usePreview.crossFadeInfo）。 */
+    position: relative;
     display: flex;
     align-items: center;
     min-width: 0;
     padding: 0 12px 0 8px;
+}
+
+/**
+ * 交叉淡出的"旧的一半"：`.ptb-info` 的完整副本，盖回原位淡出（`crossFadeInfo` 创建）。
+ *
+ * ⚠️ 必须显式 `border-box`：`.ptb-info` 没设过 box-sizing（= content-box），
+ *    而 JS 传进来的宽度是 `getBoundingClientRect().width`（border-box 宽）。
+ *    不改就会宽出左右 padding 那 20px，旧字比真身往右多顶一截。
+ * ⚠️ 宽度由 JS 钉死成**旧宽**：父级在新内容下会变宽/变窄，若让它跟随（`inset: 0`），
+ *    旧字会按新宽度重新算省略号，闪出一段用户从没见过的文字。
+ */
+.ptb-ghost {
+    position: absolute;
+    left: 0;
+    top: 0;
+    height: 100%;
+    margin: 0;
+    box-sizing: border-box;
+    pointer-events: none;
 }
 
 .ptb-name {
