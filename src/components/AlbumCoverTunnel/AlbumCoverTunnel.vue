@@ -74,7 +74,7 @@
                 @mouseleave="onCardMouseLeave"
             >
                 <div class="card-thumb-wrap">
-                    <img v-if="activeCover.src" :src="activeCover.src" class="card-thumb-img" alt="" />
+                    <img v-if="activeCover.previewSrc || activeCover.src" :src="activeCover.previewSrc || activeCover.src" class="card-thumb-img" alt="" />
                     <div v-else class="card-thumb-fallback"></div>
                 </div>
                 <div class="card-info">

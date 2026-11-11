@@ -110,6 +110,7 @@ async function loadAllCovers(serial?: string) {
                 title: item.name,
                 sig: item.sig,
                 src: apiUrl(`${API_BASE}/thumb?k=${encodeURIComponent(`t-${item.sig}.enc`)}`),
+                previewSrc: item.sig ? apiUrl(`${API_BASE}/preview?k=${encodeURIComponent(`p-${item.sig}.enc`)}`) : undefined,
                 raw: item,
             }));
             covers.value = shuffle(dedupeCovers(list));

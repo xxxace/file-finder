@@ -302,10 +302,23 @@ export function createAlbumCoverTunnel(
     geo.setAttribute('aPh', aPh);
     geo.setAttribute('aFog', aFog);
 
+    const emptyHeroCv = doc.createElement('canvas');
+    emptyHeroCv.width = emptyHeroCv.height = 1;
+    const emptyHeroCtx = emptyHeroCv.getContext('2d')!;
+    emptyHeroCtx.fillStyle = '#000000';
+    emptyHeroCtx.fillRect(0, 0, 1, 1);
+    const emptyHeroTexture = new THREE.CanvasTexture(emptyHeroCv);
+    emptyHeroTexture.minFilter = THREE.NearestFilter;
+    emptyHeroTexture.magFilter = THREE.NearestFilter;
+    emptyHeroTexture.generateMipmaps = false;
+
     const mat = new THREE.ShaderMaterial({
         transparent: true,
         uniforms: {
             map: { value: null as THREE.DataArrayTexture | null },
+            uHeroMap: { value: emptyHeroTexture as THREE.Texture },
+            uHeroBlend: { value: 0 },
+            uHeroTexId: { value: -1 },
             uRim: { value: new THREE.Color(0xb4acf0) },
             uTime: { value: 0 },
             uRes: { value: new THREE.Vector2(1, 1) },
@@ -328,6 +341,9 @@ export function createAlbumCoverTunnel(
         fragmentShader: `
             precision highp sampler2DArray;
             uniform sampler2DArray map;
+            uniform sampler2D uHeroMap;
+            uniform float uHeroBlend;
+            uniform float uHeroTexId;
             uniform vec3 uRim;
             uniform float uTime;
             uniform vec2 uRes;
@@ -359,7 +375,14 @@ export function createAlbumCoverTunnel(
                 vec3 c;
                 if (vN.z > .5) {
                     // 正面：原画纯净呈现，对高亮度封面进行保护，防止过曝
-                    c = cover(vUv, vLook.z);
+                    vec3 baseCol = cover(vUv, vLook.z);
+                    // 仅当卡片为焦点卡片（vTex 匹配 uHeroTexId 且处于焦点状态 vLook.w > 0.4）时平滑混合 1600px 高清贴图
+                    if (abs(vTex - uHeroTexId) < 0.5 && vLook.w > 0.4 && uHeroBlend > 0.001) {
+                        vec3 heroCol = texture(uHeroMap, vec2(vUv.x, 1. - vUv.y)).rgb;
+                        c = mix(baseCol, heroCol, uHeroBlend);
+                    } else {
+                        c = baseCol;
+                    }
                     float luma = dot(c, vec3(0.299, 0.587, 0.114));
                     // 扫光高光仅在暗部或中等亮度区域呈现细腻反光；若封面本身为亮白区域，大幅减弱扫光，避免泛白刺眼
                     float sweep = fract(uTime * .07 + vPh) * 2.6 - .8;
@@ -547,6 +570,116 @@ export function createAlbumCoverTunnel(
     let hovered: CoverItem | null = null;
     let heroC: CoverItem | null = covers[0];
 
+    /* ---------------- 高清焦点纹理与节能控制 ---------------- */
+    let currentHeroTexture: THREE.Texture | null = null;
+    let preloadedHeroTexture: THREE.Texture | null = null;
+    let currentHeroCoverId: string | null = null;
+    let preloadedCoverId: string | null = null;
+    let heroBlendVal = 0.0;
+    let heroBlendTarget = 0.0;
+    let isPreloading = false;
+
+    async function loadHighResTexture(url: string): Promise<THREE.Texture | null> {
+        try {
+            const img = new Image();
+            img.crossOrigin = 'anonymous';
+            img.src = url;
+            await img.decode();
+            const tex = new THREE.Texture(img);
+            tex.colorSpace = THREE.SRGBColorSpace;
+            tex.minFilter = THREE.LinearFilter;
+            tex.magFilter = THREE.LinearFilter;
+            tex.generateMipmaps = false; // 高清图单卡直显，无需耗费显存生成 Mipmap
+            tex.needsUpdate = true;
+            return tex;
+        } catch {
+            return null;
+        }
+    }
+
+    async function setHeroCoverHighRes(cover: TunnelCover | null) {
+        if (!cover || isDead) {
+            heroBlendTarget = 0.0;
+            return;
+        }
+        if (cover.id === currentHeroCoverId && currentHeroTexture) {
+            heroBlendTarget = 1.0;
+            wake();
+            return;
+        }
+
+        currentHeroCoverId = cover.id;
+        const targetUrl = cover.previewSrc || cover.src;
+        if (!targetUrl) return;
+
+        // 若已经在闲置期间提前预加载好了，直接毫秒级秒切
+        if (preloadedHeroTexture && preloadedCoverId === cover.id) {
+            if (currentHeroTexture && currentHeroTexture !== preloadedHeroTexture) {
+                currentHeroTexture.dispose();
+            }
+            currentHeroTexture = preloadedHeroTexture;
+            preloadedHeroTexture = null;
+            preloadedCoverId = null;
+
+            mat.uniforms.uHeroMap.value = currentHeroTexture;
+            mat.uniforms.uHeroTexId.value = heroC ? heroC.tex : -1;
+            heroBlendTarget = 1.0;
+            wake();
+            return;
+        }
+
+        // 尚未预载完成，从当前 384px 缩略图开始平滑拉取
+        heroBlendTarget = 0.0;
+        let tex = await loadHighResTexture(targetUrl);
+        if (!tex && cover.previewSrc && cover.src) {
+            tex = await loadHighResTexture(cover.src);
+        }
+        if (isDead || currentHeroCoverId !== cover.id) {
+            tex?.dispose();
+            return;
+        }
+
+        if (tex) {
+            if (currentHeroTexture && currentHeroTexture !== tex) {
+                currentHeroTexture.dispose();
+            }
+            currentHeroTexture = tex;
+            mat.uniforms.uHeroMap.value = currentHeroTexture;
+            mat.uniforms.uHeroTexId.value = heroC ? heroC.tex : -1;
+            heroBlendTarget = 1.0;
+            wake();
+        }
+    }
+
+    async function preloadNextHeroCover(cover: TunnelCover | null) {
+        if (!cover || isDead || isPausedState || isPreloading) return;
+        if (preloadedCoverId === cover.id || currentHeroCoverId === cover.id) return;
+
+        const targetUrl = cover.previewSrc || cover.src;
+        if (!targetUrl) return;
+
+        isPreloading = true;
+        const targetId = cover.id;
+        let tex = await loadHighResTexture(targetUrl);
+        if (!tex && cover.previewSrc && cover.src) {
+            tex = await loadHighResTexture(cover.src);
+        }
+        isPreloading = false;
+
+        if (isDead || isPausedState) {
+            tex?.dispose();
+            return;
+        }
+
+        if (tex) {
+            if (preloadedHeroTexture && preloadedHeroTexture !== tex) {
+                preloadedHeroTexture.dispose();
+            }
+            preloadedHeroTexture = tex;
+            preloadedCoverId = targetId;
+        }
+    }
+
     const smooth = (a: number, b: number, x: number) => {
         const t = Math.min(Math.max((x - a) / (b - a), 0), 1);
         return t * t * (3 - 2 * t);
@@ -587,7 +720,9 @@ export function createAlbumCoverTunnel(
         vel = 0;
         idleTime = 0;
         if (notify && coversList[t.tex]) {
-            options.onSelect?.(coversList[t.tex]);
+            const active = coversList[t.tex];
+            options.onSelect?.(active);
+            void setHeroCoverHighRes(active);
         }
         wake();
     }
@@ -649,6 +784,28 @@ export function createAlbumCoverTunnel(
 
         vel *= Math.pow(0.06, dt);
         travel += vel * (isPausedState ? 0.12 : dt) * 6;
+
+        if (options.autoTravel && !isPausedState && idleTime > 2.0 && goTo === null && (!hovered || mouseMoveIdle >= 3.0) && !isDragging) {
+            // 在当前焦点停留满 2.0 秒后（距离下次启程还有 2.5 秒），静默预拉取下一个中心专辑的高清大图
+            if (!preloadedHeroTexture && !isPreloading) {
+                const fz = CAM0 - travel - FOCUS;
+                let minAheadDist = 1e9;
+                let nextCenterItem: CoverItem | null = null;
+                for (const L of layers) {
+                    const c = centerOf(L);
+                    if (c) {
+                        const distAhead = fz - L.z;
+                        if (distAhead > 1.5 && distAhead < minAheadDist) {
+                            minAheadDist = distAhead;
+                            nextCenterItem = c;
+                        }
+                    }
+                }
+                if (nextCenterItem && coversList[nextCenterItem.tex]) {
+                    void preloadNextHeroCover(coversList[nextCenterItem.tex]);
+                }
+            }
+        }
 
         if (goTo !== null) {
             travel = damp(travel, goTo, 2.4, dt);
@@ -742,7 +899,9 @@ export function createAlbumCoverTunnel(
         if (!inFlight && focalCenter && focalCenter !== heroC && minCenterDist < 1.5) {
             heroC = focalCenter;
             if (coversList[heroC.tex]) {
-                options.onSelect?.(coversList[heroC.tex]);
+                const active = coversList[heroC.tex];
+                options.onSelect?.(active);
+                void setHeroCoverHighRes(active);
             }
         }
 
@@ -871,6 +1030,17 @@ export function createAlbumCoverTunnel(
         aPh.needsUpdate = true;
         aFog.needsUpdate = true;
 
+        if (heroBlendVal !== heroBlendTarget) {
+            heroBlendVal = damp(heroBlendVal, heroBlendTarget, 4.0, dt);
+            if (Math.abs(heroBlendVal - heroBlendTarget) < 0.01) {
+                heroBlendVal = heroBlendTarget;
+            }
+            mat.uniforms.uHeroBlend.value = heroBlendVal;
+        }
+        if (heroC) {
+            mat.uniforms.uHeroTexId.value = heroC.tex;
+        }
+
         mat.uniforms.uTime.value = t;
         bgMat.uniforms.uTime.value = t;
         dust.rotation.z = t * 0.01;
@@ -922,6 +1092,17 @@ export function createAlbumCoverTunnel(
     function loop(now: number) {
         raf = 0;
         if (isDead || !isVisible || doc.hidden || !isLoaded) return;
+
+        // 绿色环保节能调度：
+        // 当处于暂停态，或者当前卡片已到达中心静止驻留欣赏（未拖拽、未悬停）且高清渐变已完成时，
+        // 将渲染帧率从 60 FPS 降至 30 FPS，降低 50% 以上 GPU 计算频率与发热，彻底防止电脑风扇起飞！
+        const isQuiescent = isPausedState || (goTo === null && !isDragging && idleTime > 1.0 && mouseMoveIdle >= 3.0 && heroBlendVal === heroBlendTarget);
+        const targetInterval = isQuiescent ? 32 : 15;
+        if (lastTime && now - lastTime < targetInterval) {
+            raf = win.requestAnimationFrame(loop);
+            return;
+        }
+
         render(now);
         raf = win.requestAnimationFrame(loop);
     }
@@ -1046,7 +1227,9 @@ export function createAlbumCoverTunnel(
             composer.render();
 
             if (heroC && coversList[heroC.tex]) {
-                options.onSelect?.(coversList[heroC.tex]);
+                const active = coversList[heroC.tex];
+                options.onSelect?.(active);
+                void setHeroCoverHighRes(active);
             }
             wake();
         } catch (e) {
@@ -1096,6 +1279,18 @@ export function createAlbumCoverTunnel(
                 }
             }
         });
+
+        if (currentHeroTexture) {
+            currentHeroTexture.dispose();
+            currentHeroTexture = null;
+        }
+        if (preloadedHeroTexture) {
+            preloadedHeroTexture.dispose();
+            preloadedHeroTexture = null;
+        }
+        if (emptyHeroTexture) {
+            emptyHeroTexture.dispose();
+        }
 
         textures.forEach((t) => t.dispose());
         geometries.forEach((g) => g.dispose());
