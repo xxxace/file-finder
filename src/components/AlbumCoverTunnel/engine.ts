@@ -10,6 +10,23 @@ import type { TunnelCover, TunnelOptions, TunnelController } from './types';
 const TS = 384; // 纹理数组单层分辨率 (384x384 RGBA，96层约45MB显存，极致平衡画质与显存)
 const MAX_TEXTURE_LAYERS = 96;
 
+/**
+ * 根据图像的原始宽高比，计算 3D 空间的 instance 缩放矩阵比例 (scaleX, scaleY)
+ * 使得 384x384 方形纹理被贴在按原图宽高比缩放后的几何体上时，
+ * 横向或纵向拉伸与纹理压缩 1:1 精确抵消，消除任何变形失真。
+ */
+function getAspectScale(asp: number): { scaleX: number; scaleY: number } {
+    const clampedAspect = Math.max(0.45, Math.min(2.0, asp || 1.0));
+    if (clampedAspect <= 1) {
+        // 竖版海报/照片：高度维持标准 1.0，宽度按比例收窄
+        return { scaleX: clampedAspect, scaleY: 1.0 };
+    } else {
+        // 横版图片/宽屏视频：宽度限制在 1.25 以内，高度等比收缩，确保 scaleX / scaleY === clampedAspect
+        const w = Math.min(1.25, clampedAspect);
+        return { scaleX: w, scaleY: w / clampedAspect };
+    }
+}
+
 function createPlaceholderCanvas(index: number, text: string): HTMLCanvasElement {
     const cv = document.createElement('canvas');
     cv.width = cv.height = TS;
@@ -62,6 +79,7 @@ export function createAlbumCoverTunnel(
     let isVisible = true;
     let isInView = true;
     let loadVersion = 0;
+    const layerAspects = new Float32Array(MAX_TEXTURE_LAYERS).fill(1.0);
 
     const win = container.ownerDocument.defaultView || window;
     const doc = container.ownerDocument;
@@ -595,10 +613,12 @@ export function createAlbumCoverTunnel(
             const dist = camera.position.z - tmp.z;
             if (dist < 1) continue;
             tmp.project(camera);
-            const half = (S * c.s * 0.5) / (dist * tanHalf);
+            const asp = getAspectScale(layerAspects[c.tex]);
+            const halfX = (S * c.s * asp.scaleX * 0.5) / (dist * tanHalf);
+            const halfY = (S * c.s * asp.scaleY * 0.5) / (dist * tanHalf);
             if (
-                Math.abs(tmp.x - pointer.x) * camera.aspect < half &&
-                Math.abs(tmp.y - pointer.y) < half &&
+                Math.abs(tmp.x - pointer.x) * camera.aspect < halfX &&
+                Math.abs(tmp.y - pointer.y) < halfY &&
                 c.z > bestZ
             ) {
                 bestZ = c.z;
@@ -762,7 +782,8 @@ export function createAlbumCoverTunnel(
             E.set(c.rx, c.ry + ryF, Math.sin(t * 0.3 + c.ph) * 0.012 + rz);
             Q.setFromEuler(E);
             P.set(c.x, c.y, c.z);
-            SC.setScalar(s);
+            const asp = getAspectScale(layerAspects[c.tex]);
+            SC.set(s * asp.scaleX, s * asp.scaleY, s);
             M.compose(P, Q, SC);
             mesh.setMatrixAt(n, M);
 
@@ -864,6 +885,8 @@ export function createAlbumCoverTunnel(
         tempCanvas.width = tempCanvas.height = TS;
         const g = tempCanvas.getContext('2d', { willReadFrequently: true })!;
 
+        layerAspects.fill(1.0);
+
         for (let i = 0; i < count; i++) {
             if (isDead || version !== loadVersion) break;
             const item = covers[i];
@@ -874,6 +897,9 @@ export function createAlbumCoverTunnel(
                     img.src = item.src;
                     await img.decode();
                     if (isDead || version !== loadVersion) break;
+                    if (img.naturalWidth && img.naturalHeight) {
+                        layerAspects[i] = img.naturalWidth / img.naturalHeight;
+                    }
                     g.clearRect(0, 0, TS, TS);
                     g.drawImage(img, 0, 0, TS, TS);
                     data.set(g.getImageData(0, 0, TS, TS).data, i * TS * TS * 4);

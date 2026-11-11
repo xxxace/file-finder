@@ -60,7 +60,10 @@
         <!-- 底部焦点封面详情操作面板 -->
         <Transition name="slide-up">
             <div v-if="activeCover" class="hud-bottom-card">
-                <div class="card-thumb" :style="{ backgroundImage: activeCover.src ? `url(${activeCover.src})` : 'none' }"></div>
+                <div class="card-thumb-wrap">
+                    <img v-if="activeCover.src" :src="activeCover.src" class="card-thumb-img" alt="" />
+                    <div v-else class="card-thumb-fallback"></div>
+                </div>
                 <div class="card-info">
                     <div class="card-title" :title="activeCover.title">{{ activeCover.title }}</div>
                     <div class="card-meta">
@@ -180,7 +183,6 @@ onMounted(() => {
         autoTravel: true,
         onSelect: (item) => {
             activeCover.value = item;
-            playSfx('menu-click');
         },
         onHover: (item) => {
             if (item && item.id !== hoveredCover.value?.id) {
@@ -401,15 +403,31 @@ onBeforeUnmount(() => {
     z-index: 15;
 }
 
-.card-thumb {
+.card-thumb-wrap {
     width: 52px;
     height: 52px;
     border-radius: 8px;
-    background-size: cover;
-    background-position: center;
     background-color: #1e1e2f;
     flex-shrink: 0;
     box-shadow: 0 4px 12px rgba(0, 0, 0, 0.4);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    overflow: hidden;
+    border: 1px solid rgba(255, 255, 255, 0.08);
+}
+
+.card-thumb-img {
+    max-width: 100%;
+    max-height: 100%;
+    object-fit: contain;
+    display: block;
+}
+
+.card-thumb-fallback {
+    width: 100%;
+    height: 100%;
+    background: #2a2d4a;
 }
 
 .card-info {

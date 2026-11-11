@@ -49,7 +49,6 @@ import { API_BASE, getAction, apiUrl } from '@/utils/request';
 import { openInFiles } from '@/views/FileFinder/target';
 import useNotify from '@/hooks/useNotify';
 import { useTheme } from '@/hooks/useTheme';
-import { playSfx } from '@/utils/sfx';
 
 const router = useRouter();
 const notify = useNotify();
@@ -128,7 +127,6 @@ function handleSerialChange(serial: string) {
 }
 
 async function handleSelect(cover: TunnelCover) {
-    playSfx('menu-click');
     const raw = cover.raw;
     if (!raw) return;
 
@@ -157,7 +155,6 @@ async function handleSelect(cover: TunnelCover) {
 }
 
 function handleNavigateDir(cover: TunnelCover) {
-    playSfx('menu-click');
     const raw = cover.raw;
     if (!raw) return;
 
@@ -167,7 +164,6 @@ function handleNavigateDir(cover: TunnelCover) {
 }
 
 function goHome() {
-    playSfx('menu-click');
     void router.push('/');
 }
 
