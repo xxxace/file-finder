@@ -606,10 +606,23 @@ export function createAlbumCoverTunnel(
             if (Math.abs(travel - goTo) < 0.02) {
                 travel = goTo;
                 goTo = null;
+                idleTime = 0; // 成功到达目标层后，重置闲置计时，确保完整驻留欣赏
             }
         } else if (options.autoTravel && !isPausedState && idleTime > 4.5 && !hovered && !isDragging) {
-            // 自动漫游展示节奏：在当前专辑停留 4.5s 欣赏后，平滑前进至下一层专辑
-            goTo = travel + D;
+            // 自动漫游展示节奏：在当前中心专辑驻留 4.5s 欣赏后，寻找隧道深处前方下一个拥有中心封面的层（严格向前，绝不后退）
+            const fz = CAM0 - travel - FOCUS;
+            let minAheadDist = 1e9;
+            for (const L of layers) {
+                if (centerOf(L)) {
+                    const distAhead = fz - L.z;
+                    // 必须严格在前方（距离大于 1.5），避开当前所在层
+                    if (distAhead > 1.5 && distAhead < minAheadDist) {
+                        minAheadDist = distAhead;
+                    }
+                }
+            }
+            // 棋盘格隧道中心封面每隔两层出现一次，前方下一层距离为 2 * D (约 11.0)
+            goTo = travel + (minAheadDist < 1e8 ? minAheadDist : 2 * D);
             idleTime = 0;
         } else if (idleTime > 0.45 && Math.abs(vel) < 0.5) {
             // 鼠标拖拽或滚轮滚动松开后，磁吸对齐到最近的中心专辑层
@@ -638,24 +651,21 @@ export function createAlbumCoverTunnel(
         camera.updateMatrixWorld();
 
         const focusZ = camera.position.z - FOCUS;
-        let focalLayer: { k: number; z: number; items: CoverItem[] } | null = null;
-        let minLayerDist = 1e9;
+        let heroL: { k: number; z: number; items: CoverItem[] } | null = null;
         for (const L of layers) {
             while (L.z > camera.position.z - 1) L.z -= NL * D;
             while (L.z < camera.position.z - 1 - NL * D) L.z += NL * D;
-            const dist = Math.abs(L.z - focusZ);
-            if (dist < minLayerDist) {
-                minLayerDist = dist;
-                focalLayer = L;
-            }
+            if (Math.abs(L.z - focusZ) < 1.2 && centerOf(L)) heroL = L;
         }
 
-        // 漫游推进至新层时，平滑移交焦点专辑并通知更新，无跳跃重置
-        if (focalLayer && minLayerDist < 0.6) {
-            const nextCenter = centerOf(focalLayer);
-            if (nextCenter && nextCenter !== heroC && (!heroC || !heroC.fl)) {
-                heroC = nextCenter;
-                heroAmt = smooth(1.0 * D, 0.0, minLayerDist);
+        const newHero = heroL ? centerOf(heroL) : null;
+        const inFlight = heroC && heroC.fl;
+        if (!inFlight && newHero && newHero !== heroC) {
+            const distToFocus = Math.abs(heroL!.z - focusZ);
+            if (distToFocus < 1.2) {
+                heroC = newHero;
+                // 继承逼近焦平面的自然过渡系数，绝不归零！
+                heroAmt = Math.max(heroAmt, 1 - distToFocus / 1.2);
                 if (coversList[heroC.tex]) {
                     options.onSelect?.(coversList[heroC.tex]);
                 }
@@ -694,7 +704,7 @@ export function createAlbumCoverTunnel(
             let arcZ = 0;
             let rz = 0;
             let ryF = 0;
-            let flightHero = 0;
+            let isHero = 0;
             if (c.fl) {
                 const F = c.fl;
                 F.p = Math.min(1, F.p + dt / F.dur);
@@ -706,33 +716,29 @@ export function createAlbumCoverTunnel(
                 const amp = Math.min(3.2, len * 0.32) * F.side;
                 c.x = F.x0 + dx * e + (-dy / len) * bump * amp;
                 c.y = F.y0 + dy * e + (dx / len) * bump * amp;
-                arcZ = bump * (F.side > 0 ? 1.0 : 0.6);
+                // 沿弧线飞跃：向镜头方向拱起与翻转（完全保留 LeiBox 原版极富冲击力的 3D 轨迹）
+                arcZ = bump * (F.side > 0 ? 1.2 : 0.6);
                 rz = bump * 0.22 * F.side;
                 ryF = bump * 0.35 * Math.sign(dx || 1);
+
+                // 核心修复：飞入中心的卡片，其焦点系数随飞行进度 e 从 0 平滑单调递增至 1
                 if (F.side > 0) {
-                    flightHero = e;
-                    if (c === heroC) {
-                        heroAmt = Math.max(heroAmt, e);
-                    }
+                    isHero = e;
+                    if (c === heroC) heroAmt = Math.max(heroAmt, e);
                 } else {
-                    flightHero = 1 - e;
+                    isHero = 1 - e;
                 }
                 if (F.p >= 1) c.fl = null;
             } else {
                 c.x = damp(c.x, c.hx + px, 4, dt);
                 c.y = damp(c.y, c.hy + py, 4, dt);
-            }
-
-            // 计算焦点聚焦程度（彻底消除“先位移放大然后迅速变回小图模式再慢慢放大”的两次播放现象）
-            const isCenter = Math.abs(c.hx) < 0.1 && Math.abs(c.hy) < 0.1;
-            let heroFactor = 0;
-            if (c.fl) {
-                heroFactor = flightHero;
-            } else if (c === heroC) {
-                heroAmt = damp(heroAmt, 1, 3.5, dt);
-                heroFactor = heroAmt;
-            } else if (isCenter && Math.abs(dz) < 1.0 * D) {
-                heroFactor = smooth(1.0 * D, 0.0, Math.abs(dz));
+                if (c === heroC) {
+                    heroAmt = damp(heroAmt, 1, 3.2, dt);
+                    isHero = heroAmt;
+                } else if (c.hx === 0 && c.hy === 0 && Math.abs(dz) < 1.2) {
+                    // 焦平面附近中心封面过渡
+                    isHero = Math.max(0, 1 - Math.abs(dz) / 1.2);
+                }
             }
 
             const r = Math.hypot(c.x / 17, c.y / 10.5);
@@ -743,15 +749,15 @@ export function createAlbumCoverTunnel(
             // 深度光感衰减：宽广的动态范围，远景依然保留清晰通透的轮廓
             const depth = dz < 0 ? 1 - 0.4 * smooth(D, 11 * D, -dz) : 1;
             let b = 0.95 * depth * (1 - 0.5 * smooth(0.2, 1.2, r));
-            b = b + (1.02 - b) * heroFactor;
+            b = b + (1.02 - b) * isHero;
             b = b + (1.0 - b) * c.lift * 0.85;
 
             c.b = b;
             c.o = ahead;
             c.fog = fog;
-            const s = 1 + 0.7 * heroFactor + 0.14 * c.lift;
+            const s = 1 + 0.7 * isHero + 0.14 * c.lift;
             c.s = s;
-            c.z = L.z + 1.3 * heroFactor + 2.0 * c.lift + arcZ + Math.sin(t * 0.4 + c.ph) * 0.04;
+            c.z = L.z + 1.3 * isHero + 2.0 * c.lift + arcZ + Math.sin(t * 0.4 + c.ph) * 0.04;
             c.zo = c.z - L.z;
 
             const tgx = (c === hovered ? -look.y * 0.35 : 0) + c.y * 0.012;
@@ -761,7 +767,7 @@ export function createAlbumCoverTunnel(
 
             // 景深虚化：焦平面周围 8 个单位内（1.5层）保持绝对清晰，深处渐进柔焦，上限 1.8（约120px清晰度）绝无马赛克感
             const distFromFocus = Math.max(0, Math.abs(dz) - 8);
-            const blur = Math.min(1.8, Math.pow(distFromFocus / 24, 1.2) * 1.8) * (1 - Math.max(heroFactor, c.lift));
+            const blur = Math.min(1.8, Math.pow(distFromFocus / 24, 1.2) * 1.8) * (1 - Math.max(isHero, c.lift));
             E.set(c.rx, c.ry + ryF, Math.sin(t * 0.3 + c.ph) * 0.012 + rz);
             Q.setFromEuler(E);
             P.set(c.x, c.y, c.z);
@@ -770,7 +776,7 @@ export function createAlbumCoverTunnel(
             M.compose(P, Q, SC);
             mesh.setMatrixAt(n, M);
 
-            aLook.setXYZW(n, c.b, c.o, blur, Math.max(heroFactor, c.lift));
+            aLook.setXYZW(n, c.b, c.o, blur, Math.max(isHero, c.lift));
             aTex.setX(n, c.tex);
             aPh.setX(n, c.ph * 0.159);
             aFog.setX(n, c.fog);

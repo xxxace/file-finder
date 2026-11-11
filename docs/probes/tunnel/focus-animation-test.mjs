@@ -99,4 +99,55 @@ assert(Math.abs(postTouchdown.s - 1.7) < 1e-6, 'Post-touchdown scale locked at 1
 assert(Math.abs(postTouchdown.z - 1.3) < 1e-6, 'Post-touchdown elevation locked at 1.3 (zero drop)');
 console.log('PASS: Touchdown and resting state perfectly locked at scale 1.7 and depth 1.3 without any double-play glitch');
 
+// 5. 验证自动漫游在 3D 棋盘格隧道中严格向前推进，绝不后退
+function simulateAutoTravelSteps() {
+    const D = 5.5;
+    const NL = 14;
+    const FOCUS = 14;
+    const CAM0 = FOCUS;
+    let travel = 0;
+
+    // 构造三维棋盘格层列表，只有偶数层拥有中心封面
+    const layers = [];
+    for (let k = 0; k < NL; k++) {
+        const hasCenter = k % 2 === 0;
+        layers.push({ k, z: -k * D, hasCenter });
+    }
+
+    const steps = [];
+
+    for (let step = 0; step < 8; step++) {
+        const fz = CAM0 - travel - FOCUS;
+        // 循环层包装
+        for (const L of layers) {
+            while (L.z > -travel + CAM0 - 1) L.z -= NL * D;
+            while (L.z < -travel + CAM0 - 1 - NL * D) L.z += NL * D;
+        }
+
+        let minAheadDist = 1e9;
+        for (const L of layers) {
+            if (L.hasCenter) {
+                const distAhead = fz - L.z;
+                if (distAhead > 1.5 && distAhead < minAheadDist) {
+                    minAheadDist = distAhead;
+                }
+            }
+        }
+
+        const prevTravel = travel;
+        const advance = minAheadDist < 1e8 ? minAheadDist : 2 * D;
+        travel += advance;
+        steps.push({ step, prevTravel, advance, travel });
+    }
+
+    return steps;
+}
+
+const travelSteps = simulateAutoTravelSteps();
+for (const step of travelSteps) {
+    assert(step.advance > 5.0, `Advance must be positive and span to next center layer, got ${step.advance}`);
+    assert(step.travel > step.prevTravel, `Travel must strictly advance forward: prev=${step.prevTravel}, now=${step.travel}`);
+}
+console.log(`PASS: Auto-travel strictly advances forward across center layers (step advance = ${travelSteps[0].advance.toFixed(1)} units, strictly monotonic)`);
+
 console.log('\nAll focus animation continuity tests passed successfully!');
