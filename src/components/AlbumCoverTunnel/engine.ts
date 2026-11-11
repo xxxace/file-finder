@@ -2,7 +2,6 @@ import * as THREE from 'three';
 import { EffectComposer } from 'three/examples/jsm/postprocessing/EffectComposer.js';
 import { RenderPass } from 'three/examples/jsm/postprocessing/RenderPass.js';
 import { UnrealBloomPass } from 'three/examples/jsm/postprocessing/UnrealBloomPass.js';
-import { ShaderPass } from 'three/examples/jsm/postprocessing/ShaderPass.js';
 import { OutputPass } from 'three/examples/jsm/postprocessing/OutputPass.js';
 import { mergeGeometries } from 'three/examples/jsm/utils/BufferGeometryUtils.js';
 import type { TunnelCover, TunnelOptions, TunnelController } from './types';
@@ -102,7 +101,7 @@ export function createAlbumCoverTunnel(
     renderer.setPixelRatio(PR);
     renderer.outputColorSpace = THREE.SRGBColorSpace;
     renderer.toneMapping = THREE.ACESFilmicToneMapping;
-    renderer.toneMappingExposure = 1.05;
+    renderer.toneMappingExposure = 1.0;
 
     const el = renderer.domElement;
     el.style.width = '100%';
@@ -115,17 +114,15 @@ export function createAlbumCoverTunnel(
     const camera = new THREE.PerspectiveCamera(32, 16 / 9, 0.5, 200);
     scene.add(camera);
 
-    /* ---------------- 背景：跟着相机走的星云渐变 ---------------- */
+    /* ---------------- 背景：深邃优雅的宇宙深空，无刺眼高光 ---------------- */
     const BGF = `vec3 bgCol(vec2 p, float tt){
-        vec3 c=mix(vec3(.02,.03,.10),vec3(.10,.09,.34),smoothstep(.85,.3,p.y+(p.x-.5)*.25));
-        c=mix(c,vec3(.30,.22,.62),smoothstep(.55,.15,p.y)*.3);
-        c+=vec3(1.,.86,1.)*exp(-pow(length((p-vec2(.56,.2))*vec2(1.3,2.)),2.)*6.)*(.38+.03*sin(tt*.7));
-        vec2 q=(p-.5)/.382+.5;
-        vec2 cq=(q-vec2(.54,.5))*vec2(1.78,1.);
-        float r2=dot(cq,cq);
-        c*=1.-.72*smoothstep(.05,.75,sqrt(r2));
-        c+=vec3(.52,.42,.95)*exp(-r2*5.)*.42;
-        c+=vec3(.95,.86,1.)*exp(-r2*26.)*(.42+.05*sin(tt*.5));
+        vec3 c = mix(vec3(.012, .015, .032), vec3(.035, .038, .095), smoothstep(.85, .25, p.y + (p.x - .5) * .2));
+        c = mix(c, vec3(.065, .05, .13), smoothstep(.55, .15, p.y) * .25);
+        vec2 q = (p - .5) / .382 + .5;
+        vec2 cq = (q - vec2(.52, .5)) * vec2(1.6, 1.);
+        float r2 = dot(cq, cq);
+        c += vec3(.15, .12, .28) * exp(-r2 * 4.5) * .28;
+        c += vec3(.25, .20, .42) * exp(-r2 * 20.) * .15;
         return c; }`;
 
     const bgMat = new THREE.ShaderMaterial({
@@ -167,10 +164,10 @@ export function createAlbumCoverTunnel(
             geo,
             new THREE.PointsMaterial({
                 map: new THREE.CanvasTexture(c),
-                size: 0.09,
-                color: 0xf4e8ff,
+                size: 0.05,
+                color: 0xe0d4fc,
                 transparent: true,
-                opacity: 0.75,
+                opacity: 0.25,
                 depthWrite: false,
                 blending: THREE.AdditiveBlending,
             }),
@@ -320,7 +317,7 @@ export function createAlbumCoverTunnel(
             varying float vFog;
             ${BGF}
             float h21(vec2 p){ return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453); }
-            vec3 cover(vec2 uv, float bias){ return pow(texture(map, vec3(uv.x, 1. - uv.y, vTex), bias).rgb, vec3(2.2)); }
+            vec3 cover(vec2 uv, float bias){ return texture(map, vec3(uv.x, 1. - uv.y, vTex), bias).rgb; }
             void main(){
                 if (vLook.y < .01 || vFog > .99) discard;
                 // 软投影
@@ -340,11 +337,11 @@ export function createAlbumCoverTunnel(
                 vec3 L = normalize(vec3(-.45, .75, .5));
                 vec3 c;
                 if (vN.z > .5) {
-                    // 正面：原画纯净呈现，去除假倒角、伪暗边与描边压边效果
+                    // 正面：原画纯净高清呈现，无噪点、无色散、无刺眼强光
                     c = cover(vUv, vLook.z);
                     float sweep = fract(uTime * .07 + vPh) * 2.6 - .8;
                     float band = exp(-pow((vUv.x * .7 + (1. - vUv.y) * .3) - sweep, 2.) * 90.);
-                    c += vec3(1., .95, 1.) * band * (.035 + .14 * vLook.w);
+                    c += vec3(1., .95, 1.) * band * (.02 + .06 * vLook.w);
                 } else if (vN.z < -.5) {
                     c = vec3(.025, .022, .045);
                 } else {
@@ -367,43 +364,14 @@ export function createAlbumCoverTunnel(
     world.add(mesh);
     scene.add(world);
 
-    /* ---------------- 后期合成 ---------------- */
+    /* ---------------- 后期合成（轻柔高雅Bloom，彻底剔除噪点与伪色散） ---------------- */
     const composer = new EffectComposer(renderer);
     composer.addPass(new RenderPass(scene, camera));
 
-    const bloom = new UnrealBloomPass(new THREE.Vector2(960, 540), 0.5, 0.35, 0.9);
+    const bloom = new UnrealBloomPass(new THREE.Vector2(960, 540), 0.16, 0.5, 0.92);
     const origSetSize = bloom.setSize.bind(bloom);
     bloom.setSize = (w: number, h: number) => origSetSize(w / 2, h / 2);
     composer.addPass(bloom);
-
-    const grade = new ShaderPass({
-        uniforms: {
-            tDiffuse: { value: null },
-            uTime: { value: 0 },
-            uLight: { value: new THREE.Vector2(0.53, 0.47) },
-        },
-        vertexShader: `varying vec2 vUv; void main(){ vUv=uv; gl_Position=projectionMatrix*modelViewMatrix*vec4(position,1.); }`,
-        fragmentShader: `uniform sampler2D tDiffuse; uniform float uTime; uniform vec2 uLight; varying vec2 vUv;
-            float h(vec2 p){ return fract(sin(dot(p,vec2(12.9898,78.233)))*43758.5453); }
-            void main(){
-                vec2 uv=vUv, d=uv-.5;
-                vec3 c;
-                c.r=texture2D(tDiffuse,uv+d*.003).r;
-                c.g=texture2D(tDiffuse,uv).g;
-                c.b=texture2D(tDiffuse,uv-d*.003).b;
-                vec2 st=(uLight-uv)/18.; vec2 q=uv+st*h(gl_FragCoord.xy); float w=1., ray=0.;
-                for(int i=0;i<18;i++){
-                    vec3 s=texture2D(tDiffuse,q).rgb;
-                    ray+=max(dot(s,vec3(.3,.5,.2))-.62,0.)*w;
-                    w*=.9; q+=st;
-                }
-                c+=vec3(.70,.62,1.)*ray*.13*smoothstep(.2,.42,length((uv-uLight)*vec2(1.6,1.)));
-                c*=1.-dot(d*vec2(1.,1.25),d*vec2(1.,1.25))*1.35;
-                c+=(h(gl_FragCoord.xy+fract(uTime)*100.)-.5)*.022;
-                gl_FragColor=vec4(c,1.);
-            }`,
-    });
-    composer.addPass(grade);
     composer.addPass(new OutputPass());
 
     function resize() {
@@ -633,8 +601,10 @@ export function createAlbumCoverTunnel(
         travel += vel * (isPausedState ? 0.12 : dt) * 6;
 
         if (goTo !== null) {
-            travel = damp(travel, goTo, 2.4, dt);
+            travel = damp(travel, goTo, 2.8, dt);
             if (Math.abs(travel - goTo) < 0.02) goTo = null;
+        } else if (options.autoTravel && !isPausedState && idleTime > 2.0 && !hovered && !isDragging) {
+            travel += 1.6 * dt; // 匀速平缓漫游，告别周期性冲撞与急刹
         } else if (idleTime > 0.45 && Math.abs(vel) < 0.5) {
             const fz = CAM0 - travel - FOCUS;
             let best: { z: number } | null = null;
@@ -651,11 +621,6 @@ export function createAlbumCoverTunnel(
             if (best) travel = damp(travel, travel - bd, 3, dt);
         }
 
-        if (options.autoTravel && !isPausedState && idleTime > 5 && !hovered && goTo === null) {
-            vel += 5.6;
-            idleTime = 0;
-        }
-
         camera.position.z = CAM0 - travel;
         if (isInside) look.copy(pointer);
         else look.multiplyScalar(Math.pow(0.1, dt));
@@ -666,24 +631,10 @@ export function createAlbumCoverTunnel(
         camera.updateMatrixWorld();
 
         const focusZ = camera.position.z - FOCUS;
-        let heroL: { k: number; z: number; items: CoverItem[] } | null = null;
         for (const L of layers) {
             while (L.z > camera.position.z - 1) L.z -= NL * D;
             while (L.z < camera.position.z - 1 - NL * D) L.z += NL * D;
-            if (Math.abs(L.z - focusZ) < 1.2 && centerOf(L)) heroL = L;
         }
-
-        const newHero = heroL ? centerOf(heroL) : null;
-        const settled = newHero && Math.abs(vel) < 0.6 && Math.abs(heroL!.z - focusZ) < 0.25;
-        if (goTo === null && newHero !== heroC && settled) {
-            heroC = newHero;
-            heroAmt = 0;
-            if (heroC && coversList[heroC.tex]) {
-                options.onSelect?.(coversList[heroC.tex]);
-            }
-        }
-        const targetHeroAmt = (heroC && (settled || goTo !== null || (heroC.fl && heroC.fl.side > 0))) ? 1 : 0;
-        heroAmt = damp(heroAmt, targetHeroAmt, settled ? 3.0 : 3.5, dt);
 
         if (!isDragging) pick();
         else hovered = null;
@@ -694,7 +645,26 @@ export function createAlbumCoverTunnel(
         for (const c of order) {
             const L = c.L;
             const dz = L.z - focusZ;
-            const isHero = c === heroC ? heroAmt : 0;
+
+            // 基于物理深度的连续平滑聚焦（彻底消除 0->1 重置与“小大小大”突兀跳跃）
+            const isCenter = Math.abs(c.hx) < 0.1 && Math.abs(c.hy) < 0.1;
+            let heroProximity = 0;
+            if (isCenter) {
+                const distToFocus = Math.abs(dz);
+                if (distToFocus < 1.35 * D) {
+                    heroProximity = smooth(1.35 * D, 0.0, distToFocus);
+                }
+            }
+            if (c.fl && c.fl.side > 0) {
+                heroProximity = Math.max(heroProximity, ease(c.fl.p));
+            }
+
+            if (isCenter && heroProximity > 0.85 && heroC !== c) {
+                heroC = c;
+                if (coversList[c.tex]) {
+                    options.onSelect?.(coversList[c.tex]);
+                }
+            }
 
             let lift = 0;
             let px = 0;
@@ -746,15 +716,15 @@ export function createAlbumCoverTunnel(
             // 深度光感衰减：宽广的动态范围，远景依然保留清晰通透的轮廓
             const depth = dz < 0 ? 1 - 0.4 * smooth(D, 11 * D, -dz) : 1;
             let b = 0.95 * depth * (1 - 0.5 * smooth(0.2, 1.2, r));
-            b = b + (1.02 - b) * isHero;
+            b = b + (1.02 - b) * heroProximity;
             b = b + (1.0 - b) * c.lift * 0.85;
 
             c.b = b;
             c.o = ahead;
             c.fog = fog;
-            const s = 1 + 0.65 * isHero + 0.14 * c.lift;
+            const s = 1 + 0.45 * heroProximity + 0.14 * c.lift;
             c.s = s;
-            c.z = L.z + 1.2 * isHero + 2.0 * c.lift + arcZ + Math.sin(t * 0.6 + c.ph) * 0.06;
+            c.z = L.z + 0.8 * heroProximity + 1.8 * c.lift + arcZ + Math.sin(t * 0.4 + c.ph) * 0.04;
             c.zo = c.z - L.z;
 
             const tgx = (c === hovered ? -look.y * 0.35 : 0) + c.y * 0.012;
@@ -764,7 +734,7 @@ export function createAlbumCoverTunnel(
 
             // 景深虚化：焦平面周围 8 个单位内（1.5层）保持绝对清晰，深处渐进柔焦，上限 1.8（约120px清晰度）绝无马赛克感
             const distFromFocus = Math.max(0, Math.abs(dz) - 8);
-            const blur = Math.min(1.8, Math.pow(distFromFocus / 24, 1.2) * 1.8) * (1 - Math.max(isHero, c.lift));
+            const blur = Math.min(1.8, Math.pow(distFromFocus / 24, 1.2) * 1.8) * (1 - Math.max(heroProximity, c.lift));
             E.set(c.rx, c.ry + ryF, Math.sin(t * 0.3 + c.ph) * 0.012 + rz);
             Q.setFromEuler(E);
             P.set(c.x, c.y, c.z);
@@ -773,7 +743,7 @@ export function createAlbumCoverTunnel(
             M.compose(P, Q, SC);
             mesh.setMatrixAt(n, M);
 
-            aLook.setXYZW(n, c.b, c.o, blur, Math.max(isHero, c.lift));
+            aLook.setXYZW(n, c.b, c.o, blur, Math.max(heroProximity, c.lift));
             aTex.setX(n, c.tex);
             aPh.setX(n, c.ph * 0.159);
             aFog.setX(n, c.fog);
@@ -788,7 +758,6 @@ export function createAlbumCoverTunnel(
 
         mat.uniforms.uTime.value = t;
         bgMat.uniforms.uTime.value = t;
-        grade.uniforms.uTime.value = t;
         dust.rotation.z = t * 0.01;
     }
 
@@ -870,6 +839,8 @@ export function createAlbumCoverTunnel(
         const tempCanvas = document.createElement('canvas');
         tempCanvas.width = tempCanvas.height = TS;
         const g = tempCanvas.getContext('2d', { willReadFrequently: true })!;
+        g.imageSmoothingEnabled = true;
+        g.imageSmoothingQuality = 'high';
 
         layerAspects.fill(1.0);
 
@@ -901,11 +872,12 @@ export function createAlbumCoverTunnel(
         }
 
         const t = new THREE.DataArrayTexture(data, TS, TS, count);
+        t.colorSpace = THREE.SRGBColorSpace;
         t.minFilter = THREE.LinearMipmapLinearFilter;
         t.magFilter = THREE.LinearFilter;
         t.generateMipmaps = true;
         t.flipY = false;
-        t.anisotropy = 4;
+        t.anisotropy = 8;
         t.needsUpdate = true;
         return t;
     }

@@ -2,7 +2,7 @@
     <div
         ref="containerRef"
         class="tunnel-container"
-        :class="{ 'is-fullscreen': isFullscreen }"
+        :class="{ 'is-fullscreen': isFullscreen, 'hide-cursor': isCursorHidden }"
         @mousemove="onCanvasActivity"
         @wheel="onCanvasActivity"
         @pointerdown="onCanvasActivity"
@@ -163,6 +163,20 @@ const isHudActive = ref(false);
 let hudTimer: ReturnType<typeof setTimeout> | null = null;
 let isHoveringCard = false;
 
+const isCursorHidden = ref(false);
+let cursorTimer: ReturnType<typeof setTimeout> | null = null;
+
+function resetCursorTimer() {
+    isCursorHidden.value = false;
+    if (cursorTimer) {
+        clearTimeout(cursorTimer);
+        cursorTimer = null;
+    }
+    cursorTimer = setTimeout(() => {
+        isCursorHidden.value = true;
+    }, 3000);
+}
+
 function pingHudActivity() {
     isHudActive.value = true;
     if (hudTimer) {
@@ -189,9 +203,15 @@ function onCanvasActivity(e: MouseEvent | WheelEvent) {
         return;
     }
     pingHudActivity();
+    resetCursorTimer();
 }
 
 function onContainerMouseLeave() {
+    isCursorHidden.value = false;
+    if (cursorTimer) {
+        clearTimeout(cursorTimer);
+        cursorTimer = null;
+    }
     if (!isHoveringCard) {
         if (hudTimer) {
             clearTimeout(hudTimer);
@@ -203,6 +223,11 @@ function onContainerMouseLeave() {
 
 function onWindowBlur() {
     isHoveringCard = false;
+    isCursorHidden.value = false;
+    if (cursorTimer) {
+        clearTimeout(cursorTimer);
+        cursorTimer = null;
+    }
     if (hudTimer) {
         clearTimeout(hudTimer);
         hudTimer = null;
@@ -315,6 +340,10 @@ onBeforeUnmount(() => {
         clearTimeout(hudTimer);
         hudTimer = null;
     }
+    if (cursorTimer) {
+        clearTimeout(cursorTimer);
+        cursorTimer = null;
+    }
     if (controller) {
         controller.destroy();
         controller = null;
@@ -331,6 +360,11 @@ onBeforeUnmount(() => {
     background: #05060f;
     user-select: none;
     font-family: var(--ff-font-family, system-ui, sans-serif);
+}
+
+.tunnel-container.hide-cursor,
+.tunnel-container.hide-cursor * {
+    cursor: none !important;
 }
 
 .tunnel-stage {
