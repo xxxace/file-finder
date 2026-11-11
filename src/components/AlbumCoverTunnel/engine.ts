@@ -3,6 +3,7 @@ import { EffectComposer } from 'three/examples/jsm/postprocessing/EffectComposer
 import { RenderPass } from 'three/examples/jsm/postprocessing/RenderPass.js';
 import { UnrealBloomPass } from 'three/examples/jsm/postprocessing/UnrealBloomPass.js';
 import { OutputPass } from 'three/examples/jsm/postprocessing/OutputPass.js';
+import { FXAAPass } from 'three/examples/jsm/postprocessing/FXAAPass.js';
 import { mergeGeometries } from 'three/examples/jsm/utils/BufferGeometryUtils.js';
 import type { TunnelCover, TunnelOptions, TunnelController } from './types';
 
@@ -84,12 +85,12 @@ export function createAlbumCoverTunnel(
     const doc = container.ownerDocument;
     const dpr = win.devicePixelRatio || 1;
 
-    let PR = Math.min(dpr, 1.5);
+    let PR = Math.min(dpr, 2.0);
 
     let renderer: THREE.WebGLRenderer;
     try {
         renderer = new THREE.WebGLRenderer({
-            antialias: false,
+            antialias: true,
             powerPreference: 'high-performance',
             preserveDrawingBuffer: false,
         });
@@ -207,9 +208,21 @@ export function createAlbumCoverTunnel(
     const covers: CoverItem[] = [];
     const layers: { k: number; z: number; items: CoverItem[] }[] = [];
 
+    const hash3D = (i: number, j: number, k: number): number => {
+        let h = (i * 374761393 + j * 668265263 + k * 1013904223) | 0;
+        h = Math.imul(h ^ (h >>> 13), 1274126177);
+        return (h ^ (h >>> 16)) >>> 0;
+    };
+
     const keyAt = (i: number, j: number, k: number, len: number) => {
         if (len <= 1) return 0;
-        return 1 + (((((i * 3 + j * 5 + k * 2) % (len - 1)) + len - 1) % (len - 1)));
+        // 中心焦点封面（i=0, j=0）按层顺序循环映射，确保沿漫游轴线每一层的中心封面都绝不重复
+        if (i === 0 && j === 0) {
+            return Math.floor(k / 2) % len;
+        }
+        // 周边网格封面使用高熵哈希，防止相邻卡片出现相同的封面图案
+        const h = hash3D(i, j, k);
+        return h % len;
     };
 
     for (let k = 0; k < NL; k++) {
@@ -364,8 +377,14 @@ export function createAlbumCoverTunnel(
     world.add(mesh);
     scene.add(world);
 
-    /* ---------------- 后期合成（轻柔高雅Bloom，彻底剔除噪点与伪色散） ---------------- */
-    const composer = new EffectComposer(renderer);
+    /* ---------------- 后期合成与全管线抗锯齿（MSAA 4x + FXAA + 柔和Bloom） ---------------- */
+    const initialW = Math.max(1, container.clientWidth);
+    const initialH = Math.max(1, container.clientHeight);
+    const renderTarget = new THREE.WebGLRenderTarget(initialW, initialH, {
+        type: THREE.HalfFloatType,
+        samples: 4,
+    });
+    const composer = new EffectComposer(renderer, renderTarget);
     composer.addPass(new RenderPass(scene, camera));
 
     const bloom = new UnrealBloomPass(new THREE.Vector2(960, 540), 0.16, 0.5, 0.92);
@@ -373,6 +392,9 @@ export function createAlbumCoverTunnel(
     bloom.setSize = (w: number, h: number) => origSetSize(w / 2, h / 2);
     composer.addPass(bloom);
     composer.addPass(new OutputPass());
+
+    const fxaaPass = new FXAAPass();
+    composer.addPass(fxaaPass);
 
     function resize() {
         const w = Math.max(1, container.clientWidth);
@@ -400,6 +422,7 @@ export function createAlbumCoverTunnel(
     const look = new THREE.Vector2();
     let isInside = false;
     let isDragging = false;
+    let mouseMoveIdle = 0;
     let lastY = 0;
     let movedDist = 0;
     let dragV = 0;
@@ -408,6 +431,7 @@ export function createAlbumCoverTunnel(
     const onPointerMove = (e: PointerEvent) => {
         const r = el.getBoundingClientRect();
         isInside = true;
+        mouseMoveIdle = 0;
         pointer.set(((e.clientX - r.left) / r.width) * 2 - 1, -((e.clientY - r.top) / r.height) * 2 + 1);
         if (isDragging) {
             dragV += e.clientY - lastY;
@@ -419,6 +443,7 @@ export function createAlbumCoverTunnel(
 
     const onPointerDown = (e: PointerEvent) => {
         isDragging = true;
+        mouseMoveIdle = 0;
         lastY = e.clientY;
         movedDist = 0;
         el.focus({ preventScroll: true });
@@ -443,6 +468,11 @@ export function createAlbumCoverTunnel(
 
     const onPointerLeave = () => {
         isInside = false;
+        mouseMoveIdle = 0;
+        if (hovered) {
+            hovered = null;
+            options.onHover?.(null);
+        }
         wake();
     };
 
@@ -553,30 +583,34 @@ export function createAlbumCoverTunnel(
     const tmp = new THREE.Vector3();
 
     function pick() {
-        hovered = null;
-        if (!isInside) return;
-        let bestZ = -1e9;
-        for (const c of covers) {
-            if (c.o < 0.5 || c.fog > 0.6) continue;
-            tmp.set(c.x, c.y, c.z).applyMatrix4(world.matrixWorld);
-            const dist = camera.position.z - tmp.z;
-            if (dist < 1) continue;
-            tmp.project(camera);
-            const asp = getAspectScale(layerAspects[c.tex]);
-            const halfX = (S * c.s * asp.scaleX * 0.5) / (dist * tanHalf);
-            const halfY = (S * c.s * asp.scaleY * 0.5) / (dist * tanHalf);
-            if (
-                Math.abs(tmp.x - pointer.x) * camera.aspect < halfX &&
-                Math.abs(tmp.y - pointer.y) < halfY &&
-                c.z > bestZ
-            ) {
-                bestZ = c.z;
-                hovered = c;
+        let nextHovered: CoverItem | null = null;
+        if (isInside && mouseMoveIdle < 3.0) {
+            let bestZ = -1e9;
+            for (const c of covers) {
+                if (c.o < 0.5 || c.fog > 0.6) continue;
+                tmp.set(c.x, c.y, c.z).applyMatrix4(world.matrixWorld);
+                const dist = camera.position.z - tmp.z;
+                if (dist < 1) continue;
+                tmp.project(camera);
+                const asp = getAspectScale(layerAspects[c.tex]);
+                const halfX = (S * c.s * asp.scaleX * 0.5) / (dist * tanHalf);
+                const halfY = (S * c.s * asp.scaleY * 0.5) / (dist * tanHalf);
+                if (
+                    Math.abs(tmp.x - pointer.x) * camera.aspect < halfX &&
+                    Math.abs(tmp.y - pointer.y) < halfY &&
+                    c.z > bestZ
+                ) {
+                    bestZ = c.z;
+                    nextHovered = c;
+                }
             }
         }
-        if (options.onHover) {
-            const hCover = hovered && coversList[hovered.tex] ? coversList[hovered.tex] : null;
-            options.onHover(hCover);
+        if (nextHovered !== hovered) {
+            hovered = nextHovered;
+            if (options.onHover) {
+                const hCover = hovered && coversList[hovered.tex] ? coversList[hovered.tex] : null;
+                options.onHover(hCover);
+            }
         }
     }
 
@@ -587,6 +621,8 @@ export function createAlbumCoverTunnel(
     const SC = new THREE.Vector3();
 
     function update(dt: number, t: number) {
+        mouseMoveIdle += dt;
+
         const input = wheelDelta * 0.004 + dragV * 0.02;
         wheelDelta = 0;
         dragV = 0;
@@ -608,7 +644,7 @@ export function createAlbumCoverTunnel(
                 goTo = null;
                 idleTime = 0; // 成功到达目标层后，重置闲置计时，确保完整驻留欣赏
             }
-        } else if (options.autoTravel && !isPausedState && idleTime > 4.5 && !hovered && !isDragging) {
+        } else if (options.autoTravel && !isPausedState && idleTime > 4.5 && (!hovered || mouseMoveIdle >= 3.0) && !isDragging) {
             // 自动漫游展示节奏：在当前中心专辑驻留 4.5s 欣赏后，寻找隧道深处前方下一个拥有中心封面的层（严格向前，绝不后退）
             const fz = CAM0 - travel - FOCUS;
             let minAheadDist = 1e9;
@@ -825,12 +861,19 @@ export function createAlbumCoverTunnel(
         if (accTime > 1) {
             const currentFps = frameCount / accTime;
             options.onFps?.(Math.round(currentFps));
-            if (currentFps < 45) {
+            const targetPR = Math.min(dpr, 2.0);
+            if (currentFps < 30) {
                 slowCount++;
-                if (slowCount >= 2 && PR > 0.76) {
-                    PR = Math.max(0.75, PR - 0.25);
+                if (slowCount >= 3 && PR > 1.01) {
+                    PR = Math.max(1.0, PR - 0.25);
                     resize();
                     slowCount = 0;
+                }
+            } else if (currentFps >= 55) {
+                slowCount = 0;
+                if (PR < targetPR) {
+                    PR = Math.min(targetPR, PR + 0.25);
+                    resize();
                 }
             } else {
                 slowCount = 0;
@@ -1007,6 +1050,7 @@ export function createAlbumCoverTunnel(
         materials.forEach((m) => m.dispose());
         composer.passes.forEach((p: any) => p.dispose?.());
         composer.dispose();
+        renderTarget.dispose();
         renderer.dispose();
         renderer.forceContextLoss();
 
@@ -1023,7 +1067,7 @@ export function createAlbumCoverTunnel(
         update: (next = {}) => {
             options = { ...options, ...next };
             if (next.theme) {
-                PR = Math.min(dpr, next.theme === 'light' ? 0.75 : 1.5);
+                PR = Math.min(dpr, 2.0);
                 resize();
             }
             wake();

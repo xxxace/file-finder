@@ -762,7 +762,8 @@ export function collectTunnelCovers(
     hasBinFn: (name: string) => boolean,
     serial?: string,
 ): TunnelCoverItem[] {
-    const seen = new Set<string>();
+    const seenSig = new Set<string>();
+    const seenPath = new Set<string>();
     const items: TunnelCoverItem[] = [];
 
     for (const doc of rows) {
@@ -774,9 +775,13 @@ export function collectTunnelCovers(
             const thumbName = thumbNameOf(it.sig);
             if (!thumbName || !hasBinFn(thumbName)) continue;
 
-            const key = `${doc.serial}:${it.dir || ''}/${it.name}`.toLowerCase();
-            if (seen.has(key)) continue;
-            seen.add(key);
+            // 图像指纹去重：同一张专辑的多首单曲具有相同的封面 sig，只保留一个代表项，确保画廊中专辑封面完全不重复
+            if (seenSig.has(it.sig)) continue;
+            seenSig.add(it.sig);
+
+            const pathKey = `${doc.serial}:${it.dir || ''}/${it.name}`.toLowerCase();
+            if (seenPath.has(pathKey)) continue;
+            seenPath.add(pathKey);
 
             items.push({
                 id: `${doc.serial}:${it.dir || ''}/${it.name}`,

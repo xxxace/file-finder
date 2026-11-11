@@ -105,6 +105,7 @@ async function loadAllCovers(serial?: string) {
             const list = rawItems.map((item) => ({
                 id: item.id,
                 title: item.name,
+                sig: item.sig,
                 src: apiUrl(`${API_BASE}/thumb?k=${encodeURIComponent(`t-${item.sig}.enc`)}`),
                 raw: item,
             }));

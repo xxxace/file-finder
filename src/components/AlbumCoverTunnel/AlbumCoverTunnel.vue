@@ -292,6 +292,17 @@ onDeactivated(() => {
     controller?.setActive(false);
 });
 
+function dedupeCoversBySig(items: TunnelCover[]): TunnelCover[] {
+    const seen = new Set<string>();
+    return items.filter((it) => {
+        const sig = it.sig || it.raw?.sig;
+        if (!sig) return true;
+        if (seen.has(sig)) return false;
+        seen.add(sig);
+        return true;
+    });
+}
+
 onMounted(() => {
     if (!stageRef.value) return;
 
@@ -316,7 +327,7 @@ onMounted(() => {
     });
 
     if (props.items.length) {
-        void controller.setCovers(props.items);
+        void controller.setCovers(dedupeCoversBySig(props.items));
     }
 
     setTimeout(() => {
@@ -328,7 +339,7 @@ watch(
     () => props.items,
     (next) => {
         if (controller) {
-            void controller.setCovers(next);
+            void controller.setCovers(dedupeCoversBySig(next));
         }
     },
     { deep: false },

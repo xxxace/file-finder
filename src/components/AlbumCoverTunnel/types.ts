@@ -2,6 +2,7 @@ export interface TunnelCover {
     id: string;
     title: string;
     src: string;
+    sig?: string;
     raw?: any;
 }
 
