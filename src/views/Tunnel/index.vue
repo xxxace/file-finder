@@ -94,6 +94,8 @@ async function loadAllCovers(serial?: string) {
                 id: string;
                 name: string;
                 dir: string;
+                relPath?: string;
+                key?: string;
                 serial: string;
                 sig: string;
                 type: string;
@@ -159,8 +161,17 @@ function handleNavigateDir(cover: TunnelCover) {
     const raw = cover.raw;
     if (!raw) return;
 
-    const targetPath = `#${raw.serial}${raw.dir ? `/${raw.dir}` : ''}`;
-    openInFiles({ kind: 'path', path: targetPath });
+    // 定位目标目录：对应实际扫描收录并具备 NeDB 缓存的目录层级 (doc.relPath)。
+    // 若封面属于收敛作品目录（如 Movies/Actor/ABC-123），其实际缓存所在目录是上一层父目录（Movies/Actor）。
+    const relPath = raw.relPath !== undefined
+        ? raw.relPath
+        : (raw.dir && raw.dir.includes('/') ? raw.dir.substring(0, raw.dir.lastIndexOf('/')) : '');
+    const targetPath = `#${raw.serial}${relPath ? `/${relPath}` : ''}`;
+
+    // 该作品在网格里的唯一身份标识 keyOf(item) = `${item.dir}/${item.name}`
+    const focusKey = raw.key || `${raw.dir || ''}/${raw.name}`;
+
+    openInFiles({ kind: 'path', path: targetPath, focusKey });
     void router.push('/');
 }
 

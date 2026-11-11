@@ -7,8 +7,8 @@ import { FXAAPass } from 'three/examples/jsm/postprocessing/FXAAPass.js';
 import { mergeGeometries } from 'three/examples/jsm/utils/BufferGeometryUtils.js';
 import type { TunnelCover, TunnelOptions, TunnelController } from './types';
 
-const TS = 384; // 纹理数组单层分辨率 (384x384 RGBA，96层约45MB显存，极致平衡画质与显存)
-const MAX_TEXTURE_LAYERS = 96;
+const TS = 384; // 纹理数组单层分辨率 (384x384 RGBA，128层约60MB显存，极致平衡画质与显存)
+const MAX_TEXTURE_LAYERS = 128;
 
 /**
  * 根据图像的原始宽高比，计算 3D 空间的 instance 缩放矩阵比例 (scaleX, scaleY)
@@ -350,11 +350,16 @@ export function createAlbumCoverTunnel(
                 vec3 L = normalize(vec3(-.45, .75, .5));
                 vec3 c;
                 if (vN.z > .5) {
-                    // 正面：原画纯净高清呈现，无噪点、无色散、无刺眼强光
+                    // 正面：原画纯净呈现，对高亮度封面进行保护，防止过曝
                     c = cover(vUv, vLook.z);
+                    float luma = dot(c, vec3(0.299, 0.587, 0.114));
+                    // 扫光高光仅在暗部或中等亮度区域呈现细腻反光；若封面本身为亮白区域，大幅减弱扫光，避免泛白刺眼
                     float sweep = fract(uTime * .07 + vPh) * 2.6 - .8;
                     float band = exp(-pow((vUv.x * .7 + (1. - vUv.y) * .3) - sweep, 2.) * 90.);
-                    c += vec3(1., .95, 1.) * band * (.02 + .06 * vLook.w);
+                    float sheenFactor = (1.0 - smoothstep(0.65, 0.95, luma)) * (0.012 + 0.03 * vLook.w);
+                    c += vec3(0.9, 0.88, 1.0) * band * sheenFactor;
+                    // 将正面原色峰值限制在 0.96 以内，确保绝不会击穿 Bloom 阈值导致整张封面亮瞎白屏
+                    c = min(c, vec3(0.96));
                 } else if (vN.z < -.5) {
                     c = vec3(.025, .022, .045);
                 } else {
@@ -387,7 +392,7 @@ export function createAlbumCoverTunnel(
     const composer = new EffectComposer(renderer, renderTarget);
     composer.addPass(new RenderPass(scene, camera));
 
-    const bloom = new UnrealBloomPass(new THREE.Vector2(960, 540), 0.16, 0.5, 0.92);
+    const bloom = new UnrealBloomPass(new THREE.Vector2(960, 540), 0.12, 0.4, 0.99);
     const origSetSize = bloom.setSize.bind(bloom);
     bloom.setSize = (w: number, h: number) => origSetSize(w / 2, h / 2);
     composer.addPass(bloom);
@@ -689,9 +694,28 @@ export function createAlbumCoverTunnel(
         const focusZ = camera.position.z - FOCUS;
         let focalCenter: CoverItem | null = null;
         let minCenterDist = 1e9;
+        const len = Math.max(1, Math.min(MAX_TEXTURE_LAYERS, coversList.length));
+
         for (const L of layers) {
-            while (L.z > camera.position.z - 1) L.z -= NL * D;
-            while (L.z < camera.position.z - 1 - NL * D) L.z += NL * D;
+            let wrapped = false;
+            while (L.z > camera.position.z - 1) {
+                L.z -= NL * D;
+                wrapped = true;
+            }
+            while (L.z < camera.position.z - 1 - NL * D) {
+                L.z += NL * D;
+                wrapped = true;
+            }
+            if (wrapped) {
+                // 当层在隧道深处（雾气完全遮蔽处）发生回环重置时，根据其在无限隧道中的绝对层序 kAbs 重新映射封面纹理，
+                // 彻底打破 14 层回环重复看固定几个专辑的限制，实现无限漫游全库海量专辑！
+                const kAbs = Math.max(0, Math.round(-L.z / D));
+                for (const c of L.items) {
+                    if (!c.fl) {
+                        c.tex = keyAt(c.gridX, c.gridY, kAbs, len);
+                    }
+                }
+            }
             const cCenter = centerOf(L);
             if (cCenter) {
                 const dist = Math.abs(L.z - focusZ);
@@ -985,7 +1009,8 @@ export function createAlbumCoverTunnel(
             const textureLayers = Math.min(MAX_TEXTURE_LAYERS, items.length);
             const len = Math.max(1, textureLayers);
             covers.forEach((c) => {
-                c.tex = c.gridX === 0 && c.gridY === 0 && c.L.k === 0 ? 0 : keyAt(c.gridX, c.gridY, c.L.k, len);
+                const kAbs = Math.max(0, Math.round(-c.L.z / D));
+                c.tex = c.gridX === 0 && c.gridY === 0 && kAbs === 0 ? 0 : keyAt(c.gridX, c.gridY, kAbs, len);
             });
 
             isLoaded = true;

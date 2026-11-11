@@ -11,11 +11,11 @@
 import { ref } from 'vue';
 
 export type FileTarget =
-    | { kind: 'path'; path: string; nonce: number }
+    | { kind: 'path'; path: string; focusKey?: string; nonce: number }
     | { kind: 'playlist'; id: string; name: string; nonce: number };
 
 export type TargetInput =
-    | { kind: 'path'; path: string }
+    | { kind: 'path'; path: string; focusKey?: string }
     | { kind: 'playlist'; id: string; name: string };
 
 const pending = ref<FileTarget | null>(null);

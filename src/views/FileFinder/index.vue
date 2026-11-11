@@ -1273,7 +1273,7 @@ const onCursorConfirm = (item: WiredFileInfo) => {
  * ⚠️ 必须显式归零滚动：NavEntry.scrollY=0 只是数字，容器 scrollTop 不会自己归零 ⇒ 进新屏会停在上一屏的偏移（与面包屑矛盾）。
  * ⚠️ 归零要在取数之前（内容没渲染时 scrollTo 会被 clamp 或作用在旧内容上）。
  */
-const enterScreen = (path: string, mode: OpenMode = 'cover', pl?: NavEntry['pl'], keepFlat?: boolean) => {
+const enterScreen = (path: string, mode: OpenMode = 'cover', pl?: NavEntry['pl'], keepFlat?: boolean, focusKey?: string) => {
     // 进任何一屏之前先保证栈底是首页（2026-11-11）：冷启动直接吃一个跨页跳转时，
     // 栈里原本一条都没有 ⇒ 那一屏会变成"第 0 条"，于是它**后面没有首页可回**。
     ensureHome();
@@ -1338,7 +1338,16 @@ const enterScreen = (path: string, mode: OpenMode = 'cover', pl?: NavEntry['pl']
          * 失败时**不许**标记：那时画面仍是上一屏的内容，给它拍快照就是记错人。
          */
         if (!failKind.value) nav.markShown();
-        void nextTick(() => imageBox.value?.scrollTo(0, 0));
+        if (focusKey) {
+            void nextTick(() => {
+                revealAndFlash(focusKey);
+                setTimeout(() => {
+                    focusCursor(focusKey);
+                }, 80);
+            });
+        } else {
+            void nextTick(() => imageBox.value?.scrollTo(0, 0));
+        }
     });
 }
 
@@ -1731,15 +1740,18 @@ const onCtxClearNav = () => {
  * `mode` 仍然不看：那是"这条记录当初怎么被扫出来的"（缓存记录的属性），
  * 不该决定"导航长什么样"。三条入口一律 `'cover'`。
  */
-const openHistory = (path: string) => {
+const openHistory = (path: string, focusKey?: string) => {
     const norm = (p: string) => (p || '').replace(/\\/g, '/').replace(/\/+$/, '').toLowerCase();
-    // 已经处于该目录：不重复处理/取数，直接保留当前展示
+    // 已经处于该目录：不重复处理/取数，直接保留当前展示并定位高亮
     if (norm(currentPath.value) === norm(path)) {
+        if (focusKey) {
+            void nextTick(() => revealAndFlash(focusKey));
+        }
         return;
     }
     // 若当前为 flat 模式，从缓存记录打开另一根目录时沿用 flat 模式
     const wasFlat = isFlatView.value;
-    enterScreen(path, 'cover', undefined, wasFlat);
+    enterScreen(path, 'cover', undefined, wasFlat, focusKey);
 };
 
 /**
@@ -2189,7 +2201,7 @@ onActivated(() => {
         if (atHome.value) void reloadHome();
         return;
     }
-    if (t.kind === 'path') openHistory(t.path);
+    if (t.kind === 'path') openHistory(t.path, t.focusKey);
     else enterPlaylist(t.id, t.name);
 });
 

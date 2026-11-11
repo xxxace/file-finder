@@ -96,7 +96,7 @@
                         <template #icon>
                             <n-icon :component="PlayOutline" />
                         </template>
-                        预览 / 播放
+                        播放
                     </n-button>
                     <n-button
                         v-if="activeCover.raw?.dir"

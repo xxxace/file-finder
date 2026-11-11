@@ -745,6 +745,8 @@ export interface TunnelCoverItem {
     id: string;
     name: string;
     dir: string;
+    relPath: string;
+    key: string;
     serial: string;
     sig: string;
     type: string;
@@ -787,6 +789,8 @@ export function collectTunnelCovers(
                 id: `${doc.serial}:${it.dir || ''}/${it.name}`,
                 name: it.name,
                 dir: it.dir || '',
+                relPath: doc.relPath || '',
+                key: `${it.dir || ''}/${it.name}`,
                 serial: doc.serial,
                 sig: it.sig,
                 type: it.type,
