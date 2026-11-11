@@ -4,7 +4,7 @@ import crypto from 'node:crypto';
 import os from 'node:os';
 import config from '../config';
 import path from 'node:path';
-import { initBinStore, putBin } from '../utils/binStore';
+import { initBinStore, putBin, hasBin, thumbNameOf } from '../utils/binStore';
 import { encryptLine, decryptLine } from '../utils/cacheCrypto';
 import dayjs from 'dayjs';
 import type { FileInfo } from './index';
@@ -739,6 +739,72 @@ export function compact(): Promise<void> {
     return new Promise((resolve, reject) => {
         nedb.compactDatafile((err) => (err ? reject(err) : resolve()));
     });
+}
+
+export interface TunnelCoverItem {
+    id: string;
+    name: string;
+    dir: string;
+    serial: string;
+    sig: string;
+    type: string;
+    ext?: string;
+    size?: number;
+    files?: FileInfo['files'];
+}
+
+/**
+ * 纯内存聚合：从缓存行中提取所有带有有效封面（有 sig 且本地缩略图存在）的非目录项，
+ * 支持按盘符过滤并去重。
+ */
+export function collectTunnelCovers(
+    rows: SearchCache[],
+    hasBinFn: (name: string) => boolean,
+    serial?: string,
+): TunnelCoverItem[] {
+    const seen = new Set<string>();
+    const items: TunnelCoverItem[] = [];
+
+    for (const doc of rows) {
+        if (serial && doc.serial !== serial) continue;
+        if (!Array.isArray(doc.data)) continue;
+
+        for (const it of doc.data) {
+            if (!it.sig || it.isDirectory || it.type === 'folder') continue;
+            const thumbName = thumbNameOf(it.sig);
+            if (!thumbName || !hasBinFn(thumbName)) continue;
+
+            const key = `${doc.serial}:${it.dir || ''}/${it.name}`.toLowerCase();
+            if (seen.has(key)) continue;
+            seen.add(key);
+
+            items.push({
+                id: `${doc.serial}:${it.dir || ''}/${it.name}`,
+                name: it.name,
+                dir: it.dir || '',
+                serial: doc.serial,
+                sig: it.sig,
+                type: it.type,
+                ext: it.ext,
+                size: it.size,
+                files: it.files,
+            });
+        }
+    }
+
+    return items;
+}
+
+/**
+ * 纯内存查询全库或指定盘符所有可用的封面条目（零读盘）。
+ */
+export async function findAllCachedCovers(serial?: string): Promise<TunnelCoverItem[]> {
+    assertUsable();
+    const query = serial ? { serial } : {};
+    const rows = await new Promise<SearchCache[]>((resolve, reject) => {
+        nedb.find(query, (err: Error | null, docs: unknown[]) => (err ? reject(err) : resolve(docs as SearchCache[])));
+    });
+    return collectTunnelCovers(rows, (name) => hasBin(name), serial);
 }
 
 export default nedb;

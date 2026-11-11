@@ -21,7 +21,7 @@ import type { DiskRegistry } from '../utils/driveIdentity';
 import { DIR_COVER_FILES, isDirCover } from './dirCover';
 import {
     BEFORE_RESTORE_PATH, CACHE_DB_PATH, CACHE_VERSION, beginRestore, cacheBackup, endRestore,
-    exportCompactSnapshot, exportSnapshotPlain, findCache, findSubtreeLeafItems, insertCache, loadMeta, loadSubtreeBytes,
+    exportCompactSnapshot, exportSnapshotPlain, findAllCachedCovers, findCache, findSubtreeLeafItems, insertCache, loadMeta, loadSubtreeBytes,
     migrateLegacyThumbs, readExternalCache, reloadFromDisk, removeCache,
 } from './nedb';
 import type { CacheMeta, OpenMode, SearchCache } from './nedb';
@@ -2078,6 +2078,11 @@ route('/backup', backup);
 route('/backupToFile', backupToFile);
 route('/restoreFromFile', restoreFromFile);
 route('/mergeCache', mergeCache);
+route('/getAllCovers', async (req: Req, res: http.ServerResponse) => {
+    const serial = req.params?.get('serial') || undefined;
+    const items = await findAllCachedCovers(serial);
+    sendJson(res, { code: 200, data: { items, total: items.length } });
+});
 // 把只读锚点解析成"此刻"的完整路径 —— 只读层双击打开原文件时走它。
 // 见 resolveAnchorController 的注释：修的是"用地址形态当判据"这个设计缺陷。
 route('/resolveAnchor', resolveAnchorController);
