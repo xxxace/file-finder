@@ -121,6 +121,7 @@ import { ref, onMounted, onBeforeUnmount, onActivated, onDeactivated, watch } fr
 import { NButton, NTag, NIcon } from 'naive-ui';
 import { PlayOutline, FolderOpenOutline } from '@vicons/ionicons5';
 import { createAlbumCoverTunnel } from './engine';
+import { dedupeCovers } from './types';
 import type { TunnelCover, TunnelController } from './types';
 import { formatBytes } from '@/utils';
 import { playSfx } from '@/utils/sfx';
@@ -292,17 +293,6 @@ onDeactivated(() => {
     controller?.setActive(false);
 });
 
-function dedupeCoversBySig(items: TunnelCover[]): TunnelCover[] {
-    const seen = new Set<string>();
-    return items.filter((it) => {
-        const sig = it.sig || it.raw?.sig;
-        if (!sig) return true;
-        if (seen.has(sig)) return false;
-        seen.add(sig);
-        return true;
-    });
-}
-
 onMounted(() => {
     if (!stageRef.value) return;
 
@@ -327,7 +317,7 @@ onMounted(() => {
     });
 
     if (props.items.length) {
-        void controller.setCovers(dedupeCoversBySig(props.items));
+        void controller.setCovers(dedupeCovers(props.items));
     }
 
     setTimeout(() => {
@@ -339,7 +329,7 @@ watch(
     () => props.items,
     (next) => {
         if (controller) {
-            void controller.setCovers(dedupeCoversBySig(next));
+            void controller.setCovers(dedupeCovers(next));
         }
     },
     { deep: false },

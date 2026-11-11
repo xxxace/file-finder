@@ -7,8 +7,8 @@ import { FXAAPass } from 'three/examples/jsm/postprocessing/FXAAPass.js';
 import { mergeGeometries } from 'three/examples/jsm/utils/BufferGeometryUtils.js';
 import type { TunnelCover, TunnelOptions, TunnelController } from './types';
 
-const TS = 384; // 纹理数组单层分辨率 (384x384 RGBA，128层约60MB显存，极致平衡画质与显存)
-const MAX_TEXTURE_LAYERS = 128;
+const TS = 384; // 纹理数组单层分辨率 (384x384 RGBA，256层约150MB显存，极致平衡画质与显存)
+const MAX_TEXTURE_LAYERS = 256;
 
 /**
  * 根据图像的原始宽高比，计算 3D 空间的 instance 缩放矩阵比例 (scaleX, scaleY)
@@ -187,6 +187,7 @@ export function createAlbumCoverTunnel(
         L: { k: number; z: number; items: CoverItem[] };
         gridX: number;
         gridY: number;
+        slotIndex: number;
         tex: number;
         hx: number;
         hy: number;
@@ -208,37 +209,43 @@ export function createAlbumCoverTunnel(
     const covers: CoverItem[] = [];
     const layers: { k: number; z: number; items: CoverItem[] }[] = [];
 
-    const hash3D = (i: number, j: number, k: number): number => {
-        let h = (i * 374761393 + j * 668265263 + k * 1013904223) | 0;
-        h = Math.imul(h ^ (h >>> 13), 1274126177);
-        return (h ^ (h >>> 16)) >>> 0;
-    };
-
-    const keyAt = (i: number, j: number, k: number, len: number) => {
+    const keyAt = (i: number, j: number, kAbs: number, len: number, slotIndex: number) => {
         if (len <= 1) return 0;
         // 中心焦点封面（i=0, j=0）按层顺序循环映射，确保沿漫游轴线每一层的中心封面都绝不重复
         if (i === 0 && j === 0) {
-            return Math.floor(k / 2) % len;
+            return Math.floor(kAbs / 2) % len;
         }
-        // 周边网格封面使用高熵哈希，防止相邻卡片出现相同的封面图案
-        const h = hash3D(i, j, k);
-        return h % len;
+        const centerTex = Math.floor(kAbs / 2) % len;
+        if (kAbs % 2 === 0) {
+            // 偶数层：中心封面为 centerTex，壁面卡片避开 centerTex 且各自分配不同槽位，数学保证 0 碰撞
+            const step = 1 + (Math.max(0, slotIndex) % (len - 1));
+            return (centerTex + step) % len;
+        } else {
+            // 奇数层：无中心卡片，壁面卡片整体对半偏移，展现不同封面群
+            const oddBase = (Math.floor(kAbs / 2) + Math.floor(len / 2)) % len;
+            return (oddBase + Math.max(0, slotIndex)) % len;
+        }
     };
 
     for (let k = 0; k < NL; k++) {
         const L = { k, z: -k * D, items: [] as CoverItem[] };
         layers.push(L);
+        let wallSlot = 0;
         for (let j = -5; j <= 5; j++) {
             for (let i = -7; i <= 7; i++) {
                 if ((((i + j + k) % 2) + 2) % 2) continue; // 三维棋盘格
                 const hh = Math.abs(Math.sin(i * 12.9898 + j * 78.233 + k * 37.719) * 43758.5453) % 1;
                 if (Math.max(Math.abs(i), Math.abs(j)) > 1 && hh < 0.42) continue; // 随机镂空
 
+                const isCenter = i === 0 && j === 0;
+                const slotIndex = isCenter ? -1 : wallSlot++;
+
                 const c: CoverItem = {
                     L,
                     gridX: i,
                     gridY: j,
-                    tex: i === 0 && j === 0 && k === 0 ? 0 : 0,
+                    slotIndex,
+                    tex: 0,
                     hx: i * G,
                     hy: j * G,
                     x: i * G,
@@ -707,13 +714,17 @@ export function createAlbumCoverTunnel(
                 wrapped = true;
             }
             if (wrapped) {
-                // 当层在隧道深处（雾气完全遮蔽处）发生回环重置时，根据其在无限隧道中的绝对层序 kAbs 重新映射封面纹理，
-                // 彻底打破 14 层回环重复看固定几个专辑的限制，实现无限漫游全库海量专辑！
+                // 当层在隧道深处（雾气完全遮蔽处）发生回环重置时：
+                // 1. 将层内所有卡片重置回标准网格位置，清除之前点击对焦产生的位移残留，杜绝重叠
+                // 2. 根据其在无限隧道中的绝对层序 kAbs 重新映射封面纹理，彻底消除重复
                 const kAbs = Math.max(0, Math.round(-L.z / D));
                 for (const c of L.items) {
-                    if (!c.fl) {
-                        c.tex = keyAt(c.gridX, c.gridY, kAbs, len);
-                    }
+                    c.hx = c.gridX * G;
+                    c.hy = c.gridY * G;
+                    c.x = c.hx;
+                    c.y = c.hy;
+                    c.fl = null;
+                    c.tex = keyAt(c.gridX, c.gridY, kAbs, len, c.slotIndex);
                 }
             }
             const cCenter = centerOf(L);
@@ -943,6 +954,18 @@ export function createAlbumCoverTunnel(
     doc.addEventListener('visibilitychange', syncVisibility);
 
     /* ---------------- 纹理构建与增量更新 ---------------- */
+    async function loadImg(src: string): Promise<HTMLImageElement | null> {
+        try {
+            const img = new Image();
+            img.crossOrigin = 'anonymous';
+            img.src = src;
+            await img.decode();
+            return img;
+        } catch {
+            return null;
+        }
+    }
+
     async function buildArrayTexture(covers: TunnelCover[], version: number): Promise<THREE.DataArrayTexture> {
         const count = Math.min(MAX_TEXTURE_LAYERS, Math.max(1, covers.length));
         const data = new Uint8Array(TS * TS * 4 * count);
@@ -954,31 +977,34 @@ export function createAlbumCoverTunnel(
 
         layerAspects.fill(1.0);
 
-        for (let i = 0; i < count; i++) {
+        const BATCH_SIZE = 16;
+        for (let b = 0; b < count; b += BATCH_SIZE) {
             if (isDead || version !== loadVersion) break;
-            const item = covers[i];
-            if (item && item.src) {
-                try {
-                    const img = new Image();
-                    img.crossOrigin = 'anonymous';
-                    img.src = item.src;
-                    await img.decode();
-                    if (isDead || version !== loadVersion) break;
+            const batchEnd = Math.min(count, b + BATCH_SIZE);
+            const batchItems = covers.slice(b, batchEnd);
+            const loadedImgs = await Promise.all(
+                batchItems.map((item) => (item?.src ? loadImg(item.src) : Promise.resolve(null))),
+            );
+            if (isDead || version !== loadVersion) break;
+
+            for (let k = 0; k < loadedImgs.length; k++) {
+                const i = b + k;
+                const item = batchItems[k];
+                const img = loadedImgs[k];
+                if (img) {
                     if (img.naturalWidth && img.naturalHeight) {
                         layerAspects[i] = img.naturalWidth / img.naturalHeight;
                     }
                     g.clearRect(0, 0, TS, TS);
                     g.drawImage(img, 0, 0, TS, TS);
                     data.set(g.getImageData(0, 0, TS, TS).data, i * TS * TS * 4);
-                    continue;
-                } catch {
-                    if (isDead || version !== loadVersion) break;
+                } else {
+                    const placeholder = createPlaceholderCanvas(i, item?.title || `Cover ${i + 1}`);
+                    g.clearRect(0, 0, TS, TS);
+                    g.drawImage(placeholder, 0, 0, TS, TS);
+                    data.set(g.getImageData(0, 0, TS, TS).data, i * TS * TS * 4);
                 }
             }
-            const placeholder = createPlaceholderCanvas(i, item?.title || `Cover ${i + 1}`);
-            g.clearRect(0, 0, TS, TS);
-            g.drawImage(placeholder, 0, 0, TS, TS);
-            data.set(g.getImageData(0, 0, TS, TS).data, i * TS * TS * 4);
         }
 
         const t = new THREE.DataArrayTexture(data, TS, TS, count);
@@ -1010,7 +1036,7 @@ export function createAlbumCoverTunnel(
             const len = Math.max(1, textureLayers);
             covers.forEach((c) => {
                 const kAbs = Math.max(0, Math.round(-c.L.z / D));
-                c.tex = c.gridX === 0 && c.gridY === 0 && kAbs === 0 ? 0 : keyAt(c.gridX, c.gridY, kAbs, len);
+                c.tex = keyAt(c.gridX, c.gridY, kAbs, len, c.slotIndex);
             });
 
             isLoaded = true;

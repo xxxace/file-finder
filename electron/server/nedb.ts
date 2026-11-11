@@ -755,6 +755,23 @@ export interface TunnelCoverItem {
     files?: FileInfo['files'];
 }
 
+const GENERIC_COVER_NAMES = new Set([
+    'cover', 'folder', 'front', 'avatar', 'thumb', 'thumbnail',
+    'poster', 'default', 'preview', 'fanart', 'back', 'cd', 'disc',
+]);
+
+export function workKeyOf(it: { name?: string; dir?: string }): string {
+    const raw = (it.name || '').trim();
+    const base = raw.replace(/\.[^./\\]+$/, '').trim().toLowerCase();
+    if (base && !GENERIC_COVER_NAMES.has(base)) {
+        return base;
+    }
+    const dir = (it.dir || '').replace(/\\/g, '/').replace(/\/+$/, '');
+    const parts = dir.split('/').filter(Boolean);
+    const leaf = parts.length > 0 ? parts[parts.length - 1] : '';
+    return leaf ? leaf.replace(/\.[^./\\]+$/, '').trim().toLowerCase() : base || 'untitled';
+}
+
 /**
  * 纯内存聚合：从缓存行中提取所有带有有效封面（有 sig 且本地缩略图存在）的非目录项，
  * 支持按盘符过滤并去重。
@@ -765,6 +782,7 @@ export function collectTunnelCovers(
     serial?: string,
 ): TunnelCoverItem[] {
     const seenSig = new Set<string>();
+    const seenWork = new Set<string>();
     const seenPath = new Set<string>();
     const items: TunnelCoverItem[] = [];
 
@@ -777,12 +795,18 @@ export function collectTunnelCovers(
             const thumbName = thumbNameOf(it.sig);
             if (!thumbName || !hasBinFn(thumbName)) continue;
 
-            // 图像指纹去重：同一张专辑的多首单曲具有相同的封面 sig，只保留一个代表项，确保画廊中专辑封面完全不重复
+            // 1. 图像指纹去重：同一张专辑的多首单曲具有相同的封面 sig，只保留一个代表项
             if (seenSig.has(it.sig)) continue;
-            seenSig.add(it.sig);
+
+            // 2. 作品/专辑唯一标识去重：同一部作品在不同备份目录、temp 目录、新建文件夹中多次收录时只保留一份
+            const wk = workKeyOf(it);
+            if (wk && seenWork.has(wk)) continue;
 
             const pathKey = `${doc.serial}:${it.dir || ''}/${it.name}`.toLowerCase();
             if (seenPath.has(pathKey)) continue;
+
+            seenSig.add(it.sig);
+            if (wk) seenWork.add(wk);
             seenPath.add(pathKey);
 
             items.push({

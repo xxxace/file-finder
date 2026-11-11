@@ -44,6 +44,7 @@ import { useRouter } from 'vue-router';
 import { NSpin } from 'naive-ui';
 import { ipcRenderer } from 'electron';
 import AlbumCoverTunnel from '@/components/AlbumCoverTunnel/AlbumCoverTunnel.vue';
+import { dedupeCovers } from '@/components/AlbumCoverTunnel/types';
 import type { TunnelCover } from '@/components/AlbumCoverTunnel/types';
 import { API_BASE, getAction, apiUrl } from '@/utils/request';
 import { openInFiles } from '@/views/FileFinder/target';
@@ -111,7 +112,7 @@ async function loadAllCovers(serial?: string) {
                 src: apiUrl(`${API_BASE}/thumb?k=${encodeURIComponent(`t-${item.sig}.enc`)}`),
                 raw: item,
             }));
-            covers.value = shuffle(list);
+            covers.value = shuffle(dedupeCovers(list));
         } else {
             covers.value = [];
         }
