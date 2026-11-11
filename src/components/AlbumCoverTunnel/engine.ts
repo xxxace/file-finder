@@ -252,11 +252,11 @@ export function createAlbumCoverTunnel(
     }
 
     const N = covers.length;
-    const TH = S * 0.12;
+    const TH = S * 0.045; // 超薄精致卡片厚度，消除粗厚积木边框感
 
     // 几何合并：软阴影面 + 盒子
     const shadowG = new THREE.PlaneGeometry(S * 1.6, S * 1.6);
-    shadowG.translate(0.28, -0.42, -TH * 0.5 - 0.35);
+    shadowG.translate(0.28, -0.42, -TH * 0.5 - 0.2);
     const boxG = new THREE.BoxGeometry(S, S, TH, 1, 1, 1);
 
     const partOf = (g: THREE.BufferGeometry, v: number) => {
@@ -322,7 +322,7 @@ export function createAlbumCoverTunnel(
             float h21(vec2 p){ return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453); }
             vec3 cover(vec2 uv, float bias){ return pow(texture(map, vec3(uv.x, 1. - uv.y, vTex), bias).rgb, vec3(2.2)); }
             void main(){
-                if (vLook.y < .01 || vFog > .985) discard;
+                if (vLook.y < .01 || vFog > .99) discard;
                 // 软投影
                 if (vPart < .5) {
                     vec2 q = abs(vUv - .5) - .5 / 1.6 * .92;
@@ -340,36 +340,16 @@ export function createAlbumCoverTunnel(
                 vec3 L = normalize(vec3(-.45, .75, .5));
                 vec3 c;
                 if (vN.z > .5) {
-                    // 正面：封面 + 倒角 + 覆膜流光 + 纸张颗粒
+                    // 正面：原画纯净呈现，去除假倒角、伪暗边与描边压边效果
                     c = cover(vUv, vLook.z);
-                    vec2 e2 = min(vUv, 1. - vUv); float e = min(e2.x, e2.y);
-                    float lip = 1. - smoothstep(.0, .014, e);
-                    float tl = clamp(.5 + (vUv.y - vUv.x) * .9, 0., 1.);
-                    c = mix(c, c * .55 + vec3(.55, .52, .70) * tl * .6, lip * .8);
-                    c *= 1. - .35 * smoothstep(.022, .014, e) * smoothstep(.010, .016, e);
-                    c *= .9 + .1 * smoothstep(.0, .35, e);
-                    c += (h21(floor(vUv * 700.)) - .5) * .018;
                     float sweep = fract(uTime * .07 + vPh) * 2.6 - .8;
                     float band = exp(-pow((vUv.x * .7 + (1. - vUv.y) * .3) - sweep, 2.) * 90.);
-                    c += vec3(1., .95, 1.) * band * (.06 + .22 * vLook.w);
-                    c += uRim * fres * .25;
+                    c += vec3(1., .95, 1.) * band * (.035 + .14 * vLook.w);
                 } else if (vN.z < -.5) {
                     c = vec3(.025, .022, .045);
                 } else {
-                    // 侧面厚度：亚克力亮棱 + 纸芯微纹
-                    float f = vN.x > .5 ? 1. - vUv.x : vN.x < -.5 ? vUv.x : vN.y > .5 ? 1. - vUv.y : vUv.y;
-                    float along = abs(vN.x) > .5 ? vUv.y : vUv.x;
-                    vec2 edgeUv = vN.x > .5 ? vec2(.985, along) : vN.x < -.5 ? vec2(.015, along) : vN.y > .5 ? vec2(along, .985) : vec2(along, .015);
-                    vec3 ink = cover(edgeUv, 2.);
-                    vec3 paper = vec3(.80, .77, .88) * (.86 + .14 * sin(f * 190.)) * (.94 + .06 * h21(vec2(floor(f * 60.), floor(along * 400.))));
-                    vec3 back = vec3(.06, .055, .10);
-                    c = back;
-                    c = mix(c, paper, smoothstep(.13, .16, f));
-                    c = mix(c, ink * .85, smoothstep(.74, .77, f));
-                    c = mix(c, ink * .5 + vec3(.55, .55, .7) * .45, smoothstep(.90, .92, f));
-                    c += vec3(.9, .85, 1.) * .35 * (smoothstep(.975, 1., f) + (1. - smoothstep(.0, .03, f)) * .4);
-                    c *= .55 + .55 * max(dot(vN, L), 0.);
-                    c += uRim * fres * .45;
+                    // 侧面：超薄沉浸暗色侧壁，不添加抢眼的亮色边框条纹
+                    c = vec3(.045, .04, .07) * (.65 + .35 * max(dot(vN, L), 0.));
                 }
                 c *= vLook.x;
                 vec2 sp = .5 + (gl_FragCoord.xy / uRes - .5) * .382;
@@ -574,7 +554,7 @@ export function createAlbumCoverTunnel(
             x1,
             y1,
             p: 0,
-            dur: 1.15,
+            dur: 0.95,
             side: side * (Math.random() < 0.5 ? 1 : -1),
         };
         c.hx = x1;
@@ -590,10 +570,10 @@ export function createAlbumCoverTunnel(
             fly(occ, t.hx, t.hy, -1);
         }
         fly(t, 0, 0, 1);
+        heroC = t;
         goTo = travel + (camera.position.z - FOCUS - L.z);
         vel = 0;
         idleTime = 0;
-        heroAmt = 0;
         if (notify && coversList[t.tex]) {
             options.onSelect?.(coversList[t.tex]);
         }
@@ -695,14 +675,15 @@ export function createAlbumCoverTunnel(
 
         const newHero = heroL ? centerOf(heroL) : null;
         const settled = newHero && Math.abs(vel) < 0.6 && Math.abs(heroL!.z - focusZ) < 0.25;
-        if (newHero !== heroC && settled) {
+        if (goTo === null && newHero !== heroC && settled) {
             heroC = newHero;
             heroAmt = 0;
             if (heroC && coversList[heroC.tex]) {
                 options.onSelect?.(coversList[heroC.tex]);
             }
         }
-        heroAmt = damp(heroAmt, settled && newHero === heroC ? 1 : 0, settled ? 2.8 : 7, dt);
+        const targetHeroAmt = (heroC && (settled || goTo !== null || (heroC.fl && heroC.fl.side > 0))) ? 1 : 0;
+        heroAmt = damp(heroAmt, targetHeroAmt, settled ? 3.0 : 3.5, dt);
 
         if (!isDragging) pick();
         else hovered = null;
@@ -745,12 +726,12 @@ export function createAlbumCoverTunnel(
                 const dx = F.x1 - F.x0;
                 const dy = F.y1 - F.y0;
                 const len = Math.hypot(dx, dy) || 1;
-                const amp = Math.min(3.2, len * 0.32) * F.side;
+                const amp = Math.min(2.0, len * 0.25) * F.side;
                 c.x = F.x0 + dx * e + (-dy / len) * bump * amp;
                 c.y = F.y0 + dy * e + (dx / len) * bump * amp;
-                arcZ = bump * (F.side > 0 ? 2.6 : 1.2);
-                rz = bump * 0.22 * F.side;
-                ryF = bump * 0.35 * Math.sign(dx || 1);
+                arcZ = bump * (F.side > 0 ? 0.35 : 0.2);
+                rz = bump * 0.12 * F.side;
+                ryF = bump * 0.2 * Math.sign(dx || 1);
                 if (F.p >= 1) c.fl = null;
             } else {
                 c.x = damp(c.x, c.hx + px, 4, dt);
@@ -759,18 +740,21 @@ export function createAlbumCoverTunnel(
 
             const r = Math.hypot(c.x / 17, c.y / 10.5);
             const ahead = 1 - smooth(0.5, 2.4, dz);
-            const fog = Math.min(1, (1 - Math.exp(-Math.max(0, -dz - 0.8 * D) / (4.6 * D))) / 0.96);
-            const depth = dz < 0 ? 1 - 0.72 * smooth(0, 4 * D, -dz) : 1;
-            let b = 0.86 * depth * (1 - 0.7 * smooth(0.15, 1, r));
+            // 大气透视雾化：近景 2.5 层保持完全清澈剔透，深处逐渐融入星云背景，远景绝不突兀消失
+            const fogDist = Math.max(0, -dz - 2.5 * D);
+            const fog = Math.min(0.88, 1 - Math.exp(-fogDist / (8.5 * D)));
+            // 深度光感衰减：宽广的动态范围，远景依然保留清晰通透的轮廓
+            const depth = dz < 0 ? 1 - 0.4 * smooth(D, 11 * D, -dz) : 1;
+            let b = 0.95 * depth * (1 - 0.5 * smooth(0.2, 1.2, r));
             b = b + (1.02 - b) * isHero;
             b = b + (1.0 - b) * c.lift * 0.85;
 
             c.b = b;
             c.o = ahead;
             c.fog = fog;
-            const s = 1 + 0.7 * isHero + 0.14 * c.lift;
+            const s = 1 + 0.65 * isHero + 0.14 * c.lift;
             c.s = s;
-            c.z = L.z + 1.3 * isHero + 2.0 * c.lift + arcZ + Math.sin(t * 0.6 + c.ph) * 0.06;
+            c.z = L.z + 1.2 * isHero + 2.0 * c.lift + arcZ + Math.sin(t * 0.6 + c.ph) * 0.06;
             c.zo = c.z - L.z;
 
             const tgx = (c === hovered ? -look.y * 0.35 : 0) + c.y * 0.012;
@@ -778,7 +762,9 @@ export function createAlbumCoverTunnel(
             c.rx = damp(c.rx, tgx, 6, dt);
             c.ry = damp(c.ry, tgy, 6, dt);
 
-            const blur = Math.min(4.5, Math.abs(dz) * 0.3) * (1 - Math.max(isHero, c.lift));
+            // 景深虚化：焦平面周围 8 个单位内（1.5层）保持绝对清晰，深处渐进柔焦，上限 1.8（约120px清晰度）绝无马赛克感
+            const distFromFocus = Math.max(0, Math.abs(dz) - 8);
+            const blur = Math.min(1.8, Math.pow(distFromFocus / 24, 1.2) * 1.8) * (1 - Math.max(isHero, c.lift));
             E.set(c.rx, c.ry + ryF, Math.sin(t * 0.3 + c.ph) * 0.012 + rz);
             Q.setFromEuler(E);
             P.set(c.x, c.y, c.z);

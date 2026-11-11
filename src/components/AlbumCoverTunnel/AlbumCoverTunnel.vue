@@ -1,5 +1,12 @@
 <template>
-    <div ref="containerRef" class="tunnel-container" :class="{ 'is-fullscreen': isFullscreen }">
+    <div
+        ref="containerRef"
+        class="tunnel-container"
+        :class="{ 'is-fullscreen': isFullscreen }"
+        @mousemove="pingHudActivity"
+        @wheel="pingHudActivity"
+        @pointerdown="pingHudActivity"
+    >
         <!-- 3D WebGL 画布宿主容器 -->
         <div ref="stageRef" class="tunnel-stage"></div>
 
@@ -57,9 +64,14 @@
             </div>
         </Transition>
 
-        <!-- 底部焦点封面详情操作面板 -->
+        <!-- 底部焦点封面详情操作面板（统一设计规范，按活动状态显隐） -->
         <Transition name="slide-up">
-            <div v-if="activeCover" class="hud-bottom-card">
+            <div
+                v-if="activeCover && isHudActive"
+                class="hud-bottom-card"
+                @mouseenter="onCardMouseEnter"
+                @mouseleave="onCardMouseLeave"
+            >
                 <div class="card-thumb-wrap">
                     <img v-if="activeCover.src" :src="activeCover.src" class="card-thumb-img" alt="" />
                     <div v-else class="card-thumb-fallback"></div>
@@ -67,24 +79,36 @@
                 <div class="card-info">
                     <div class="card-title" :title="activeCover.title">{{ activeCover.title }}</div>
                     <div class="card-meta">
-                        <span v-if="activeCover.raw?.serial" class="meta-tag">{{ activeCover.raw.serial }}</span>
-                        <span v-if="activeCover.raw?.dir" class="meta-dir" :title="activeCover.raw.dir">{{ activeCover.raw.dir }}</span>
-                        <span v-if="activeCover.raw?.size" class="meta-size">{{ formatSize(activeCover.raw.size) }}</span>
+                        <n-tag v-if="activeCover.raw?.serial" size="small" :bordered="false" type="info">
+                            {{ activeCover.raw.serial }}
+                        </n-tag>
+                        <span v-if="activeCover.raw?.dir" class="meta-dir" :title="activeCover.raw.dir">
+                            {{ activeCover.raw.dir }}
+                        </span>
+                        <n-tag v-if="activeCover.raw?.size" size="small" :bordered="false">
+                            {{ formatSize(activeCover.raw.size) }}
+                        </n-tag>
                     </div>
                 </div>
                 <div class="card-actions">
-                    <button type="button" class="btn-primary" @click="handleSelect">
-                        <svg viewBox="0 0 24 24" class="btn-icon">
-                            <path fill="currentColor" d="M8 5v14l11-7z" />
-                        </svg>
-                        <span>预览 / 播放</span>
-                    </button>
-                    <button v-if="activeCover.raw?.dir" type="button" class="btn-secondary" title="在文件列表中定位" @click="handleNavigateDir">
-                        <svg viewBox="0 0 24 24" class="btn-icon">
-                            <path fill="currentColor" d="M10 4H4c-1.1 0-1.99.9-1.99 2L2 18c0 1.1.9 2 2 2h16c1.1 0 2-.9 2-2V8c0-1.1-.9-2-2-2h-8l-2-2z" />
-                        </svg>
-                        <span>定位目录</span>
-                    </button>
+                    <n-button type="primary" size="small" secondary @click="handleSelect">
+                        <template #icon>
+                            <n-icon :component="PlayOutline" />
+                        </template>
+                        预览 / 播放
+                    </n-button>
+                    <n-button
+                        v-if="activeCover.raw?.dir"
+                        size="small"
+                        secondary
+                        title="在文件列表中定位"
+                        @click="handleNavigateDir"
+                    >
+                        <template #icon>
+                            <n-icon :component="FolderOpenOutline" />
+                        </template>
+                        定位目录
+                    </n-button>
                 </div>
             </div>
         </Transition>
@@ -93,6 +117,8 @@
 
 <script setup lang="ts">
 import { ref, onMounted, onBeforeUnmount, onActivated, onDeactivated, watch } from 'vue';
+import { NButton, NTag, NIcon } from 'naive-ui';
+import { PlayOutline, FolderOpenOutline } from '@vicons/ionicons5';
 import { createAlbumCoverTunnel } from './engine';
 import type { TunnelCover, TunnelController } from './types';
 import { formatBytes } from '@/utils';
@@ -131,6 +157,37 @@ const fps = ref(60);
 const isPaused = ref(false);
 const isFullscreen = ref(false);
 const showHint = ref(true);
+
+const isHudActive = ref(true);
+let hudTimer: ReturnType<typeof setTimeout> | null = null;
+let isHoveringCard = false;
+
+function pingHudActivity() {
+    isHudActive.value = true;
+    if (hudTimer) {
+        clearTimeout(hudTimer);
+        hudTimer = null;
+    }
+    if (!isHoveringCard) {
+        hudTimer = setTimeout(() => {
+            isHudActive.value = false;
+        }, 2800);
+    }
+}
+
+function onCardMouseEnter() {
+    isHoveringCard = true;
+    isHudActive.value = true;
+    if (hudTimer) {
+        clearTimeout(hudTimer);
+        hudTimer = null;
+    }
+}
+
+function onCardMouseLeave() {
+    isHoveringCard = false;
+    pingHudActivity();
+}
 
 function formatSize(bytes?: number) {
     return formatBytes(bytes);
@@ -178,11 +235,14 @@ onDeactivated(() => {
 onMounted(() => {
     if (!stageRef.value) return;
 
+    pingHudActivity();
+
     controller = createAlbumCoverTunnel(stageRef.value, {
         theme: props.theme,
         autoTravel: true,
         onSelect: (item) => {
             activeCover.value = item;
+            pingHudActivity();
         },
         onHover: (item) => {
             if (item && item.id !== hoveredCover.value?.id) {
@@ -215,6 +275,10 @@ watch(
 );
 
 onBeforeUnmount(() => {
+    if (hudTimer) {
+        clearTimeout(hudTimer);
+        hudTimer = null;
+    }
     if (controller) {
         controller.destroy();
         controller = null;
@@ -384,22 +448,22 @@ onBeforeUnmount(() => {
     font-weight: 600;
 }
 
-/* 底部对焦卡片浮层 */
+/* 底部对焦卡片浮层（规范统一、距离底部 16px、支持鼠标活动激活/静止收起） */
 .hud-bottom-card {
     position: absolute;
-    bottom: 24px;
+    bottom: 16px;
     left: 50%;
     transform: translateX(-50%);
-    width: min(720px, calc(100% - 40px));
+    width: min(680px, calc(100% - 32px));
     display: flex;
     align-items: center;
     gap: 16px;
-    padding: 12px 18px;
-    background: rgba(16, 18, 32, 0.88);
+    padding: 10px 16px;
+    background: rgba(16, 18, 32, 0.9);
     backdrop-filter: blur(24px);
-    border: 1px solid rgba(255, 255, 255, 0.15);
-    border-radius: 16px;
-    box-shadow: 0 16px 48px rgba(0, 0, 0, 0.6), 0 0 0 1px rgba(168, 85, 247, 0.15);
+    border: 1px solid rgba(255, 255, 255, 0.12);
+    border-radius: 14px;
+    box-shadow: 0 16px 40px rgba(0, 0, 0, 0.6), 0 0 0 1px rgba(168, 85, 247, 0.12);
     z-index: 15;
 }
 
@@ -453,72 +517,18 @@ onBeforeUnmount(() => {
     color: rgba(255, 255, 255, 0.55);
 }
 
-.meta-tag {
-    padding: 1px 6px;
-    background: rgba(168, 85, 247, 0.2);
-    border: 1px solid rgba(168, 85, 247, 0.4);
-    border-radius: 4px;
-    color: #d8b4fe;
-    font-size: 10px;
-}
-
 .meta-dir {
     white-space: nowrap;
     overflow: hidden;
     text-overflow: ellipsis;
-    max-width: 280px;
-}
-
-.meta-size {
-    color: rgba(255, 255, 255, 0.4);
+    max-width: 260px;
 }
 
 .card-actions {
     display: flex;
     align-items: center;
-    gap: 10px;
+    gap: 8px;
     flex-shrink: 0;
-}
-
-.btn-primary,
-.btn-secondary {
-    display: inline-flex;
-    align-items: center;
-    gap: 6px;
-    padding: 8px 16px;
-    border-radius: 8px;
-    font-size: 13px;
-    font-weight: 500;
-    cursor: pointer;
-    transition: all 0.2s cubic-bezier(0.2, 0, 0, 1);
-}
-
-.btn-primary {
-    background: linear-gradient(135deg, #9333ea, #6366f1);
-    border: 1px solid rgba(255, 255, 255, 0.2);
-    color: #ffffff;
-    box-shadow: 0 4px 16px rgba(147, 51, 234, 0.4);
-}
-
-.btn-primary:hover {
-    filter: brightness(1.15);
-    transform: translateY(-1px);
-}
-
-.btn-secondary {
-    background: rgba(255, 255, 255, 0.08);
-    border: 1px solid rgba(255, 255, 255, 0.12);
-    color: #e2e8f0;
-}
-
-.btn-secondary:hover {
-    background: rgba(255, 255, 255, 0.15);
-    border-color: rgba(255, 255, 255, 0.25);
-}
-
-.btn-icon {
-    width: 14px;
-    height: 14px;
 }
 
 /* 动画过渡 */
@@ -534,12 +544,13 @@ onBeforeUnmount(() => {
 
 .slide-up-enter-active,
 .slide-up-leave-active {
-    transition: all 0.35s cubic-bezier(0.2, 0, 0, 1);
+    transition: all 0.35s cubic-bezier(0.16, 1, 0.3, 1);
 }
 
 .slide-up-enter-from,
 .slide-up-leave-to {
     opacity: 0;
-    transform: translate(-50%, 20px);
+    transform: translate(-50%, 20px) scale(0.97);
+    pointer-events: none;
 }
 </style>
