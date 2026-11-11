@@ -21,5 +21,6 @@ export interface TunnelController {
     setCovers: (covers: TunnelCover[]) => Promise<void>;
     togglePause: () => boolean;
     isPaused: () => boolean;
+    setActive: (active: boolean) => void;
     getActiveCover: () => TunnelCover | null;
 }

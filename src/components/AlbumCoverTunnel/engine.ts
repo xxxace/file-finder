@@ -487,6 +487,11 @@ export function createAlbumCoverTunnel(
     };
 
     const onKeyDown = (e: KeyboardEvent) => {
+        if (isDead || !isVisible || !isInView) return;
+        const target = e.target as HTMLElement | null;
+        if (target && (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA' || target.isContentEditable)) {
+            return;
+        }
         if (e.key === ' ') {
             e.preventDefault();
             togglePause();
@@ -852,7 +857,7 @@ export function createAlbumCoverTunnel(
     doc.addEventListener('visibilitychange', syncVisibility);
 
     /* ---------------- 纹理构建与增量更新 ---------------- */
-    async function buildArrayTexture(covers: TunnelCover[]): Promise<THREE.DataArrayTexture> {
+    async function buildArrayTexture(covers: TunnelCover[], version: number): Promise<THREE.DataArrayTexture> {
         const count = Math.min(MAX_TEXTURE_LAYERS, Math.max(1, covers.length));
         const data = new Uint8Array(TS * TS * 4 * count);
         const tempCanvas = document.createElement('canvas');
@@ -860,6 +865,7 @@ export function createAlbumCoverTunnel(
         const g = tempCanvas.getContext('2d', { willReadFrequently: true })!;
 
         for (let i = 0; i < count; i++) {
+            if (isDead || version !== loadVersion) break;
             const item = covers[i];
             if (item && item.src) {
                 try {
@@ -867,13 +873,13 @@ export function createAlbumCoverTunnel(
                     img.crossOrigin = 'anonymous';
                     img.src = item.src;
                     await img.decode();
-                    if (isDead) throw new Error('destroyed');
+                    if (isDead || version !== loadVersion) break;
                     g.clearRect(0, 0, TS, TS);
                     g.drawImage(img, 0, 0, TS, TS);
                     data.set(g.getImageData(0, 0, TS, TS).data, i * TS * TS * 4);
                     continue;
                 } catch {
-                    // 图片加载失败时走占位图
+                    if (isDead || version !== loadVersion) break;
                 }
             }
             const placeholder = createPlaceholderCanvas(i, item?.title || `Cover ${i + 1}`);
@@ -897,7 +903,7 @@ export function createAlbumCoverTunnel(
         coversList = items;
 
         try {
-            const texture = await buildArrayTexture(items);
+            const texture = await buildArrayTexture(items, version);
             if (isDead || version !== loadVersion) {
                 texture.dispose();
                 return;
@@ -906,7 +912,8 @@ export function createAlbumCoverTunnel(
             mat.uniforms.map.value = texture;
             prev?.dispose();
 
-            const len = Math.max(1, items.length);
+            const textureLayers = Math.min(MAX_TEXTURE_LAYERS, items.length);
+            const len = Math.max(1, textureLayers);
             covers.forEach((c) => {
                 c.tex = c.gridX === 0 && c.gridY === 0 && c.L.k === 0 ? 0 : keyAt(c.gridX, c.gridY, c.L.k, len);
             });
@@ -997,6 +1004,15 @@ export function createAlbumCoverTunnel(
         setCovers: loadCovers,
         togglePause,
         isPaused: () => isPausedState,
+        setActive: (active: boolean) => {
+            isVisible = active && isInView && !doc.hidden;
+            if (active) {
+                resize();
+                wake();
+            } else {
+                stop();
+            }
+        },
         getActiveCover: () => (heroC && coversList[heroC.tex] ? coversList[heroC.tex] : null),
     };
 }

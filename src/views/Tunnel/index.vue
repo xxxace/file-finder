@@ -28,8 +28,11 @@
             :items="covers"
             :theme="isDark ? 'dark' : 'light'"
             :show-back="true"
+            :disks="disks"
+            :selected-serial="selectedSerial"
             @select="handleSelect"
             @navigate-dir="handleNavigateDir"
+            @change-serial="handleSerialChange"
             @back="goHome"
         />
     </div>
@@ -42,7 +45,7 @@ import { NSpin } from 'naive-ui';
 import { ipcRenderer } from 'electron';
 import AlbumCoverTunnel from '@/components/AlbumCoverTunnel/AlbumCoverTunnel.vue';
 import type { TunnelCover } from '@/components/AlbumCoverTunnel/types';
-import { getAction, apiUrl } from '@/utils/request';
+import { API_BASE, getAction, apiUrl } from '@/utils/request';
 import { openInFiles } from '@/views/FileFinder/target';
 import useNotify from '@/hooks/useNotify';
 import { useTheme } from '@/hooks/useTheme';
@@ -54,13 +57,39 @@ const { isDark } = useTheme();
 
 const loading = ref(true);
 const covers = ref<TunnelCover[]>([]);
+const disks = ref<Array<{ serial: string; name: string }>>([]);
+const selectedSerial = ref('');
 
 const VIDEO_EXT_RE = /\.(mp4|mkv|avi|wmv|mov|flv|webm|ts|m4v)$/i;
 
-async function loadAllCovers() {
+function shuffle<T>(arr: T[]): T[] {
+    const res = [...arr];
+    for (let i = res.length - 1; i > 0; i--) {
+        const j = Math.floor(Math.random() * (i + 1));
+        [res[i], res[j]] = [res[j], res[i]];
+    }
+    return res;
+}
+
+async function loadDisks() {
+    try {
+        const res = await getAction(`${API_BASE}/getDisks`);
+        if (res && res.code === 200 && Array.isArray(res.data?.disks)) {
+            disks.value = res.data.disks.map((d: any) => ({
+                serial: d.serial,
+                name: d.letter ? `${d.letter}盘 (${d.name || d.serial})` : `${d.name || d.serial} (离线)`,
+            }));
+        }
+    } catch {
+        // ignore
+    }
+}
+
+async function loadAllCovers(serial?: string) {
     loading.value = true;
     try {
-        const res = await getAction('/getAllCovers');
+        const url = `${API_BASE}/getAllCovers${serial ? `?serial=${encodeURIComponent(serial)}` : ''}`;
+        const res = await getAction(url);
         if (res && res.code === 200 && Array.isArray(res.data?.items)) {
             const rawItems = res.data.items as Array<{
                 id: string;
@@ -74,12 +103,13 @@ async function loadAllCovers() {
                 files?: Array<{ name: string; size: number }>;
             }>;
 
-            covers.value = rawItems.map((item) => ({
+            const list = rawItems.map((item) => ({
                 id: item.id,
                 title: item.name,
-                src: apiUrl(`/thumb?k=${encodeURIComponent(`t-${item.sig}.enc`)}`),
+                src: apiUrl(`${API_BASE}/thumb?k=${encodeURIComponent(`t-${item.sig}.enc`)}`),
                 raw: item,
             }));
+            covers.value = shuffle(list);
         } else {
             covers.value = [];
         }
@@ -90,6 +120,11 @@ async function loadAllCovers() {
     } finally {
         loading.value = false;
     }
+}
+
+function handleSerialChange(serial: string) {
+    selectedSerial.value = serial;
+    void loadAllCovers(serial);
 }
 
 async function handleSelect(cover: TunnelCover) {
@@ -103,17 +138,21 @@ async function handleSelect(cover: TunnelCover) {
     const target = `#${raw.serial}/${raw.dir ? `${raw.dir}/` : ''}${filename}`;
 
     try {
-        const res = await getAction(`/resolveAnchor?a=${encodeURIComponent(target)}`);
-        if (res && res.data?.path) {
-            const err = await ipcRenderer.invoke('openFile', res.data.path);
+        const res = await getAction(`${API_BASE}/resolveAnchor?path=${encodeURIComponent(target)}`);
+        if (res?.path) {
+            const err = await ipcRenderer.invoke('openFile', res.path);
             if (err) {
                 notify('error', '打开失败', err);
             }
         } else {
             notify('warning', '磁盘未在线', `文件所在磁盘（序列号 ${raw.serial}）当前未连接。`);
         }
-    } catch (e) {
-        notify('error', '打开出错', String(e));
+    } catch (e: any) {
+        if (e?.kind === 'offline' || e?.message?.includes('不在') || String(e).includes('offline')) {
+            notify('warning', '磁盘未在线', `文件所在磁盘（序列号 ${raw.serial}）当前未连接。`);
+        } else {
+            notify('error', '打开出错', String(e));
+        }
     }
 }
 
@@ -133,6 +172,7 @@ function goHome() {
 }
 
 onMounted(() => {
+    void loadDisks();
     void loadAllCovers();
 });
 </script>

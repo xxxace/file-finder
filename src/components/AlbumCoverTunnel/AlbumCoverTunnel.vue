@@ -17,6 +17,11 @@
                     <span class="hud-title">3D 封面漫游</span>
                     <span class="hud-count">{{ items.length }} 张封面</span>
                 </div>
+
+                <select v-if="disks && disks.length > 1" class="hud-select" :value="selectedSerial" @change="$emit('change-serial', ($event.target as HTMLSelectElement).value)">
+                    <option value="">全部磁盘</option>
+                    <option v-for="d in disks" :key="d.serial" :value="d.serial">{{ d.name }}</option>
+                </select>
             </div>
 
             <div class="hud-right">
@@ -84,26 +89,32 @@
 </template>
 
 <script setup lang="ts">
-import { ref, onMounted, onBeforeUnmount, watch } from 'vue';
+import { ref, onMounted, onBeforeUnmount, onActivated, onDeactivated, watch } from 'vue';
 import { createAlbumCoverTunnel } from './engine';
 import type { TunnelCover, TunnelController } from './types';
 import { formatBytes } from '@/utils';
+import { playSfx } from '@/utils/sfx';
 
 const props = withDefaults(
     defineProps<{
         items: TunnelCover[];
         theme?: 'dark' | 'light';
         showBack?: boolean;
+        disks?: Array<{ serial: string; name: string }>;
+        selectedSerial?: string;
     }>(),
     {
         theme: 'dark',
         showBack: true,
+        disks: () => [],
+        selectedSerial: '',
     },
 );
 
 const emit = defineEmits<{
     (e: 'select', item: TunnelCover): void;
     (e: 'navigate-dir', item: TunnelCover): void;
+    (e: 'change-serial', serial: string): void;
     (e: 'back'): void;
 }>();
 
@@ -153,6 +164,14 @@ function handleNavigateDir() {
     }
 }
 
+onActivated(() => {
+    controller?.setActive(true);
+});
+
+onDeactivated(() => {
+    controller?.setActive(false);
+});
+
 onMounted(() => {
     if (!stageRef.value) return;
 
@@ -161,8 +180,12 @@ onMounted(() => {
         autoTravel: true,
         onSelect: (item) => {
             activeCover.value = item;
+            playSfx('menu-click');
         },
         onHover: (item) => {
+            if (item && item.id !== hoveredCover.value?.id) {
+                playSfx('hover');
+            }
             hoveredCover.value = item;
         },
         onFps: (val) => {
@@ -272,6 +295,24 @@ onBeforeUnmount(() => {
 .hud-count {
     color: rgba(255, 255, 255, 0.5);
     font-size: 12px;
+}
+
+.hud-select {
+    padding: 6px 12px;
+    background: rgba(18, 20, 36, 0.75);
+    backdrop-filter: blur(16px);
+    border: 1px solid rgba(255, 255, 255, 0.15);
+    border-radius: 999px;
+    color: #e2e8f0;
+    font-size: 13px;
+    outline: none;
+    cursor: pointer;
+    box-shadow: 0 4px 16px rgba(0, 0, 0, 0.3);
+}
+
+.hud-select option {
+    background: #121424;
+    color: #e2e8f0;
 }
 
 .hud-btn {
