@@ -378,7 +378,7 @@ export function createAlbumCoverTunnel(
                     vec3 baseCol = cover(vUv, vLook.z);
                     // 仅当卡片为焦点卡片（vTex 匹配 uHeroTexId 且处于焦点状态 vLook.w > 0.4）时平滑混合 1600px 高清贴图
                     if (abs(vTex - uHeroTexId) < 0.5 && vLook.w > 0.4 && uHeroBlend > 0.001) {
-                        vec3 heroCol = texture(uHeroMap, vec2(vUv.x, 1. - vUv.y)).rgb;
+                        vec3 heroCol = texture(uHeroMap, vUv).rgb;
                         c = mix(baseCol, heroCol, uHeroBlend);
                     } else {
                         c = baseCol;
@@ -590,6 +590,7 @@ export function createAlbumCoverTunnel(
             tex.minFilter = THREE.LinearFilter;
             tex.magFilter = THREE.LinearFilter;
             tex.generateMipmaps = false; // 高清图单卡直显，无需耗费显存生成 Mipmap
+            tex.flipY = true;
             tex.needsUpdate = true;
             return tex;
         } catch {
