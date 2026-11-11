@@ -25,6 +25,7 @@ import {
     migrateLegacyThumbs, readExternalCache, reloadFromDisk, removeCache,
 } from './nedb';
 import type { CacheMeta, OpenMode, SearchCache } from './nedb';
+import { diskTops } from './diskTops';
 import { encryptLine } from '../utils/cacheCrypto';
 import { LOCAL_TOKEN } from './token';
 import config from '../config';
@@ -1387,7 +1388,19 @@ async function listDisksController(req: Req, res: http.ServerResponse) {
 
     sendJson(res, {
         disks: [
-            ...drives.map(d => ({ ...d, online: true, ...(stats.get(d.serial) || empty) })),
+            ...drives.map(d => ({
+                ...d,
+                online: true,
+                // 首页（主界面空白区）的落点 = **缓存路径森林的根**（祖先缓存过的不算入口）。
+                // 计算在 `diskTops.ts`（纯函数、有探针），这里只喂"这块盘的记录 + 怎么拼地址"。
+                // 上次「真的探到这块盘」的时间（只在 `?refresh=true` 时登记）。
+                // 首页离线卡片拿它当"上次插入日期"，见 `useHomeDisks` 的 timeLine。
+                lastSeenAt: registry[d.serial]?.lastSeenAt || '',
+                tops: diskTops(metas.filter(m => m.serial === d.serial), {
+                    path: rel => toFullPath(d.drive, rel),
+                }),
+                ...(stats.get(d.serial) || empty),
+            })),
             ...offline.map(serial => ({
                 serial,
                 drive: '',
@@ -1398,6 +1411,13 @@ async function listDisksController(req: Req, res: http.ServerResponse) {
                 // 比原来的"少一个选项"严重得多。
                 label: registry[serial]?.label || '',
                 online: false,
+                // 上次「真的探到这块盘」的时间（只在 `?refresh=true` 时登记）。
+                // 首页离线卡片拿它当"上次插入日期"，见 `useHomeDisks` 的 timeLine。
+                lastSeenAt: registry[serial]?.lastSeenAt || '',
+                // 离线盘的地址必须走锚点（`#serial/rel`）——盘符此刻可能属于别人
+                tops: diskTops(metas.filter(m => m.serial === serial), {
+                    path: rel => toAnchorPath(serial, rel),
+                }),
                 ...(stats.get(serial) || empty),
             })),
         ],

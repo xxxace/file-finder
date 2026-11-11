@@ -43,8 +43,10 @@
                 <!-- 刷新住在导航区、不搬去动作区：它重读的是**当前这个位置**，
                      与「返回」同属位置动作。tooltip 只为说清它和「重读这一片」的分工。
                      扫描期间禁掉：它带 noCache、会真的再读一次盘，与整片扫描并发就是两路读盘。
-                     只读层 / 清单屏也禁掉：那两种屏的源就是缓存，没有"重读"这回事。 -->
-                <n-button size="small" :disabled="scanning || readOnlyLevel || playlistLevel"
+                     只读层 / 清单屏也禁掉：那两种屏的源就是缓存，没有"重读"这回事。
+                     ⚠️ 首页（没有当前屏）同样禁掉：那时按下去**什么也不会发生**（`onRefresh` 会早退），
+                     一颗亮着却没反应的按钮，比置灰更让人以为程序卡了。 -->
+                <n-button size="small" :disabled="scanning || readOnlyLevel || playlistLevel || atHome"
                     aria-label="刷新" v-tip="{ text: '刷新', keys: 'F5' }" @click="onRefresh">
                     <template #icon>
                         <n-icon :component="RefreshOutline" />
@@ -62,6 +64,12 @@
                      进度**仍然以 naive 的 `.n-loading-bar` 为唯一真相源** —— 它现在只是
                      `visibility: hidden`（见 App.vue），尺寸照常读得到，本层只负责"画得好看"。 -->
                 <GalaxyLoadingBar />
+
+                <!-- 首页时地址槽是空的（没有路径可说），空着会被读成"这条坏了"。
+                     给一个静态段「这台电脑」，与首页的盘列表同一个说法（资源管理器同形制）。
+                     它**不在** TransitionGroup 里：不是一屏、不参与进离场、不该被 FLIP 挪。
+                     ⚠️ 判据是 `atHome`：首页是导航栈里常驻的第 0 条，`!hasAny` 已经恒为假。 -->
+                <span v-if="atHome" class="nav-home">这台电脑</span>
 
                 <!-- 面包屑 = 从**盘符 / 离线锚点**到当前的完整链，由 `ancestorsOf(currentPath)` 现算。
                      为什么不按导航栈渲染：跳转到达的目录**不是"栈顶的子级"**，用栈拼会拼出
@@ -207,8 +215,13 @@
                 ref="imageBox"
                 :data-density="density"
                 :style="{ '--ff-grid-cols': gridCols }"
-                @contextmenu.prevent="onBlankContextMenu"
+                @contextmenu.prevent="onBlankCtx"
             >
+                <!-- 首页（空白区，2026-11-11）：没有当前这一屏的时候，把"有缓存的盘"直接列出来，
+                     点一块盘就进它缓存记录里**最上层**的那一屏 —— 省掉"先去缓存记录找一行"。
+                     ⚠️ 它**不是** `.image-box-item`：内容网格的分行算法与方向键不认它（见组件头注释）。
+                     ⚠️ 与 `.empty-tip` 互斥：有盘时那句灰字必须让位（判据在 `emptyTip` 里）。 -->
+                <HomeDisks v-if="showHome" :disks="homeDisks" @open="openHomeTop" />
                 <!-- key 不能只用 item.name：封面条目的 name 取的是**封面图文件名**，
                      同一层的两个文件夹若都叫 cover.jpg，就会生成两个 key="cover"。
                      Vue 遇到重复 key 会复用错的组件实例，封面会串到别的格子里。
@@ -481,10 +494,10 @@
                 <!-- 导航组：只此一条，单独一组压在末尾（2026-11-10 业主裁决：清空导航住右键菜单）。
                      为什么不并进上面的目录工具组：那一组是"这一层的工具"（可反复做）；
                      清空重置的是**视图状态**、不删任何数据 ⇒ 不加确认（业主同日裁决）。
-                     判据 `hasAny` = 有没有走过路；扫描 / 挑封面期间也禁掉 ——
+                     判据 `atHome` = 有没有走过路；扫描 / 挑封面期间也禁掉 ——
                      那两种状态下清空会把正在进行的活儿的舞台抽走（选中的格子还在、但看不见了）。 -->
                 <div class="ctx-sep" aria-hidden="true"></div>
-                <button type="button" class="ctx-item" :disabled="!hasAny || scanning || picking"
+                <button type="button" class="ctx-item" :disabled="atHome || scanning || picking"
                     @click="onCtxClearNav">
                     <n-icon :size="16" :component="CloseOutline" />
                     <span class="ctx-label">清空导航历史</span>
@@ -542,6 +555,7 @@ import type { Density } from './density';
 import { buildCrumbLayout } from './crumbRows';
 import { useNavStack } from './useNavStack';
 import type { NavEntry } from './useNavStack';
+import { HOME_PATH, homeEntry } from './useNavStack';
 import { dissolveGrid } from './gridDissolve';
 import { decideOpen, isMultiFileCard } from './openDecision';
 import { SearchOutline, RefreshOutline, SyncOutline, ArrowBackOutline, ArrowForwardOutline, CloseOutline, CopyOutline, StarOutline, ChevronForwardOutline, LinkOutline, FolderOpenOutline, CloudDownloadOutline, ImageOutline, PersonOutline, SettingsOutline, ImagesOutline, VideocamOutline, MusicalNotesOutline, DocumentOutline } from '@vicons/ionicons5';
@@ -554,6 +568,8 @@ import ScanGlow from './ScanGlow.vue';
 import AssistantCoverModal from './AssistantCoverModal.vue';
 import AssistantAvatarModal from './AssistantAvatarModal.vue';
 import PlaylistPicker from './PlaylistPicker.vue';
+import HomeDisks from './HomeDisks.vue';
+import { useHomeDisks } from './useHomeDisks';
 import { consumeTarget } from './target';
 import { useRouter } from 'vue-router';
 import { ipcRenderer } from 'electron';
@@ -720,14 +736,41 @@ const nav = useNavStack({
  * `!ComputedRef` 恒为 false ⇒ 两颗按钮永远置灰。所以模板只读下面这三个顶层名
  *（顶层 ref 才会被 `<script setup>` 展开）；脚本里仍然用 `nav.step()` 那一组方法。
  */
-const { canBack, canForward, hasAny } = nav;
+const { canBack, canForward } = nav;
 /**
  * 当前这一屏的路径 —— 「位置」的一切都从它派生。
  * 因为它就是路径本身，所以**不可能**和界面显示的位置不一致（不存状态 ⇒ 不会不一致）。
  */
 const currentPath = computed(() => nav.current.value?.path ?? '');
+/**
+ * 现在是不是停在**首页**（空白区盘列表）。
+ *
+ * 首页是导航栈里**常驻的第 0 条**（`HOME_PATH` 哨兵，见 `useNavStack.ts` 那段）——
+ * 所以"没有当前屏"这件事在 2026-11-11 之后**不存在了**：从冷启动那一刻起栈里就有一条。
+ * ⚠️ 判据一律用 `atHome`，**不要**再写 `!hasAny`：`hasAny` 现在恒为真（首页占着第 0 条），
+ *    拿它当"有没有当前屏"用会静默失灵（刷新/扫描/面包屑全都以为自己在某一屏上）。
+ */
+const atHome = computed(() => currentPath.value === HOME_PATH);
+
+/**
+ * 保证首页那一屏在栈里（冷启动 / 清空导航之后）。
+ * ⚠️ 幂等：已经有栈就不动 —— 它只在"栈是空的"这一刻补一条，不参与任何导航。
+ */
+const ensureHome = () => {
+    if (!nav.hasAny.value) nav.push(homeEntry());
+};
+/**
+ * **setup 期就补**，不进 `onMounted`。
+ * `onMounted` 在首帧之后才跑 ⇒ 那一帧栈是空的、`atHome` 为假 ⇒ 首页不渲染，
+ * 屏幕上先闪一下真正的空白再长出盘卡片。`push` 不碰 DOM（`snapshot()` 因"没有当前屏"不会被执行），
+ * 所以在 setup 里做是安全的。
+ */
+ensureHome();
 /** 面包屑：从起点到当前的完整链。**纯推导** ⇒ 跳转后自动正确，不需要任何同步代码。 */
 const crumbs = computed(() => {
+    // 首页：一条真实路径都没有 —— `ancestorsOf('@home')` 会把它当成 UNC 拆出一段假的
+    // 根段（名就叫 `@home`）。地址槽那边由 `.nav-home` 静态段接管（见模板）。
+    if (atHome.value) return [];
     // 清单屏：面包屑是「清单 / 名称」两段，不是磁盘路径 —— ancestorsOf 会把
     // `@pl:` 当 UNC 拆成物理上不存在的层级。根段不可点（点它开货架，见 onCrumbClick）。
     const top = nav.current.value;
@@ -749,8 +792,11 @@ const crumbs = computed(() => {
  * ⚠️ 平铺只摊**缓存里已经有的**：没扫过的深层会是空的 —— 那是缓存态，不是 bug。
  */
 const isFlatView = ref(false);
-/** 除清单屏外（清单不是目录，没有"向下"这回事）都允许切平铺；有没有路径也算判据 */
-const canToggleFlat = computed(() => !playlistLevel.value && !!currentPath.value);
+/** 除清单屏外（清单不是目录，没有"向下"这回事）都允许切平铺；有没有路径也算判据
+ * ⚠️ 首页（`@home`）也排除：那个哨兵串是**真值**，`!!currentPath` 拦不住它，
+ *    于是平铺按钮会在首页亮着、点下去把一张空盘列表"摊开"。
+ */
+const canToggleFlat = computed(() => !playlistLevel.value && !!currentPath.value && !atHome.value);
 /**
  * 面包屑的**渲染布局**（head + tail）。
  *
@@ -845,6 +891,24 @@ const failKind = ref('');
  * 就是**在骗人**。所以失败时必须把它排除掉。
  */
 const loadFailed = computed(() => failKind.value !== '');
+
+/**
+ * 首页（空白区）的盘列表数据 —— 取数与刷新时机都归本页管，组件只负责长相。
+ * 见 `useHomeDisks.ts` 文件头：**零读盘**（`/getDisks` 不带 refresh，全部走内存聚合）。
+ */
+const { disks: homeDisks, ready: homeReady, hasCards: homeHasCards, reload: reloadHome } = useHomeDisks();
+
+/**
+ * 首页要不要**顶替内容网格**（2026-11-11）。
+ *
+ * 三个条件缺一不可：
+ *  - `atHome`：当前这一屏就是首页（栈里常驻的第 0 条，不是"栈空"）；
+ *  - 有可点的盘：一块有缓存的盘都没有时，首页是空的 —— 那就该让原来那句
+ *    "还没选文件夹"的灰字出来，而不是给一张空白卡片区；
+ *  - 没在搜索：首页没有内容可过滤，卡片和"没找到匹配的内容"同时出现等于自相矛盾。
+ */
+const showHome = computed(() => atHome.value && !searchText.value && homeHasCards.value);
+
 /**
  * 空状态提示。空串 = 不显示。
  *
@@ -855,16 +919,21 @@ const emptyTip = computed(() => {
     if (loading.value || loadFailed.value || fileList.value.length) return '';
     if (searchText.value) return '没找到匹配的内容';
     /**
-     * "有没有进入浏览"要用**当下事实**（有没有一屏），不能用 `dir`（那只是"曾经选过根"的快照）。
+     * "有没有进入浏览"要用**当下事实**（现在这一屏是不是首页），不能用 `dir`（那只是"曾经选过根"的快照）。
      * ⚠️ 这一条是自查 S-1 的回归防护：从缓存跳转**不再写 `dir`**，
      * 冷启动直接跳进一个空目录时，用 `dir` 判断会让提示不显示 —— 一片空白、什么都不说。
      *
-     * ⚠️ 而"一屏都没有" ≠ "空目录"：那种情况当前**压根没有目录**，
+     * ⚠️ 而"首页" ≠ "空目录"：那种情况当前**压根没有目录**，
      * 沿用下面那句"这个目录是空的"就是骗人（`loadFailed` 那条注释讲的是同一件事）。
      * 但它同样不该什么都不说 —— 2026-10-05 加了「清空」之后，这条路径是**用户主动点出来**的，
      * 落在纯空白页上会像是把程序点坏了 ⇒ 给"下一步做什么"。
      */
-    if (!hasAny.value) return '还没选文件夹 —— 点左上角那个图标选一个';
+    if (atHome.value) {
+        // 2026-11-11：首页盘列表接住了这一屏 —— 有盘的时候由卡片说话，这句话必须让位；
+        // 首次响应没回来之前也不说（先闪一句"还没选文件夹"、再变出五张卡，是最廉价的那种动效）。
+        if (!homeReady.value || homeHasCards.value) return '';
+        return '还没选文件夹 —— 点左上角那个图标选一个';
+    }
     // 清单屏的空态说的是另一件事：不是"目录里没东西"，是"还没收录过"，
     // 且要告诉用户下一步做什么（照 emptyTip 的既有原则：空态给动作，不给空白）
     if (playlistLevel.value) return '这个收藏夹还是空的 —— 在网格里右键卡片「加入收藏」即可收录';
@@ -1075,6 +1144,18 @@ const {
 });
 
 /**
+ * 网格空白处的右键。
+ *
+ * 首页没有"当前这一层"——那个位置上的动作（补封面 / 更新读取 / 重新读取 / 清空导航历史）
+ * 在首页全是空的或已禁用，弹出来就是一排灰字。⇒ 首页干脆不弹。
+ * （卡片自己的右键由 `HomeDisks` 根节点吞掉，见组件头注释。）
+ */
+const onBlankCtx = (e: MouseEvent) => {
+    if (atHome.value) return;
+    onBlankContextMenu(e);
+};
+
+/**
  * 「补封面」写盘完成后的刷新。与 onRefresh 的区别：**不带 noCache** ——
  * apply 已经把写过的目录缓存删掉了，正常取数会真读一次盘、把新封面收进来再建缓存；
  * 再带 noCache 等于把刚建的缓存又删一遍重读，纯浪费。
@@ -1193,6 +1274,9 @@ const onCursorConfirm = (item: WiredFileInfo) => {
  * ⚠️ 归零要在取数之前（内容没渲染时 scrollTo 会被 clamp 或作用在旧内容上）。
  */
 const enterScreen = (path: string, mode: OpenMode = 'cover', pl?: NavEntry['pl'], keepFlat?: boolean) => {
+    // 进任何一屏之前先保证栈底是首页（2026-11-11）：冷启动直接吃一个跨页跳转时，
+    // 栈里原本一条都没有 ⇒ 那一屏会变成"第 0 条"，于是它**后面没有首页可回**。
+    ensureHome();
     // 新的一屏**从零开始**：选择器不继承上一屏的（它属于那一屏，不属于这一屏）
     // pl = 清单屏标记（2026-10-21）：与 path 上的 `@pl:<id>` 前缀同进同退
     // ⚠️ `push` 内部会先拍上一屏的快照，再砍掉"前进尾巴"（在中间位置进新屏的浏览器语义）
@@ -1411,6 +1495,28 @@ const openFile = async (item: WiredFileInfo | string) => {
 const goStep = async (delta: 1 | -1) => {
     const to = nav.step(delta);
     if (!to) return;
+    /**
+     * 回到**首页**（2026-11-11 业主："可以通过上一屏回到空白页"）。
+     *
+     * 首页没有数据要取、没有选择器要恢复、没有滚动位要还原 —— 它只有盘卡片。
+     * 所以走一条短路：`loadScreen` 的 home 分支负责"清列表 + 同拍清词 + 让过期响应作废"，
+     * 这里只管把视口归零（首页是从顶上开始看的）。
+     * ⚠️ 不能省掉 `loadScreen`：不清 `dataSource`，上一屏的卡片会留在首页卡片下面
+     *    （`fileList` 非空 ⇒ 网格照画）。
+     */
+    if (to.path === HOME_PATH) {
+        /**
+         * ⚠️ 平铺必须复位（2026-11-11 code review 抓到）：从"平铺屏"按返回落到首页时
+         * `isFlatView` 还是 true ⇒ ① 首页那颗平铺按钮 `disabled` 却带着 `.is-on`，
+         * 禁用态显示成开启；② 从首页点盘卡走 `openHistory`，它会把 `wasFlat` 带进去，
+         * 于是进的是"平铺后的顶层"而不是那一层本身。两处都是同一个残留状态。
+         */
+        isFlatView.value = false;
+        void loadScreen(to, { adoptSearch: true });
+        nav.markShown();
+        imageBox.value?.scrollTo(0, 0);
+        return;
+    }
     // 恢复这一屏的搜索词 —— **不在这里写**。这是同一个病的方向相反那一半：
     // 提前把词写回去 = 拿**子目录的数据** × **父目录的词** 渲染一次，等数据到了再换。
     // 词与列表必须同一拍 ⇒ 交给 `loadScreen(to, { adoptSearch: true })`，由 `useScreenData.commit()`
@@ -1539,9 +1645,8 @@ const onRefresh = () => {
     // 只读层没有"重读"这回事：它的源就是缓存，盘不在，F5 也读不出新东西。
     // 拦住而不是让服务端静默回一份缓存 —— 静默最坏（用户以为他重读过了）。
     // 清单屏同理：它的源是系统盘上的收录快照，没有"重读硬盘"这个动作。
-    // ⚠️ 判据直接问"有没有当前屏"，不再分开写 `!hasAny` —— `hasAny` 是真值判据，
-    //    TS 不会用它收窄 `nav.current.value` ⇒ 那会逼出一处 `cur!`（非空断言掩盖真分支）。
-    if (loading.value || readOnlyLevel.value || playlistLevel.value) return;
+    // 首页同理：没有"这一层"可读，卡片归 `/getDisks` 管（且那是零读盘，不需要 F5）。
+    if (loading.value || readOnlyLevel.value || playlistLevel.value || atHome.value) return;
     const cur = nav.current.value;
     if (!cur) return;
     // F5 = 重新扫盘，要带 noCache 让服务端把这条缓存删掉真去读盘，
@@ -1560,30 +1665,28 @@ const setRoot = (value: string) => {
     if (!value) {
         dir.value = '';
         nav.reset();
-        // 清掉文件夹选择就该把这个文件夹的内容也清掉，
-        // 否则界面上留着上一个目录的东西，而选择框已经空了
-        // ⚠️ 这两个写**必须留在同一个块里**（与 useScreenData.commit 同一条纪律：
-        //    `fileList = filterByName(dataSource, searchText)`，拆开就有一帧"旧数据 × 新词"）。
-        dataSource.value = [];
-        searchText.value = '';
         /**
-         * ⚠️ `failKind` **必须一起清**（2026-10-05 code review 抓到）。
-         *
-         * 它描述的是"**当前这一屏**取数失败了"，而上面刚把"当前这一屏"整个拿掉
-         *（`nav.reset()`）⇒ 留着它就是在陈述一个已经不存在的对象。两处后果：
-         *  ① `banner` 继续显示"移动硬盘不在…插好后按 F5 重读"，而 F5 已因"没有当前屏"被拦掉
-         *     （见 `onRefresh`）⇒ **文案指向一个不存在的操作**；
-         *  ② `emptyTip` 的守卫把 `loadFailed` 排在 `!hasAny` **前面**
-         *     ⇒ 那句"还没选文件夹"永远显示不出来 ⇒ 用户落在**纯空白页**上。
-         *
-         * 缓解面：这条路以前只有 chip 上的 × 走得到；2026-10-05 加了「清空」按钮之后，
-         * 它变成"在任意一屏一键可达" ⇒ 必须在这里收口（唯一的状态复位点）。
+         * ⚠️ 首页必须立刻补回栈里（2026-11-11）：
+         * `reset()` 之后栈是空的，而"清空导航历史"的落点**就是首页**。
+         * 不补的话首页会以 `index = -1` 这个瞬态被渲染出来 —— 看起来一样，
+         * 但「前进」失去目标、`atHome` 为假 ⇒ 刷新/扫描/面包屑全都不认为自己在首页上。
          */
-        failKind.value = '';
+        ensureHome();
+        /**
+         * 清列表 / 清词 / 清 failKind / 停转圈 / **作废在飞请求**，全部交给 `loadScreen`
+         * 的首页分支（`useScreenData.showHome`）—— 2026-11-11 code review 抓到：
+         * 这里原来是**手工**清那几个 ref，没有递增 `fetchSeq` ⇒ 上一屏还在飞的请求回来后
+         * 仍算"最新"，会把它的数据写进 `dataSource`，于是首页盘卡片下面冒出一片旧网格。
+         * ⇒ 收口到唯一那处（与"进首页"走同一条路，两处行为不可能再漂）。
+         * ⚠️ 手工那几行**不许加回来**：加了就是第二个写入点。
+         */
+        void loadScreen(homeEntry(), { adoptSearch: true });
         return;
     }
     dir.value = value;
     nav.reset();
+    // 同上：换根 = 重新开始，栈底仍然是首页（于是「上一屏」能从新根回到盘列表）
+    ensureHome();
     // 首层也用 cover。cover 模式才会对子目录调 handleCover（收敛成封面条目）；
     // 原来首层写的是 folder，而 folder 模式**根本不会调用 handleCover** ——
     // 结果是「封面收敛」只在点进去之后的第二层生效，第一层永远只看到一堆文件夹图标，
@@ -1640,6 +1743,17 @@ const openHistory = (path: string) => {
 };
 
 /**
+ * 首页点了一块盘 → 进它缓存记录里**最上层**的那一屏（森林的根，见服务端 `diskTops`）。
+ *
+ * 走 `openHistory` 这个既有出口，不在这里自己拼 `enterScreen`：
+ * "同一目录不重复取数""flat 模式继承"这两条只应该有一份实现。
+ * 地址由服务端给（在线 = 实时路径，离线 = 只读锚点），前端**不解析、不拼**。
+ */
+const openHomeTop = (path: string) => {
+    if (path) openHistory(path);
+};
+
+/**
  * 批量扫描「这一片」的全部状态与流程 —— 见 useScanFlow.ts。
  * 这里只留一条"扫完怎么刷当前屏"的实现（页面才知道清单屏与目录屏的差别）。
  */
@@ -1690,7 +1804,12 @@ interface DirAction {
     icon: Component;
     disabled: () => boolean;
 }
-const scanLocked = () => scanning.value || picking.value || !hasAny.value || !!readOnlyLevel.value;
+/**
+ * 扫描类动作共用的闸门。
+ * ⚠️ 首页是导航栈里常驻的第 0 条，所以"没有当前屏"这件事不再存在 ——
+ * 判据一律用 `atHome`，别再写 `!hasAny`（它现在恒为真）。
+ */
+const scanLocked = () => scanning.value || picking.value || atHome.value || !!readOnlyLevel.value;
 const DIR_ACTIONS: DirAction[] = [
     // ⚠️ 扫描类动作在「挑封面」模式下**也禁用**：它们会把网格重扫一遍，
     // 而状态条那边是 `v-if="scanning || picking"` 且扫描优先 —— 扫描条会把挑选 UI
@@ -1699,10 +1818,13 @@ const DIR_ACTIONS: DirAction[] = [
     //   刷新     = 只重读**你眼前这一层**（F5 同一个动作）
     //   更新读取 = 整片核对一遍，只重读**变了的**层（每层 1 次 stat；当前层逐条比对）
     //   重新读取 = 整片每层都真读（兜底：改名/换盘/大改之后）
-    { key: 'refresh', label: () => '刷新', icon: RefreshOutline, disabled: () => scanning.value || !hasAny.value || !!readOnlyLevel.value },
+    { key: 'refresh', label: () => '刷新', icon: RefreshOutline, disabled: () => scanning.value || atHome.value || !!readOnlyLevel.value },
     { key: 'update', label: () => '更新读取', icon: CloudDownloadOutline, disabled: scanLocked },
     { key: 'reload', label: () => '重新读取', icon: SyncOutline, disabled: scanLocked },
-    { key: 'cover', label: () => '补封面', icon: ImageOutline, disabled: () => scanning.value },
+    // ⚠️ 首页（`@home`）也禁：这两个动作都要"当前这一层"——
+    //    补封面会把 `@home` 当路径传进抓取弹窗，换封面会在**一张格子都没有**的首页进挑选模式。
+    //    （2026-11-11 code review 抓到）
+    { key: 'cover', label: () => '补封面', icon: ImageOutline, disabled: () => scanning.value || atHome.value },
     { key: 'avatar-recovery', label: () => '头像回收', icon: PersonOutline, disabled: scanLocked },
     // 「站点规则」= 抓取规则的编辑器（入口 / 动作 / 抽取三段）。它是**系统盘上的配置**，
     // 与移动硬盘无关 ⇒ 离线只读层里也允许打开（不禁用）。
@@ -1710,7 +1832,7 @@ const DIR_ACTIONS: DirAction[] = [
     // 「换封面」= 补封面的**反面**：补封面是让程序找出"没有封面的"，
     // 换封面是让用户自己挑"有封面但要换的"。两者最终复用同一个弹窗、同一条抓取写入链路。
     // 2026-10-21：主人裁定它不是高频动作 ⇒ 从次栏搬回这里，不占常驻位置。
-    { key: 'faces', label: () => (picking.value ? '退出换封面' : '换封面'), icon: ImagesOutline, disabled: () => scanning.value || !!readOnlyLevel.value },
+    { key: 'faces', label: () => (picking.value ? '退出换封面' : '换封面'), icon: ImagesOutline, disabled: () => scanning.value || !!readOnlyLevel.value || atHome.value },
 ];
 
 /**
@@ -2019,6 +2141,9 @@ const onDocClickBlurButton = (e: MouseEvent) => {
 onMounted(() => {
     window.addEventListener('keyup', onKeyup);
     document.addEventListener('click', onDocClickBlurButton, true);
+    // 首页盘列表：一次 `/getDisks`，**零读盘**（见 useHomeDisks 文件头）。
+    // 取不到也只是没有卡片，不影响别的功能。（首页那条导航条目已在 setup 期补过，这里不再补。）
+    void reloadHome();
     // 收录索引（2026-10-21 清单）：网格星标与「加入清单」选单 ✓ 的数据源。
     // 失败不打扰启动 —— 星标只是不显示，清单功能要等用户点进去才用得上。
     void refreshIndex().catch(() => undefined);
@@ -2051,8 +2176,19 @@ onUnmounted(() => {
  */
 onActivated(() => {
     pageActive.value = true;
+    // 从别的页回来时栈里可能还是空的（本页首次挂载前就被路由切走过）—— 补一条首页。
+    ensureHome();
     const t = consumeTarget();
-    if (!t) return;
+    if (!t) {
+        /**
+         * 回到本页且没有跨页意图：首页可能在别处被改过 ——
+         * 缓存记录页删过记录、插拔过盘、收藏页动过条目，都会让"哪些盘有缓存"变化。
+         * 只在这一屏确实是首页时重取（有当前屏时首页根本没渲染，取来是浪费）。
+         * 不带 `refresh=true`：那会重探 26 个盘符 —— 零读盘是这条路径的前提。
+         */
+        if (atHome.value) void reloadHome();
+        return;
+    }
     if (t.kind === 'path') openHistory(t.path);
     else enterPlaylist(t.id, t.name);
 });
@@ -2110,6 +2246,13 @@ const onDisksChanged = async (disks: { serial: string; drive: string }[]) => {
     }
 
     const top = nav.current.value;
+    // 首页（盘列表）：插拔盘只影响"列出哪几块盘"，重取一次就够。
+    // ⚠️ 判据必须是 `atHome`：首页现在**也有** `nav.current`（常驻第 0 条），
+    //    靠 `!top` 判会让下面那段盘符解析拿到 `@home` 而静默返回 —— 卡片不会更新。
+    if (atHome.value) {
+        void reloadHome();
+        return;
+    }
     if (!top) return;
 
     /** 换掉当前这一屏的地址。**替换**而不是 push —— 用户眼里还是同一层，只是地址变了 */

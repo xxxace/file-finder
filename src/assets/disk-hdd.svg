@@ -1,0 +1,71 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 48 36" width="48" height="36" role="img">
+<!--
+    拟物硬盘（主界面首页盘卡片用）。第三版 2026-11-11，业主两次反馈：
+      「状态灯可以再大点亮点颜色」→ 灯做大了，但只要大到"碰槽边"就丑 ⇒ 现在 r=2.0
+        （槽高 10.4，上下各留约 3px），亮度靠**两层 bloom**（feGaussianBlur 2.1 宽晕 + 0.7 紧晕）
+        而不是"一个大圆"，这才是指示灯该有的光。
+      「能再立体些吗」→ 三处一起给体积：① 底下一枚模糊落影（脱离卡面）；
+        ② 内圈一圈**渐变描边**斜角（上沿白 85% → 下沿深灰 55%，一个元素做出上下两道边）；
+        ③ 机身高光从"一条硬边"改成竖向渐隐。
+
+    ⚠️ 观感按"任意底色都立得住"设计：机身自带 1px 深色描边，深色主题面板 #1f1f1f、
+    浅色主题 #fff，两端都不能糊掉。
+    ⚠️ 离线态**不另做资产**：卡片上 `filter: grayscale(1)` 让灯自然灭掉。
+        两枚资产迟早会画得不一致，一枚 + 滤镜在结构上不可能不一致。
+    ⚠️ 滤镜（feGaussianBlur）在 `<img src="*.svg">` 里**可用**（同文档内定义，不跨资源）。
+        已用无头 Electron 按 `<img>` 方式渲过一遍确认。
+  -->
+
+  <defs>
+    <linearGradient id="body" x1="0" y1="0" x2="0.15" y2="1">
+      <stop offset="0" stop-color="#fdfefe"/>
+      <stop offset="0.10" stop-color="#e8edf3"/>
+      <stop offset="0.38" stop-color="#c9d0d9"/>
+      <stop offset="0.68" stop-color="#a3abb6"/>
+      <stop offset="0.90" stop-color="#88919c"/>
+      <stop offset="1" stop-color="#767f8a"/>
+    </linearGradient>
+    <linearGradient id="gloss" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#ffffff" stop-opacity="0.95"/>
+      <stop offset="0.55" stop-color="#ffffff" stop-opacity="0.35"/>
+      <stop offset="1" stop-color="#ffffff" stop-opacity="0"/>
+    </linearGradient>
+    <linearGradient id="bevel" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#ffffff" stop-opacity="0.85"/>
+      <stop offset="0.45" stop-color="#ffffff" stop-opacity="0.15"/>
+      <stop offset="0.62" stop-color="#3d444e" stop-opacity="0.18"/>
+      <stop offset="1" stop-color="#333942" stop-opacity="0.55"/>
+    </linearGradient>
+    <linearGradient id="slot" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#1d2228"/>
+      <stop offset="0.30" stop-color="#454c56"/>
+      <stop offset="1" stop-color="#171b20"/>
+    </linearGradient>
+    <filter id="drop" x="-30%" y="-30%" width="160%" height="190%">
+      <feGaussianBlur stdDeviation="1.4"/>
+    </filter>
+    <filter id="bloomWide" x="-120%" y="-120%" width="340%" height="340%">
+      <feGaussianBlur stdDeviation="2.1"/>
+    </filter>
+    <filter id="bloomTight" x="-80%" y="-80%" width="260%" height="260%">
+      <feGaussianBlur stdDeviation="0.7"/>
+    </filter>
+  </defs>
+
+  <ellipse cx="24" cy="30.4" rx="17" ry="2" fill="#161d26" opacity="0.25" filter="url(#drop)"/>
+
+  <rect x="2.5" y="3.6" width="43" height="24" rx="4.4" fill="url(#body)" stroke="#6b737f" stroke-width="0.8"/>
+  <rect x="4" y="5" width="40" height="9" rx="2.6" fill="url(#gloss)"/>
+  <rect x="3.5" y="4.6" width="41" height="22" rx="3.6" fill="none" stroke="url(#bevel)" stroke-width="1.2"/>
+
+  <rect x="6.5" y="15.2" width="35" height="10.4" rx="2.2" fill="url(#slot)"/>
+  <rect x="7.7" y="15.9" width="32.6" height="1" rx="0.5" fill="#05080b" opacity="0.8"/>
+  <rect x="7.7" y="24.2" width="32.6" height="0.9" rx="0.45" fill="#a9b1bc" opacity="0.5"/>
+  <rect x="9.5" y="18.7" width="13" height="2.1" rx="1.05" fill="#b6bec8" opacity="0.5"/>
+  <rect x="9.5" y="21.9" width="8.5" height="1.6" rx="0.8" fill="#b6bec8" opacity="0.28"/>
+
+  <circle cx="35.2" cy="20.4" r="3.9" fill="#2bdd78" opacity="0.5" filter="url(#bloomWide)"/>
+  <circle cx="35.2" cy="20.4" r="2.4" fill="#34e783" opacity="0.85" filter="url(#bloomTight)"/>
+  <circle cx="35.2" cy="20.4" r="2" fill="#20dd77"/>
+  <circle cx="34.6" cy="19.8" r="0.75" fill="#f0fff6" opacity="0.92"/>
+</svg>

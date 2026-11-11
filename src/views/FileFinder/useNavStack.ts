@@ -60,6 +60,27 @@ export interface NavEntry {
 /** 离开一屏时要记下的三样 */
 export type NavSnapshot = Pick<NavEntry, 'scrollY' | 'searchText' | 'cursorKey'>;
 
+/**
+ * 首页（空白区盘列表）在导航栈里的**哨兵地址**（2026-11-11 业主要求）。
+ *
+ * 为什么它必须是一条真正的导航条目、而不是"栈空"这个状态：
+ * 业主原话「默认常驻空白首页在导航历史中，这样子我可以通过上一屏回到空白页」——
+ * "回到首页"是一次**导航**，它必须和别的屏一样可后退/可前进。
+ * 而原来 `index = -1 ⟺ 空数组` 这套模型里，"回到首页"只能 `reset()`：
+ * 数组一清，前进方向就没了 ⇒ 从首页再点"前进"回不到刚才那一屏。
+ * ⇒ 首页占 index 0，任何一屏的 `canBack` 天然为真，前进尾巴也还在。
+ *
+ * ⚠️ 它是**哨兵**，不是磁盘上的路径：取数、面包屑、扫描、刷新都要认这个前缀并让路
+ *    （唯一分派点在 `useScreenData.loadScreen` 与页面里的 `atHome`）。
+ * ⚠️ 前缀带 `@`：与真实盘符 / UNC / 只读锚点 `#` / 清单 `@pl:` 都不冲突。
+ */
+export const HOME_PATH = '@home';
+
+/** 首页那一屏的导航条目。内容字段全空 —— 首页没有滚动位、没有选择器、没有过滤词 */
+export const homeEntry = (): NavEntry => ({
+    path: HOME_PATH, mode: 'cover', searchText: '', scrollY: 0, cursorKey: '',
+});
+
 export interface NavStackDeps {
     /**
      * 取"这一屏现在的样子"。
@@ -141,7 +162,9 @@ export function useNavStack(deps: NavStackDeps) {
         if (cur) Object.assign(cur, patch);
     };
 
-    /** 清空全部历史（选根 / 换根 / 清空导航）—— "重新开始"，与 push 不是一回事 */
+    /** 清空全部历史（选根 / 换根 / 清空导航）—— "重新开始"，与 push 不是一回事。
+     *  ⚠️ 调用方**必须**在这之后立刻 `push(homeEntry())`（页面里的 `ensureHome`）：
+     *  首页常驻之后，`index = -1` 只应该是一个瞬态，不应该被渲染出来。 */
     const reset = () => {
         entries.value = [];
         index.value = -1;

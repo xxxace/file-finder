@@ -1,0 +1,55 @@
+=== 首页盘落点（diskTops）· 2026-11-11 第五版判据 ===
+
+PASS  media/SET-A + A + B ⇒ 只给 media/SET-A
+      实得 ["media/SET-A"]
+      期望 ["media/SET-A"]
+PASS  media/SET-B 没扫过 ⇒ 给 media/SET-B/COLL-A（不许折成 SET-B）
+      实得 ["media/SET-B/COLL-A"]
+      期望 ["media/SET-B/COLL-A"]
+PASS  D 盘 = media/SET-A + media/SET-B/COLL-A（SET-A 在前）
+      实得 ["media/SET-A","media/SET-B/COLL-A"]
+      期望 ["media/SET-A","media/SET-B/COLL-A"]
+PASS  离线单条 ⇒ 长度 1（不弹菜单）
+      实得 1
+      期望 1
+PASS  反斜杠子层 ⇒ 被父层覆盖
+      实得 ["videos"]
+      期望 ["videos"]
+PASS  父层没缓存的反斜杠兄弟 ⇒ 两条都留
+      实得 ["videos/a","videos/b"]
+      期望 ["videos/a","videos/b"]
+PASS  Videos 与 videos/xxx 认成一家人
+      实得 ["Videos"]
+      期望 ["Videos"]
+PASS  盘根缓存过 ⇒ 只剩盘根
+      实得 [""]
+      期望 [""]
+PASS  深 3 层的独苗 ⇒ 原样
+      实得 ["a/b/c"]
+      期望 ["a/b/c"]
+PASS  互不相干的支线 ⇒ 各给各的
+      实得 ["music2/yyy1","videos2/xxx1"]
+      期望 ["music2/yyy1","videos2/xxx1"]
+PASS  同层两条记录 ⇒ 去重 + count 取大
+      实得 [["videos",9]]
+      期望 [["videos",9]]
+PASS  path / name
+      实得 ["H:/a/b/c","c"]
+      期望 ["H:/a/b/c","c"]
+PASS  盘根的地址与名字
+      实得 ["#SER","盘根"]
+      期望 ["#SER","盘根"]
+PASS  离线地址保留反斜杠
+      实得 ["#SER/videos\\aaa"]
+      期望 ["#SER/videos\\aaa"]
+PASS  排序按路径、不看条目数
+      实得 ["aaa","bbb","zzz"]
+      期望 ["aaa","bbb","zzz"]
+PASS  没有缓存记录 ⇒ 空数组
+      实得 []
+      期望 []
+PASS  尾部反斜杠记录 ⇒ 地址无尾分隔符
+      实得 [["videos","H:/videos"]]
+      期望 [["videos","H:/videos"]]
+
+=== 全部通过 ===

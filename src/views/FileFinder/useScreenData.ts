@@ -18,6 +18,7 @@ import type { OpenMode } from 'electron/server/nedb';
 import type { WiredFileInfo } from '../../../electron/server/index';
 import { getPlaylistItems } from './playlist';
 import type { PlaylistDetail } from './playlist';
+import { HOME_PATH } from './useNavStack';
 
 /** 与页面 `NavEntry` 同形（这里只读这四样，别把整个导航条目搬进来） */
 export interface ScreenTarget {
@@ -180,7 +181,29 @@ export function useScreenData(deps: ScreenDataDeps) {
     };
 
     /**
-     * 加载某一屏的**唯一出口**：目录屏走 `fetchFolder`，清单屏走 `fetchPlaylistItems`。
+     * 首页那一屏（见 `useNavStack.ts` 的 `HOME_PATH`）。
+     *
+     * 它**没有数据源** —— 首页画的是盘列表，而盘列表归 `useHomeDisks` 管
+     * （那里零读盘、只认 `/getDisks` 的内存聚合）。所以这里只做三件事：
+     * 让列表清空（`fileList` 因此为空 ⇒ 网格不会留着上一屏的卡片）、
+     * 与列表**同一拍**把词清掉（同 `commit` 的纪律）、把还在飞的请求作废。
+     *
+     * ⚠️ 不 `notify` / 不 `loadingBar.error`：进首页不是失败，是导航。
+     * ⚠️ `loading = false`：上一屏的请求已被序号作废，转圈必须当场停 ——
+     *    否则首页顶上会一直转一条永远不结束的进度条。
+     */
+    const showHome = (search?: SearchAdopt) => {
+        ++fetchSeq;
+        deps.loading.value = false;
+        deps.failKind.value = '';
+        commit([], search);
+        loadingBar.finish();
+        return Promise.resolve();
+    };
+
+    /**
+     * 加载某一屏的**唯一出口**：目录屏走 `fetchFolder`，清单屏走 `fetchPlaylistItems`，
+     * **首页走 `showHome`**（没有取数，只是把列表清空）。
      *
      * 为什么必须收成一个口：取数调用点原有 6 个（进入 / 返回 / 刷新 / apply 后 /
      * 扫描收尾 / 换盘降级），逐点加 `if (entry.pl)` 就是 6 处分支 —— 漏一处的症状是
@@ -193,6 +216,9 @@ export function useScreenData(deps: ScreenDataDeps) {
         const search = opts.adoptSearch
             ? { from: deps.searchText.value, to: entry.searchText ?? '' }
             : undefined;
+        // 首页是哨兵屏（见 `HOME_PATH`）：**不取数**，但必须走同一条"落地"路径 ——
+        // 递增序号让还在飞的那次请求闭嘴（否则它回来会把列表又填上，首页下面冒出上一屏的卡片）
+        if (entry.path === HOME_PATH) return showHome(search);
         if (entry.pl) return fetchPlaylistItems(entry.pl.id, search);
         return fetchFolder(entry.path, entry.mode, { flat: opts.flat, search });
     };
