@@ -265,8 +265,12 @@
 
     .pick-badge {
         position: absolute;
-        top: 2px;
-        right: 2px;
+        /* ⚠️ 2026-11-11：2px → 6px（业主：「换封面的选中图标太靠边缘」）。
+           2px 时这颗 16px 的圆直接压在封面的 10px 圆角上，被弧线切掉一角，
+           看起来像"从边上挤出来的"。6px 让整个圆都落在圆角之内。
+           ⚠️ 与 `.pl-badge` 同步改 —— 两者是同一层的两颗角标，只调一颗会让左右不对称。 */
+        top: 6px;
+        right: 6px;
         /* ⚠️ 契约的"卡片标记"层：必须压过封面图（否则换封面时勾选圈看不见，
            2026-10-22 主人报）。 */
         z-index: var(--z-card-mark);
@@ -278,15 +282,41 @@
         font-style: normal;
         border-radius: 50%;
         background-color: var(--ff-status-ok);
-        box-shadow: 0 0 0 1px var(--ff-on-highlight);
+        /**
+         * 两层：**白色隔断 + 小落影**（2026-11-11，业主：「两个图标都容易和背景混在一起，容易眼花」）。
+         *
+         * 判据与焦点环同一条（见 `[data-cursor]`）：**标记不能直接压在照片上**。
+         * 封面的颜色是不可控输入 —— 绿勾压到偏绿的封面上、橙星压到暖色封面上就糊成一个色块。
+         * · 白环负责"和照片隔开"：2px 是下限，1px 会被封面边缘的像素噪声吃掉。
+         * · 落影负责"在白/浅色封面上也能定界"：那张照片平时是白的，白环贴上去等于没画。
+         * 落影直接复用 `--ff-ctl-shadow`（1px 3px 的黑影，语义就是"小元素的厚度"），
+         * 不新造 token —— 它和开关拇指那颗影是同一个工种。
+         */
+        box-shadow:
+            0 0 0 2px var(--ff-on-highlight),
+            var(--ff-ctl-shadow);
 
+        /**
+         * 对勾：一个「左边框 + 下边框」的 L 形，绕自身中心转 -45° 得到。
+         *
+         * ⚠️ 居中必须用 `inset: 0` + `margin: auto`，**不能手写 left/top**（2026-11-11
+         * 业主：「勾号视觉上偏上，没有居中」）。
+         * 原因：`left/top` 量的是**未旋转**的盒子，而 `rotate` 以盒子中心为轴、
+         * 转完之后的视觉包围盒比原来大一圈（宽 + 高)/√2）。原来写 `top: 3px`，
+         * 盒子自然中心落在 y=5，而圆心是 y=8 ⇒ 整整偏上 3px。
+         * `margin: auto` 让未旋转的盒子在圆心，绕中心转就不会跑。
+         *
+         * ⚠️ 不加 `box-sizing: border-box`：这里要的就是 content-box 的 7×4
+         * **内容区** + 2px 边框（实际 11×8），旋转后在 16px 圆里刚好撑满、
+         * 笔画够粗。加了 border-box 勾会缩水一截。
+         */
         &::after {
             content: '';
             position: absolute;
-            left: 4px;
-            top: 3px;
+            inset: 0;
             width: 7px;
             height: 4px;
+            margin: auto;
             border-left: 2px solid var(--ff-on-highlight);
             border-bottom: 2px solid var(--ff-on-highlight);
             transform: rotate(-45deg);
@@ -299,8 +329,10 @@
        ⚠️ `z-index` 走契约的"卡片标记"层（同 pick-badge）：压过封面图。 */
     .pl-badge {
         position: absolute;
-        top: 2px;
-        left: 2px;
+        /* 与 `.pick-badge` 同级同值：两颗角标分居左右，边距必须一样，
+           否则一眼就看出"一边贴边、一边留缝"。6px 的理由见 `.pick-badge`。 */
+        top: 6px;
+        left: 6px;
         z-index: var(--z-card-mark);
         display: block;
         width: 16px;
@@ -314,7 +346,13 @@
         border-radius: 50%;
         color: var(--ff-on-highlight);
         background-color: var(--ff-status-warn);
-        box-shadow: 0 0 0 1px var(--ff-mask);
+        /* 与 `.pick-badge` **逐条相同**（白隔断 2px + `--ff-ctl-shadow`）。
+           ⚠️ 原来是 1px 的 `--ff-mask`（黑环），和绿勾的白环不一致 ——
+           一颗白描一颗黑描，同屏出现就是两种"记号语言"，正是"眼花"的一半来源。
+           判据见 `.pick-badge` 那段。 */
+        box-shadow:
+            0 0 0 2px var(--ff-on-highlight),
+            var(--ff-ctl-shadow);
 
         &::before {
             content: '★';
