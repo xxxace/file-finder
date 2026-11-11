@@ -106,6 +106,26 @@ export const SFX_RECIPES = {
         ],
     },
     /**
+     * 「同一作品多分片」弹层里按回车 / 双击选定（Sound Lab「Halo」：
+     * A warm confirm for choosing a card —— 逐字就是"选一张卡"）。
+     *
+     * ⚠️ 为什么不用名字更直白的「Enter」：那个配方第一层是 `type:'sample'` + `THOCK`
+     *    **真实键帽录音**，要拖 `samples.js`（98KB base64）才出得了声。本仓 13 个音全是
+     *    Web Audio 合成、零音频资产；为一个回车引整套采样 + 开一个"录音音色族"不值。
+     *    主人 2026-11-11 的判据是「名称对得上行为」：Halo 对的是"选一张卡"这个**行为**，
+     *    Enter 对的只是"按了哪个键"。
+     * ⚠️ 数值是官方 `hz(76)` / `hz(83)` / `hz(76)*1.03` 换算来的（本仓用字面频率）：
+     *    659.26 / 987.77 / 679.04。
+     */
+    halo: {
+        duration: 0.36, seed: 23, loudness: -19, lowpass: 7500,
+        reverb: { mix: 0.18, decay: 0.6, predelay: 0.01, damp: 5500 },
+        layers: [
+            { type: 'tone', freq: { from: 659.26, to: 679.04, time: 0.08 }, fm: { ratio: 2, index: { from: 0.35, to: 0, time: 0.12 } }, env: { attack: 0.006, decay: 0.26, curve: 5 } },
+            { type: 'tone', freq: 987.77, at: 0.014, gain: -17, env: { attack: 0.006, decay: 0.16, curve: 5 } },
+        ],
+    },
+    /**
      * 移动硬盘插入（Sound Lab「Plug」：连接设备的上扬点击）。
      * 结构与官方逐字对齐：blip(180→150 triangle, 800Hz 低通) + knock(800) + 两颗 bell(81/86, bright .4)。
      */

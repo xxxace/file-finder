@@ -6,6 +6,13 @@
  * 三条纪律：
  *  ① 只给「离散、低频、缺视觉反馈」的事件上声音 —— hover / 方向键 / 打开预览一律不配
  *     （Apple HIG 同判据：声音只给离散动作；预览层弹出本身已是强反馈）。
+ *     ⚠️ **两处主人指定的例外**（都是"覆盖一般规则"，不是判据松动）：
+ *        · 左轨入口 hover（2026-11-09）
+ *        · 「同一作品多分片」弹层：方向键/鼠标悬浮移动 = `file-move`，
+ *          回车/双击选定 = `file-open`（2026-11-11，主人原话"方向盘切换视频时
+ *          或鼠标悬浮时用同一个音效，回车又是一个音效"）
+ *        理由：那一层只有 2~5 行、全是同名近似项，光标落在哪一行**没有视觉锚点**，
+ *        声音是唯一能确认"我走了一格"的反馈。
  *  ② 同一事件 60ms 内去重：连点/连扫不会变成机关枪。
  *  ③ 设置（开关 + 音量）走 localStorage `ff.sfx`，模式照抄 `useTheme.ts`；
  *     首次**任何用户手势前**浏览器不让出声 —— 引擎在首次 play 时才建 AudioContext，天然合规。
@@ -31,6 +38,8 @@ export type SfxEvent =
     | 'hover'         // 左轨入口 hover（主人 2026-11-09 指定，覆盖"不上 hover 音"的一般规则）
     | 'drive-in'     // 移动硬盘接入（音色 = Sound Lab「Plug」）
     | 'drive-out'    // 移动硬盘拔出（音色 = Sound Lab「Unplug」）
+    | 'file-move'    // 多分片弹层：方向键/悬浮移动一格（音色 = Sound Lab「Halo」）
+    | 'file-open'    // 多分片弹层：回车/双击选定（音色 = Sound Lab「Halo」）
     | 'warn'          // 警告 / 注意（nudge）
     | 'fail';         // 失败 / 没成（shrug）—— 与 warn 是两件事：警告是"注意一下"，失败是"没成"
 
@@ -47,6 +56,12 @@ const EVENT_RECIPE: Record<SfxEvent, SfxRecipe> = {
     hover: SFX_RECIPES.hover,
     'drive-in': SFX_RECIPES.plug,
     'drive-out': SFX_RECIPES.unplug,
+    // ⚠️ 2026-11-11：业主先定"移动=Notch、选定=Halo"，同一天改口「悬浮的方向键切换
+    // 现在用的 Notch 我要变成 Halo」⇒ 移动与选定**同音**。
+    // 代价：移动中听不出"走了一格"和"已经打开"的区别，靠视觉兜（实蓝高亮 / 播放器启动）。
+    // 要恢复区分度，把下面这行改回 `SFX_RECIPES.notch` 就行（配方还在，没删）。
+    'file-move': SFX_RECIPES.halo,
+    'file-open': SFX_RECIPES.halo,
     warn: SFX_RECIPES.nudge,
     fail: SFX_RECIPES.shrug,
 };
@@ -128,6 +143,9 @@ export function preloadSfx() {
         const common: SfxEvent[] = [
             'hover', 'menu-click', 'mode', 'switch-on', 'theme-light', 'theme-dark', 'success',
             'drive-in', 'drive-out',
+            // 弹层两个都要：`file-move` 是**连按**（第一次迟一拍会被当成"没反应"），
+            // `file-open` 是"按下去就要出声"，迟了会盖在播放器启动之后。
+            'file-move', 'file-open',
         ];
         common.forEach((event) => preloadSound(EVENT_RECIPE[event] as unknown as Recipe));
     }));

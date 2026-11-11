@@ -1,0 +1,21 @@
+ok    TST-003.mp4          < TST-003-2.mp4
+ok    TST-003.mp4          < TST-003-10.mp4
+ok    TST-003-2.mp4        < TST-003-10.mp4
+ok    TST-001.mp4          < TST-001A.mp4
+ok    TST-001A.mp4         < TST-001B.mp4
+ok    CD1.mp4              < CD10.mp4
+ok    a.mp4                < b.mkv
+
+ok    整表排序
+       TST-001.mp4
+       TST-001A.mp4
+       TST-001B.mp4
+       TST-003.mp4
+       TST-003-2.mp4
+       TST-003-3.mkv
+       TST-003-10.mp4
+
+ok    大小写不敏感
+ok    同 stem 不同扩展名有确定顺序
+
+10/10 通过

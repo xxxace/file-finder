@@ -1,38 +1,12 @@
-/* 卡片底座与多文件弹层条目 */
+/* 网格卡片 + 多文件弹层（纵向菜单） */
 
 /**
- * 卡片底座：网格格子与弹层条目**共用**的那一点东西（盒模型 + 边框 + 过渡）。
- *
- * ⚠️⚠️ **只放两者真的共用的属性。** 原来这个选择器里还塞着网格的整套尺寸算法
- *（`--item-height` 的 `!important` 高度、`white-space:nowrap`…），于是它们**原样漏进了弹层**：
- * 弹层的 `.file-cover` 被压成 0 高（等于从来没画出来）、文件名被压成单行 + 尾部省略
- *（业主 2026-10-05：「多个文件弹出层好丑」，4 个文件显示成一模一样的 `[TST-59…`）。
- * ⇒ 按"谁的属性谁持有"拆开：网格那半在下面 `.image-box-item`，弹层那半在 `.file-item`。
- *
- * ⚠️ 2026-10-21 再拆一次：网格卡片现在是"封面 + 标题 + 角标"，**没有边框也没有悬停底色**
- *（B 站那套）。所以这条只留给弹层 —— 之前忘了拆，网格 hover 时冒出一圈灰边框，
- * 正是主人截图里"悬浮难看"的那一条。
+ * ⚠️ 这个文件里**没有**"卡片底座"了（2026-11-11）。
+ * 原来有个 `.file-item` 底座给网格与弹层共用，结果网格的尺寸算法一路漏进弹层
+ * （`--item-height` 的 `!important` 高度把弹层图标压成 0 高、名字压成单行），
+ * 拆了两次才干净。弹层现在改成纵向菜单，与网格**再没有任何共用属性** ——
+ * 别再造一个"共用底座"，那正是这个文件历史上两次翻车的来源。
  */
-.file-item {
-    display: flex;
-    flex-direction: column;
-    align-items: center;
-    box-sizing: border-box;
-    border: 1px solid transparent;
-    transition: border-color .1s ease-in-out, box-shadow .1s ease-in-out,
-        background-color .1s ease-in-out, transform .18s cubic-bezier(.2, .9, .3, 1.1);
-    user-select: none;
-
-    &:hover {
-        border-color: var(--ff-highlight-line);
-        background-color: var(--ff-highlight-weak);
-    }
-
-    &:active {
-        border-color: var(--ff-highlight);
-        background-color: var(--ff-highlight-weak);
-    }
-}
 
 /**
  * 网格卡片（B 站视频卡的骨架）。
@@ -282,14 +256,28 @@
 }
 
 /**
- * 弹层里的文件列表容器（与 `.hstack` 同一个节点）。
+ * 多文件弹层 —— **纵向菜单**，材质是 tooltip 那一套（`--ff-tooltip-*` 反色深片）。
  *
- * `.hstack` 本身已经会换行，这里只补一条**宽度上限**：4 个 150px 的条目
- * 加间距正好 636px，所以 660px 恰好「一行 4 个」；再多就换行，
- * 而不是把弹层横向撑到屏幕外。
+ * 为什么不是卡片：这一层是"从 2~5 个近似项里挑一个"的短列表。150×116 的卡片只装
+ * 三个短字段 ⇒ 图标是缩得很大的系统图、名字居中折行、大小被 `margin-top:auto` 推到底，
+ * 眼睛要在弹层里上下扫两趟才凑齐"这是哪个文件、多大"。
+ *
+ * 为什么是反色深片：它浮在**封面照片**上。浅色白片压在照片或白卡片上都"没有边界可依"
+ * （同 `--ff-tip-*` 那段注释的判据），业主 2026-11-11 也明确要 tooltip 那套而不要
+ * naive popover 的白底 + 小三角。
+ * ⚠️ 所以行内**不能用** `--ff-text-1/2`（深色主题下它们是浅字，压在深片上是反的）——
+ *    一律走 `--ff-tooltip-text` + `opacity`，底色走 `--ff-tooltip-hover` / `--ff-highlight`。
+ *
+ * 宽度固定 300：名字靠两段省略（见 `fileNameSplit.ts`）自适应，弹层**不许**被长名字撑开
+ * —— 否则同一个封面在长名字上弹得比别人宽，"这一层在哪"就没有稳定形状。
  */
 .file-list {
-    max-width: min(660px, 88vw);
+    display: flex;
+    flex-direction: column;
+    gap: 1px;
+    width: 300px;
+    max-width: min(300px, 88vw);
+    color: var(--ff-tooltip-text);
 
     /**
      * ⚠️ 抑制**浏览器默认焦点环**（业主 2026-10-05：「弹出层是橙色边框」）。
@@ -301,7 +289,7 @@
      *
      * 为什么该抑制：这个容器 `tabindex="-1"` 的意义就是**接住方向键**
      *（`openFileList` 里那句 `focus()`，见它上面的注释），它不是一个"控件"；
-     * 这一层的"我在哪"由 `.file-cursor` 的蓝色边框表达 ⇒ 焦点环纯属噪音。
+     * 这一层的"我在哪"由 `.file-cursor` 的淡蓝底表达 ⇒ 焦点环纯属噪音。
      * 声明放在**元素自己**身上，而不是给将来每个 focus 调用点加守卫。
      */
     &:focus,
@@ -311,80 +299,102 @@
 }
 
 /**
- * 弹层条目：「同一作品的多个文件」，双击封面时问打开哪一个。
- * ⚠️ 文件名往往同前缀、尾部才是区分点 ⇒ 必须可换行（最多 3 行）+ 类型图标 + 灰色大小，别用 nowrap / 定高截断。
- * ⚠️ 这里不该出现 !important：若需要靠它压过网格样式，说明拆分没拆对。 */
+ * 一行 = 一个候选文件。图标 / 名字 / 大小三段，名字占满剩余、两头对齐。
+ *
+ * 悬浮与选中是**两档**：悬浮走 `--ff-tooltip-hover`（反色片上的一层白光），
+ * 选中走**实蓝 + 白字**（`--ff-highlight` / `--ff-on-highlight`）。
+ * ⚠️ 选中不用"淡蓝底"：这一片本身是 86% 黑，12% 蓝压上去几乎看不见；
+ *    macOS 深色菜单的键盘光标也是实蓝底白字。
+ *
+ * ⚠️ 选中态**不画边框**：32px 的行上加 1px 框会盖过文字，读起来像输入框。
+ */
 .file-item {
-    width: 150px;
-    height: 116px;
-    padding: 10px 8px;
-    margin: 0; // 间距只由 `.hstack` 的 gap 提供 → 一处来源
-    justify-content: flex-start; // 图标统一贴顶 ⇒ 一排卡片的图标对齐，好扫
-    gap: 4px;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    height: 32px;
+    padding: 0 8px;
+    box-sizing: border-box;
+    border-radius: 6px;
+    cursor: pointer;
+    user-select: none;
+    transition: background-color var(--ff-dur-hover) ease;
+
+    &:hover {
+        background-color: var(--ff-tooltip-hover);
+    }
+
+    /* ⚠️ 必须写在 `&:hover` **之后**：两者特异性相同（都是两个类），
+       鼠标停在选中行上时要保持蓝色，不能变成灰色的悬停 */
+    &.file-cursor {
+        background-color: var(--ff-highlight);
+
+        .file-icon,
+        .file-name,
+        .file-size {
+            color: var(--ff-on-highlight);
+            opacity: 1;
+        }
+    }
+
+    .file-icon {
+        flex: 0 0 auto;
+        color: var(--ff-tooltip-text);
+        opacity: 0.62;
+    }
+
+    /* 图标与大小的"变亮"要和行底色同一个节拍 —— 只给 color 过渡的话，
+       选中那一刻 opacity 会从 .62 直接跳到 1，看起来是"啪"地一闪。 */
+    .file-icon,
+    .file-size {
+        transition: color var(--ff-dur-hover) ease, opacity var(--ff-dur-hover) ease;
+    }
 
     /**
-     * 类型图标。`fiv-cla` 的尺寸就是 `1em`（`line-height:1em; width:.72em`）
-     * ⇒ 用 `font-size` 定大小。`.file-cover` 自带的 `blank.svg` 是**未知扩展名的兜底**
-     *（`fiv-icon-*` 有匹配时按注入顺序覆盖它）。
+     * 名字：两段拼起来，**中间没有 gap、没有空格**。
+     *
+     * 宽度够时 `head` 与 `tail` 首尾相接 ⇒ 视觉上就是一个完整文件名（不会平白多个 `…`）；
+     * 放不下时只有 `head` 出省略号，`tail`（扩展名 + 前 3 字符）**永不收缩**。
+     * 为什么这样切：这几个文件名的前缀往往一样，区分点（`A`/`B`、`前編`/`後編`）
+     * 和扩展名都在尾部 —— 尾部省略会把唯一的区分点藏起来。
      */
-    .file-cover {
-        font-size: 26px;
-        margin: 0;
+    .file-name {
+        display: flex;
+        flex: 1 1 auto;
+        min-width: 0; // flex item 的必要项：不加就收缩不到内容以下，省略号永不出现
+        /* ⚠️ `overflow:hidden` 是兜底：尾段（扩展名 + 3 字符）在极端窄的容器里
+           仍可能比这一行剩下的空间宽，不收口就会压到右边的大小上。 */
+        overflow: hidden;
+        white-space: nowrap;
+        font-size: var(--ff-fs-body);
+        color: var(--ff-tooltip-text);
+    }
+
+    .name-head {
+        /* 默认就是 `0 1 auto`，写明是为了让"它可以被压到 0"这件事在代码里看得见 */
+        flex: 0 1 auto;
+        min-width: 0;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+    }
+
+    .name-tail {
         flex: 0 0 auto;
     }
 
     /**
-     * 文件名。**必须换行** —— 这一层几个文件名的前缀往往一样，
-     * 尾部省略等于把**唯一的区分点**藏起来。最多 3 行，装不下就截断
-     *（完整名字在整格的 `title` 里）。
-     */
-    span {
-        /* 多行"..."：**只有 `-webkit-box` 这一种 display 能让 `-webkit-line-clamp` 生效**
-           （`block` / `-webkit-box` 之外都不吃这个属性 —— 设了也静默无效）。
-           业主 2026-10-05：「标题过长没有省略号」—— 上一版只 `overflow:hidden`，
-           长名字是被**硬切**的，看不出"后面还有"。 */
-        display: -webkit-box;
-        -webkit-box-orient: vertical;
-        -webkit-line-clamp: 3; // 与下面 `max-height` 同一个预算：3 行 × 15px
-        width: 100%;
-        max-height: 45px; // ⚠️ 兜底：万一哪个版本不认 line-clamp，也不许把卡片撑破
-        line-height: 15px;
-        font-size: 13px;
-        color: var(--ff-text-1);
-        font-weight: 400;
-        text-align: center;
-        white-space: normal;
-        /* ⚠️ 不能写 `word-break: break-all`（那会**逐字符**断，把 `[TST-593]`、`CD1.mp4`
-           这种拉丁串也从中间劈开 —— 第一版就是，读起来很碎）。
-           `overflow-wrap: break-word` 只在"整词放不下"时才断，中日韩本来就能逐字折行。 */
-        overflow-wrap: break-word;
-        overflow: hidden;
-    }
-
-    /**
-     * 大小。⚠️ 用 `<i>` 而**不是** `<span>` —— 否则会被上面那条 `span` 规则
-     * （`max-height: 45px` / `font-size: 13px`）一起吃掉。
-     * 与网格里那个选中角标用 `<i>` 同一个理由。
+     * 大小：`<i>` 而不是 `<span>`（`span` 在这里是 `.file-name` 的组成部分，
+     * 用同名标签容易在样式上互相吃掉）。右端对齐、比名字低一档。
+     * 次要信息用 opacity 降档而**不是**换 `--ff-text-2`：后者在深色主题下是浅灰，
+     * 压在这个反色片上会跟前一个字重色（两套色系不能混用）。
      */
     .file-size {
         flex: 0 0 auto;
-        /* 钉在卡片底部：名字 1～3 行都能变 ⇒ 让多出来的空白落在**名字和大小之间**，
-           而不是整块吊在卡片下方（`align-items/justify-content` 都做不到这一条 ——
-           它们的作用对象是整组子元素，不是"最后一个"). */
-        margin-top: auto;
         font-style: normal;
-        font-size: 12px;
-        line-height: 14px;
-        color: var(--ff-text-2);
-    }
-
-    /* 键盘高亮项（Enter 打开多文件封面后 ←→ 走的就是它）。
-       只改 border-color：.file-item 从共用底座继承了 1px transparent 边框与 transition，
-       不加任何盒模型属性 —— 与网格 .cursor 同一套焦点语言（1px 主色，不是双环）。 */
-    &.file-cursor {
-        border-color: var(--ff-highlight);
-        // 与 `.image-box-item[data-cursor]` **逐条相同**（边框 + 淡底，不碰盒模型、不加阴影）
-        background-color: var(--ff-highlight-weak);
+        font-size: var(--ff-fs-eyebrow);
+        color: var(--ff-tooltip-text);
+        opacity: 0.62;
     }
 }
 

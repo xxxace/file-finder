@@ -1,0 +1,14 @@
+ok    "TST-001A.mp4"                               head="TST-0"                          tail="01A.mp4"
+ok    "TST-001B.mp4"                               head="TST-0"                          tail="01B.mp4"
+ok    "abc.mp4"                                    head=""                               tail="abc.mp4"
+ok    "a.mp4"                                      head=""                               tail="a.mp4"
+ok    "前編.mp4"                                     head=""                               tail="前編.mp4"
+ok    "[TST-002]完全版 特典映像 前編.mp4"                   head="[TST-002]完全版 特典映像"              tail=" 前編.mp4"
+ok    "[TST-002]完全版 特典映像 後編.mp4"                   head="[TST-002]完全版 特典映像"              tail=" 後編.mp4"
+ok    "a.b.c.mp4"                                  head="a."                             tail="b.c.mp4"
+ok    "README"                                     head="README"                         tail=""
+ok    ".mp4"                                       head=".mp4"                           tail=""
+ok    "x.MKV"                                      head=""                               tail="x.MKV"
+ok    "这是一个非常非常非常长的中文文件名没有任何扩展名"                   head="这是一个非常非常非常长的中文文件名没有任何扩展名"       tail=""
+
+12/12 通过

@@ -1,6 +1,12 @@
 /**
- * 右键菜单（Apple 式纵向菜单）。内容被 n-popover teleport 到 body，scoped 够不到。
- * 比例对齐 Apple PC 菜单：行高 26、项内距 7、菜单内衬 3、圆角 6、发丝分隔线内缩。
+ * **teleport 到 body 的浮层内容**（右键菜单 / 多文件弹层）。
+ *
+ * 这些节点被 `n-popover` 搬到 body 之后拿不到本组件的 scoped 属性 ⇒ 样式只能走
+ * 非 scoped 文件 + 各自的前缀（`.ctx-` / `.file-`）兜作用域。
+ * （文件名沿用 `ctx-menu` 是历史原因；它管的是"浮层内容的尺度"，不只是右键菜单。）
+ *
+ * 右键菜单部分比例对齐 Apple PC 菜单：行高 26、项内距 7、菜单内衬 3、圆角 6、
+ * 发丝分隔线内缩。多文件弹层见文件末尾。
  */
 /* ════ 右键菜单（2026-11-09 重构：横排小按钮 → Apple 式纵向菜单）══════
    内容被 n-popover teleport 到 body，scoped 够不到 ⇒ 非 scoped + .ctx- 前缀兜作用域。
@@ -72,5 +78,30 @@
     height: 1px;
     margin: 3px 8px;
     background: var(--ff-line);
+}
+
+/* ════ 多文件弹层（2026-11-11）════
+   材质走 **tooltip 那一套**（`--ff-tooltip-*`：圆角 8 / 反色深片 / 磨砂 / 发丝 + 落影），
+   不用 naive popover 的白底 + 小三角（业主 2026-11-11：「不要现在这种 n-popover 的样式，
+   还带小三角形不好看」）。判据与 tooltip 逐字相同：这层浮在封面照片上，浅色白片在
+   照片/白卡片上都**没有边界可依**，反色深片是唯一在任何底色上都立得住的材质。
+
+   ⚠️ 三件事必须一起做，少一件就退回 naive 的默认样子：
+     ① 模板 `:show-arrow="false"` —— 三角是独立 DOM，CSS 藏不干净
+     ② `--n-*` 必须带 `!important`：naive 把主题变量**内联**写在 popover 根节点上
+        （`PopoverBody.mjs:180`），普通声明赢不了内联值；属性再补一份兜住变量名变更
+     ③ 行内间距/颜色在 `styles/list.less`（本组件节点，scoped 够得到），这里只处理弹层壳 */
+.n-popover:has(.file-list) {
+    --n-padding: 4px !important;
+    --n-color: var(--ff-tooltip-bg) !important;
+    --n-text-color: var(--ff-tooltip-text) !important;
+    --n-border-radius: 8px !important;
+    --n-box-shadow: var(--ff-tooltip-shadow) !important;
+    padding: 4px;
+    border-radius: 8px;
+    background: var(--ff-tooltip-bg);
+    color: var(--ff-tooltip-text);
+    box-shadow: var(--ff-tooltip-shadow);
+    backdrop-filter: var(--ff-tooltip-backdrop);
 }
 

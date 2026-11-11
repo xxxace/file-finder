@@ -397,25 +397,37 @@
                 </div>
             </div>
         </Transition>
-        <!-- 「这个封面下有哪几个文件」那一层。
+        <!-- 「这个封面下有哪几个文件」那一层 —— 2026-11-11 重构为**纵向菜单**。
+             为什么不是卡片网格：这一层是"从 2~5 个近似项里挑一个"的短列表，不是内容网格。
+             原来的 150×116 卡片带系统大图标（Windows 紫色立体方块）、名字居中折行、
+             大小被推到卡片底部，和右键菜单那套 Apple 尺度完全两个语言。
+             现在照 `ctx-menu.css`：32 行高、16 线条图标、名字左对齐、大小右对齐。
+
+             ⚠️ 名字拆两段（`fileNameSplit.ts`）而不是 `text-overflow: ellipsis`：
+             这几个文件名的前缀往往一模一样，区分点（A/B、前編/後編）和扩展名都在尾部，
+             尾部省略正好把唯一的区分点藏起来。两段在宽度够时首尾相接、无省略号。
+
              ⚠️ 键盘进出全靠**焦点**，不是靠额外的守卫分支：
              `isGridKeyBlocked` 的 `e.target !== document.body` 在焦点落在某一项上时
              自动为真 ⇒ 网格的方向键监听收不到事件，**两个选择器不会打架**。
              而这一层若不给焦点，网格方向键就会穿透进来（用户以为在网格里按了方向键，
              结果焦点还停在一个看得见却没焦点的弹层上）。
              两条都是**必做项**，少任何一条键盘就失灵。-->
-        <n-popover :show="popover.visible" :x="popover.x" :y="popover.y" trigger="manual" placement="bottom"
-            @clickoutside="closeFileList">
-            <!-- 同理换掉 n-space：这里 v-for 的是文件列表，个数天生会变 -->
-            <div class="hstack file-list" tabindex="-1" ref="fileListBox" @keydown.stop="onFileListKeydown">
-                <div v-for="(f, i) in popover.files" class="file-item" :class="{ 'file-cursor': i === fileCursor }"
-                    :key="f.name" @dblclick="openFile(f.name)" :title="f.name + ` ${getSize(f.size) || ''}`">
-                    <!-- 类型图标（`.file-cover` + fiv）。**必须带上 `fiv-cla fiv-icon-*`** ——
-                         漏掉后半截时它只剩 `blank.svg` 且没有尺寸 ⇒ 高 0、等于没画，
-                         整个条目就变成"一大块空白 + 一行截断的名字"（2026-10-05 业主报的丑） -->
-                    <div class="file-cover fiv-cla" :class="`fiv-icon-${extOf(f.name)}`" aria-hidden="true"></div>
-                    <span>{{ f.name }}</span>
-                    <!-- 大小用 `<i>`：`.file-item span` 那条规则会吃掉 `span` -->
+        <n-popover :show="popover.visible" :x="popover.x" :y="popover.y" trigger="manual" placement="bottom-start"
+            :show-arrow="false" @clickoutside="closeFileList">
+            <!-- 裸 flex（不是 n-space / .hstack）：这里 v-for 的是文件列表，个数天生会变 -->
+            <div class="file-list" tabindex="-1" ref="fileListBox" @keydown.stop="onFileListKeydown">
+                <div v-for="(f, i) in rows" class="file-item" :class="{ 'file-cursor': i === fileCursor }"
+                    :key="f.name" @dblclick="openFile(f.name)" @mouseenter="hoverFile(i)"
+                    :title="f.name + ` ${getSize(f.size) || ''}`">
+                    <!-- 线条图标（与右键菜单同族），**不用** `fiv-icon-*` 那套系统大图标；
+                         整层都是同一部片的文件，图标只负责"这是视频还是图片"，不负责好看。 -->
+                    <n-icon class="file-icon" :size="16" :component="iconOf(f.name)" />
+                    <!-- ⚠️ 两段之间**不许有空格/换行**：宽度够时它们必须首尾相接成完整文件名 -->
+                    <span class="file-name">
+                        <span class="name-head">{{ f.head }}</span><span class="name-tail">{{ f.tail }}</span>
+                    </span>
+                    <!-- 大小用 `<i>`：`.file-name` 那条 flex 规则会吃掉 `span` 的默认行为 -->
                     <i class="file-size">{{ getSize(f.size) }}</i>
                 </div>
             </div>
@@ -532,7 +544,7 @@ import { useNavStack } from './useNavStack';
 import type { NavEntry } from './useNavStack';
 import { dissolveGrid } from './gridDissolve';
 import { decideOpen, isMultiFileCard } from './openDecision';
-import { SearchOutline, RefreshOutline, SyncOutline, ArrowBackOutline, ArrowForwardOutline, CloseOutline, CopyOutline, StarOutline, ChevronForwardOutline, LinkOutline, FolderOpenOutline, CloudDownloadOutline, ImageOutline, PersonOutline, SettingsOutline, ImagesOutline } from '@vicons/ionicons5';
+import { SearchOutline, RefreshOutline, SyncOutline, ArrowBackOutline, ArrowForwardOutline, CloseOutline, CopyOutline, StarOutline, ChevronForwardOutline, LinkOutline, FolderOpenOutline, CloudDownloadOutline, ImageOutline, PersonOutline, SettingsOutline, ImagesOutline, VideocamOutline, MusicalNotesOutline, DocumentOutline } from '@vicons/ionicons5';
 import { MoreVertical28Filled } from '@/components/icons/fluent';
 import { FlatCards24 } from '@/components/icons/grid';
 import { playSfx } from '@/utils/sfx';
@@ -662,7 +674,7 @@ const showAvatarModal = ref(false);
  * ⚠️ openFile 反过来要读 popover.cover 算父目录，所以用闭包传它：
  *    此刻 openFile 还没声明，直接传值会当场 TDZ。
  */
-const { popover, fileCursor, fileListBox, openFileList, closeFileList, onFileListKeydown } =
+const { popover, rows, fileCursor, fileListBox, openFileList, closeFileList, onFileListKeydown, hoverFile } =
     useFileListPopover({
         isMultiFileCard,
         openFile: (name) => { void openFile(name); },
@@ -991,11 +1003,24 @@ const onCoverLoad = (e: Event) => {
 };
 
 /**
- * 扩展名（小写、不带点）。只有多文件弹层用它选 `fiv-icon-*` 的类型图标 ——
- * 服务端下发的 `files[]` 只带 `name` + `size`（`FileInfoFiles`），没有 ext 字段，
- * 而名字里本来就有。取不到就返回空串 ⇒ `fiv-icon-` 不匹配 ⇒ 兜底 `blank.svg`。
+ * 多文件弹层的行图标 —— **线条图标**，与右键菜单同族。
+ *
+ * 为什么不用 `fiv-icon-*`（`fileTypeIcon/` 那套 svg）：它是 Windows 大图标的风格
+ * （立体、高饱和、带底色），贴在 32px 的行里会变成一块紫方块，而全站其余地方
+ * 要么是封面图、要么是 `n-icon` 线条 —— 两套语言撞在一起就是"和设计系统不一致"。
+ * 这一层全是同一部片的文件，图标只回答"视频还是图片"，不承担装饰。
+ *
+ * ⚠️ 视频判据复用 `VIDEO_EXT_RE`（它自身与 `electron/server/videoExt.ts` 对齐），
+ *    不要在这里再写一份视频名单。
  */
-const extOf = (name: string) => (name.includes('.') ? name.split('.').pop()!.toLowerCase() : '');
+const IMAGE_EXT_RE = /\.(jpe?g|png|gif|webp|bmp|avif|heic|tiff?)$/i;
+const AUDIO_EXT_RE = /\.(mp3|flac|wav|m4a|aac|ogg|opus|wma|ape)$/i;
+const iconOf = (name: string) => {
+    if (VIDEO_EXT_RE.test(name)) return VideocamOutline;
+    if (IMAGE_EXT_RE.test(name)) return ImageOutline;
+    if (AUDIO_EXT_RE.test(name)) return MusicalNotesOutline;
+    return DocumentOutline;
+};
 
 
 // ── 清单（收藏分类）· 界面接线 ──────────────────────────────────────────────
@@ -1062,15 +1087,35 @@ const refreshAfterApply = () => {
 }
 
 /**
- * 卡片在视口里的中心坐标。**键盘路径专用**（鼠标路径有事件坐标）。
+ * 卡片在视口里的**锚点坐标** —— 弹层贴在这一格**下沿**（文件名称下面）往下展开。
+ * **键盘路径专用**（鼠标路径有事件坐标）。
+ *
+ * ## 为什么是 `r.bottom - 6`
+ *
+ * `r.bottom` 是卡片**盒子**的底边，而卡片底部还留着 `--item-pad-b`（`grid.less`：
+ * 宽松档 6 / 紧凑档 4）的内边距，用来给标题留呼吸空间。直接贴盒子底边 ⇒ 视觉上
+ * 弹层离文件名还差这一截（业主 2026-11-11：「默认能不能上调 4-8px？太靠下了，
+ * 离名称太远了」）。减 6 正好落在标题文字的下沿。
+ * ⚠️ 不读 `--item-pad-b`：它在 `.image-box` 上按密度档设，JS 侧读不到，
+ *    而两档只差 2px，取值 6 对紧凑档也不会错位到能看出来。
+ *
+ * ## 这一行被改过三次，判据记在这别再摆
+ *
+ *   · 初版：`r.bottom`，**没有**视口收敛 ⇒ 卡片靠屏幕底时整层溢出，业主「太靠下」。
+ *     当时真因是**缺收敛**，不是锚点错。
+ *   · 第二版：`r.top` + 收敛 ⇒ 改过头，业主「又太靠上了」。
+ *   · 现在：`r.bottom - 6` + 收敛 ⇒ 够空间就贴名称下面；撞视口底才上移恰好够的距离。
+ *
  * 拿不到元素时退回视口中心 —— 宁可弹在中间，也不能不弹。
  */
-const cardCenterOf = (item: WiredFileInfo) => {
+const cardAnchorOf = (item: WiredFileInfo) => {
     const el = imageBox.value?.querySelector<HTMLElement>(
         `.image-box-item[data-key="${CSS.escape(keyOf(item))}"]`,
     );
     const r = el?.getBoundingClientRect();
-    return { x: r ? r.left + r.width / 2 : window.innerWidth / 2, y: r ? r.top + r.height / 2 : window.innerHeight / 2 };
+    return r
+        ? { x: r.left, y: r.bottom - 6 }
+        : { x: window.innerWidth / 2, y: window.innerHeight / 2 };
 };
 
 const handleOpen = (e: MouseEvent, item: WiredFileInfo) => {
@@ -1131,7 +1176,7 @@ const onCursorConfirm = (item: WiredFileInfo) => {
             return;
         }
         case 'pick-from-list': {
-            const c = cardCenterOf(item);
+            const c = cardAnchorOf(item);
             openFileList(item, c.x, c.y);
             return;
         }
