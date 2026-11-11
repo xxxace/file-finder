@@ -34,7 +34,7 @@ const { isDark, toggleTheme } = useTheme();
 
 const active = computed<RailKey>(() => {
     const name = String(route.name || 'files');
-    return name === 'playlists' || name === 'cache' || name === 'settings' ? name : 'files';
+    return name === 'playlists' || name === 'cache' || name === 'tunnel' || name === 'settings' ? name : 'files';
 });
 
 const go = (key: RailKey) => {

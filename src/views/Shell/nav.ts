@@ -4,9 +4,9 @@
  *
  * 上面三个是"内容目的地"；设置放底部（B 站也是把设置压在最下面）。
  */
-import { BookmarkOutline, HomeOutline, TimeOutline } from '@vicons/ionicons5';
+import { BookmarkOutline, HomeOutline, TimeOutline, CubeOutline } from '@vicons/ionicons5';
 
-export type RailKey = 'files' | 'playlists' | 'cache' | 'settings';
+export type RailKey = 'files' | 'playlists' | 'cache' | 'tunnel' | 'settings';
 
 export const RAIL_ITEMS = [
     { key: 'files' as const, label: '文件', icon: HomeOutline },
@@ -23,11 +23,13 @@ export const RAIL_ITEMS = [
      * 小尺寸下不会糊成一团；而且它与 Playlists 页空态用的是同一个符号。
      */
     { key: 'playlists' as const, label: '收藏', icon: BookmarkOutline },
+    { key: 'tunnel' as const, label: '3D 漫游', icon: CubeOutline },
 ];
 
 export const RAIL_PATHS: Record<RailKey, string> = {
     files: '/',
     playlists: '/playlists',
     cache: '/cache',
+    tunnel: '/tunnel',
     settings: '/settings',
 };
