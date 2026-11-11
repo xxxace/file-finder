@@ -3,9 +3,10 @@
         ref="containerRef"
         class="tunnel-container"
         :class="{ 'is-fullscreen': isFullscreen }"
-        @mousemove="pingHudActivity"
-        @wheel="pingHudActivity"
-        @pointerdown="pingHudActivity"
+        @mousemove="onCanvasActivity"
+        @wheel="onCanvasActivity"
+        @pointerdown="onCanvasActivity"
+        @mouseleave="onContainerMouseLeave"
     >
         <!-- 3D WebGL 画布宿主容器 -->
         <div ref="stageRef" class="tunnel-stage"></div>
@@ -158,7 +159,7 @@ const isPaused = ref(false);
 const isFullscreen = ref(false);
 const showHint = ref(true);
 
-const isHudActive = ref(true);
+const isHudActive = ref(false);
 let hudTimer: ReturnType<typeof setTimeout> | null = null;
 let isHoveringCard = false;
 
@@ -173,6 +174,40 @@ function pingHudActivity() {
             isHudActive.value = false;
         }, 2800);
     }
+}
+
+function onCanvasActivity(e: MouseEvent | WheelEvent) {
+    if (!containerRef.value) return;
+    const rect = containerRef.value.getBoundingClientRect();
+    // 严格限制：只有鼠标指针确实在画布的可视矩形区域内部移动才算活动
+    if (
+        e.clientX < rect.left ||
+        e.clientX > rect.right ||
+        e.clientY < rect.top ||
+        e.clientY > rect.bottom
+    ) {
+        return;
+    }
+    pingHudActivity();
+}
+
+function onContainerMouseLeave() {
+    if (!isHoveringCard) {
+        if (hudTimer) {
+            clearTimeout(hudTimer);
+            hudTimer = null;
+        }
+        isHudActive.value = false;
+    }
+}
+
+function onWindowBlur() {
+    isHoveringCard = false;
+    if (hudTimer) {
+        clearTimeout(hudTimer);
+        hudTimer = null;
+    }
+    isHudActive.value = false;
 }
 
 function onCardMouseEnter() {
@@ -235,14 +270,14 @@ onDeactivated(() => {
 onMounted(() => {
     if (!stageRef.value) return;
 
-    pingHudActivity();
+    window.addEventListener('blur', onWindowBlur);
 
     controller = createAlbumCoverTunnel(stageRef.value, {
         theme: props.theme,
         autoTravel: true,
         onSelect: (item) => {
             activeCover.value = item;
-            pingHudActivity();
+            // 静默更新焦点封面数据，不在每次自动穿梭时误唤醒底栏
         },
         onHover: (item) => {
             if (item && item.id !== hoveredCover.value?.id) {
@@ -275,6 +310,7 @@ watch(
 );
 
 onBeforeUnmount(() => {
+    window.removeEventListener('blur', onWindowBlur);
     if (hudTimer) {
         clearTimeout(hudTimer);
         hudTimer = null;
