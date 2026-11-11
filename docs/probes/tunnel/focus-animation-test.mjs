@@ -150,4 +150,37 @@ for (const step of travelSteps) {
 }
 console.log(`PASS: Auto-travel strictly advances forward across center layers (step advance = ${travelSteps[0].advance.toFixed(1)} units, strictly monotonic)`);
 
+// 6. 验证相机穿梭逼近过程中的物理透视连续聚焦（无停顿后原地突变跳大）
+function simulateApproachContinuity() {
+    const D = 5.5;
+    const smooth = (a, b, x) => {
+        const t = Math.min(Math.max((x - a) / (b - a), 0), 1);
+        return t * t * (3 - 2 * t);
+    };
+
+    let prevScale = 1.0;
+    const history = [];
+
+    // 相机从距离 11.0 逼近到 0.0
+    for (let dist = 11.0; dist >= 0.0; dist -= 0.1) {
+        let isHero = 0;
+        if (dist < D) {
+            isHero = smooth(D, 0.0, dist);
+        }
+        const s = 1 + 0.7 * isHero;
+        // 每步跨度极小，无突变
+        assert(s >= prevScale - 1e-6, `Scale must not decrease during approach at dist=${dist}`);
+        assert(s - prevScale < 0.05, `Scale must not jump abruptly (jump = ${s - prevScale}) at dist=${dist}`);
+        prevScale = s;
+        history.push({ dist, s, isHero });
+    }
+
+    assert.strictEqual(history[0].s, 1.0, 'Start of travel at dist 11 must be 1.0');
+    assert(Math.abs(history[history.length - 1].s - 1.7) < 1e-6, 'Arrival at dist 0 must reach 1.7');
+    return history;
+}
+
+simulateApproachContinuity();
+console.log('PASS: Continuous optical blooming during travel (smoothly blooms 1.0 -> 1.7 during camera flight, 0 abrupt jump on arrival)');
+
 console.log('\nAll focus animation continuity tests passed successfully!');

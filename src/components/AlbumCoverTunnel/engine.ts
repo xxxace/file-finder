@@ -651,24 +651,26 @@ export function createAlbumCoverTunnel(
         camera.updateMatrixWorld();
 
         const focusZ = camera.position.z - FOCUS;
-        let heroL: { k: number; z: number; items: CoverItem[] } | null = null;
+        let focalCenter: CoverItem | null = null;
+        let minCenterDist = 1e9;
         for (const L of layers) {
             while (L.z > camera.position.z - 1) L.z -= NL * D;
             while (L.z < camera.position.z - 1 - NL * D) L.z += NL * D;
-            if (Math.abs(L.z - focusZ) < 1.2 && centerOf(L)) heroL = L;
+            const cCenter = centerOf(L);
+            if (cCenter) {
+                const dist = Math.abs(L.z - focusZ);
+                if (dist < minCenterDist) {
+                    minCenterDist = dist;
+                    focalCenter = cCenter;
+                }
+            }
         }
 
-        const newHero = heroL ? centerOf(heroL) : null;
         const inFlight = heroC && heroC.fl;
-        if (!inFlight && newHero && newHero !== heroC) {
-            const distToFocus = Math.abs(heroL!.z - focusZ);
-            if (distToFocus < 1.2) {
-                heroC = newHero;
-                // 继承逼近焦平面的自然过渡系数，绝不归零！
-                heroAmt = Math.max(heroAmt, 1 - distToFocus / 1.2);
-                if (coversList[heroC.tex]) {
-                    options.onSelect?.(coversList[heroC.tex]);
-                }
+        if (!inFlight && focalCenter && focalCenter !== heroC && minCenterDist < 1.5) {
+            heroC = focalCenter;
+            if (coversList[heroC.tex]) {
+                options.onSelect?.(coversList[heroC.tex]);
             }
         }
 
@@ -721,7 +723,7 @@ export function createAlbumCoverTunnel(
                 rz = bump * 0.22 * F.side;
                 ryF = bump * 0.35 * Math.sign(dx || 1);
 
-                // 核心修复：飞入中心的卡片，其焦点系数随飞行进度 e 从 0 平滑单调递增至 1
+                // 点击或键盘切换时：飞入中心的卡片，其焦点系数随飞行进度 e 从 0 平滑单调递增至 1
                 if (F.side > 0) {
                     isHero = e;
                     if (c === heroC) heroAmt = Math.max(heroAmt, e);
@@ -732,12 +734,20 @@ export function createAlbumCoverTunnel(
             } else {
                 c.x = damp(c.x, c.hx + px, 4, dt);
                 c.y = damp(c.y, c.hy + py, 4, dt);
-                if (c === heroC) {
-                    heroAmt = damp(heroAmt, 1, 3.2, dt);
-                    isHero = heroAmt;
-                } else if (c.hx === 0 && c.hy === 0 && Math.abs(dz) < 1.2) {
-                    // 焦平面附近中心封面过渡
-                    isHero = Math.max(0, 1 - Math.abs(dz) / 1.2);
+
+                // 物理透视连续聚焦（彻底消除“等了一段时间直接原地变大”的突兀硬跳）：
+                // 随着相机穿梭逼近目标层，中心封面在整个穿行过程中连续、有机地从 1.0 绽放至 1.7，
+                // 到达停稳时已完美处于焦点状态，无任何停顿后原地二次跳大！
+                if (c.hx === 0 && c.hy === 0) {
+                    const distToFocus = Math.abs(dz);
+                    if (distToFocus < D) {
+                        isHero = smooth(D, 0.0, distToFocus);
+                    } else {
+                        isHero = 0;
+                    }
+                    if (c === heroC) {
+                        isHero = Math.max(isHero, smooth(1.2, 0.0, distToFocus));
+                    }
                 }
             }
 
