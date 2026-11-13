@@ -1,0 +1,210 @@
+{
+  "byXPath": {
+    "tag": "button",
+    "cls": "flex items-center justify-center backdrop-blur-[12.5px] bg-[var(--black)]/40 shadow-md text-[var(--white)] whitespace-nowrap cursor-pointer transition-all duration-300 hover:bg-[var(--black)]/60 h-6 px-2 text-[9px] leading-none rounded-md",
+    "html": "<button type=\"button\" class=\"flex items-center justify-center backdrop-blur-[12.5px] bg-[var(--black)]/40 shadow-md text-[var(--white)] whitespace-nowrap cursor-pointer transition-all duration-300 hover:bg-[var(--black)]/60 h-6 px-2 text-[9px] leading-none rounded-md\" data-testid=\"community-taptv-channel-get-recipe-btn\">查看创作过程</button>",
+    "text": "查看创作过程",
+    "rect": {
+      "x": 282,
+      "y": 306,
+      "w": 70,
+      "h": 24
+    },
+    "bg": "oklab(0 0 0 / 0.4)",
+    "bgVarBlack": "#000",
+    "color": "rgb(255, 255, 255)",
+    "radius": "10px",
+    "backdrop": "blur(12.5px)",
+    "shadow": "rgba(0, 0, 0, 0) 0px 0px 0px 0px, rgba(0, 0, 0, 0) 0px 0px 0px 0px, rgba(0, 0, 0, 0) 0px 0px 0px 0px, rgba(0, 0, 0, 0) 0px 0px 0px 0px, color(srgb 0 0 0 / 0.1) 0px 2px 4px 0px, color(srgb 0 0 0 / 0.1) 0px 2px 4px -1px",
+    "padding": "0px 8px",
+    "fontSize": "9px",
+    "fontWeight": "400",
+    "fontFamily": "Inter, -apple-system, BlinkMacSystemFont, \"Segoe UI\", Roboto, sans-serif",
+    "letterSpacing": "normal",
+    "lineHeight": "9px",
+    "border": "0px solid rgb(46, 46, 46)",
+    "gap": "normal",
+    "display": "flex",
+    "alignItems": "center",
+    "opacity": "1",
+    "filter": "none",
+    "willChange": "auto"
+  },
+  "pillButton": {
+    "tag": "button",
+    "cls": "flex items-center justify-center backdrop-blur-[12.5px] bg-[var(--black)]/40 shadow-md text-[var(--white)] whitespace-nowrap cursor-pointer transition-all duration-300 hover:bg-[var(--black)]/60 h-6 px-2 text-[9px] leading-none rounded-md",
+    "html": "<button type=\"button\" class=\"flex items-center justify-center backdrop-blur-[12.5px] bg-[var(--black)]/40 shadow-md text-[var(--white)] whitespace-nowrap cursor-pointer transition-all duration-300 hover:bg-[var(--black)]/60 h-6 px-2 text-[9px] leading-none rounded-md\" data-testid=\"community-taptv-channel-get-recipe-btn\">查看创作过程</button>",
+    "text": "查看创作过程",
+    "rect": {
+      "x": 110,
+      "y": 306,
+      "w": 70,
+      "h": 24
+    },
+    "bg": "oklab(0 0 0 / 0.4)",
+    "bgVarBlack": "#000",
+    "color": "rgb(255, 255, 255)",
+    "radius": "10px",
+    "backdrop": "blur(12.5px)",
+    "shadow": "rgba(0, 0, 0, 0) 0px 0px 0px 0px, rgba(0, 0, 0, 0) 0px 0px 0px 0px, rgba(0, 0, 0, 0) 0px 0px 0px 0px, rgba(0, 0, 0, 0) 0px 0px 0px 0px, color(srgb 0 0 0 / 0.1) 0px 2px 4px 0px, color(srgb 0 0 0 / 0.1) 0px 2px 4px -1px",
+    "padding": "0px 8px",
+    "fontSize": "9px",
+    "fontWeight": "400",
+    "fontFamily": "Inter, -apple-system, BlinkMacSystemFont, \"Segoe UI\", Roboto, sans-serif",
+    "letterSpacing": "normal",
+    "lineHeight": "9px",
+    "border": "0px solid rgb(46, 46, 46)",
+    "gap": "normal",
+    "display": "flex",
+    "alignItems": "center",
+    "opacity": "1",
+    "filter": "none",
+    "willChange": "auto"
+  },
+  "pillButtonCount": 30,
+  "duration": {
+    "tag": "div",
+    "cls": "absolute top-1 left-1 md:top-2 md:left-2 z-[15] inline-flex items-center gap-2 rounded-sm bg-black/40 shadow-md backdrop-blur-[12.5px] px-1.5 py-0.5 md:px-2 md:py-1 text-[10px] md:text-xs text-[var(--white)] opacity-100 md:opacity-0 md:group-hover/video:opacity-100 transition-opacity duration-300 po",
+    "html": "<div class=\"absolute top-1 left-1 md:top-2 md:left-2 z-[15] inline-flex items-center gap-2 rounded-sm bg-black/40 shadow-md backdrop-blur-[12.5px] px-1.5 py-0.5 md:px-2 md:py-1 text-[10px] md:text-xs text-[var(--white)] opacity-100 md:opacity-0 md:group-hover/video:opacity-100 transition-opacity duration-300 pointer-events-none [transform:translateZ(0)]\">07:55</div>",
+    "text": "07:55",
+    "rect": {
+      "x": 32,
+      "y": 306,
+      "w": 38.1875,
+      "h": 19
+    },
+    "bg": "oklab(0 0 0 / 0.4)",
+    "bgVarBlack": "#000",
+    "color": "rgb(255, 255, 255)",
+    "radius": "8px",
+    "backdrop": "blur(12.5px)",
+    "shadow": "rgba(0, 0, 0, 0) 0px 0px 0px 0px, rgba(0, 0, 0, 0) 0px 0px 0px 0px, rgba(0, 0, 0, 0) 0px 0px 0px 0px, rgba(0, 0, 0, 0) 0px 0px 0px 0px, color(srgb 0 0 0 / 0.1) 0px 2px 4px 0px, color(srgb 0 0 0 / 0.1) 0px 2px 4px -1px",
+    "padding": "2px 6px",
+    "fontSize": "10px",
+    "fontWeight": "400",
+    "fontFamily": "Inter, -apple-system, BlinkMacSystemFont, \"Segoe UI\", Roboto, sans-serif",
+    "letterSpacing": "normal",
+    "lineHeight": "15px",
+    "border": "0px solid rgb(46, 46, 46)",
+    "gap": "8px",
+    "display": "flex",
+    "alignItems": "center",
+    "opacity": "1",
+    "filter": "none",
+    "willChange": "auto"
+  },
+  "cardBox": {
+    "tag": "div",
+    "cls": "relative isolate aspect-video w-full shrink-0 overflow-hidden rounded-t-2xl",
+    "html": "<div class=\"relative isolate aspect-video w-full shrink-0 overflow-hidden rounded-t-2xl\"><img alt=\"嫁给一颗星星\" loading=\"lazy\" crossorigin=\"anonymous\" class=\"absolute inset-0 h-full w-full object-cover transition-transform duration-300 group-hover/video:scale-110\" src=\"https://api.tapnow.media/api/community/files/7fe2912d-ae87-4a43-a323-eddc7ff27722?variant_name=small\"><video class=\"absolute inset-0 z-",
+    "text": "07:55\n查看创作过程",
+    "rect": {
+      "x": 28,
+      "y": 302,
+      "w": 156,
+      "h": 87.75
+    },
+    "bg": "rgba(0, 0, 0, 0)",
+    "bgVarBlack": "#000",
+    "color": "rgb(242, 242, 242)",
+    "radius": "16px 16px 0px 0px",
+    "backdrop": "none",
+    "shadow": "none",
+    "padding": "0px",
+    "fontSize": "16px",
+    "fontWeight": "400",
+    "fontFamily": "Inter, -apple-system, BlinkMacSystemFont, \"Segoe UI\", Roboto, sans-serif",
+    "letterSpacing": "normal",
+    "lineHeight": "24px",
+    "border": "0px solid rgb(46, 46, 46)",
+    "gap": "normal",
+    "display": "block",
+    "alignItems": "normal",
+    "opacity": "1",
+    "filter": "none",
+    "willChange": "auto"
+  },
+  "cardChildren": [
+    {
+      "tag": "img",
+      "cls": "absolute inset-0 h-full w-full object-cover transition-transform duration-300 group-hover/video:scale-110",
+      "rect": [
+        28,
+        302,
+        156,
+        88
+      ],
+      "pos": "absolute",
+      "bg": "rgba(0, 0, 0, 0)",
+      "rad": "0px",
+      "bf": "none",
+      "fs": "16px"
+    },
+    {
+      "tag": "video",
+      "cls": "absolute inset-0 z-10 h-full w-full object-cover opacity-0 transition-opacity duration-300 group-hover/video:opacity-100",
+      "rect": [
+        28,
+        302,
+        156,
+        88
+      ],
+      "pos": "absolute",
+      "bg": "rgba(0, 0, 0, 0)",
+      "rad": "0px",
+      "bf": "none",
+      "fs": "16px"
+    },
+    {
+      "tag": "div",
+      "cls": "absolute top-1 left-1 md:top-2 md:left-2 z-[15] inline-flex items-center gap-2 rounded-sm bg-black/40 shadow-md backdrop",
+      "rect": [
+        32,
+        306,
+        38,
+        19
+      ],
+      "pos": "absolute",
+      "bg": "oklab(0 0 0 / 0.4)",
+      "rad": "8px",
+      "bf": "blur(12.5px)",
+      "fs": "10px"
+    },
+    {
+      "tag": "div",
+      "cls": "absolute z-[15] flex flex-row items-center gap-2 transition-opacity duration-300 [transform:translateZ(0)] top-1 right-1",
+      "rect": [
+        110,
+        306,
+        70,
+        24
+      ],
+      "pos": "absolute",
+      "bg": "rgba(0, 0, 0, 0)",
+      "rad": "0px",
+      "bf": "none",
+      "fs": "16px"
+    },
+    {
+      "tag": "button",
+      "cls": "flex items-center justify-center backdrop-blur-[12.5px] bg-[var(--black)]/40 shadow-md text-[var(--white)] whitespace-no",
+      "rect": [
+        110,
+        306,
+        70,
+        24
+      ],
+      "pos": "static",
+      "bg": "oklab(0 0 0 / 0.4)",
+      "rad": "10px",
+      "bf": "blur(12.5px)",
+      "fs": "9px"
+    }
+  ],
+  "clip": {
+    "x": 24,
+    "y": 298,
+    "width": 164,
+    "height": 95.75
+  }
+}

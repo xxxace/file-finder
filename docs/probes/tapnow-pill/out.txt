@@ -1,0 +1,40 @@
+tapnow 胶囊实测取证（2026-11-13，只读）
+=====================================
+
+来源：https://app.tapnow.media/home/taptv（移动 UA / 390×844 / 真 Chromium）
+探针：run3.cjs + page3.js（run2.cjs 是摸底版，卡片选择器不同）
+
+目标元素（主人给的 XPath，实为卡右上那颗按钮）
+  data-testid="community-taptv-channel-get-recipe-btn"  文本「查看创作过程」
+
+计算值（computedStyle，实测）
+  尺寸        h 24px / padding 0 8px（h-6 px-2）
+  背景        oklab(0 0 0 / 0.4)   ← --black(#000) 的 40%
+  磨砂        backdrop-filter: blur(12.5px)     ★ 关键
+  圆角        10px（h 24 ⇒ 比例 0.417，rounded-md 被主题改成 10px）
+  阴影        0 2px 4px rgba(0,0,0,.10)，0 2px 4px -1px rgba(0,0,0,.10)
+  文字        #fff / 9px / 400 / line-height 9px（leading-none）
+  边框        0
+  交互        hover 背景 → 60%，transition 300ms
+
+同时长胶囊（左上 07:55）
+  h 19px / radius 8px（0.42）/ bg 黑 40% / blur 12.5px / 10px 字 / padding 2px 6px / 同款 shadow
+
+⇒ 归纳成三条"好看"的成因
+  ① 磨砂玻璃（40% 黑 + blur 12.5）—— 透出底下的画面，不是一块死黑
+  ② 圆角 ≈ 0.42×高度（切角矩形），**不是全圆 pill**（全圆读作"贴纸"）
+  ③ 极轻落影，让片子浮起来，边界不靠加深底色
+
+我们侧原值（改前）
+  background: var(--ff-mask) = rgba(0,0,0,.55/.45)
+  border-radius: var(--ff-radius-pill)（全圆）
+  无 backdrop-filter、无 box-shadow
+
+落点（本次改动）
+  src/styles/tokens.css   新增 --ff-badge-bg / --ff-badge-blur / --ff-badge-shadow
+                          （浅色 .45，深色块覆盖 .40；blur 与 shadow 两主题同值）
+  src/views/.../list.less .card-badges .badge 改用上面三个 token
+                          + border-radius: calc(var(--item-badge-h) * 0.42)
+
+未实测（需人眼）：质感是否合意；backdrop-filter 在本机 GPU 上是否掉帧。
+截图证据：shot-full.png（整屏）/ shot-card.png（单卡）—— 均被 .gitignore 挡住不入库。

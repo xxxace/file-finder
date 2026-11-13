@@ -169,8 +169,20 @@
                `line-height` 必须同 `height` 一起换，否则文字会偏上/偏下。 */
             height: var(--item-badge-h);
             line-height: var(--item-badge-h);
-            border-radius: var(--ff-radius-pill);
-            background: var(--ff-mask);
+            /* 圆角跟着高度算，**不是 pill**（2026-11-13，对齐 tapnow 实测）：
+               那边 19px 高→8px、24px 高→10px，比例恒 0.42 ⇒ 切角矩形。
+               全圆会让角标读成"贴纸"，切角才像"压在片子上的一格字"。
+               用 calc 而不是写死 8px：密度档换高度时比例不变（写死会在紧凑档变回全圆）。
+               ⚠️ `--item-badge-h` 定义在 `grid.less` 的 `.image-box`（18 / 紧凑档 16）。
+               拿不到时 height 与这条 border-radius 会一起失效 —— 这是上一条 `height`
+               就有的既有前提，不是这里新增的耦合。 */
+            border-radius: calc(var(--item-badge-h) * 0.42);
+            /* 磨砂玻璃：底下是缩略图，透出一点画面才有层次（值见 tokens 的 `--ff-badge-*`）。
+               不加 `-webkit-` 前缀：Electron 44 = Chromium 140，无前缀原生支持，
+               多写一行只是让"到底哪个生效"变成第二个真相源。 */
+            background: var(--ff-badge-bg);
+            backdrop-filter: var(--ff-badge-blur);
+            box-shadow: var(--ff-badge-shadow);
             color: var(--ff-on-highlight);
             font-size: var(--item-badge-fs);
         }

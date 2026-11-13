@@ -51,3 +51,6 @@ docs/probes/**/*.generated.css
 # ⚠️ 探针截图**永不入库**：文件名里带的是真实番号，画面里是真实目录名。
 # 这条必须写在源头上 —— 靠提交前人工挑，早晚会漏（2026-11-07 一次就攒了 40+ 张）。
 docs/probes/**/shot-*.png
+# 探针自己起的 Electron 会话目录（app.setPath('userData') 指到探针里），几十 MB 缓存。
+# 做完就删；万一被护栏拦住（trash 对目录 FAIL_CLOSED），至少别让它进版本库。
+docs/probes/**/_userdata/
