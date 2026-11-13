@@ -58,10 +58,10 @@ async function createWindow() {
     // 这一句只在**页面加载完成之前**有用（避免白屏那几百毫秒显示默认标题）；
     // 加载完就由 index.html 的 `<title>` 接管 —— 两处要一起改。
     title: 'File Finder',
-    // 窗口出现 → 页面首个 paint 之间的**原生底色**。取应用默认主题画布（dark #141414）：
+    // 窗口出现 → 页面首个 paint 之间的**原生底色**。取应用默认主题画布（dark #0e0e0e）：
     // 不设的话这段是 OS 白色，深色用户开局白闪。亮色用户这里会先暗一拍，
     // 页面 paint 后由 index.html 的内联脚本按 `ff-theme` 纠正（那里读得到 localStorage）。
-    backgroundColor: '#141414',
+    backgroundColor: '#0e0e0e',
     icon: join(ROOT_PATH.public, 'favicon.ico'),
     width: Math.min(1280, wa.width - 40),
     height: Math.min(860, wa.height - 40),

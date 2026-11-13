@@ -40,7 +40,7 @@ naive-ui 无法接收 `var()`，故 `naive-theme.ts` 用 `getComputedStyle` 读 
 - Produces: L2 变量 `--ff-canvas --ff-panel --ff-raised --ff-raised-hover --ff-line --ff-line-strong --ff-text-1 --ff-text-2 --ff-accent --ff-on-accent --ff-danger --ff-warn --ff-ok`；尺度 `--ff-r-card(10) --ff-r-ctl(8) --ff-r-pill(6)`、`--ff-fs-title(15) --ff-fs-body(13) --ff-fs-meta(12) --ff-fs-eyebrow(11)`、`--ff-h-nav(48) --ff-h-list(34) --ff-h-table(36) --ff-h-head(32) --ff-h-ctl(28)`、`--ff-sp-1..6(4/8/12/16/24)`。
 - 旧名保留为别名：`--ff-bg→canvas`、`--ff-surface→panel`、`--ff-fill→raised`、`--ff-text-3→text-2`、`--ff-text-muted→text-2`、`--ff-pink/--ff-blue→accent`。
 
-- [ ] 深色：canvas `#141414`、panel `#1f1f1f`、raised `#242424`、raised-hover `#2a2a2a`、text-1 `#ededed`、text-2 `#8f8f8f`、line `rgba(255,255,255,.08)`、line-strong `.14`
+- [ ] 深色：canvas `#0e0e0e`、panel `#1f1f1f`、raised `#242424`、raised-hover `#2a2a2a`、text-1 `#ededed`、text-2 `#8f8f8f`、line `rgba(255,255,255,.08)`、line-strong `.14`
 - [ ] 浅色：canvas `#f7f7f8`、panel `#ffffff`、raised `#f0f0f1`、raised-hover `#e8e8ea`、text-1 `#1a1a1a`、text-2 `#5c5c5c`、line `rgba(0,0,0,.08)`
 - [ ] `--ff-accent: var(--ff-text-1)`，`--ff-on-accent: var(--ff-canvas)`（无彩＝反色；换品牌色只改这两行）
 - [ ] `--ff-tip-*` 按新灰阶重算（深色保留磨砂 + 内描边，浅色保留轻投影）

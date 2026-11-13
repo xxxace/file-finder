@@ -64,7 +64,7 @@
   --ff-raised-hover: var(--ff-raw-n3);
   /* ════════ L2 语义 · 输入框底（**不是** `--ff-raised`） ════════
      判据：输入框必须"一眼看出这里可以打字"。它靠**底色与所在面的明度差**成立，
-     参考 WorkBuddy 搜索框实测：画布 #141414 / 框 #262626，明度差 **18**，无描边。
+     参考 WorkBuddy 搜索框实测：画布 #0e0e0e / 框 #262626，明度差 **18**，无描边。
      ⚠️ 2026-11-09：浅色原来别名到 --ff-raised（#eef0f2），可它在**白色**页头/面板上
      只差 2~3%，输入框和背景融成一片（主人："过滤框都和背景色融一起你没看到吗"）。
      浅色从此给显式值 #e0e2e6：对白底 ≈10 级明度差，一眼见框；深色维持 11-08 定的 #313131。 */
@@ -241,7 +241,7 @@
   --ff-link: #2080f0;
   --ff-link-hover: #4098fc;
   /* 盘条 chip 底：浅色=白面板（灰画布上靠描边定界）；深色=抬一档（画布上靠明度差，
-     #1f1f1f 贴 #141414 只差 5 级不够，所以深色单独指向 --ff-raised）。 */
+     #1f1f1f 贴 #0e0e0e 只差 5 级不够，所以深色单独指向 --ff-raised）。 */
   --ff-chip-bg: var(--ff-panel);
 
   /* ════════ L2 语义 · 圆角 / 字号 / 行高 / 间距 ════════ */
@@ -410,8 +410,8 @@
 [data-theme='dark'] {
   color-scheme: dark;
 
-  /* L1 · 颜色（深色主题，值取自 WorkBuddy 实测：画布 #141414 / 面板 #1f1f1f） */
-  --ff-raw-n0: #141414;
+  /* L1 · 颜色（深色主题，值取自 WorkBuddy 实测：画布 #0e0e0e / 面板 #1f1f1f） */
+  --ff-raw-n0: #0e0e0e;
   --ff-raw-n1: #1f1f1f;
   --ff-raw-n2: #242424;
   --ff-raw-n3: #2a2a2a;
@@ -449,7 +449,7 @@
   --ff-status-err: #f87171;
   --ff-status-info: var(--ff-text-2);
 
-  /* 高亮：深色下同一个 #049eff 直接可用（在 #141414 上足够亮），只把淡底加一档 */
+  /* 高亮：深色下同一个 #049eff 直接可用（在 #0e0e0e 上足够亮），只把淡底加一档 */
   --ff-highlight: #049eff;
   --ff-highlight-hover: #33b1ff;
   --ff-highlight-pressed: #0086db;
@@ -460,7 +460,7 @@
   --ff-action: var(--ff-text-1);
   --ff-action-hover: #ffffff;
   --ff-action-pressed: #d8d8d8;
-  --ff-on-action: #141414;
+  --ff-on-action: #0e0e0e;
 
   /* 深色不加卡片描边：靠明度差分区，加线只会脏 */
   --ff-card-outline: transparent;

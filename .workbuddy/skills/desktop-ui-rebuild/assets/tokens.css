@@ -61,7 +61,7 @@
      判据：输入框必须"一眼看出这里可以打字"。它靠**底色与所在面的明度差**成立，
      而 `--ff-raised` 在深色下贴 #1f1f1f 面板只差 5 级 —— 框和背景糊在一起
      （2026-11-08 主人："过滤框的颜色太浅了"）。
-     参考 WorkBuddy 搜索框实测：画布 #141414 / 框 #262626，明度差 **18**，无描边。
+     参考 WorkBuddy 搜索框实测：画布 #0e0e0e / 框 #262626，明度差 **18**，无描边。
      面板 31 + 18 = 49 = #313131，取同量级。浅色下 #eef0f2 贴白面板差 17，本来就够。 */
   --ff-field: var(--ff-raised);
   /* ════════ L2 语义 · 界面外框（左轨 + 顶部操作栏，2026-11-08 主人给定值） ════════
@@ -320,8 +320,8 @@
 [data-theme='dark'] {
   color-scheme: dark;
 
-  /* L1 · 颜色（深色主题，值取自 WorkBuddy 实测：画布 #141414 / 面板 #1f1f1f） */
-  --ff-raw-n0: #141414;
+  /* L1 · 颜色（深色主题，值取自 WorkBuddy 实测：画布 #0e0e0e / 面板 #1f1f1f） */
+  --ff-raw-n0: #0e0e0e;
   --ff-raw-n1: #1f1f1f;
   --ff-raw-n2: #242424;
   --ff-raw-n3: #2a2a2a;
@@ -351,7 +351,7 @@
   --ff-warn: #d3a03a;
   --ff-ok: #6aa87c;
 
-  /* 高亮：深色下同一个 #049eff 直接可用（在 #141414 上足够亮），只把淡底加一档 */
+  /* 高亮：深色下同一个 #049eff 直接可用（在 #0e0e0e 上足够亮），只把淡底加一档 */
   --ff-highlight: #049eff;
   --ff-highlight-hover: #33b1ff;
   --ff-highlight-pressed: #0086db;
@@ -362,7 +362,7 @@
   --ff-action: var(--ff-text-1);
   --ff-action-hover: #ffffff;
   --ff-action-pressed: #d8d8d8;
-  --ff-on-action: #141414;
+  --ff-on-action: #0e0e0e;
 
   /* 深色不加卡片描边：靠明度差分区，加线只会脏 */
   --ff-card-outline: transparent;

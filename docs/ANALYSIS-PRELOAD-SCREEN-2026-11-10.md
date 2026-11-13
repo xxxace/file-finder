@@ -64,11 +64,11 @@
 
 | 改动 | 文件 | 内容 |
 |---|---|---|
-| 覆盖层换皮 | `electron/preload/index.ts` | 深灰+白方块 → 主题画布底色（dark `#141414` / light `#f1f2f3`，读 localStorage `ff-theme`，默认 dark）+ 呼吸的放大镜 SVG（galaxy 紫 `#c7a1fa`）+ "File Finder" 字标 + 140px 细进度条往返扫动；`removeLoading` 改为加 `.is-out` 淡出（200ms，项目标准缓动），220ms 后才摘节点；`leaving` 标志挡 postMessage 与 4999ms 兜底的双重触发；`prefers-reduced-motion` 下关动画 |
-| 原生底色 | `electron/main/index.ts` | `BrowserWindow` 加 `backgroundColor: '#141414'`（默认主题画布）——窗口出现 → 页面首个 paint 的 T0 段不再是 OS 白色。⚠️ 亮色用户 T0 会先暗一拍，首个 paint 后由 index.html 内联脚本纠正 |
-| 首帧兜底 | `index.html` | head 加内联脚本：提前把 `ff-theme` 写进 `data-theme`（默认 dark）；内联 `<style>` 给 html 按主题染 `#141414` / `#f1f2f3` —— tokens.css 是打进 bundle 的 CSS，到位前 html 没有底色。html 层该样式常驻，body 的 `--ff-canvas` 盖在上面，切主题时经 `data-theme` 联动，不残留 |
+| 覆盖层换皮 | `electron/preload/index.ts` | 深灰+白方块 → 主题画布底色（dark `#0e0e0e` / light `#f1f2f3`，读 localStorage `ff-theme`，默认 dark）+ 呼吸的放大镜 SVG（galaxy 紫 `#c7a1fa`）+ "File Finder" 字标 + 140px 细进度条往返扫动；`removeLoading` 改为加 `.is-out` 淡出（200ms，项目标准缓动），220ms 后才摘节点；`leaving` 标志挡 postMessage 与 4999ms 兜底的双重触发；`prefers-reduced-motion` 下关动画 |
+| 原生底色 | `electron/main/index.ts` | `BrowserWindow` 加 `backgroundColor: '#0e0e0e'`（默认主题画布）——窗口出现 → 页面首个 paint 的 T0 段不再是 OS 白色。⚠️ 亮色用户 T0 会先暗一拍，首个 paint 后由 index.html 内联脚本纠正 |
+| 首帧兜底 | `index.html` | head 加内联脚本：提前把 `ff-theme` 写进 `data-theme`（默认 dark）；内联 `<style>` 给 html 按主题染 `#0e0e0e` / `#f1f2f3` —— tokens.css 是打进 bundle 的 CSS，到位前 html 没有底色。html 层该样式常驻，body 的 `--ff-canvas` 盖在上面，切主题时经 `data-theme` 联动，不残留 |
 
-**三处共用值（改要一起改）**：主题键 `ff-theme`（useTheme.ts）· 画布色 dark `#141414` / light `#f1f2f3`（tokens.css `--ff-canvas`）· preload 覆盖层与 index.html 内联样式都自带这两值（CSS 变量读不到）。
+**三处共用值（改要一起改）**：主题键 `ff-theme`（useTheme.ts）· 画布色 dark `#0e0e0e` / light `#f1f2f3`（tokens.css `--ff-canvas`）· preload 覆盖层与 index.html 内联样式都自带这两值（CSS 变量读不到）。
 
 **契约不变**：`window.onmessage` / `removeLoading` / 4999ms 兜底 / `src/main.ts` 的 postMessage 一字未动。
 

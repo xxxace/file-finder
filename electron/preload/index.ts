@@ -34,7 +34,7 @@ const safeDOM = {
  * 编排：圆板浮现 → 2×2 方格逐个落格（文件网格的隐喻）→ 白环描边画出 → 蓝手柄补画 → 轻呼吸。
  * 三点用 logo 手柄蓝 #049EFF —— 那套紫（--ff-bar-*）是 galaxy 进度条的专属色板，不挪用。
  * ⚠️ 手柄画在环下层是 logo 自己的裁决（icon.svg 内注释），结构保持原样。
- * 配色判据：背景 = 主题画布（dark #141414 / light #f1f2f3），主题读 localStorage
+ * 配色判据：背景 = 主题画布（dark #0e0e0e / light #f1f2f3），主题读 localStorage
  * `ff-theme`（useTheme.ts 的键，默认 dark）—— ⚠️ 画布色/主题键共 **5 个落点**，改要一起改：
  * useTheme.ts · tokens.css · 这里 · index.html 内联脚本+内联 style · main/index.ts 的 backgroundColor。
  */
@@ -46,7 +46,7 @@ function useLoading() {
     // 存储被禁用时按应用默认主题（dark）走
   }
   const dark = theme !== 'light'
-  const bg = dark ? '#141414' : '#f1f2f3'
+  const bg = dark ? '#0e0e0e' : '#f1f2f3'
   const blue = '#049EFF' // logo 手柄蓝（build/icon.svg 唯一的品牌点缀色）
 
   const styleContent = `

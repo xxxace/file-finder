@@ -102,7 +102,7 @@ function panel(ctx, ox, oy, p, t) {
   ctx.save();
   ctx.beginPath(); ctx.rect(ox, oy, W, H); ctx.clip();
   ctx.globalAlpha = veilOpacity;
-  ctx.fillStyle = '#141414';
+  ctx.fillStyle = '#0e0e0e';
   ctx.fillRect(ox, oy, W, H);
   ctx.restore();
 
