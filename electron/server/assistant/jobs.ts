@@ -77,6 +77,14 @@ export interface Job<Row = unknown> {
     status: JobStatus;
     progress: JobProgress;
     rows: Row[];
+    /**
+     * **此刻真正在飞的**目标（`writeRel` 列表），由 worker 在取到/交还一条时维护。
+     *
+     * 为什么不拿 `progress.current` 顶：那是一个字符串，一次只能表达一条；
+     * 并发 3 的时候界面需要知道"这三张正在请求"。而"已排队但还没轮到"的卡
+     * **不该**转圈 —— 那会让人以为几十张同时在跑（2026-11-14 主人报的就是这个）。
+     */
+    inflight: string[];
     /** 一句话结果 / 失败原因（面向用户，前端直接显示） */
     message: string;
     startedAt: number;
@@ -115,6 +123,7 @@ export function createJob<Row = unknown>(kind: JobKind, total = 0): Job<Row> {
         status: 'running',
         progress: { total, processed: 0, hits: 0, misses: 0, blocked: 0, current: '' },
         rows: [],
+        inflight: [],
         message: '',
         startedAt: Date.now(),
         endedAt: null,
@@ -195,6 +204,8 @@ export function reopenJob<Row>(job: Job<Row>): void {
     job.cancelled = false;
     job.endedAt = null;
     job.gate.resume();
+    // 上一批若异常退出，可能留着一张"永远在飞"的卡 ⇒ 重开时先清干净
+    job.inflight = [];
     job.controller = new AbortController();
 }
 
@@ -213,6 +224,9 @@ export function finishJob(job: Job, status: Exclude<JobStatus, 'running' | 'paus
     job.status = status;
     job.message = message;
     job.progress.current = '';
+    // 收尾时一律清空：worker 正常退出会自己清，但异常/取消路径可能漏一张，
+    // 留着就是界面上永远转圈的那张卡（它已经不会再出结果了）
+    job.inflight = [];
     job.endedAt = Date.now();
 }
 
@@ -224,6 +238,7 @@ export function snapshotJob(job: Job): Record<string, unknown> {
         status: job.status,
         progress: { ...job.progress },
         rows: job.rows,
+        inflight: [...job.inflight],
         message: job.message,
         startedAt: job.startedAt,
         endedAt: job.endedAt,

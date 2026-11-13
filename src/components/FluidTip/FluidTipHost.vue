@@ -3,7 +3,7 @@
          scoped 样式够不到 teleport 出去的 DOM（项目已知坑）⇒ 样式不带 scoped。 -->
     <Teleport to="body">
         <div ref="el" class="ftip" :class="{ 'is-on': tipState.visible, 'is-snap': tipState.snap, 'is-rich': !!tipState.body }"
-            :style="{ transform: `translate(${pos.x}px, ${pos.y}px)` }">
+            :style="{ transform: `translate(${pos.x}px, ${pos.y}px)`, minWidth: richMinWidth }">
             <!-- 富内容：调用方给的渲染函数直接当函数式组件挂（宿主不认识业务结构，只给材质与定位） -->
             <component :is="tipState.body" v-if="tipState.body" />
             <template v-else>
@@ -36,6 +36,21 @@ import { hideTip, tipState } from './fluidTip';
 
 /** `'Alt+→'` → `['Alt', '→']`；单键（`S` / `F5` / `Backspace`）仍是一颗帽 */
 const keyCaps = computed(() => (tipState.keys || '').split('+').map((s) => s.trim()).filter(Boolean));
+
+/**
+ * 富内容的最小宽度 = **锚点（卡片）自身的宽度 + 20**。
+ *
+ * 为什么不用一个固定值：卡片宽度是 `minmax(184px, 1fr)` 算出来的，窗口一变就拉伸。
+ * 写死只会两头不讨好 —— 比卡片窄显得小气，比卡片宽又压住隔壁的卡。
+ * 跟着锚点走，浮层永远和它的主人差一档。
+ *
+ * 宽度来源是 `tipState.anchor`（`showTip` 时存下的元素矩形），
+ * 不往 `TipPayload` 加参数：这是全局浮层，不该让每个调用方各报一个宽度。
+ */
+const richMinWidth = computed(() => {
+    if (!tipState.body || !tipState.anchor) return undefined;
+    return `${Math.round(tipState.anchor.width + 20)}px`;
+});
 
 const el = ref<HTMLElement | null>(null);
 const pos = reactive({ x: -1000, y: -1000 });
@@ -140,8 +155,28 @@ onBeforeUnmount(() => {
     &.is-rich {
         display: block;
         padding: 8px 10px;
+        /**
+         * 宽度策略：**最小 = 锚点宽度 + 20（模板里按 rect 算），上限 300**。
+         *
+         * 这里这两行只是**兜底**（没有锚点 rect 时，比如将来程序化调用）：
+         *  · 不写死最小宽度：富内容是 k/v 两列表格，表格最怕宽度随内容变；
+         *  · 也不写死成 300：视口窄时会顶出屏幕，只有两行的短内容又会留一大片空。
+         */
+        min-width: 280px;
         max-width: 300px;
         white-space: normal;
+        /**
+         * 富内容 = **一块小面板**（标题 + 多行键值），不是"一行字 + 箭头"的气泡。
+         *
+         * 所以它走**跟随主题的磨砂面板**（`--ff-tip-*`），和助手面板的头/底栏同一块材质；
+         * 单行气泡继续用反色深片（`--ff-tooltip-*`）—— 那种白底小气泡在界面里没有边界可依，
+         * 反色是刻意的。富内容有 300px 见方的面积，再用反色深片就成了一块乌黑的板子压在
+         * 封面上（2026-11-14 主人：「卡片的 tooltip 为什么还是乌漆嘛黑」）。
+         */
+        background: var(--ff-tip-bg);
+        color: var(--ff-tip-text);
+        backdrop-filter: var(--ff-tip-backdrop);
+        box-shadow: var(--ff-tip-shadow);
     }
 }
 

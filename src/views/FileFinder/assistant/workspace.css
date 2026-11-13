@@ -31,7 +31,21 @@
 }
 
 /* ───────── 壳 ───────── */
+/**
+ * 外壳 = 一个**整块**的画布，顶栏/底栏浮在它上面（不再是"头上一条、脚上一条"的分段）。
+ *
+ * 2026-11-14 主人：「布局分头中脚，能不能让头和脚 sticky/absolute 压在 ffw-stage 上，
+ * 然后用毛玻璃」。做法：bar / dock 都是 `position: absolute`，stage 占满整个壳，
+ * 再用 padding 把首尾内容让出来 —— 于是中间的内容可以**滚到浮层底下**，
+ * 而不是滚到浮层边缘就"撞墙"。
+ *
+ * ⚠️ `position: relative` 是必须的：bar/dock 的绝对定位以它为包含块。
+ * ⚠️ 底栏高度只有一份来源（`--ff-dock-h`），stage 的让位读同一个变量 ——
+ *    改一处就够，不会出现"底栏变高了但内容被压住最后一行"。
+ */
 .ffw-shell {
+    --ff-dock-h: 52px;
+    position: relative;
     display: flex;
     flex-direction: column;
     height: 100%;
@@ -42,14 +56,47 @@
 }
 
 .ffw-bar {
-    flex: none;
+    position: absolute;
+    inset: 0 0 auto 0;
+    /* 浮层压在卡片与内容之上；助手面板里没有别的 z 契约，2 够用 */
+    z-index: 2;
     height: var(--ff-header-h);
     display: flex;
     align-items: center;
     gap: var(--ff-sp-2);
     padding: 0 12px;
-    background: var(--ff-chrome-bg);
+    /**
+     * 毛玻璃**复用浮层的材质令牌**（不新造色值）：
+     * 82% 面板色 + `blur(14px) saturate(160%)`，深浅两套值都由 `--ff-tip-*` 给
+     * （浅色 2026-11-14 起也是玻璃，见 tokens.css 那组的历史注记）。
+     */
+    background: var(--ff-tip-bg);
+    backdrop-filter: var(--ff-tip-backdrop);
     border-bottom: 1px solid var(--ff-line);
+}
+
+.ffw-stage {
+    flex: 1;
+    min-height: 0;
+    overflow: hidden auto;
+    /* 上下各让出浮层高度：内容能滚到它们底下，首尾又不会被永久遮住 */
+    padding: calc(var(--ff-header-h) + 20px) 24px calc(var(--ff-dock-h) + 24px);
+    scrollbar-gutter: stable;
+}
+
+.ffw-dock {
+    position: absolute;
+    inset: auto 0 0 0;
+    z-index: 2;
+    height: var(--ff-dock-h);
+    display: flex;
+    align-items: center;
+    gap: var(--ff-sp-3);
+    padding: 0 16px;
+    /* 与顶栏同一块材质：它们是同一层"浮在内容上的东西" */
+    background: var(--ff-tip-bg);
+    backdrop-filter: var(--ff-tip-backdrop);
+    border-top: 1px solid var(--ff-line);
 }
 
 .ffw-title {
@@ -82,12 +129,113 @@
     font-variant-numeric: tabular-nums;
 }
 
-.ffw-meta i {
+/**
+ * 圆点分隔符。
+ *
+ * ⚠️ **必须用直系子选择器 `>`**。写成 `.ffw-meta i` 会连 `n-icon` 一起命中 ——
+ * naive 的图标根元素**就是一个 `<i class="n-icon">`**，于是胶囊里的切换图标被强行改成
+ * 2×2 的圆点：看着像"多了一个点"，同时"图标错位/没渲染"（2026-11-14 主人自己定位到的）。
+ * 分隔点永远是 slot 的直接子节点，`>` 不会漏。
+ */
+.ffw-meta > i {
     width: 2px;
     height: 2px;
     border-radius: 50%;
     background: var(--ff-text-2);
     opacity: 0.55;
+}
+
+/**
+ * 范围胶囊（顶栏）。
+ *
+ * ⚠️ **不许发明胶囊**。项目里胶囊只有两种，各自职责固定：
+ *   · **标签**（不可点）：`FileFinder/styles/grid.less:77` 的 `.pick-badge` —— 11px / 行高 18 / 无边框。
+ *   · **可点选**：`views/Cache/index.vue:1066` 的 `.disk-chip` —— 26 高 / `0 11px` / 12px 字 /
+ *     全圆 / `--ff-chip-bg` 底 / 1px `--ff-line` 边 / hover 换 `--ff-line-strong` + `--ff-ctl-hover`。
+ *     那是 2026-11-09 六轮定稿的"可点胶囊"，也是缓存记录里那排盘条。
+ *
+ * 范围是**可点**的 ⇒ 逐字对齐 `.disk-chip`（不只是"长得像"：尺寸、边框、圆角、hover 全同）。
+ * 要改规格，去改那一份，再同步这里 —— 不要在这里长出新尺寸。
+ */
+.ffw-scope {
+    flex: none;
+    /* 260 而不是 220：给"盘符 + 文件夹名 + 图标"留够余量，别频繁触发省略号 */
+    max-width: 260px;
+    height: 26px;
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    padding: 0 11px;
+    border: 1px solid var(--ff-line);
+    border-radius: 999px;
+    /**
+     * 用 `--ff-field`（"一眼看出这是一块可操作的底"那一档），而不是 `.disk-chip` 的 `--ff-chip-bg`。
+     *
+     * 两个理由（2026-11-14 主人两次指正后定的）：
+     * ① `--ff-chip-bg` 在浅色 = `--ff-panel`，而顶栏也是 `--ff-panel` ⇒ **胶囊和顶栏同色**，
+     *    只剩一条 1px 描边，看着像"只有框没有底"。那边能用是因为它长在白卡片上、底下是灰画布。
+     * ② 它又是一颗**可点**的控件，本就该用"可操作的面"这一档。
+     * 明暗方向正好是主人要的：深色 #242424 → #313131（更亮）、浅色 #eef0f2 → #e0e2e6（更暗）。
+     */
+    background: var(--ff-field);
+    font-family: inherit;
+    font-size: var(--ff-fs-meta);
+    /**
+     * ⚠️ 与上面的 `height: 26px` **成对**，改一个必须改另一个。
+     *
+     * 不能用 `line-height: 1`（`.disk-chip` 那边是 1，但它整条没有图标）：
+     * 行盒只有 12px 时，英文大写的墨迹会靠上，和右边那颗几何居中的图标就差出 1–2px。
+     * 行盒撑满 26px 后，半行距上下均分，文字和图标才落在同一条中线上。
+     */
+    line-height: 26px;
+    color: var(--ff-text-1);
+    /* 溢出交给内层 `.ffw-scope__t` 做省略：
+       容器上的 `text-overflow` 管不到 flex 的**匿名文本节点**，硬裁出来就是半截字母 */
+    overflow: hidden;
+    cursor: pointer;
+    transition:
+        background-color var(--ff-dur-hover) ease,
+        border-color var(--ff-dur-hover) ease,
+        color var(--ff-dur-hover) ease;
+}
+
+.ffw-scope:hover:not(:disabled) {
+    border-color: var(--ff-line-strong);
+    /* ⚠️ 底是 `--ff-field` 时悬停**只能**用 `--ff-ctl-on`：
+       深色下 `--ff-ctl-hover` 与 `--ff-field` 是同一个 #313131，压上去等于没反应 */
+    background: var(--ff-ctl-on);
+}
+
+/**
+ * 文字与图标的两段结构。
+ *
+ * ⚠️ 文字**必须**是真实元素（`.ffw-scope__t`）：flex 的匿名文本节点上
+ * `text-overflow` 不生效，长文件夹名会被硬裁成半截字母（2026-11-14 截图里那个"文本小点"）。
+ * ⚠️ 图标**必须**有自己的盒子（`.ffw-scope__x`）：直接给 `n-icon` 挂 class 时 `flex: none`
+ * 不一定落到根元素上，文字一长图标就被压缩成 0 宽 —— 看着就是"图标没渲染出来"。
+ */
+.ffw-scope__t {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.ffw-scope__x {
+    flex: none;
+    /* 图标本体 13（与卡片右上那颗同档），盒子 14 留 1px 呼吸 */
+    width: 14px;
+    height: 14px;
+    display: grid;
+    place-items: center;
+    /* 与胶囊文字同亮：`--ff-text-2` 在 13px 的线性图标上太糊，看着像没渲染出来 */
+    color: var(--ff-text-1);
+}
+
+/* 只有一态（从盘根打开）或任务锁定中：保持长相、明确失效 */
+.ffw-scope:disabled {
+    color: var(--ff-text-2);
+    cursor: default;
 }
 
 .ffw-spacer {
@@ -231,12 +379,48 @@
 }
 
 /* ───────── 主区 ───────── */
-.ffw-stage {
-    flex: 1;
-    min-height: 0;
-    overflow: hidden auto;
-    padding: 20px 24px 24px;
-    scrollbar-gutter: stable;
+/* `.ffw-stage` 的布局定义在文件顶部（与 `.ffw-shell` 放在一起，见那里"整块画布"的说明） */
+
+/**
+ * 总控勾选（底栏「已选 n / m」前面那颗）。
+ *
+ * 与卡片左上那颗**同一套语汇**：20px / pill 圆角 / 1px 描边 → 填蓝 + 反色勾。
+ * 同一个"勾"动作，两处必须长得一样 —— 不另发明一种"全选框"。
+ * 三态由内容表达：全选 = 勾，部分 = 短横，全不选 = 空框（checkbox group 的通用语言）。
+ */
+.ffw-check {
+    flex: none;
+    width: 20px;
+    height: 20px;
+    padding: 0;
+    display: grid;
+    place-items: center;
+    border-radius: var(--ff-r-pill);
+    border: 1px solid var(--ff-line-strong);
+    background: transparent;
+    color: transparent;
+    cursor: pointer;
+    transition:
+        background-color var(--ff-dur-hover) ease,
+        border-color var(--ff-dur-hover) ease,
+        color var(--ff-dur-hover) ease;
+}
+
+.ffw-check:hover {
+    border-color: var(--ff-text-2);
+}
+
+.ffw-check.is-on {
+    background: var(--ff-highlight);
+    border-color: var(--ff-highlight);
+    color: var(--ff-on-highlight);
+}
+
+.ffw-check__dash {
+    width: 8px;
+    height: 2px;
+    border-radius: 1px;
+    background: var(--ff-on-highlight);
 }
 
 .ffw-grid {
@@ -354,6 +538,137 @@
     box-shadow: var(--ff-shadow-lift);
 }
 
+/**
+ * 角标的语义色 —— **只染字，材质不动**。
+ *
+ * 底仍是那块实心面板色胶囊：一排卡扫过去材质是齐的，颜色只回答
+ * "成功 / 要注意 / 失败 / 还没轮到"。这也符合「无彩」的裁决 ——
+ * 状态色只用于语义，不拿来装饰卡片。
+ */
+.ffw-card__badge[data-tone='ok'] {
+    color: var(--ff-status-ok);
+}
+
+.ffw-card__badge[data-tone='warn'] {
+    color: var(--ff-status-warn);
+}
+
+.ffw-card__badge[data-tone='err'] {
+    color: var(--ff-status-err);
+}
+
+/**
+ * 来源胶囊（右下角）。
+ *
+ * 与左下那颗状态角标**同一套材质**（实心面板底 + 小胶囊），但字色弱一档：
+ * 状态是"这张走到哪一步"（要看），来源是"这张图哪来的"（要能查到）。
+ * 放右下而不是并进左下：一颗胶囊只承载一个维度，挤在一起又会回到
+ * "抽帧 · 30% 看起来像已完成"那个坑。
+ */
+.ffw-card__src {
+    position: absolute;
+    right: 6px;
+    bottom: 6px;
+    max-width: 48%;
+    height: 20px;
+    padding: 0 6px;
+    border-radius: var(--ff-r-pill);
+    display: inline-flex;
+    align-items: center;
+    font-size: var(--ff-fs-eyebrow);
+    font-weight: 500;
+    /* 与状态角标同亮：两颗胶囊一灰一白会被读成"一颗禁用、一颗可用" */
+    color: var(--ff-text-1);
+    background: var(--ff-popover);
+    box-shadow: var(--ff-shadow-lift);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+/**
+ * 「排队」是最弱的一档：它说的是"这件事还没发生"，不该和结果一样亮。
+ *
+ * ⚠️ 不要改成小圆点/任何非文字标记 —— 2026-11-14 试过一次，主人原话
+ * 「读完还是看不出有什么区别，不知道的还以为在等待呢」。
+ * 状态必须是**字**，一个位置只放一个词：排队 / 待写入 / 已写入 / 失败。
+ */
+.ffw-card__badge[data-tone='mute'] {
+    color: var(--ff-text-2);
+}
+
+/**
+ * 封面卡的悬停详情（`v-tip` 的富内容通道，材质/定位/进出场由 ftip 宿主负责）。
+ *
+ * ⚠️ 浮层是 Teleport 到 body 的 ⇒ 这个文件必须保持**全局**（不是 scoped），
+ *    否则这些类一条都命中不了（项目已知坑）。
+ * ⚠️ 长路径必须能折行（`overflow-wrap: anywhere`）：盘内相对路径经常比浮层还宽。
+ */
+.ffw-ctip {
+    display: grid;
+    grid-template-columns: auto 1fr;
+    /* 列间距 12：label 与值靠**留白**分隔，不加冒号 —— 紧凑浮层里冒号是多余的符号 */
+    gap: 4px 12px;
+    align-items: baseline;
+    /**
+     * 不要写死宽度：浮层宿主 `.ftip.is-rich` 已经限了 `max-width: 300px`。
+     * 这里再写 320 会让内容比背景宽 20px —— 右侧那一截文字落在浮层**外面**，
+     * 看起来就是"文字透在封面图上、背景是半透明的"（2026-11-14 截图里的异常）。
+     */
+    max-width: 100%;
+    font-size: var(--ff-fs-eyebrow);
+    line-height: 1.5;
+}
+
+.ffw-ctip__head {
+    grid-column: 1 / -1;
+    display: flex;
+    align-items: baseline;
+    gap: 8px;
+    margin-bottom: 2px;
+    padding-bottom: 6px;
+    border-bottom: 1px solid var(--ff-line);
+}
+
+.ffw-ctip__title {
+    min-width: 0;
+    font-size: var(--ff-fs-meta);
+    font-weight: 500;
+    color: var(--ff-text-1);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.ffw-ctip__badge {
+    flex: none;
+    margin-left: auto;
+    color: var(--ff-text-2);
+}
+
+.ffw-ctip__badge[data-tone='ok'] {
+    color: var(--ff-status-ok);
+}
+
+.ffw-ctip__badge[data-tone='warn'] {
+    color: var(--ff-status-warn);
+}
+
+.ffw-ctip__badge[data-tone='err'] {
+    color: var(--ff-status-err);
+}
+
+.ffw-ctip__k {
+    color: var(--ff-text-2);
+    white-space: nowrap;
+}
+
+.ffw-ctip__v {
+    min-width: 0;
+    color: var(--ff-text-1);
+    overflow-wrap: anywhere;
+}
+
 .ffw-card__check {
     position: absolute;
     left: 6px;
@@ -436,9 +751,19 @@
     color: var(--ff-text-1);
 }
 
+/* 空态里的出口按钮（"扫描整个盘"）：说明文字是行内流，
+   `inline-flex` 会挤在同一行 ⇒ 改成块级换行；`fit-content` 才是"按内容收窄"，
+   否则块级按钮会撑满整行、`margin auto` 也就居不了中 */
+.ffw-empty__act {
+    display: flex;
+    width: fit-content;
+    margin: 12px auto 0;
+}
+
 /* 任务进行中：勾选禁用（点了没效果的事，不如不让点） */
 .ffw-card__check:disabled,
-.ffw-row__check:disabled {
+.ffw-row__check:disabled,
+.ffw-check:disabled {
     opacity: 0.4;
     cursor: default;
 }
@@ -661,17 +986,7 @@
 }
 
 /* ───────── 底栏 ───────── */
-.ffw-dock {
-    position: relative;
-    flex: none;
-    height: 52px;
-    display: flex;
-    align-items: center;
-    gap: var(--ff-sp-3);
-    padding: 0 16px;
-    background: var(--ff-panel);
-    border-top: 1px solid var(--ff-line);
-}
+/* `.ffw-dock` 的布局定义在文件顶部（浮在内容之上，见 `.ffw-shell` 那段） */
 
 /* 进度线画在底栏上边缘：0 布局占用，两个阶段共用同一条 */
 .ffw-dock__rail {
@@ -726,15 +1041,31 @@
 }
 
 /* 文字形变：旧字上移淡出、新字下移淡入（同节点，位置不动） */
+/**
+ * 底栏文字行 = [可选的总控勾选] + [叠层文字]。
+ *
+ * 原来是直接 `display: grid` 且所有子节点都堆在 `1/1`（靠 Transition 换人）。
+ * 2026-11-13 加了"已选"前面的勾选框 ⇒ 必须先把外面变成一行，
+ * 否则勾选框会和文字叠在同一格里（看不见，也点不到）。
+ * `__stack` 承接原来的叠层职责，头像面板不传 lead 时布局与以前完全一致。
+ */
 .ffw-dock__line {
     position: relative;
+    flex: 1;
+    display: flex;
+    align-items: center;
+    gap: var(--ff-sp-2);
+    min-width: 0;
+}
+
+.ffw-dock__stack {
     flex: 1;
     display: grid;
     align-items: center;
     min-width: 0;
 }
 
-.ffw-dock__line > * {
+.ffw-dock__stack > * {
     grid-area: 1 / 1;
     display: flex;
     align-items: center;

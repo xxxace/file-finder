@@ -545,7 +545,7 @@ export function createAssistantRoutes(deps: AssistantDeps): AssistantRoute[] {
                 return;
             }
             reopenJob(job);
-            void runFrameJob(body.serial, targets, job, dataDir, online.root);
+            void runFrameJob(body.serial, targets, job, dataDir, online.root, { append: true });
             sendJson(res, { code: 200, jobId: job.id, total: targets.length, appended: true });
             return;
         }

@@ -38,6 +38,8 @@ import type { ScanTarget, TargetKind } from './scan';
 import type { Job } from './jobs';
 import { bumpProgress, finishJob, pushRow } from './jobs';
 
+import { cardKeyOf } from './cardKey';
+
 export type GrabStatus = 'ok' | 'no-id' | 'no-match' | 'blocked' | 'bad-cover' | 'error';
 
 export interface GrabActor {
@@ -101,10 +103,25 @@ interface GrabMatch {
 }
 
 /**
- * 同时在飞的抓取数（2026-09-25 用户拍板"一次 5 个"）。
- * 每个 worker 一次抓一个番号 = 一个隐藏 BrowserWindow；同主机的**发起节奏**
- * 仍被 queue.ts 的 runPaced 钉在 1.5s 一个，所以加大这个数只会让慢页面重叠加载，
- * 不会让对站点的请求变密 —— 觉得猛了调小，觉得慢了调大，是唯一的旋钮。
+ * 同时在飞的抓取数 = 5（2026-11-14 主人裁决：「并发不能开到 5 吗」）。
+ *
+ * ⚠️ 这个数**不是**"越大越快"的旋钮。昨天 5 个并发会卡，根因不是 5，而是当时每条都要
+ * 「新建窗口 → 等整个页面 load 完（含全站图片/广告）→ 销毁窗口」⇒ 5 个渲染进程同时
+ * 解码图片、跑广告脚本。11-13 把它降到 2，只是把症状盖住了。
+ *
+ * 11-14 改的是**单窗成本**（见 `siteFetch.ts` 的 `SKIP_RESOURCE_TYPES` 与 `loadURL` 那段）：
+ * 拦掉字体/媒体/beacon（**不含 image**，理由见那里的回退记录），配合 `HOST_GAP_MS` 1200
+ * ⇒ 现在 5 个窗口的总开销低于当年轻飘飘的 2 个。
+ * ⚠️ 试过"只等 dom-ready"与"连 image 一起拦"，两者都会让懒加载站的封面抽成占位图，已回滚。
+ *
+ * ⚠️ **提速到什么程度由 `HOST_GAP_MS` 封顶，不由这个数决定**：
+ *     稳态吞吐 = min(N / T单条, 1 / HOST_GAP_MS)
+ *   N=5、间隔 1.2s ⇒ 上限 0.83 条/秒。也就是说 **单条耗时 T > 6 秒** 时，加这个数才看得见；
+ *   T ≤ 6 秒时早就被间隔封顶了，再往上加就是空转（只多占内存和渲染进程）。
+ *   要真提速，先看底栏 `抓取中 x/y` 的推进节奏：每 1.2 秒跳一格 = 已在封顶，别加；
+ *   每 3～4 秒才跳一格 = T 太大，加这个数有用。
+ *
+ * ⚠️ 改这个数**必须**同步 `queue.ts` 的 `MAX_ACTIVE_PER_HOST`（它必须 ≥ 这里）。
  */
 const GRAB_PARALLEL = 5;
 
@@ -125,25 +142,27 @@ export async function runGrab(
     dataDir: string,
     /**
      * `force: true` = **绕开落盘命中缓存，真打站点**。
-     *
-     * 为什么必须有它（2026-10-02「换封面」）：下面 `outcomeOf` 的第一级就是查
-     * `hits.jsonl`，凡助手**以前抓到过**的番号会秒回旧 URL ⇒ 下载到**逐字节相同**的图。
-     * 对"补封面"这是优点（省请求）；但对"换封面"就是**空转** —— 用户明确表示这张不好、
-     * 要换一张，结果拿回同一张，"已替换"就成了假话。
-     *
-     * ⚠️ 刻意**不写墓碑**（`appendTombstone`）来实现：墓碑的语义是"这个 URL 永久坏了"，
-     * 而"我想换一张"跟 URL 好坏无关 —— 不该污染那张表。
      */
     force = false,
     /**
      * `true` = 追加一批目标到**已有的** job（重抓失败项 / 过验证后重抓）。
-     * 区别只在进度总数要累加，不能把 `total` 重置成这一批的数量。
      */
     append = false,
 ): Promise<void> {
     const active = rules.filter(r => r.enabled);
+
+    // 按卡键收拢：多卷（8 个分卷）同一部片只作为 1 个抓取任务，彻底杜绝重复抓取
+    const cardGroups = new Map<string, ScanTarget[]>();
+    for (const t of targets) {
+        const key = cardKeyOf({ kind: t.kind, writeRel: t.writeRel, query: t.query });
+        const list = cardGroups.get(key);
+        if (list) list.push(t);
+        else cardGroups.set(key, [t]);
+    }
+    const cardList = [...cardGroups.values()];
+
     bumpProgress(job, {
-        total: append ? job.progress.total + targets.length : targets.length,
+        total: append ? job.progress.total + cardList.length : cardList.length,
     });
 
     if (!active.length) {
@@ -152,15 +171,13 @@ export async function runGrab(
     }
 
     // 跨任务/跨重启的命中缓存：以前抓到过的番号直接复用 URL，不再开窗打站点
-    // （中断、重启后重抓，成功的部分是秒回的 —— 用户 2026-09-25 反馈的"从 0 开始"就断在这）
     const hits = await loadHits(dataDir);
 
     /**
-     * 番号 → 尝试结果（Promise 形态）。null 表示"抓过了，没命中"（同样要记住，
-     * 免得对同一番号反复打站点）。存 Promise 而不是值：并发下两个分卷（同一番号）
-     * 可能同时到 —— 后到的直接 await 同一个 Promise，天然只发一次请求。
+     * 番号 → 尝试结果（Promise 形态）。
+     * 全链路 memoize，不管是命中缓存验证还是打站点，同一番号天然只发一次！
      */
-    const memo = new Map<string, Promise<MatchOutcome>>();
+    const outcomeMemo = new Map<string, Promise<MatchOutcome>>();
 
     /** 真打站点：按启用站点顺序 fallback 到第一个命中为止 */
     async function fetchOnce(id: string): Promise<MatchOutcome> {
@@ -173,8 +190,13 @@ export async function runGrab(
         for (const rule of active) {
             if (job.cancelled) return { match, blocked, blockedSite, why, badCover };
 
+            // ⚠️ 「图坏」必须**每站独立判断**：上一站有图但坏了，不代表这一站没图。
+            // 不重置就会出现「第一站图坏 + 第二站根本抽不到」时报成"封面取不到"，
+            // 用户跑去查图片链接，而真实原因是第二站的规则抽不到（2026-11-14 主人报）。
+            // `blocked` 刻意**不**重置：被拦是累积信号，它决定"能不能人工过验证再试"。
+            badCover = false;
+
             bumpProgress(job, { current: `${id} → ${rule.id}` });
-            // ⚠️ 与试跑走**同一个**模板引擎 —— 两边拼法必须永远一致（否则"试跑通了、抓取反而错"）
             const url = expandUrl(rule.detailUrl, id, rule.queryTransform);
             const extract = buildExtractScript(rule.fields);
             const steps = rule.steps ?? [];
@@ -187,8 +209,6 @@ export async function runGrab(
                     () => (steps.length
                         ? runSteps(url, planned, extract, { signal: job.controller.signal })
                         : runExtract<ExtractedFields>(url, extract, { signal: job.controller.signal })),
-                    // ⚠️ 有动作的规则**一律不重试**：动作有副作用，重试 = 重复输入 / 重复点击。
-                    // "只有超时值得再试"那条判据只对幂等的纯抽取成立。
                     r => !steps.length && !r.ok && r.err === 'timeout',
                     job.controller.signal,
                 );
@@ -213,22 +233,14 @@ export async function runGrab(
 
             const f = res.data as ExtractedFields | undefined;
             if (f && f.cover) {
-                // 抽到链接不等于拿到封面。验不过就继续下一个站点 —— fallback 链不因
-                // 一条死链断掉；验过了才写命中缓存（`appendHit`），坏 URL 永不入库。
-                // 图片是 CDN 静态资源，不是页面浏览 ⇒ 不占 runPaced 的 1.5s 限速额度
-                //（预览代理本来也是直接发的）。整条链路的**图片**请求数反而比改前少：
-                // 验过的字节进 coverImage 缓存，预览和写盘都直接复用，不再各下一次。
                 const check = await getVerifiedCover(f.cover, job.controller.signal);
                 if (check.ok) {
                     match = {
                         hitSite: rule.id,
                         coverUrl: f.cover,
                         title: f.title || null,
-                        // javbus 这类站的选择器只取第一个演员节点 —— 先给一个，
-                        // 多演员拆解是 Phase 4「演员聚合」的事
                         actresses: f.actress ? [{ name: f.actress, link: f.actressLink || undefined }] : [],
                     };
-                    // 立刻进命中缓存（追加一行，fire-and-forget）：中断/重启后这里直接复用
                     appendHit(dataDir, { id, at: new Date().toISOString(), ...match });
                     break;
                 }
@@ -242,73 +254,55 @@ export async function runGrab(
     }
 
     /**
-     * 取番号的尝试结果，三级递进：
-     *   ① 落盘命中缓存（以前抓到过）→ ② 本次任务 memo → ③ 真打站点。
-     *
-     * ⚠️ ① 也要验：命中缓存里可能躺着**以前误记的坏 URL**（正是这次要修的病）。
-     *    秒回一个坏链接等于把 bug 永久化。验不过 ⇒ 立墓碑 + 本次内存表删掉
-     *    ⇒ 回落到 ③ 真抓一次，有机会拿到新 URL（新 URL 会覆盖墓碑）。
+     * 取番号的尝试结果（全过程 Promise 级别 memo，防止重复请求）：
+     *   ① 落盘命中缓存（以前抓到过）→ ② 真打站点。
      */
-    async function outcomeOf(id: string): Promise<MatchOutcome> {
-        // `force` 时跳过命中缓存（理由见 `runGrab` 的形参注释）；`force` 下抓到的**新 URL
-        // 仍然照常 `appendHit`**（在 `fetchOnce` 里），所以缓存不会因此失效。
-        const hit = force ? undefined : hits.get(id);
-        if (hit) {
-            const check = await getVerifiedCover(hit.coverUrl, job.controller.signal);
-            if (check.ok) {
-                return {
-                    match: {
-                        hitSite: hit.hitSite,
-                        coverUrl: hit.coverUrl,
-                        title: hit.title,
-                        actresses: hit.actresses,
-                    },
-                    blocked: false,
-                    why: '',
-                };
-            }
-            if (check.urlBad) appendTombstone(dataDir, id);
-            hits.delete(id);
-        }
-        return fresh(id);
-    }
-
-    /** 真抓（并发撞同一番号时复用同一个 Promise，天然只发一次请求） */
-    function fresh(id: string): Promise<MatchOutcome> {
-        let p = memo.get(id);
+    function outcomeOf(id: string): Promise<MatchOutcome> {
+        let p = outcomeMemo.get(id);
         if (!p) {
-            p = fetchOnce(id).catch(e => {
-                // memo 里不能留 rejected：同番号的后续行要能拿到"失败原因"而不是抛异常
-                memo.delete(id);
-                throw e;
-            });
-            memo.set(id, p);
+            p = (async () => {
+                const hit = force ? undefined : hits.get(id);
+                if (hit) {
+                    const check = await getVerifiedCover(hit.coverUrl, job.controller.signal);
+                    if (check.ok) {
+                        return {
+                            match: {
+                                hitSite: hit.hitSite,
+                                coverUrl: hit.coverUrl,
+                                title: hit.title,
+                                actresses: hit.actresses,
+                            },
+                            blocked: false,
+                            why: '',
+                        };
+                    }
+                    if (check.urlBad) appendTombstone(dataDir, id);
+                    hits.delete(id);
+                }
+                return fetchOnce(id);
+            })();
+            outcomeMemo.set(id, p);
         }
         return p;
     }
 
-    /** 处理一个目标：解析番号 → 取结果 → 记一行。单条失败记成一行，不炸整批 */
-    async function grabOne(t: ScanTarget): Promise<void> {
-        // ⚠️ 优先用目标自带的查询词。封面卡条目的 `name` 是**封面图文件名**
-        // （`handleCover` 里 `info.name = getFilename(file)`，可能是 `cover`/`1` 这类），
-        // 拿它解析番号必然失败 ⇒ 那批目标会被静默记成 `no-id` 跳过
-        // （用户真机实测："点了换封面，弹窗里什么都没发生"）。
-        // `scanMissingCovers`（补封面）的目标**没有** `query` 字段，所以回落到原来的
-        // `parseTitle(t.name)` —— 那条既有路径的行为一个字都没变。
-        const id = t.query || parseTitle(t.name).id;
+    /** 处理一部片（含这一部的所有分卷，只抓一次）：解析番号 → 取结果 → 给各分卷各记一行 */
+    async function grabCard(list: ScanTarget[]): Promise<void> {
+        const t0 = list[0];
+        const id = t0.query || parseTitle(t0.name).id;
         if (!id) {
-            pushRow(job, {
-                writeRel: t.writeRel,
-                query: '',
-                hitSite: null,
-                coverUrl: null,
-                title: null,
-                actresses: [],
-                status: 'no-id',
-                // 原文案写的是"可手动填写" —— 界面上**从来没有**这个入口，是句空承诺。
-                // 这里只说事实：跳过了，不会去搜、也不会写任何东西。
-                message: '认不出番号，已跳过',
-            });
+            for (const t of list) {
+                pushRow(job, {
+                    writeRel: t.writeRel,
+                    query: '',
+                    hitSite: null,
+                    coverUrl: null,
+                    title: null,
+                    actresses: [],
+                    status: 'no-id',
+                    message: '认不出番号，已跳过',
+                });
+            }
             step(job, 'miss');
             return;
         }
@@ -318,92 +312,100 @@ export async function runGrab(
             outcome = await outcomeOf(id);
         } catch (e) {
             if (e instanceof CancelledError) throw e;
-            pushRow(job, {
-                writeRel: t.writeRel, query: id, hitSite: null, coverUrl: null, title: null,
-                actresses: [], status: 'error',
-                message: e instanceof Error ? e.message : String(e),
-            });
+            for (const t of list) {
+                pushRow(job, {
+                    writeRel: t.writeRel, query: id, hitSite: null, coverUrl: null, title: null,
+                    actresses: [], status: 'error',
+                    message: e instanceof Error ? e.message : String(e),
+                });
+            }
             step(job, 'miss');
             return;
         }
 
-        // ⚠️ 终止时**已经拿到的结果照样要记**：用户点「终止」最关心的是
-        // "抓到的那几张还算不算"。原来这里无条件 return，把这一条的命中整条丢掉
-        // ⇒ hits 恒为 0、写入按钮根本不出现（用户 2026-10-22 反馈）。
         if (job.cancelled && !outcome.match) return;
 
         if (outcome.match) {
-            pushRow(job, {
-                writeRel: t.writeRel,
-                query: id,
-                hitSite: outcome.match.hitSite,
-                coverUrl: outcome.match.coverUrl,
-                title: outcome.match.title,
-                actresses: outcome.match.actresses,
-                status: 'ok',
-                message: '',
-                srcRel: t.srcRel,
-                kind: t.kind,
-                name: t.name,
-            });
+            for (const t of list) {
+                pushRow(job, {
+                    writeRel: t.writeRel,
+                    query: id,
+                    hitSite: outcome.match.hitSite,
+                    coverUrl: outcome.match.coverUrl,
+                    title: outcome.match.title,
+                    actresses: outcome.match.actresses,
+                    status: 'ok',
+                    message: '',
+                    srcRel: t.srcRel,
+                    kind: t.kind,
+                    name: t.name,
+                });
+            }
             step(job, 'hit');
         } else {
-            pushRow(job, {
-                writeRel: t.writeRel,
-                query: id,
-                hitSite: null,
-                coverUrl: null,
-                title: null,
-                actresses: [],
-                status: outcome.blocked ? 'blocked' : outcome.badCover ? 'bad-cover' : 'no-match',
-                message: outcome.why,
-                blockedSite: outcome.blockedSite,
-            });
+            for (const t of list) {
+                pushRow(job, {
+                    writeRel: t.writeRel,
+                    query: id,
+                    hitSite: null,
+                    coverUrl: null,
+                    title: null,
+                    actresses: [],
+                    status: outcome.blocked ? 'blocked' : outcome.badCover ? 'bad-cover' : 'no-match',
+                    message: outcome.why,
+                    blockedSite: outcome.blockedSite,
+                });
+            }
             step(job, outcome.blocked ? 'blocked' : 'miss');
         }
     }
 
-    // 有界并发：GRAB_PARALLEL 个 worker 共享一个下标，谁空谁取下一条。
-    // 同番号去重靠 memo 的 Promise 形态；取消时 worker 各自退出，Promise.all 收拢。
-    //
-    // ⚠️ 闸门必须在**取下一条之前**等：暂停时在飞的条目跑完即记入结果，
-    // 停住的是队列 —— 这样"暂停 → 写入已抓到的 → 继续"能串起来（用户 2026-10-22）。
-    // ⚠️ 先看 `next` 再等闸门：否则队列已经跑空时暂停，worker 会挂在闸门上，
-    // job 永远停在 paused（明明已经没事可做了）。
     let next = 0;
     const worker = async () => {
         while (!job.cancelled) {
-            if (next >= targets.length) return;
+            if (next >= cardList.length) return;
             await job.gate.wait();
             if (job.cancelled) return;
             const i = next++;
-            if (i >= targets.length) return;
-            await grabOne(targets[i]);
+            if (i >= cardList.length) return;
+            const card = cardList[i];
+            /**
+             * 在飞登记 —— 界面只给这几张卡转圈。
+             * 放在 worker 里而不是 `grabCard` 里：`finally` 能兜住取消（CancelledError）、
+             * 异常、以及未来的提前 return，三种出口都不会把卡永久留在 inflight 里。
+             */
+            const rels = card.map(t => t.writeRel);
+            job.inflight.push(...rels);
+            try {
+                await grabCard(card);
+            } finally {
+                for (const r of rels) {
+                    const k = job.inflight.indexOf(r);
+                    if (k !== -1) job.inflight.splice(k, 1);
+                }
+            }
         }
     };
 
     try {
-        // ⚠️ allSettled 而不是 all：某个 worker 被 abort 抛 CancelledError 时，
-        // `all` 会立刻 reject，而其他 worker 还在往里 pushRow —— 收尾与写结果赛跑，
-        // 最后几条会被"已经结束"的快照吞掉。等全部收拢再 `finishJob`。
         const settled = await Promise.allSettled(
             Array.from({ length: GRAB_PARALLEL }, () => worker()),
         );
         const rejected = settled.find(r => r.status === 'rejected');
         if (rejected) throw (rejected as PromiseRejectedResult).reason;
 
-        const { processed, total, hits, misses, blocked } = job.progress;
+        const { processed, total, hits: hCount, misses, blocked } = job.progress;
         if (job.cancelled) {
             finishJob(job, 'cancelled',
-                `已终止：处理了 ${processed}/${total}，命中 ${hits} 张（可以写入）`);
+                `已终止：处理了 ${processed}/${total}，命中 ${hCount} 张（可以写入）`);
         } else {
-            finishJob(job, 'done', `完成：命中 ${hits}，未命中 ${misses}，被拦 ${blocked}`);
+            finishJob(job, 'done', `完成：命中 ${hCount}，未命中 ${misses}，被拦 ${blocked}`);
         }
     } catch (e) {
         if (e instanceof CancelledError) {
-            const { processed, total, hits } = job.progress;
+            const { processed, total, hits: hCount } = job.progress;
             finishJob(job, 'cancelled',
-                `已终止：处理了 ${processed}/${total}，命中 ${hits} 张（可以写入）`);
+                `已终止：处理了 ${processed}/${total}，命中 ${hCount} 张（可以写入）`);
         } else {
             finishJob(job, 'error', e instanceof Error ? e.message : String(e));
         }

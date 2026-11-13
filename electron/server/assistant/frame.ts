@@ -173,6 +173,7 @@ export async function runFrameJob(
     dataDir: string,
     /** 调用方已经查过的盘根。给了就不再自己扫一遍盘表（一次动作只扫一趟） */
     rootHint?: string,
+    opts: { append?: boolean } = {},
 ): Promise<void> {
     let root = rootHint ?? '';
     if (!root) {
@@ -186,7 +187,13 @@ export async function runFrameJob(
     const absOf = (rel: string) => path.join(root, rel.replace(/\//g, path.sep));
 
     const cards = groupByCard(targets);
-    bumpProgress(job, { total: cards.size, processed: 0, hits: 0, misses: 0 });
+    const append = opts.append === true;
+    bumpProgress(job, {
+        total: append ? (job.progress.total ?? 0) + cards.size : cards.size,
+        processed: append ? (job.progress.processed ?? 0) : 0,
+        hits: append ? (job.progress.hits ?? 0) : 0,
+        misses: append ? (job.progress.misses ?? 0) : 0,
+    });
     if (!cards.size) {
         finishJob(job, 'done', '没有可抽帧的目标');
         return;
@@ -208,8 +215,8 @@ export async function runFrameJob(
         }
     }
 
-    let hits = 0;
-    let misses = 0;
+    let hits = append ? (job.progress.hits ?? 0) : 0;
+    let misses = append ? (job.progress.misses ?? 0) : 0;
 
     /** 一条失败/成功的记账口：一张卡的所有 writeRel 都要各推一行，否则写盘只知道一个分卷 */
     const pushFor = (list: ScanTarget[], row: Omit<FrameRow, 'writeRel' | 'kind' | 'name' | 'query' | 'srcRel'>) => {
@@ -232,6 +239,12 @@ export async function runFrameJob(
             if (job.cancelled) break;
 
             bumpProgress(job, { current: list[0].name });
+            /**
+             * 在飞登记。抽帧是**串行**的 ⇒ 这里恒为"当前这一卡"。
+             * 整体赋值（而不是 push/splice）就够了：同一时刻只有一张。
+             * 界面只给这一张转圈 —— 把整批几十张一起点亮既是假象，又要几十个 Canvas 同时跑。
+             */
+            job.inflight = list.map(t => t.writeRel);
             const k16 = key16Of(key);
             const video = await pickVideo(root, absOf, list[0]);
 
@@ -285,12 +298,15 @@ export async function runFrameJob(
             }
 
             bumpProgress(job, { processed: (job.progress.processed ?? 0) + 1, hits, misses });
+            job.inflight = [];
         }
     } catch (e) {
+        job.inflight = [];
         finishJob(job, 'error', e instanceof Error ? e.message : String(e));
         return;
     }
 
+    job.inflight = [];
     if (job.cancelled) {
         finishJob(job, 'cancelled', `已终止，抽到 ${hits} 部`);
         return;

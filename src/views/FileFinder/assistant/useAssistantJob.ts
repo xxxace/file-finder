@@ -3,7 +3,14 @@ import { API_BASE, deletAction, getAction, postAction } from '@/utils/request';
 import { isLiveJob } from './jobTypes';
 import type { JobSnapshot } from './jobTypes';
 
-const POLL_MS = 1200;
+/**
+ * 轮询间隔。
+ *
+ * 2026-11-14：1200 → 800。抓取吞吐提到 ~0.8 条/秒之后，1.2 秒才看一次快照，
+ * 界面会比实际落后一整拍（结果已经出了、卡上还是空的）。
+ * 800 是折中：本地 HTTP，开销只有几个 KB，比"看起来卡住"便宜得多。
+ */
+const POLL_MS = 800;
 
 /**
  * 盯一个后台任务：轮询快照 + 暂停 / 继续 / 终止。
@@ -50,7 +57,10 @@ export function useAssistantJob(
 
     const apply = (next: JobSnapshot) => {
         job.value = next;
-        if (isLiveJob(next)) return;
+        if (isLiveJob(next)) {
+            settledFor = null;
+            return;
+        }
         if (acting.value === 'stop') acting.value = '';
         if (settledFor === next.id) return;
         settledFor = next.id;

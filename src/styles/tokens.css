@@ -257,10 +257,6 @@
   --ff-sp-3: var(--ff-raw-sp-3);
   --ff-sp-4: var(--ff-raw-sp-4);
   --ff-sp-6: var(--ff-raw-sp-6);
-  --ff-h-nav: 48px;
-  --ff-h-list: 34px;
-  --ff-h-table: 36px;
-  --ff-h-head: 32px;
   --ff-h-ctl: 28px;
 
   /* 结构常量 */
@@ -268,9 +264,6 @@
   --ff-mask: rgba(0, 0, 0, 0.45);
   --ff-rail-w: 64px;
   --ff-grid-gap: 16px;
-  /* ⚠️ 2026-11-07 起**不再使用**：网格是 `repeat(N, minmax(0,1fr))`，列数必须精确等于密度档的 N
-     （否则 `useGridCursor` 的「列数变了就失效行结构缓存」判据永不触发，方向键会错位）。保留作记号。 */
-  --ff-grid-min-cell: 110px;
   /* 封面比例：改这一个值就能整体换比例（16/10、4/3 都行） */
   --ff-cover-ratio: 3 / 2;
 
@@ -354,19 +347,18 @@
   --ff-on-highlight: #ffffff;
 
 
-  /* 提示胶囊：**浅色下不走玻璃**。
-     ⚠️ 2026-11-08 主人反馈"浅色下看起来很脏"：玻璃会吸到身后封面图的颜色（截图里那抹蓝就是透出来的），
-     白底上再叠一层深投影就是一圈灰雾。浅色的正确答案是「不透明白 + 1px 发丝 + 极轻投影」，
-     干净靠边界，不靠透光。深色相反 —— 深色下必须玻璃，见下面那段注释。 */
-  --ff-tip-bg: var(--ff-panel);
+  /* 磨砂面板材质（"浮在内容上的面"：左轨浮标、助手面板的头/底栏、富内容提示）。
+     ⚠️ 浅色的历史：2026-11-08 曾裁决「浅色不走玻璃」（当时是实心面板 + `backdrop: none`），
+     理由是玻璃会吸到身后封面图的颜色、看着脏。2026-11-14 主人改判：浅色也要毛玻璃
+     ⇒ 半透明白 + 与深色同一档模糊。深色同组值见 `[data-theme='dark']`。 */
+  --ff-tip-bg: rgba(255, 255, 255, 0.82);
   --ff-tip-text: var(--ff-text-1);
   --ff-tip-shadow: 0 4px 12px rgba(0, 0, 0, 0.08), inset 0 0 0 1px rgba(0, 0, 0, 0.08);
-  --ff-tip-backdrop: none;
+  --ff-tip-backdrop: blur(14px) saturate(160%);
 
   /* naive Tooltip 的小气泡 —— **不是**上面那组。
-     `--ff-tip-*` 只服务左轨那颗自绘浮标（44px 按钮旁边、要磨砂、要发丝边）。
-     naive 的 tooltip 是「一行字 + 箭头」的纯信息气泡，白底在这个界面里没有边界可依，
-     所以它走反色：浅色下深片白字。 */
+     `--ff-tip-*` 是"磨砂面板"（可跟随主题）；naive 的 tooltip / `v-tip` 胶囊是「一行字 + 箭头」
+     的纯信息气泡，白底在这个界面里没有边界可依，所以它**永远走反色**：浅色下深片白字。 */
   --ff-tooltip-bg: rgba(0, 0, 0, 0.86);
   --ff-tooltip-text: #ffffff;
   /* Fluid Tip（v-tip 指令的胶囊）与 naive tooltip 同工种：永远反色深底，
@@ -383,28 +375,16 @@
       0 8px 24px -8px rgba(0, 0, 0, 0.45);
   --ff-tooltip-backdrop: none;
 
-  /* ════════ 兼容别名（Task 8 删除） ════════ */
+  /* ════════ 常用别名 ════════ */
   --ff-bg: var(--ff-canvas);
-  --ff-surface: var(--ff-panel);
   --ff-fill: var(--ff-raised);
   --ff-fill-strong: var(--ff-raised-hover);
   --ff-text-3: var(--ff-text-2);
   --ff-text-muted: var(--ff-text-2);
-  --ff-pink: var(--ff-highlight);
-  --ff-pink-deep: var(--ff-highlight);
-  --ff-pink-weak: var(--ff-highlight-weak);
-  --ff-blue: var(--ff-highlight);
-  --ff-blue-deep: var(--ff-highlight);
-  --ff-blue-weak: var(--ff-highlight-weak);
-  --ff-shadow-1: 0 2px 10px rgba(0, 0, 0, 0.08);
 
-  /* 旧尺度别名 */
+  /* 尺度别名 */
   --ff-radius-card: var(--ff-r-card);
   --ff-radius-ctl: var(--ff-r-ctl);
-  --ff-radius-pill: var(--ff-r-pill);
-
-  /* naive-ui 圆角小档在若干处按 4px 硬编码，保留一个记号位 */
-  --ff-radius-xs: 4px;
 }
 
 [data-theme='dark'] {
@@ -528,8 +508,6 @@
       inset 0 0 0 1px rgba(255, 255, 255, 0.12),
       0 2px 8px rgba(0, 0, 0, 0.4),
       0 12px 28px -10px rgba(0, 0, 0, 0.55);
-
-  --ff-shadow-1: 0 2px 10px rgba(0, 0, 0, 0.4);
 }
 
 /* 根节点：原来 body 带着 UA 的 8px margin，与 `100vh` 的页面叠在一起会溢出 */

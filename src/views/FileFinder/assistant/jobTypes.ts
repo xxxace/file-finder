@@ -24,6 +24,14 @@ export interface JobSnapshot<Row = unknown> {
     status: JobStatus;
     progress: JobProgress;
     rows: Row[];
+    /**
+     * 此刻**真正在飞**的目标（`writeRel`）。界面靠它决定"哪几张卡转圈"。
+     *
+     * ⚠️ 别用 `progress.current` 代替：那是单个字符串，并发时表达不了"这三张同时在请求"。
+     * ⚠️ 也别用"选中且还没结果"来推断：那会把几十张排队中的卡一起点亮，
+     * 既是假象、又要几十个 Canvas 同时跑 rAF（2026-11-14 两件事一起修）。
+     */
+    inflight?: string[];
     message: string;
 }
 

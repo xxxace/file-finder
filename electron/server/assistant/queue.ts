@@ -17,8 +17,13 @@
  */
 import type { BrowserWindow } from 'electron';
 
-/** 同一主机两次请求之间的最小间隔（毫秒） */
-const HOST_GAP_MS = 1_500;
+/**
+ * 同一主机两次**发起**之间的最小间隔（毫秒）。
+ *
+ * 2026-11-14：1500 → 1200（主人裁决：「不考虑封禁风险，1000-1200 我认为已经足够了」）。
+ * ⚠️ 这条只管"发起节奏"，和"同时在飞几个"是两个维度 —— 混着调会得出错的结论。
+ */
+const HOST_GAP_MS = 1_200;
 
 /**
  * 每次重试前的等待（毫秒）。长度即"最多再试几次"。
@@ -61,10 +66,73 @@ export function sleep(ms: number, signal?: AbortSignal): Promise<void> {
     });
 }
 
-/** 主进程里的"抓取线程"：任何时候只有一条链在跑 */
+/** 主进程里的"写盘线程"：任何时候只有一条链在跑 */
 let chain: Promise<unknown> = Promise.resolve();
-/** host → 上次发起请求的时刻 */
-const lastHitAt = new Map<string, number>();
+/** host → 下一次允许发起请求的时刻 */
+const nextSlotAt = new Map<string, number>();
+/** host → 当前正在飞的请求数（防单个主机被过多窗口同时压垮） */
+const activePerHost = new Map<string, number>();
+/**
+ * 同一主机最多几个请求同时在飞。
+ *
+ * ⚠️ 必须 **≥ 抓取 worker 数**（`grab.ts` 的 `GRAB_PARALLEL` = 5），否则多出来的 worker
+ * 只是换个地方排队：并发开到 5 而这里只放 3 个，第 4、5 个会卡在这条闸门上 ——
+ * 形式上加了并发，实际吞吐一点没变（2026-11-14 自检抓到过一次）。
+ */
+const MAX_ACTIVE_PER_HOST = 5;
+const hostWaiters = new Map<string, (() => void)[]>();
+
+async function acquireHostSlot(host: string, signal?: AbortSignal): Promise<void> {
+    while ((activePerHost.get(host) ?? 0) >= MAX_ACTIVE_PER_HOST) {
+        if (signal?.aborted) throw new CancelledError();
+        await new Promise<void>((resolve, reject) => {
+            /**
+             * ⚠️ 取消时**必须按排队项本身**摘除，不能按 `resolve` 摘。
+             * 队列里存的是包了一层清理逻辑的 `waiter`，`indexOf(resolve)` 恒为 -1 ——
+             * 被取消的那一项会留在队里，下一次 `releaseHostSlot` 把它叫醒时空转一格，
+             * 后面真正在等的那个反而没被叫到（极端情况下那张卡会永远卡在闸门前，
+             * job 停在 running，界面上就是"卡住了"）。
+             */
+            const waiter = () => {
+                signal?.removeEventListener('abort', onAbort);
+                resolve();
+            };
+            const onAbort = () => {
+                const arr = hostWaiters.get(host);
+                if (arr) {
+                    const idx = arr.indexOf(waiter);
+                    if (idx !== -1) arr.splice(idx, 1);
+                }
+                reject(new CancelledError());
+            };
+            if (signal?.aborted) {
+                reject(new CancelledError());
+                return;
+            }
+            signal?.addEventListener('abort', onAbort, { once: true });
+            let list = hostWaiters.get(host);
+            if (!list) {
+                list = [];
+                hostWaiters.set(host, list);
+            }
+            list.push(waiter);
+        });
+    }
+    activePerHost.set(host, (activePerHost.get(host) ?? 0) + 1);
+}
+
+function releaseHostSlot(host: string): void {
+    const cur = (activePerHost.get(host) ?? 1) - 1;
+    if (cur <= 0) activePerHost.delete(host);
+    else activePerHost.set(host, cur);
+
+    const list = hostWaiters.get(host);
+    if (list && list.length) {
+        const next = list.shift()!;
+        if (!list.length) hostWaiters.delete(host);
+        next();
+    }
+}
 
 /**
  * 把一次抓取排进串行链。返回的 Promise 在**这次任务真正跑完**时 settle。
@@ -78,16 +146,14 @@ export function enqueue<T>(host: string, task: () => Promise<T>, signal?: AbortS
         if (signal?.aborted) throw new CancelledError();
 
         // 同主机限速：等够间隔再发。等待期间被取消要立刻退出，别白等 1.5 秒。
-        const last = lastHitAt.get(host) ?? 0;
-        const wait = last + HOST_GAP_MS - Date.now();
+        const now = Date.now();
+        const slot = Math.max(now, nextSlotAt.get(host) ?? 0);
+        nextSlotAt.set(host, slot + HOST_GAP_MS);
+        const wait = slot - now;
         if (wait > 0) await sleep(wait, signal);
 
         if (signal?.aborted) throw new CancelledError();
-        try {
-            return await task();
-        } finally {
-            lastHitAt.set(host, Date.now());
-        }
+        return await task();
     });
 
     // 链上只留"已完成"这个事实，不带结果也不带异常
@@ -99,28 +165,30 @@ export function enqueue<T>(host: string, task: () => Promise<T>, signal?: AbortS
 }
 
 /**
- * 限速但不排队：等到该主机的间隔满足后就发，**不进全局串行链**。
+ * 限速但不排全局串行链：等到该主机的间隔满足后就发。
  *
- * 和 `enqueue` 的区别：enqueue 是"任意时刻全库只有一个请求在飞"（串行链）；
- * runPaced 只守"同主机两次发起之间 ≥ HOST_GAP_MS"（时间戳判定），
- * 允许多个请求**重叠在飞** —— 这是抓取并发的地基（Phase 5 起，用户要求并发）。
- *
- * 对站点的表现：请求**发起时刻**仍然每隔 1.5s 一个，到达节奏和串行时一样；
- * 变的只是"上一张页面还在慢慢加载时，下一张已经出发"。封禁看的是请求节奏，
- * 不是同时挂着的连接数 —— 所以底线还在。
+ * 1. 同一主机**发起时刻**严格保证 ≥ HOST_GAP_MS（预约式错峰，并发调用天然递增错开）；
+ * 2. 同一主机在飞请求最多 MAX_ACTIVE_PER_HOST 个，避免多窗重叠打爆站点和本进程。
  */
 export async function runPaced<T>(host: string, task: () => Promise<T>, signal?: AbortSignal): Promise<T> {
     if (signal?.aborted) throw new CancelledError();
 
-    const last = lastHitAt.get(host) ?? 0;
-    const wait = last + HOST_GAP_MS - Date.now();
+    // 1. 发起节奏预约错峰（同步预占时间槽，保证并发调用时间差 >= HOST_GAP_MS）
+    const now = Date.now();
+    const slot = Math.max(now, nextSlotAt.get(host) ?? 0);
+    nextSlotAt.set(host, slot + HOST_GAP_MS);
+
+    const wait = slot - now;
     if (wait > 0) await sleep(wait, signal);
 
     if (signal?.aborted) throw new CancelledError();
+
+    // 2. 限制同主机最大并发在飞数
+    await acquireHostSlot(host, signal);
     try {
         return await task();
     } finally {
-        lastHitAt.set(host, Date.now());
+        releaseHostSlot(host);
     }
 }
 

@@ -8,14 +8,19 @@
         <div class="ffw-dock__glow" />
 
         <div class="ffw-dock__line">
+            <!-- 总控勾选（可选）。放在「已选 n / m」**前面**：它管的就是后面那个数，
+                 两个东西挨着才是一句话（放右端按钮区会被读成"又一个动作"）。 -->
+            <slot name="lead" />
             <!-- 阶段变化才换结构：数字在同阶段里原地更新，不重播动画 -->
-            <Transition name="ffw-announce">
-                <div :key="phase">
-                    <i v-if="phase === 'run' || phase === 'done'" class="ffw-dock__pulse" />
-                    <span class="ffw-dock__status">{{ status }}</span>
-                    <span class="ffw-dock__detail">{{ detail }}</span>
-                </div>
-            </Transition>
+            <div class="ffw-dock__stack">
+                <Transition name="ffw-announce">
+                    <div :key="phase">
+                        <i v-if="phase === 'run' || phase === 'done'" class="ffw-dock__pulse" />
+                        <span class="ffw-dock__status">{{ status }}</span>
+                        <span class="ffw-dock__detail">{{ detail }}</span>
+                    </div>
+                </Transition>
+            </div>
         </div>
 
         <div class="ffw-dock__actions">

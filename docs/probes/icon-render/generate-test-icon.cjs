@@ -1,0 +1,181 @@
+const fs = require('node:fs');
+const path = require('node:path');
+
+// 生成高保真纯正参考图风格 SVG
+function createSvg() {
+    return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024" width="1024" height="1024">
+  <defs>
+    <!-- 1. 底板深石墨渐变 -->
+    <linearGradient id="tile-bg" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#545B69"/>
+      <stop offset="0.55" stop-color="#3A3F49"/>
+      <stop offset="1" stop-color="#282B32"/>
+    </linearGradient>
+
+    <!-- 2. 底板温润微弧环境光 -->
+    <radialGradient id="tile-pillow" cx="50%" cy="36%" r="68%">
+      <stop offset="0%" stop-color="#FFFFFF" stop-opacity="0.08"/>
+      <stop offset="65%" stop-color="#000000" stop-opacity="0"/>
+      <stop offset="100%" stop-color="#000000" stop-opacity="0.25"/>
+    </radialGradient>
+
+    <!-- 3. 磨砂琉璃环体质渐变（乳白凝胶，微透光） -->
+    <linearGradient id="ring-gel" x1="0.15" y1="0" x2="0.85" y2="1">
+      <stop offset="0%" stop-color="#FFFFFF" stop-opacity="0.95"/>
+      <stop offset="35%" stop-color="#F2F7FC" stop-opacity="0.85"/>
+      <stop offset="75%" stop-color="#DFEBF7" stop-opacity="0.75"/>
+      <stop offset="100%" stop-color="#CCE0F2" stop-opacity="0.65"/>
+    </linearGradient>
+
+    <!-- 4. 透镜中心凸面微凝胶底盘（次表面漫射薄层） -->
+    <radialGradient id="lens-convex" cx="44%" cy="40%" r="58%">
+      <stop offset="0%" stop-color="#FFFFFF" stop-opacity="0.28"/>
+      <stop offset="50%" stop-color="#E2EEFA" stop-opacity="0.15"/>
+      <stop offset="85%" stop-color="#B8D2EB" stop-opacity="0.08"/>
+      <stop offset="100%" stop-color="#282B32" stop-opacity="0"/>
+    </radialGradient>
+
+    <!-- 5. 菲涅尔外缘光晕（Fresnel Rim Glow）—— 替代硬描边 -->
+    <radialGradient id="fresnel-outer" cx="50%" cy="50%" r="50%">
+      <stop offset="0%" stop-color="#FFFFFF" stop-opacity="0"/>
+      <stop offset="72%" stop-color="#FFFFFF" stop-opacity="0"/>
+      <stop offset="84%" stop-color="#EAF3FD" stop-opacity="0.30"/>
+      <stop offset="92%" stop-color="#FFFFFF" stop-opacity="0.75"/>
+      <stop offset="98%" stop-color="#FFFFFF" stop-opacity="0.98"/>
+      <stop offset="100%" stop-color="#FFFFFF" stop-opacity="0"/>
+    </radialGradient>
+
+    <!-- 6. 菲涅尔内缘咬光 -->
+    <radialGradient id="fresnel-inner" cx="50%" cy="50%" r="50%">
+      <stop offset="0%" stop-color="#FFFFFF" stop-opacity="0"/>
+      <stop offset="88%" stop-color="#FFFFFF" stop-opacity="0"/>
+      <stop offset="96%" stop-color="#FFFFFF" stop-opacity="0.85"/>
+      <stop offset="100%" stop-color="#FFFFFF" stop-opacity="0.1"/>
+    </radialGradient>
+
+    <!-- 7. 手柄电光蓝 #049EFF 磨砂凝胶渐变 -->
+    <linearGradient id="handle-gel" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#3AC6FF"/>
+      <stop offset="40%" stop-color="#049EFF"/>
+      <stop offset="100%" stop-color="#006CB5"/>
+    </linearGradient>
+
+    <!-- 8. 柔化光晕滤镜 -->
+    <filter id="fresnel-blur" x="-15%" y="-15%" width="130%" height="130%">
+      <feGaussianBlur stdDeviation="3" result="blur"/>
+      <feMerge>
+        <feMergeNode in="blur"/>
+        <feMergeNode in="SourceGraphic"/>
+      </feMerge>
+    </filter>
+
+    <!-- 9. 极简底部着地微阴影 -->
+    <filter id="contact-shadow" x="-50%" y="-50%" width="200%" height="200%">
+      <feGaussianBlur stdDeviation="18" result="blur"/>
+      <feComponentTransfer in="blur">
+        <feFuncA type="linear" slope="0.45"/>
+      </feComponentTransfer>
+    </filter>
+
+    <!-- 10. 核心发光体：广域次表面散射 Bloom（将整个透镜内部充满纯白柔光） -->
+    <filter id="bloom-wide" x="-100%" y="-100%" width="300%" height="300%">
+      <feGaussianBlur stdDeviation="45" result="wide"/>
+      <feComponentTransfer in="wide">
+        <feFuncA type="linear" slope="0.85"/>
+      </feComponentTransfer>
+    </filter>
+
+    <!-- 11. 核心发光体：中场高亮光晕 -->
+    <filter id="bloom-mid" x="-60%" y="-60%" width="220%" height="220%">
+      <feGaussianBlur stdDeviation="16" result="mid"/>
+      <feComponentTransfer in="mid">
+        <feFuncA type="linear" slope="0.95"/>
+      </feComponentTransfer>
+    </filter>
+
+    <!-- 12. 核心发光体：微柔化纯白光核（如原图眼睛般纯净温润，无生硬锯齿） -->
+    <filter id="core-soft" x="-20%" y="-20%" width="140%" height="140%">
+      <feGaussianBlur stdDeviation="1.5" result="soft"/>
+      <feMerge>
+        <feMergeNode in="soft"/>
+        <feMergeNode in="SourceGraphic"/>
+      </feMerge>
+    </filter>
+  </defs>
+
+  <!-- 1. 底板：温润微弧深石墨卡片 -->
+  <rect width="1024" height="1024" rx="250" fill="url(#tile-bg)"/>
+  <rect width="1024" height="1024" rx="250" fill="url(#tile-pillow)"/>
+  <rect x="1.5" y="1.5" width="1021" height="1021" rx="248.5" fill="none"
+        stroke="#FFFFFF" stroke-opacity="0.14" stroke-width="3"/>
+
+  <!-- 2. 接触着地微阴影（仅正下方单点落地，四周 100% 洁净，接缝零阴影） -->
+  <g transform="translate(-100.6 -100.6) scale(1.2)">
+    <ellipse cx="485" cy="746" rx="160" ry="22" fill="#07090D" filter="url(#contact-shadow)"/>
+    <ellipse cx="762" cy="780" rx="36" ry="14" fill="#07090D" filter="url(#contact-shadow)"/>
+  </g>
+
+  <!-- 3. 主体组合 -->
+  <g transform="translate(-100.6 -100.6) scale(1.2)">
+
+    <!-- 3.1 凝胶手柄（在透镜外延展，电光蓝 #049EFF，带温润微透光） -->
+    <g>
+      <line x1="627" y1="627" x2="762" y2="762"
+            stroke="url(#handle-gel)" stroke-width="83" stroke-linecap="round"/>
+      <!-- 手柄顶缘温润透光（菲涅尔漫反射） -->
+      <line x1="623" y1="623" x2="756" y2="756"
+            stroke="#FFFFFF" stroke-opacity="0.55" stroke-width="12" stroke-linecap="round"
+            filter="url(#fresnel-blur)"/>
+    </g>
+
+    <!-- 3.2 透镜中心凸面微凝胶底盘（次表面漫射受光层） -->
+    <circle cx="474" cy="474" r="182" fill="url(#lens-convex)"/>
+
+    <!-- 3.3 核心自发光文件光核：第 1 层 广域次表面散射 Bloom（照透整个透镜与镜圈内壁） -->
+    <g fill="#FFFFFF" filter="url(#bloom-wide)">
+      <rect x="362" y="362" width="96" height="96" rx="28"/>
+      <rect x="490" y="362" width="96" height="96" rx="28"/>
+      <rect x="362" y="490" width="96" height="96" rx="28"/>
+      <rect x="490" y="490" width="96" height="96" rx="28"/>
+    </g>
+
+    <!-- 3.4 核心自发光文件光核：第 2 层 密集纯白强晕 -->
+    <g fill="#FFFFFF" filter="url(#bloom-mid)">
+      <rect x="362" y="362" width="96" height="96" rx="28"/>
+      <rect x="490" y="362" width="96" height="96" rx="28"/>
+      <rect x="362" y="490" width="96" height="96" rx="28"/>
+      <rect x="490" y="490" width="96" height="96" rx="28"/>
+    </g>
+
+    <!-- 3.5 核心发光玉核本体（纯白温润如玉，极亮发光源） -->
+    <g fill="#FFFFFF" filter="url(#core-soft)">
+      <rect x="362" y="362" width="96" height="96" rx="28"/>
+      <rect x="490" y="362" width="96" height="96" rx="28"/>
+      <rect x="362" y="490" width="96" height="96" rx="28"/>
+      <rect x="490" y="490" width="96" height="96" rx="28"/>
+    </g>
+
+    <!-- 3.6 磨砂琉璃镜圈主体（乳白半透凝胶体，温润微圆润） -->
+    <circle cx="474" cy="474" r="218" fill="none"
+            stroke="url(#ring-gel)" stroke-width="77"/>
+
+    <!-- 3.7 菲涅尔外缘光晕（Fresnel Outer Rim Glow）—— 纯正参考图边缘质感 -->
+    <circle cx="474" cy="474" r="256.5"
+            fill="url(#fresnel-outer)"
+            filter="url(#fresnel-blur)"/>
+
+    <!-- 3.8 菲涅尔内缘咬光（透镜内环温润微发光） -->
+    <circle cx="474" cy="474" r="182" fill="none"
+            stroke="#FFFFFF" stroke-opacity="0.65" stroke-width="3"
+            filter="url(#fresnel-blur)"/>
+
+    <!-- 3.9 透镜顶弧极柔和的微漫反射弧（温润微浮雕，绝非生硬反光条） -->
+    <path d="M 335 335 A 218 218 0 0 1 613 335" fill="none"
+          stroke="#FFFFFF" stroke-opacity="0.18" stroke-width="20" stroke-linecap="round"
+          filter="url(#fresnel-blur)"/>
+  </g>
+</svg>`;
+}
+
+fs.writeFileSync(path.join(__dirname, 'test-icon.svg'), createSvg());
+console.log('Generated test-icon.svg successfully');

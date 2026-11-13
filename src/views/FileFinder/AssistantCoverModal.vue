@@ -13,11 +13,40 @@
                     待换 <b>{{ items.length }}</b> 部
                 </template>
                 <template v-else>
+                    <!-- 范围是「条件」，不是「统计」：用项目里**可点选胶囊**的规格
+                         （`Cache/index.vue` 的 `.disk-chip` —— 26 高 / 12px / 全圆 / 1px 描边）。
+                         顶栏这一行是 2026-11-08 骨架定的「待补 · 认不出 · 跳过」，
+                         别再往里塞靠下划线区分的链接 —— 那会把它变成一排找不着重点的字。 -->
+                    <button
+                        type="button"
+                        class="ffw-scope"
+                        :disabled="!canToggleScope"
+                        v-tip="scopeTip"
+                        @click="toggleScope"
+                    >
+                        <!-- 文字必须包一层：直接当 flex 的匿名文本节点时 `text-overflow` 不生效，
+                             超长会把右边那颗图标挤扁（2026-11-14 踩到：图标被压成 0 宽） -->
+                        <span class="ffw-scope__t">{{ scopeText }}</span>
+                        <!-- 图标与卡片右上那颗「换一帧」同源同档（RepeatOutline / 13px）：
+                             同一个语义在界面上只该有一种图形、一种大小 -->
+                        <span v-if="openScope" class="ffw-scope__x" aria-hidden="true">
+                            <n-icon :component="RepeatOutline" :size="13" />
+                        </span>
+                    </button>
+                    <!-- ⚠️ 这里**不要**再放一个 `<i />` 分隔点：
+                         胶囊自己带边框，已经足够把它和后面的统计分开；
+                         加上那个 2px 圆点会紧贴胶囊右边框，看着就像"胶囊里多了一个点"
+                         （2026-11-14 主人定位到的就是它）。 -->
                     待补 <b>{{ items.length }}</b>
-                    <i />
-                    认不出番号 {{ scan?.unmatched.length ?? 0 }}
-                    <i />
-                    分类目录跳过 {{ scan?.skippedCategory ?? 0 }}
+                    <!-- 0 不占位：一行里塞满「跳过 0」只是噪音 -->
+                    <template v-if="scan?.unmatched.length">
+                        <i />
+                        认不出番号 {{ scan.unmatched.length }}
+                    </template>
+                    <template v-if="scan?.skippedCategory">
+                        <i />
+                        分类目录跳过 {{ scan.skippedCategory }}
+                    </template>
                     <!-- 系统盘上没人引用的抽帧帧：只给一条去设置清理的入口，不在工作流里插动作 -->
                     <template v-if="orphanCount">
                         <i />
@@ -40,7 +69,7 @@
                     style="width: 216px"
                     @update:value="onDiskChange"
                 />
-                <button type="button" class="ffw-btn ffw-btn--ghost" :disabled="busy || !selectedSerial" @click="runScan">
+                <button type="button" class="ffw-btn ffw-btn--ghost" :disabled="busy || !selectedSerial" @click="runScan()">
                     <n-icon :component="RefreshOutline" :size="13" />
                     扫描
                 </button>
@@ -53,11 +82,17 @@
 
             <div v-else-if="!items.length" class="ffw-empty">
                 <div>
-                    <b>{{ faceMode ? '缓存里找不到你刚选的那些位置' : '缓存里没有发现缺封面的视频' }}</b>
-                    <template v-if="faceMode">
-                        收到 {{ scan?.received ?? 0 }} 个选中位置 · 查了 {{ scan?.probed ?? 1 }} 块盘的缓存
-                    </template>
-                    <template v-else>刚在盘上手动删过图的话，点上面的「深度重扫」用实时清单复核</template>
+                    <b>{{ emptyTitle }}</b>
+                    <template v-if="emptyHint">{{ emptyHint }}</template>
+                    <!-- 范围收窄最危险的后果：**空 ≠ 齐了**。给一条出口，别让人对着一张空屏猜 -->
+                    <button
+                        v-if="canWidenScope"
+                        type="button"
+                        class="ffw-btn ffw-btn--ghost ffw-empty__act"
+                        @click="widenScope"
+                    >
+                        扫描整个盘
+                    </button>
                 </div>
             </div>
 
@@ -71,7 +106,7 @@
                         :selected="isSelected(item)"
                         :locked="selLocked"
                         :action="actionOf(item, frameBusy)"
-                        :action-disabled="!!item.frame && item.frame.pct >= FRAME_STOP_PCT"
+                        :action-disabled="busy || (!!item.frame && item.frame.pct >= FRAME_STOP_PCT)"
                         :extracting="frameBusy.has(item.writeRels[0])"
                         :cover-src="srcOf(item)"
                         @toggle="toggleCard(item)"
@@ -96,11 +131,26 @@
                     :detail="task.detail"
                     :celebrate="celebrate"
                 >
+                    <!-- 总控勾选：一个盒子管全部 —— 勾上 = 全选、取消 = 全不选、半选 = 只选了一部分。
+                         不另设「反选」按钮：checkbox group 里没有这个动作，它只是"先清空再挑几个"的捷径 -->
+                    <template #lead>
+                        <button
+                            v-if="items.length && !selLocked"
+                            type="button"
+                            class="ffw-check"
+                            :class="{ 'is-on': counts.selected > 0 }"
+                            :title="allSelected ? '取消全选' : '全选'"
+                            @click="toggleAll"
+                        >
+                            <n-icon v-if="allSelected" :component="CheckmarkOutline" :size="12" />
+                            <span v-else-if="counts.selected" class="ffw-check__dash" />
+                        </button>
+                    </template>
                     <template #actions>
                         <!-- 批量抽帧：放在模式分支**之外** —— 有失败卡的那些时刻（grab-done / frame-done）
                              正是需要它的时候，塞进 idle 分支等于永远不出现 -->
                         <button
-                            v-if="needFrameCount && !isLiveJob(frameJob) && !isLiveJob(applyJob)"
+                            v-if="needFrameCount && !isLiveJob(frameJob) && !isLiveJob(applyJob) && !isLiveJob(grabJob)"
                             type="button"
                             class="ffw-btn ffw-btn--ghost"
                             :disabled="!canOperate"
@@ -162,7 +212,7 @@
                         </template>
 
                         <template v-else-if="task.mode === 'frame-done'">
-                            <button type="button" class="ffw-btn ffw-btn--ghost" @click="runScan">重扫</button>
+                            <button type="button" class="ffw-btn ffw-btn--ghost" @click="runScan()">重扫</button>
                             <button
                                 type="button"
                                 class="ffw-btn ffw-btn--primary"
@@ -230,7 +280,7 @@
                             >
                                 补抓 {{ retryTargets.length }} 条
                             </button>
-                            <button type="button" class="ffw-btn ffw-btn--ghost" @click="runScan">重扫</button>
+                            <button type="button" class="ffw-btn ffw-btn--ghost" @click="runScan()">重扫</button>
                             <button
                                 type="button"
                                 class="ffw-btn ffw-btn--primary"
@@ -243,7 +293,7 @@
                         </template>
 
                         <template v-else>
-                            <button type="button" class="ffw-btn ffw-btn--ghost" @click="runScan">重扫</button>
+                            <button type="button" class="ffw-btn ffw-btn--ghost" @click="runScan()">重扫</button>
                             <button type="button" class="ffw-btn ffw-btn--primary" @click="setShowModal(false)">完成</button>
                         </template>
                     </template>
@@ -260,11 +310,13 @@ import { NModal, NSelect, NIcon } from 'naive-ui';
 import useConfirm from '@/hooks/useConfirm';
 import {
     ArrowForwardOutline,
+    CheckmarkOutline,
     PauseOutline,
     PlayOutline,
     RefreshOutline,
     ShieldCheckmarkOutline,
     StopOutline,
+    RepeatOutline,
 } from '@vicons/ionicons5';
 import { API_BASE, apiUrl, getAction, postAction } from '@/utils/request';
 import useNotify from '@/hooks/useNotify';
@@ -327,6 +379,16 @@ let celebrateTimer: ReturnType<typeof setTimeout> | undefined;
 onBeforeUnmount(() => { if (celebrateTimer) clearTimeout(celebrateTimer); });
 
 const selectedSerial = ref<string | null>(null);
+/**
+ * 扫描范围（盘内相对路径，`''` = 整盘）。**与 `/assistant/scan` 的 `relPath` 同义**。
+ *
+ * ⚠️ 2026-11-13 之前这里永远是空串 —— 于是"在子目录里点补封面"其实扫的是整个盘，
+ * 兄弟目录 TEMP2 的影片一起被列出来（主人报的问题）。路径信息一路都带着
+ * （`resolveDriveContext` 早就返回了 `relPath`），只是在打开面板时被丢掉了。
+ */
+const scope = ref('');
+/** 打开面板时站的那一层。范围 chip 靠它在「当前文件夹 ⇄ 整个盘」之间来回切 */
+const openScope = ref('');
 const scan = ref<ScanResult | null>(null);
 /** 勾选集合，键 = writeRel；一张卡可能对应多个 writeRel（分卷） */
 const sel = ref(new Set<string>());
@@ -378,6 +440,62 @@ const canOperate = computed(() => {
     return !d || d.online !== false;
 });
 
+// ── 范围：扫哪儿 ─────────────────────────────────────────────
+/** 范围尾名。整盘 → 「整个盘」；否则只显示最后一段（全路径在 title 里） */
+const scopeLabel = computed(() => {
+    if (!scope.value) return '整个盘';
+    const i = scope.value.lastIndexOf('/');
+    return i === -1 ? scope.value : scope.value.slice(i + 1);
+});
+
+/** 从盘根打开时没有第二态可切；任务在跑时不许切（重扫会把已抓到的结果顶掉） */
+const canToggleScope = computed(() => !!openScope.value && !busy.value && !faceMode.value);
+
+/** 当前盘符（不含冒号）。取不到就空串 —— 不猜 */
+const diskLetter = computed(() => {
+    const d = disks.value.find(x => x.serial === selectedSerial.value);
+    return (d?.drive ?? '').replace(/:$/, '');
+});
+
+/**
+ * 胶囊上的字 = **盘符 + 文件夹**，不写"范围"两个字
+ * （2026-11-14 主人：「tooltip 不要冗余提示文案且不要用范围，用盘符 + 文件夹会更好些」）。
+ * 整盘时**只留盘符**（`D:`）—— 那时盘符本身就是完整定位，"整个盘"是多余的解释。
+ */
+const scopeText = computed(() => {
+    const letter = diskLetter.value;
+    if (!scope.value) return letter ? `${letter}:` : '整个盘';
+    const part = scopeLabel.value;
+    return letter ? `${letter}: ${part}` : part;
+});
+
+/**
+ * 悬停只给**完整位置**。
+ *
+ * 不再写「只补 xxx 及以下 · 点击改为整个盘」那种说明 —— 右边那颗 ⇄ 已经在说"能切换"，
+ * 再补一句就是重复。没有可切的状态时（从盘根打开）也就没有第二句可说。
+ */
+const scopeTip = computed(() => {
+    const letter = diskLetter.value;
+    if (!scope.value) return letter ? `${letter}:\\` : '';
+    return letter ? `${letter}:\\${scope.value.replace(/\//g, '\\')}` : scope.value;
+});
+
+/**
+ * 范围两态切换。**不做下拉菜单** —— 只有「当前文件夹 / 整个盘」两态，
+ * 多一层菜单只是多一次点击、多一个要读的弹层。
+ * 范围由 `runScan` 在成功后提交，这里只表达意图。
+ */
+const toggleScope = () => {
+    if (!canToggleScope.value) return;
+    void runScan(scope.value ? '' : openScope.value);
+};
+
+const widenScope = () => {
+    if (!scope.value || busy.value) return;
+    void runScan('');
+};
+
 function onApplySettled(job: JobSnapshot): void {
     const next = new Set(writtenRels.value);
     for (const r of job.rows as ApplyRowLike[]) if (r.ok) next.add(r.writeRel);
@@ -410,6 +528,17 @@ function onFrameSettled(job: JobSnapshot): void {
 const targets = computed(() => scan.value?.targets ?? []);
 const unmatched = computed(() => scan.value?.unmatched ?? []);
 const grabRows = computed<GrabRowLike[]>(() => (grabJob.value?.rows as GrabRowLike[] | undefined) ?? []);
+
+/**
+ * 此刻**真正在飞**的 writeRel —— 抓取和抽帧各自报，前端合并，**不推断**。
+ *
+ * ⚠️ 不要退回"选中且没结果就算在飞"：那会让几十张排队的卡一起转圈，
+ * 既看不出在抓谁，又让点阵每帧要重绘几十个场（共享 rAF，但绘制量是 3 个场的十几倍）。
+ */
+const inflightRels = computed<ReadonlySet<string>>(() => new Set([
+    ...(grabJob.value?.inflight ?? []),
+    ...(frameJob.value?.inflight ?? []),
+]));
 
 /**
  * 抽帧的行 = **回填的**（服务端已存在的帧，关面板重开时恢复）+ **本次 job 的**。
@@ -502,13 +631,16 @@ const items = computed<CoverItem[]>(() => {
         // ⚠️ 帧行不能无条件压在抓取行后面：重开面板后抓到的好封面会被上一天的旧帧永久遮蔽。
         [...frameRows.value, ...grabRows.value, ...jobFrameRows.value],
         applyRows.value,
-        /**
-         * ⚠️ 这里要的是「**正在**抓」，不是 `isLiveJob`。
-         * `isLiveJob` 把 `paused` 也算活着 ⇒ 暂停后未处理的卡仍停在 `pending` ⇒
-         * 点阵继续转，看起来像"暂停根本没生效"（2026-11-08 主人："暂停没用，loading 依旧播动画"）。
-         */
-        { live: grabJob.value?.status === 'running' || frameJob.value?.status === 'running',
-          selected: sel.value, frameBusy: frameBusy.value },
+        {
+            frameBusy: frameBusy.value,
+            inflight: inflightRels.value,
+            selected: sel.value,
+            /**
+             * 「排队」标记只在任务活着时出现。
+             * 没跑的时候没有队列，说"排队"是假话 —— 那时空卡就是"没扫到/不处理"。
+             */
+            live: isLiveJob(grabJob.value) || isLiveJob(frameJob.value),
+        },
     );
     if (!brokenCovers.value.size) return base;
     // 只降级"刚抓到"的卡：已写入 / 已失败 / 被拦的卡各有自己的状态，别覆盖
@@ -518,7 +650,52 @@ const items = computed<CoverItem[]>(() => {
 });
 
 const counts = computed(() => summarize(items.value, sel.value));
-const task = computed(() => buildCoverTask(grabJob.value, frameJob.value, applyJob.value, counts.value));
+
+/**
+ * 队列里还有多少没轮到。**前端算，不加后端字段** ——
+ * 三个输入都已经在快照里：`total − processed − 在飞 = 排队`。
+ * 只在抓取正在跑时才有意义（暂停时停住的那个数仍然是真话，保留）。
+ */
+const queuedCount = computed(() => {
+    const job = grabJob.value;
+    const p = job?.progress;
+    if (!job || !p || !isLiveJob(job)) return 0;
+    return Math.max(0, p.total - p.processed - (job.inflight?.length ?? 0));
+});
+
+const task = computed(() => buildCoverTask(
+    grabJob.value, frameJob.value, applyJob.value, counts.value, queuedCount.value,
+));
+
+/**
+ * 空态必须分段，**不能一句「没有缺封面的视频」**。
+ * 范围收窄之后，「这个文件夹压根没扫过」和「真的都补齐了」在界面上长得一模一样 ——
+ * 那会让人以为已经补完，然后一直缺着（比报错更坏的静默失败）。
+ */
+const emptyTitle = computed(() => {
+    if (faceMode.value) return '缓存里找不到你刚选的那些位置';
+    if (!scan.value) return '还没扫描';
+    if (scope.value && !scan.value.scannedDocs) return '这个文件夹还没有缓存记录';
+    if (scope.value && scan.value.skippedCategory) return '这里只有分类目录';
+    return '缓存里没有发现缺封面的视频';
+});
+
+const emptyHint = computed(() => {
+    if (faceMode.value) {
+        return `收到 ${scan.value?.received ?? 0} 个选中位置 · 查了 ${scan.value?.probed ?? 1} 块盘的缓存`;
+    }
+    if (!scan.value) return '';
+    if (scope.value && !scan.value.scannedDocs) {
+        return '它从没在「封面」视图下扫过，看不出缺哪张。换成整个盘，或回主界面把它刷新一次';
+    }
+    if (scope.value && scan.value.skippedCategory) {
+        return `${scan.value.skippedCategory} 个文件夹下面还是文件夹，没有影片可补`;
+    }
+    return '刚在盘上手动删过图的话，点上面的「深度重扫」用实时清单复核';
+});
+
+/** 只剩"范围"这一个变量能解释空清单时，才给那条出口 */
+const canWidenScope = computed(() => !faceMode.value && !!scope.value && !busy.value);
 
 /** 帧预览走本地代理端点（帧在系统盘，`v` 由文件名里的 nonce 保证每次换帧都变） */
 const frameSrc = (file: string) =>
@@ -570,6 +747,23 @@ const toggleCard = (item: CoverItem) => {
     sel.value = next;
 };
 
+/**
+ * 清单是否已经全选。选择条上那个方块靠它出三态（空 / 半 / 满）。
+ * 用 `counts.selected`（按卡算）而不是 `sel.size`（按 writeRel 算）：
+ * 一张卡可能压着 8 个分卷，拿 writeRel 比会永远对不上。
+ */
+const allSelected = computed(() => items.value.length > 0 && counts.value.selected === items.value.length);
+
+/**
+ * 总控勾选的标准行为（checkbox group 那一套，零学习成本）：
+ * 已全选 ⇒ 全不选；否则 ⇒ 全选。
+ * 全选用 `targets` 全量 —— 与 `applyScanResult` 落盘那一刻的口径一致。
+ */
+const toggleAll = () => {
+    if (selLocked.value) return;
+    sel.value = allSelected.value ? new Set() : new Set(targets.value.map(t => t.writeRel));
+};
+
 // ── 扫描 ────────────────────────────────────────────────────
 const loadDisks = async () => {
     try {
@@ -594,7 +788,16 @@ const applyScanResult = (result: ScanResult) => {
     detachFrame();
 };
 
-const runScan = async () => {
+/**
+ * 扫描。
+ *
+ * @param nextScope 这次要扫的范围（盘内相对路径，`''` = 整盘）。不传 = 沿用当前范围。
+ *
+ * ⚠️ 范围**只在扫描成功之后才提交**：`scope` 与 `scan` 是同一个视图的两个输入，
+ *    分两拍写就会出现"标着 TEMP、清单却是整个盘"的错配（与 11-10「换屏过滤失效」
+ *    同一个形态）。失败时两者都停在旧值 ⇒ 任何时刻都是自洽的。
+ */
+const runScan = async (nextScope?: string) => {
     // 任务在跑/暂停时不许重扫：重扫会把已抓到的结果整批顶掉
     if (isLiveJob(grabJob.value) || isLiveJob(applyJob.value) || isLiveJob(frameJob.value)) {
         notify('info', '先处理当前任务', '任务还在（暂停中），继续或终止它之后再重扫');
@@ -602,6 +805,7 @@ const runScan = async () => {
     }
     if (!faceMode.value && !selectedSerial.value) return;
 
+    const want = nextScope ?? scope.value;
     scanLoading.value = true;
     const startedAt = performance.now();
     try {
@@ -621,8 +825,9 @@ const runScan = async () => {
                 received: (res.received as number | undefined) ?? facePicks.value.length,
             });
         } else {
-            const res = await postAction(`${API_BASE}/assistant/scan`, { serial: selectedSerial.value, relPath: '' });
+            const res = await postAction(`${API_BASE}/assistant/scan`, { serial: selectedSerial.value, relPath: want });
             applyScanResult(res as ScanResult);
+            scope.value = want; // 与上面的清单同一拍落地（见 runScan 的注释）
         }
         // 清单出来之后再把"上次抽过的帧"贴回去（服务端 readdir，零读盘）
         await loadFrameIndex();
@@ -638,6 +843,10 @@ const runScan = async () => {
 
 const onDiskChange = (serial: string) => {
     selectedSerial.value = serial;
+    // 范围属于「路径」，路径属于某块盘 —— 换盘后旧范围没有意义：
+    // 留着它会让新盘扫出 0 条，看着像"这盘封面都齐了"（静默假象）
+    scope.value = '';
+    openScope.value = '';
     void runScan();
 };
 
@@ -645,7 +854,8 @@ const onDiskChange = (serial: string) => {
 /** 深度重扫前的确认 —— 统一走 Overlay 的 confirm（与头像写入同一份实现） */
 const confirmDeepRescan = () => dialog.warning({
     title: '深度重扫',
-    content: '把写入过的目录用实时清单复核一遍（只读文件名，不抽帧）。确定吗？',
+    // 范围收窄后复核范围也跟着变 —— 不说清楚，用户会以为整盘都复核过了
+    content: `把写入过的目录用实时清单复核一遍（只读文件名，不抽帧）。${scope.value ? `这次只复核「${scopeLabel.value}」及以下。` : '这次复核整个盘。'}确定吗？`,
     positiveText: '深度重扫',
     negativeText: '取消',
     onPositiveClick: () => deepRescan(),
@@ -654,7 +864,7 @@ const confirmDeepRescan = () => dialog.warning({
 const deepRescan = async () => {
     if (!selectedSerial.value || busy.value) return;
     try {
-        const res = await postAction(`${API_BASE}/assistant/rebuild`, { serial: selectedSerial.value, relPath: '' });
+        const res = await postAction(`${API_BASE}/assistant/rebuild`, { serial: selectedSerial.value, relPath: scope.value });
         applyScanResult(res as ScanResult);
         // ⚠️ 必须回填：`applyScanResult` 会把 frameIndex 清空，而只有 runScan 会重新拉。
         //    漏了这一句，深度重扫之后已抽好的帧全从卡上消失、`counts.ready` 归零，
@@ -669,6 +879,10 @@ const deepRescan = async () => {
 
 // ── 任务 ────────────────────────────────────────────────────
 const startGrab = async (list?: ScanTargetLike[], appendTo?: string) => {
+    if (isLiveJob(frameJob.value) || isLiveJob(applyJob.value)) {
+        notify('info', '任务进行中', '请等待抽帧或写入结束后再开始抓取');
+        return;
+    }
     const picked = list ?? targets.value.filter(t => sel.value.has(t.writeRel));
     if (!picked.length) return;
 
@@ -734,16 +948,18 @@ const startFrame = async (list?: ScanTargetLike[]) => {
         notify('info', '这块盘现在不在线', '插上盘再抽帧');
         return;
     }
-    // 写盘正在动这块盘：这时候抽帧等于两个进程同时读同一个视频，也违反"写盘时不动盘"
-    if (isLiveJob(applyJob.value)) {
-        notify('info', '正在写入', '等写入结束再抽帧');
+    // 写盘或抓取正在进行：避免争用与读写冲突
+    if (isLiveJob(applyJob.value) || isLiveJob(grabJob.value)) {
+        notify('info', '任务进行中', '请等待抓取或写入结束后再抽帧');
         return;
     }
     const picked = list ?? targets.value.filter(t =>
         items.value.some(i => actionOf(i, frameBusy.value) === 'frame' && i.writeRels.includes(t.writeRel)));
     if (!picked.length) return;
 
-    markBusy(picked.map(t => t.writeRel), true);
+    // 单卡「换一帧」：立刻点亮（只有一两秒，等 800ms 轮询太久）。
+    // 批量抽帧**不**走这条 —— 后端 job.inflight 会报"当前这一张"，否则一按下去几十张卡一起转
+    if (list?.length) markBusy(picked.map(t => t.writeRel), true);
     try {
         const res = await postAction(`${API_BASE}/assistant/jobs`, {
             kind: 'frame',
@@ -833,10 +1049,15 @@ const setShowModal = async (v: boolean, picks?: FacePick[], presetPath?: string)
         // 重开时它已经不是 live job，`onFrameSettled` 再也不会触发 ⇒ 那张卡会永久转圈。
         frameBusy.value = new Set();
         facePicks.value = []; // 关面板就清掉挑选，否则下次从「补封面」进来会沿用
+        scope.value = '';     // 范围跟着"从哪打开"走，绝不留上一次的
+        openScope.value = '';
         return;
     }
     // 只有显式传了才覆盖（防"回声调用"把选择清掉）
     if (picks) facePicks.value = picks;
+    // 每次打开都重算范围：漏了这句，第二次从别处进来会沿用上一次的目录
+    scope.value = '';
+    openScope.value = '';
 
     await loadDisks();
 
@@ -846,7 +1067,13 @@ const setShowModal = async (v: boolean, picks?: FacePick[], presetPath?: string)
     if (!picks?.length && presetPath) {
         const ctx = await resolveDriveContext({ currentPath: presetPath });
         const online = ctx.serial && disks.value.find(d => d.serial === ctx.serial)?.online !== false;
-        if (online) selectedSerial.value = ctx.serial;
+        if (online) {
+            selectedSerial.value = ctx.serial;
+            // 站在哪就补哪：主界面在某个子目录里点进来，范围就是那个子目录（含其子树）。
+            // 离线盘不带范围（本来也不预选盘），保持空白。
+            // `scope` 由下面的 `runScan(openScope)` 在扫描成功后提交，这里只记"打开时在哪"。
+            openScope.value = ctx.relPath;
+        }
     }
 
     // 面板关了任务还在跑（job 活在主进程内存里）：重开时挂回去，
@@ -868,7 +1095,7 @@ const setShowModal = async (v: boolean, picks?: FacePick[], presetPath?: string)
 
     // 没有在跑的任务就必须重算清单：否则第二次打开会显示上一次的清单
     //（跨模式、换盘重开都要重算）
-    if (!attached) await runScan();
+    if (!attached) await runScan(openScope.value);
 };
 
 defineExpose({ setShowModal });

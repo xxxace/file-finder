@@ -12,12 +12,15 @@
            ② 右键：首页没有"当前这一层"，空白右键（补封面 / 补全这一片 …）在这里全是空的
               ⇒ 根节点直接把 contextmenu 吞掉，别让它冒泡到 `.image-box`。
     -->
-    <div class="home-disks" @contextmenu.prevent.stop>
+    <div class="home-disks" @contextmenu.prevent.stop @click="onBlankClick">
         <div class="hd-grid">
             <button v-for="d in disks" :key="d.key" type="button" class="hd-card"
-                :class="{ 'is-off': !d.online, 'has-multi': d.tops.length > 1 }" :disabled="!d.tops.length"
+                :class="{ 'is-off': !d.online, 'has-multi': d.tops.length > 1, 'is-selected': selectedKey === d.key }"
+                :disabled="!d.tops.length"
                 :aria-label="ariaOf(d)" :title="d.online ? d.name : `序列号 ${d.serial}`"
-                @click="onCardClick($event, d)">
+                @click="onCardClick($event, d)"
+                @dblclick="onCardDblClick($event, d)"
+                @keydown="onCardKeydown($event, d)">
                 <img class="hd-icon" :src="diskIcon" alt="" draggable="false" />
                 <span class="hd-text">
                     <!-- 状态点 + 名字同一行：**在线绿 / 离线灰**，与缓存记录页那排盘 chip 同一个语言。
@@ -31,9 +34,11 @@
                     <!-- 第三行由数据层拼好（在线=上次扫描 / 离线=上次插入），模板里不再分支 -->
                     <span v-if="d.timeLine" class="hd-meta hd-time">{{ d.timeLine }}</span>
                 </span>
-                <!-- 多个顶层 = 点下去会弹菜单。给一个向下的折角，别让"点了却弹出一个列表"成为意外；
-                     只有一个顶层时**不给** —— 那时点下去就是直达，画个折角反而让人以为还要再选一次。 -->
-                <n-icon v-if="d.tops.length > 1" class="hd-caret" :size="14" :component="ChevronDownOutline" />
+                <!-- 多个顶层 = 折角提示；点击折角可直接展开菜单，双击整卡同样可展开 -->
+                <span v-if="d.tops.length > 1" class="hd-caret-btn" title="选择顶层目录"
+                    @click.stop="onCaretClick($event, d)" @dblclick.stop>
+                    <n-icon class="hd-caret" :size="14" :component="ChevronDownOutline" />
+                </span>
             </button>
         </div>
     </div>
@@ -76,6 +81,8 @@ const emit = defineEmits<{ (e: 'open', path: string): void }>();
 
 const ariaOf = (d: HomeDisk) =>
     `${d.name}：${d.folders} 个缓存目录、${d.entries} 个条目${d.online ? '' : '（这块盘未插入）'}`;
+
+const selectedKey = ref<string | null>(null);
 
 const menu = ref<{ visible: boolean; x: number; y: number; tops: DiskTop[]; key: string }>({
     visible: false, x: 0, y: 0, tops: [], key: '',
@@ -122,18 +129,24 @@ const clampIntoViewport = () => {
     if (dx > 0) menu.value.x = Math.max(GAP, menu.value.x - dx);
 };
 
-const openMenu = (e: MouseEvent, d: HomeDisk) => {
+const openMenu = (e: MouseEvent | KeyboardEvent, d: HomeDisk) => {
     /**
-     * 键盘触发的 click（Tab 到卡片后按回车/空格）**没有指针坐标**：`clientX/Y` 都是 0，
-     * 菜单会跑到窗口左上角（clamp 之后是 8,8）。`detail === 0` 正是"不是鼠标点的"，
-     * 那就改用卡片自己的矩形做锚点（贴着它下沿展开）。
+     * 键盘触发的 click（Tab 到卡片后按回车/空格）或 keydown **没有指针坐标**：`clientX/Y` 都是 0，
+     * 菜单会跑到窗口左上角（clamp 之后是 8,8）。
+     * 改用卡片本身的矩形做锚点（贴着它下沿展开）。
      */
-    const rect = (e.currentTarget as HTMLElement | null)?.getBoundingClientRect?.();
-    const useRect = e.detail === 0 && !!rect;
+    const cardEl = (e.target as HTMLElement | null)?.closest<HTMLElement>('.hd-card')
+        ?? (e.currentTarget as HTMLElement | null);
+    const rect = cardEl?.getBoundingClientRect?.();
+    const isMouse = 'clientX' in e && typeof (e as MouseEvent).clientX === 'number'
+        && ('detail' in e ? (e as MouseEvent).detail > 0 : true);
+    const useRect = !isMouse && !!rect;
+    const me = e as MouseEvent;
+
     menu.value = {
         visible: true,
-        x: useRect ? Math.round(rect!.left) : e.clientX,
-        y: useRect ? Math.round(rect!.bottom + 4) : e.clientY,
+        x: useRect ? Math.round(rect!.left) : (me.clientX ?? Math.round(rect?.left ?? 0)),
+        y: useRect ? Math.round(rect!.bottom + 4) : (me.clientY ?? Math.round(rect?.bottom ?? 0) + 4),
         tops: d.tops,
         key: d.key,
     };
@@ -150,17 +163,68 @@ const pick = (t: DiskTop) => {
     emit('open', t.path);
 };
 
-const onCardClick = (e: MouseEvent, d: HomeDisk) => {
+/** 打开一块盘：唯一顶层直接进；多顶层弹菜单选目录 */
+const openDisk = (e: MouseEvent | KeyboardEvent, d: HomeDisk) => {
     if (!d.tops.length) return;
-    // 唯一顶层 = 没有可选的，直接进；多条才弹。
-    if (d.tops.length === 1) { pick(d.tops[0]); return; }
-    /**
-     * 同一张卡**再点一次 = 收起**。
-     * ⚠️ 必须有这条 toggle：naive 的 clickoutside 在 capture 阶段先触发 `closeMenu()`
-     * （点卡片对它来说就是"点了外面"），紧接着卡片的 click 又 `openMenu()` ⇒
-     * 用户看到的是"点了关不掉"（2026-11-11 code review 抓到）。
-     */
-    if (menu.value.visible && menu.value.key === d.key) { closeMenu(); return; }
+    if (d.tops.length === 1) {
+        pick(d.tops[0]);
+        return;
+    }
+    if (menu.value.visible && menu.value.key === d.key) {
+        closeMenu();
+        return;
+    }
+    openMenu(e, d);
+};
+
+/** 单击空白处：清掉选中态，收起菜单 */
+const onBlankClick = (e: MouseEvent) => {
+    const t = e.target as HTMLElement | null;
+    if (!t?.closest('.hd-card')) {
+        selectedKey.value = null;
+        closeMenu();
+    }
+};
+
+/**
+ * 单击卡片：只选中、不高亮进入。
+ * 遵循 Windows 资源管理器「此电脑」交互规范：单击选中，双击打开。
+ */
+const onCardClick = (e: MouseEvent, d: HomeDisk) => {
+    selectedKey.value = d.key;
+    // 键盘辅助驱动的 click（e.detail === 0）依然视为用户 Enter 打开
+    if (e.detail === 0) {
+        openDisk(e, d);
+        return;
+    }
+    if (menu.value.visible && menu.value.key !== d.key) {
+        closeMenu();
+    }
+};
+
+/** 双击卡片：真正打开（唯一顶层直达，多顶层弹菜单） */
+const onCardDblClick = (e: MouseEvent, d: HomeDisk) => {
+    selectedKey.value = d.key;
+    openDisk(e, d);
+};
+
+/** 键盘回车：打开选中的盘 */
+const onCardKeydown = (e: KeyboardEvent, d: HomeDisk) => {
+    if (e.key === 'Enter') {
+        e.preventDefault();
+        selectedKey.value = d.key;
+        openDisk(e, d);
+    }
+};
+
+/** 点击多顶层的折角按钮：直接展开/收起菜单 */
+const onCaretClick = (e: MouseEvent, d: HomeDisk) => {
+    selectedKey.value = d.key;
+    if (!d.tops.length) return;
+    if (menu.value.visible && menu.value.key === d.key) {
+        closeMenu();
+        return;
+    }
     openMenu(e, d);
 };
 
@@ -242,6 +306,8 @@ const onMenuKeydown = (e: KeyboardEvent) => {
     font: inherit;
     text-align: left;
     cursor: pointer;
+    user-select: none;
+    -webkit-user-select: none;
     /* 只动底色：位移/缩放会让一排卡片在悬停时互相推挤 */
     transition: background-color var(--ff-dur-hover) linear, border-color var(--ff-dur-hover) linear;
 }
@@ -255,8 +321,24 @@ const onMenuKeydown = (e: KeyboardEvent) => {
     background: var(--ff-ctl-on);
 }
 
+/* 选中状态：模拟文件管理器中点击选中的视觉高亮 */
+.hd-card.is-selected {
+    background: var(--ff-highlight-weak);
+    border-color: var(--ff-highlight-line);
+}
+
+.hd-card.is-selected:hover {
+    background: var(--ff-highlight-weak);
+    border-color: var(--ff-highlight);
+}
+
 .hd-card:focus-visible {
     outline: 2px solid var(--ff-line-strong);
+    outline-offset: 2px;
+}
+
+.hd-card.is-selected:focus-visible {
+    outline: 2px solid var(--ff-highlight);
     outline-offset: 2px;
 }
 
@@ -343,13 +425,28 @@ const onMenuKeydown = (e: KeyboardEvent) => {
     color: var(--ff-text-3);
 }
 
-/* 「点下去会弹菜单」的折角。绝对定位不参与布局 —— meta 行的宽度因此
-   在有无折角时**完全一致**（参与布局的话，多顶层那张卡的第三行会被挤短一截）。 */
-.hd-caret {
+/* 「点下去会弹菜单」的折角按钮。绝对定位在右下角，不挤占第三行文本宽度 */
+.hd-caret-btn {
     position: absolute;
-    right: 10px;
-    bottom: 9px;
+    right: 4px;
+    bottom: 4px;
+    width: 24px;
+    height: 24px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    border-radius: var(--ff-radius-ctl, 4px);
     color: var(--ff-text-3);
+    cursor: pointer;
+    transition: background-color var(--ff-dur-hover) linear, color var(--ff-dur-hover) linear;
+}
+
+.hd-caret-btn:hover {
+    background: var(--ff-ctl-on);
+    color: var(--ff-text-1);
+}
+
+.hd-caret {
     pointer-events: none;
 }
 

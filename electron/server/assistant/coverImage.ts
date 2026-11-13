@@ -49,7 +49,48 @@ export interface CoverCheck {
     why: string;
 }
 
-/** 限速方式由调用方给：grab 用 runPaced、apply 用 enqueue、preview 直接发 */
+/** 全局最大并发图片下载与转码数，防止前端多张卡同时渲染或批量抓取时打爆网络与 Node 主线程 */
+const MAX_CONCURRENT_DOWNLOADS = 4;
+let activeDownloads = 0;
+const downloadWaiters: (() => void)[] = [];
+
+async function acquireDownloadSlot(signal?: AbortSignal): Promise<void> {
+    while (activeDownloads >= MAX_CONCURRENT_DOWNLOADS) {
+        if (signal?.aborted) throw new CancelledError();
+        await new Promise<void>((resolve, reject) => {
+            /** 摘除要按**排队项本身**（理由同 `queue.ts` 的 `acquireHostSlot`：按 `resolve` 摘恒不命中） */
+            const waiter = () => {
+                signal?.removeEventListener('abort', onAbort);
+                resolve();
+            };
+            const onAbort = () => {
+                const idx = downloadWaiters.indexOf(waiter);
+                if (idx !== -1) downloadWaiters.splice(idx, 1);
+                reject(new CancelledError());
+            };
+            signal?.addEventListener('abort', onAbort, { once: true });
+            downloadWaiters.push(waiter);
+        });
+    }
+    activeDownloads++;
+}
+
+function releaseDownloadSlot(): void {
+    activeDownloads = Math.max(0, activeDownloads - 1);
+    const next = downloadWaiters.shift();
+    if (next) next();
+}
+
+/**
+ * 图片下载的限速方式，由调用方给。
+ *
+ * ⚠️ 三种调用方各不相同，别照着注释想当然（2026-11-14 核实过）：
+ *   · **grab**（抓取时验证封面）→ 用默认的 `direct`，**刻意不进队列**。
+ *     理由：它是图片 CDN（和页面不同域），不该跟页面抢那条 1.2s 的发起闸门；
+ *     真正的兜底是下面的 `MAX_CONCURRENT_DOWNLOADS`（全局 4 个）。
+ *   · **apply**（写盘时取字节）→ 走 `enqueue`，那时在真实写盘，串行是对的。
+ *   · **preview**（界面预览）→ 也只受全局并发保护。
+ */
 export type CoverGate = <T>(host: string, task: () => Promise<T>, signal?: AbortSignal) => Promise<T>;
 const direct: CoverGate = <T>(_host: string, task: () => Promise<T>): Promise<T> => task();
 
@@ -73,9 +114,14 @@ export async function getVerifiedCover(
     let raw: Buffer;
     let status: number;
     try {
-        const r = await gate(hostOf(url), () => download(url, signal), signal);
-        status = r.status;
-        raw = r.buf;
+        await acquireDownloadSlot(signal);
+        try {
+            const r = await gate(hostOf(url), () => download(url, signal), signal);
+            status = r.status;
+            raw = r.buf;
+        } finally {
+            releaseDownloadSlot();
+        }
     } catch (e) {
         // 取消是控制流，不能被记成"这条抓失败了"
         if (signal.aborted || e instanceof CancelledError) throw new CancelledError();

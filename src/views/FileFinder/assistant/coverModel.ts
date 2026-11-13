@@ -24,6 +24,10 @@ export interface GrabRowLike {
     hitSite?: string | null;
     /** 被哪个站点拦的（「人工过验证」要按站点开窗） */
     blockedSite?: string;
+    /** 失败原因（人类可读）。卡片面上只放短标签，这句进悬停详情 */
+    message?: string;
+    /** 抽帧失败的机器可读原因（服务端 `FrameRow.why`：`no-video` / `no-frame`）。卡面只对 `no-video` 换个词 */
+    why?: string;
     /** `true` = 封面来自本地抽帧（服务端 `FrameRow`），此时 `coverUrl` 为 null */
     frame?: boolean;
     /** 帧缓存文件名。预览地址由父层用 `/assistant/frame` 拼 */
@@ -36,6 +40,8 @@ export interface GrabRowLike {
 export interface ApplyRowLike {
     writeRel: string;
     ok: boolean;
+    /** 服务端原话（成功/失败都有）。失败时这是**唯一的**原因来源，悬停详情要显示它 */
+    message?: string;
 }
 
 export type CoverState =
@@ -61,6 +67,15 @@ export interface CoverItem {
     coverUrl: string | null;
     /** 这张脸是本地抽帧来的（有它才有「换一帧」） */
     frame?: { file: string; pct: number; attempt: number; skipped: number };
+    /**
+     * 失败/被拦的**完整原因**（服务端 `message`）。
+     *
+     * 卡片面上只放得下两个字（"未找到" / "被拦"），真正有用的那句
+     * "打不开页面（超时）/ 抽到的封面不可用：…"必须留给悬停详情。
+     */
+    note?: string;
+    /** 封面来源站点（成功时）/ 拦下我们的站点（失败时） */
+    site?: string;
 }
 
 /**
@@ -83,17 +98,55 @@ export function buildCoverItems(
     targets: ScanTargetLike[],
     grabRows: GrabRowLike[],
     applyRows: ApplyRowLike[],
-    opts: { live: boolean; selected: Set<string>; frameBusy?: ReadonlySet<string> },
+    /**
+     * @param opts.inflight 此刻**真正在飞**的 `writeRel`（后端 job 直接给）。
+     *   只认它，不推断 —— 见下面 `isInflight` 的注释。
+     * @param opts.frameBusy 单卡抽帧的在途标记（「换一帧」只有一两秒，靠它立即出点阵）
+     *
+     * ⚠️ 刻意**不收** `selected`：选中态是父层渲染时算的（`isSelected(item)`），
+     *    状态机不该再拿它推"在飞" —— 那就是 2026-11-14 修掉的那个假象。
+     */
+    opts: {
+        frameBusy?: ReadonlySet<string>;
+        inflight?: ReadonlySet<string>;
+        /**
+         * 任务是否在跑。**只用来给"还没轮到"的卡打一个「排队」标记** ——
+         * 绝不用它推断"这张在飞"（那是 `inflight` 的职责，见下）。
+         */
+        live?: boolean;
+        /**
+         * 勾选集合。**只用来回答"这张会不会被处理"**（没选中的不该说"排队"）。
+         * ⚠️ 不要拿它推 `pending`：那就是 2026-11-14 修掉的那个假象。
+         */
+        selected?: ReadonlySet<string>;
+    },
 ): CoverItem[] {
     /**
-     * ⚠️ 同一个 writeRel 出现多行时**最后一条说了算**。
-     * 「换一帧」就是把同一张卡的新一帧追加进同一个 job —— 取 `find(ok)` 会一直显示第一帧，
-     * 用户点十次都觉得没生效。抓取端补抓（被拦 → 过验证 → 重抓）同理：后一条更准。
+     * 区分**站点抓取行**与**本地抽帧行**：
+     *   - 站点命中（status === 'ok' 且有 coverUrl）：优先级最高（官方封面优于截帧）
+     *   - 本地抽帧（frame === true 且有 frameFile）：作为兜底与有效封面
+     *   - 即使站点重搜失败（no-match / blocked / error），**绝不能覆盖和冲掉已有的本地帧**！
+     *     冲掉就会让卡片倒退回 miss，诱导用户重复抽帧（多抽的根因）。
      */
-    const grabOf = new Map<string, GrabRowLike>();
-    for (const r of grabRows) grabOf.set(r.writeRel, r);
+    const siteOf = new Map<string, GrabRowLike>();
+    const frameOf = new Map<string, GrabRowLike>();
+    for (const r of grabRows) {
+        if (r.frame) frameOf.set(r.writeRel, r);
+        else siteOf.set(r.writeRel, r);
+    }
     const applyOf = new Map<string, ApplyRowLike>();
-    for (const r of applyRows) applyOf.set(r.writeRel, r);
+    for (const r of applyRows) {
+        /**
+         * ⚠️ **成功是终态**：同一个 writeRel 后来即使又出现一行失败，也不许把"已写入"改回去。
+         *
+         * `applyRows` 的顺序是「本地累积的已写入（ok:true）」在前、「当前 job 的行」在后，
+         * 直接 `set` 会让后到的失败行覆盖掉先前的事实 —— 用户看到的就是
+         * "明明写成功了，卡上又变回未写入"。
+         */
+        if (applyOf.get(r.writeRel)?.ok) continue;
+        applyOf.set(r.writeRel, r);
+    }
+    const inflight = opts.inflight;
 
     const cards = new Map<string, CoverItem>();
     for (const t of targets) {
@@ -106,10 +159,6 @@ export function buildCoverItems(
         cards.set(key, {
             key,
             kind: t.kind,
-            // ⚠️ 标题就是名字本身：原来给 dir/file 拼了尾部 `/` 当"这是文件夹"的标记，
-            //    形态本来就由 kindText（新建 / 裸文件 / 覆盖）在说，这个 `/` 冗余且会把
-            //    番号渲染成 `FC2-PPV-1001424/`，像路径片段、像解析错了。它只是显示串：
-            //    query / writeRel 从来不带斜杠（番号来自 t.query 或 parseTitle(t.name)）。
             title: t.kind === 'file' ? (t.query ?? t.name)
                 : t.kind === 'cover' ? (t.query || t.name) : t.name,
             path: t.dir,
@@ -123,49 +172,130 @@ export function buildCoverItems(
 
     for (const card of cards.values()) {
         const rels = card.writeRels;
-        const applied = rels.map(r => applyOf.get(r)).find(Boolean);
-        const grabs = rels.map(r => grabOf.get(r)).filter(Boolean) as GrabRowLike[];
-        /** 这张卡最新一条"真正拿到了封面"的行：站点链接或本地帧，二选一 */
-        const grabbed = grabs.find(g => g.status === 'ok' && (!!g.coverUrl || (g.frame === true && !!g.frameFile)));
+        /**
+         * 这张卡的写入结果。
+         *
+         * ⚠️ 不能写成 `rels.map(...).find(Boolean)` —— 那**只看第一个**分卷：
+         * 一部片 8 个分卷里第 1 个失败、其余 7 个成功，就会被判成"写入失败"，
+         * 反过来第 1 个成功、后面全失败却显示"已写入"。两个方向都是错的。
+         * 正确口径：任一分卷写成功 = 这张卡有封面了（一张脸写进哪个分卷目录都算写入）；
+         * 全部失败才算失败。
+         */
+        const applyRowsOfCard = rels
+            .map(r => applyOf.get(r))
+            .filter((r): r is ApplyRowLike => !!r);
+        const applied = applyRowsOfCard.length
+            ? (applyRowsOfCard.some(r => r.ok) ? applyRowsOfCard.find(r => r.ok)! : applyRowsOfCard[0])
+            : undefined;
 
-        if (grabbed?.coverUrl) card.coverUrl = grabbed.coverUrl;
-        if (grabbed?.frame && grabbed.frameFile) {
+        const siteHits = rels.map(r => siteOf.get(r)).filter(Boolean) as GrabRowLike[];
+        const frameHits = rels.map(r => frameOf.get(r)).filter(Boolean) as GrabRowLike[];
+
+        const bestSiteHit = siteHits.find(g => g.status === 'ok' && !!g.coverUrl);
+        const bestFrameHit = frameHits.find(g => g.status === 'ok' && g.frame === true && !!g.frameFile);
+        const latestSiteRow = siteHits[siteHits.length - 1];
+        const latestFrameRow = frameHits[frameHits.length - 1];
+
+        /**
+         * **只认后端报的"在飞"，不推断**。
+         *
+         * 旧实现是 `live && selected && 没有结果行` ⇒ 所有选中又还没出结果的卡一起点亮。
+         * 两件坏事叠在一起：① 几十张卡同时转圈，"到底在抓谁"看不出来（主人 2026-11-14 报的）；
+         * ② `DotField` 虽然共享同一个 rAF，但每帧要遍历所有在场重绘 —— 40 个场 vs 3 个场，
+         *    每帧绘制量差十几倍，在弱机上就是可感的掉帧。
+         */
+        const isInflight = !!inflight && rels.some(r => inflight.has(r));
+
+        /** 把一张帧行挂到卡上（三处都用它，不三写） */
+        const holdFrame = (row: GrabRowLike) => {
             card.frame = {
-                file: grabbed.frameFile,
-                pct: grabbed.pct ?? 1,
-                attempt: grabbed.attempt ?? 0,
-                skipped: grabbed.skipped ?? 0,
+                file: row.frameFile!,
+                pct: row.pct ?? 1,
+                attempt: row.attempt ?? 0,
+                skipped: row.skipped ?? 0,
             };
-        }
+        };
 
         if (applied) {
             card.state = applied.ok ? 'written' : 'writefail';
             card.badge = applied.ok ? '已写入' : '写入失败';
-        } else if (!grabs.length) {
-            const waiting = opts.live && rels.some(r => opts.selected.has(r));
-            card.state = waiting ? 'pending' : 'idle';
-        // 帧行的 `coverUrl` 恒为 null，所以"有没有封面"不能只看 URL ——
-        // 只认 URL 会让抽帧结果全掉进 `error`，而 `startApply` 只收 `ok` 的卡（真写不进去）。
-        } else if (grabbed && (card.coverUrl || card.frame)) {
+            if (!applied.ok) card.note = applied.message;
+            if (bestSiteHit?.coverUrl) card.coverUrl = bestSiteHit.coverUrl;
+            card.site = bestSiteHit?.hitSite ?? undefined;
+            if (bestFrameHit?.frameFile) holdFrame(bestFrameHit);
+        } else if (isInflight) {            /**
+             * 正在请求 —— **优先于所有"已有结果"**。
+             *
+             * 这张卡手上可能还压着上一次的帧或站点图（换封面、重抓、补抓都会）。
+             * 不盖住的话，用户点了「开始抓取」却看不到它有任何反应 —— 那正是
+             * 「有抽帧缓存的卡片不显示 loading」这条 BUG 的成因。
+             * 图**保留**（点阵叠在上面转），抓完自然换成新图。
+             */
+            card.state = 'pending';
+            card.badge = '';
+            if (bestSiteHit?.coverUrl) card.coverUrl = bestSiteHit.coverUrl;
+            if (bestFrameHit?.frameFile) holdFrame(bestFrameHit);
+        } else if (bestSiteHit?.coverUrl) {
+            // ① 站点封面命中（优先级最高）
+            card.coverUrl = bestSiteHit.coverUrl;
             card.state = 'ok';
-            card.badge = card.frame
-                ? `抽帧 · ${card.frame.pct}%${card.frame.skipped ? ` · 跳过 ${card.frame.skipped}` : ''}`
-                : (grabbed.hitSite || '已抓到');
-        } else if (grabs.some(g => g.status === 'blocked')) {
-            card.state = 'blocked';
-            card.badge = '被拦';
-        } else if (grabs.some(g => g.status === 'bad-cover')) {
+            /**
+             * badge 只说**状态**：这张有图了、可以写，但**还没进盘**。
+             * 以前这里写站点名（javbus），读起来像"已经完成了" —— 它其实只是来源。
+             * 一个位置只承载一个维度：来源/档位全部进悬停详情（见 `site`）。
+             */
+            card.badge = '待写入';
+            card.site = bestSiteHit.hitSite ?? undefined;
+        } else if (bestFrameHit && bestFrameHit.frameFile) {
+            // ② 本地抽帧封面（即使后续抓取为 no-match/error，也安全保留抽帧成果）
+            holdFrame(bestFrameHit);
+            card.state = 'ok';
+            /**
+             * 抽帧的帧是**系统盘缓存**，不等于已进盘 ⇒ 和站点封面一样报「待写入」。
+             *
+             * ⚠️ 这条正是主人反复提醒的冲突点：帧缓存会留着（下次打开还能看到同一张图），
+             * 所以卡上看起来"已经有封面了"；但盘上其实什么都没有。写「待写入」才说得清，
+             * 写「抽帧 · 30%」只说明图的出处，读者会自动理解成"搞定了"。
+             * 档位和跳过次数都是"这张图怎么来的"，进悬停。
+             */
+            card.badge = '待写入';
+            // 右下角那颗常驻小胶囊只放得下短词；"跳过几张纯色"这种细节留给悬停
+            card.site = `抽帧 ${bestFrameHit.pct ?? 1}%`;
+        } else if (latestFrameRow && latestFrameRow.status !== 'ok') {
+            // ③ 最近一次抽帧尝试失败
             card.state = 'error';
-            card.badge = '封面取不到';
-        } else if (grabs.some(g => g.status === 'no-id')) {
-            card.state = 'noid';
-            card.badge = '认不出番号';
-        } else if (grabs.some(g => g.status === 'no-match')) {
-            card.state = 'miss';
-            card.badge = '未找到';
+            card.badge = latestFrameRow.why === 'no-video' ? '无视频' : '抽帧失败';
+            card.note = latestFrameRow.message;
+        } else if (latestSiteRow) {
+            // ④ 最近一次站点抓取失败或被拦
+            card.note = latestSiteRow.message;
+            card.site = latestSiteRow.blockedSite ?? latestSiteRow.hitSite ?? undefined;
+            if (latestSiteRow.status === 'blocked') {
+                card.state = 'blocked';
+                card.badge = '被拦';
+            } else if (latestSiteRow.status === 'bad-cover') {
+                card.state = 'error';
+                card.badge = '封面取不到';
+            } else if (latestSiteRow.status === 'no-id') {
+                card.state = 'noid';
+                card.badge = '认不出番号';
+            } else if (latestSiteRow.status === 'no-match') {
+                card.state = 'miss';
+                card.badge = '未找到';
+            } else {
+                card.state = 'error';
+                card.badge = '抓取失败';
+            }
         } else {
-            card.state = 'error';
-            card.badge = '抓取失败';
+            /**
+             * ⑤ 还没轮到。
+             *
+             * 状态仍是 `idle`（**不转圈** —— 转了就是骗人），但用 badge 明说「排队」。
+             * 之前试过右下角一个小灰点：太弱，"读完还是看不出有什么区别"（主人 2026-11-14）。
+             * 现在一个位置只放一个词，四种状态（排队 / 待写入 / 已写入 / 失败）互斥且齐全。
+             */
+            card.state = 'idle';
+            if (opts.live && rels.some(r => opts.selected?.has(r))) card.badge = '排队';
         }
 
         card.kindText = kindTextOf(card.kind, rels.length);
@@ -247,6 +377,8 @@ export function buildCoverTask(
     frame: JobSnapshot | null,
     apply: JobSnapshot | null,
     counts: CoverCounts,
+    /** 排队中（还没轮到）的部数。只喂运行态那句详情，别的地方不读它 */
+    queued = 0,
 ): CoverTask {
     const applying = apply?.status === 'running' || apply?.status === 'paused';
     const grabbing = grab?.status === 'running' || grab?.status === 'paused';
@@ -300,7 +432,8 @@ export function buildCoverTask(
             phase: 'run',
             ratio: ratioOf(grab),
             status: `抓取中 ${processed} / ${total}`,
-            detail: `命中 ${hits} · 被拦 ${blocked} · 未找到 ${misses}`,
+            // 「排队」放在最后：它是唯一一个**还没发生**的计数，读的时候该落在末尾
+            detail: `命中 ${hits} · 被拦 ${blocked} · 未找到 ${misses}${queued ? ` · 排队 ${queued}` : ''}`,
         };
     }
 

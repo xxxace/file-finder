@@ -20,7 +20,7 @@
  *   - 窗口登记进 `queue.ts` 的登记处：主窗关闭时一起销毁，否则 `window-all-closed`
  *     永远不触发（应用退不掉）。
  */
-import { BrowserWindow } from 'electron';
+import { BrowserWindow, type Session } from 'electron';
 import { sleep, trackWindow, untrackWindow } from './queue';
 
 export const PARTITION = 'persist:assistant';
@@ -33,6 +33,44 @@ export const POLL_INTERVAL = 500;
 export const POLL_TIMEOUT = 20_000;
 /** 人工过验证最多等多久。CF 的交互式挑战由用户自己掌控节奏，给足 5 分钟 */
 const CHALLENGE_TIMEOUT = 300_000;
+
+/**
+ * 抓取窗里**不需要**的资源类型。
+ *
+ * ⚠️ **不许拦 `image`**（2026-11-14 凌晨踩到的回退）：封面站的图片基本都走懒加载
+ * （`<img src="占位.jpg" data-src="真图.jpg">`），而 `rawSrc` 的取值顺序是
+ * `src || data-src || …` —— 图片一旦被拦、懒加载脚本不替换，`src` 就永远停在占位图，
+ * 抽出来的是占位地址 ⇒ `getVerifiedCover` 验不过 ⇒ 换下一站 ⇒ 每条卡满 20 秒才超时。
+ * 表现就是"前 5 个任务一直不动"。拦图片省下的带宽不值得用这个换。
+ *
+ * 留下的这几类都是**与 DOM 属性无关**的：字体不下、媒体不播、beacon 不发，
+ * 抽出来的字段一个都不会少，`load` 也能早一点触发。
+ */
+const SKIP_RESOURCE_TYPES = new Set(['font', 'media', 'ping', 'cspReport']);
+
+/**
+ * 正在抓取的窗口（`webContents.id`）。
+ *
+ * ⚠️ `session.webRequest.onBeforeRequest` **整个 session 只有一个**监听器（后装的覆盖先装的），
+ * 而所有抓取窗共用 `persist:assistant` ⇒ 不能"每个窗口装一个"，只能装一次 + 按 id 白名单生效。
+ * 白名单同时保证主界面、人工验证窗一张图都不会被误拦。
+ */
+const fetchWindowIds = new Set<number>();
+let requestBlockerInstalled = false;
+
+function ensureRequestBlocker(ses: Session): void {
+    if (requestBlockerInstalled) return;
+    requestBlockerInstalled = true;
+    ses.webRequest.onBeforeRequest((details, callback) => {
+        // `webContentsId` 在少数请求（如 worker 内部发起的）上是 undefined ⇒ 一律放过
+        const wid = details.webContentsId;
+        if (wid === undefined || !fetchWindowIds.has(wid)) {
+            callback({ cancel: false });
+            return;
+        }
+        callback({ cancel: SKIP_RESOURCE_TYPES.has(details.resourceType) });
+    });
+}
 
 /**
  * 懒加载触发：把页面滚到底，下一次再滚回顶。
@@ -193,6 +231,11 @@ export async function runExtract<T>(
         },
     });
     trackWindow(win);
+    // 这个窗口进来的图片/字体/媒体一律不发（见 SKIP_RESOURCE_TYPES）。
+    // 人工过验证窗**不登记**：那是给用户看的，页面得完整。
+    const wid = win.webContents.id;
+    fetchWindowIds.add(wid);
+    ensureRequestBlocker(win.webContents.session);
 
     // 取消 = 立刻销毁窗口。之后所有 webContents 调用都会抛，统一归到 'aborted'。
     const onAbort = () => {
@@ -215,8 +258,15 @@ export async function runExtract<T>(
         win.webContents.setUserAgent(CHROME_UA);
         // 抓取窗也不跟随弹窗（同源才导航）—— 否则站点脚本的 window.open 会漏出未登记窗口
         adoptSameOriginPopups(win);
-        // loadURL 没有 timeout 选项（S1 spike 里那个 {timeout} 其实是空转），用竞速自己兜底；
-        // 超时也可能只是 CF 挑战慢，继续进入轮询。
+        /**
+         * 等 **`load`**，不等 `dom-ready`。
+         *
+         * ⚠️ 2026-11-14 凌晨试过只等 `dom-ready`，当场回滚：封面站的图几乎都是懒加载
+         * （`src` 先是占位图，脚本加载完才换成 `data-src` 里的真地址），而 `dom-ready` 太早 ——
+         * 抽取脚本按 `src || data-src` 取值，于是抽到的是**占位地址** ⇒ 验证不过 ⇒ 换下一站 ⇒
+         * 每条卡满 20 秒超时。症状就是"前面 5 个任务一直不动"。
+         * 省下的那 2 秒，不值得用"抽不到 / 抽错图"去换。提速只能靠并发与限速（见 grab.ts）。
+         */
         await Promise.race([
             win.loadURL(url).catch(() => undefined),
             sleep(NAV_TIMEOUT, signal).catch(() => undefined),
@@ -262,6 +312,7 @@ export async function runExtract<T>(
     } finally {
         signal?.removeEventListener('abort', onAbort);
         untrackWindow(win);
+        fetchWindowIds.delete(wid);
         try {
             if (!win.isDestroyed()) win.destroy();
         } catch {

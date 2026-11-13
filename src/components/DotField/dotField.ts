@@ -38,7 +38,17 @@ interface Field {
     px: number;
     /** 光带方向上的投影跨度（= 用来把 u 归一化到 0~1） */
     span: number;
-    /** 每场随机相位：多张卡同时跑时不同步，才像"很多事在并行" */
+    /**
+     * 相位偏移。**恒为 0**（2026-11-14 主人裁决：「无论什么时候执行，5 个 loading 动画都一致」）。
+     *
+     * 原来是 `Math.random() * CYCLE_MS`，注释写的是"多张卡同时跑时不同步，才像很多事在并行"；
+     * 实际观感是五张卡各转各的，像坏了。
+     *
+     * 置 0 之后光带位置只由 `performance.now()` 这个**绝对时钟**算出来 ⇒
+     * 某张卡就算是 3 秒后才入场的，它的光带也和早入场的那几张对齐。
+     * 不需要额外的同步机制 —— 少一个状态，就少一处会飘的地方。
+     * 点自身的闪烁仍带各自的 `seed`（见 `layout`），所以不会呆板成一整块。
+     */
     phase: number;
 }
 
@@ -173,7 +183,7 @@ export function createDotField(canvas: HTMLCanvasElement): DotFieldHandle {
         h: 0,
         px: 1,
         span: 1,
-        phase: Math.random() * CYCLE_MS,
+        phase: 0,
     };
     const observer = new ResizeObserver(() => {
         if (!LIVE.has(field)) return;
@@ -181,24 +191,51 @@ export function createDotField(canvas: HTMLCanvasElement): DotFieldHandle {
     });
     observer.observe(canvas);
 
+    let active = false;
+    let isVisible = true;
+
+    const syncLive = () => {
+        if (active && isVisible) {
+            if (!LIVE.has(field)) {
+                if (!field.w || !field.h) layout(field);
+                LIVE.add(field);
+                if (!pumping) pumping = requestAnimationFrame(frame);
+            }
+        } else {
+            LIVE.delete(field);
+        }
+    };
+
+    let io: IntersectionObserver | null = null;
+    if (typeof IntersectionObserver !== 'undefined') {
+        io = new IntersectionObserver((entries) => {
+            const entry = entries[0];
+            isVisible = entry ? entry.isIntersecting : true;
+            syncLive();
+        });
+        io.observe(canvas);
+    }
+
     return {
         start() {
-            if (LIVE.has(field)) return;
+            active = true;
             layout(field);
             if (prefersReduced()) {
                 paint(field, 0);
                 return;
             }
-            LIVE.add(field);
-            if (!pumping) pumping = requestAnimationFrame(frame);
+            syncLive();
         },
         // 停止绘制但**不清画布** —— 让外层的 opacity 过渡把最后一帧淡出去
         stop() {
-            LIVE.delete(field);
+            active = false;
+            syncLive();
         },
         destroy() {
-            LIVE.delete(field);
+            active = false;
+            syncLive();
             observer.disconnect();
+            io?.disconnect();
         },
     };
 }
