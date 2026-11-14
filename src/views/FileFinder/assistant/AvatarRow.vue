@@ -10,7 +10,7 @@
             type="button"
             class="ffw-row__check"
             :disabled="locked || !row.avatarUrl"
-            :title="checkTitle"
+            v-tip="checkTitle"
             @click="emit('toggle')"
         >
             <n-icon :component="CheckmarkOutline" :size="11" />

@@ -1,6 +1,6 @@
 <template>
     <!--
-        主界面首页（空白区）——「这台电脑」式盘列表。
+        主界面首页（空白区）——「此电脑」式盘列表。
 
         业主 2026-11-11 的原话：主界面没加载缓存 / 没打开文件夹时是一片空白，
         每次都要先去点缓存记录或者打开文件夹。这里把那一步省掉：
@@ -13,11 +13,13 @@
               ⇒ 根节点直接把 contextmenu 吞掉，别让它冒泡到 `.image-box`。
     -->
     <div class="home-disks" @contextmenu.prevent.stop @click="onBlankClick">
-        <div class="hd-grid">
-            <button v-for="d in disks" :key="d.key" type="button" class="hd-card"
+        <div class="hd-grid" ref="gridEl">
+            <button v-for="(d, i) in disks" :key="d.key" type="button" class="hd-card"
                 :class="{ 'is-off': !d.online, 'has-multi': d.tops.length > 1, 'is-selected': selectedKey === d.key }"
                 :disabled="!d.tops.length"
-                :aria-label="ariaOf(d)" :title="d.online ? d.name : `序列号 ${d.serial}`"
+                :tabindex="i === focusIdx ? 0 : -1"
+                :aria-label="ariaOf(d)" v-tip="d.online ? '' : `序列号 ${d.serial}`"
+                @focus="onCardFocus(i)"
                 @click="onCardClick($event, d)"
                 @dblclick="onCardDblClick($event, d)"
                 @keydown="onCardKeydown($event, d)">
@@ -35,7 +37,7 @@
                     <span v-if="d.timeLine" class="hd-meta hd-time">{{ d.timeLine }}</span>
                 </span>
                 <!-- 多个顶层 = 折角提示；点击折角可直接展开菜单，双击整卡同样可展开 -->
-                <span v-if="d.tops.length > 1" class="hd-caret-btn" title="选择顶层目录"
+                <span v-if="d.tops.length > 1" class="hd-caret-btn" v-tip="{ text: '选择顶层目录' }"
                     @click.stop="onCaretClick($event, d)" @dblclick.stop>
                     <n-icon class="hd-caret" :size="14" :component="ChevronDownOutline" />
                 </span>
@@ -68,7 +70,7 @@
  * 它只负责"长什么样、点了去哪"。这样首页刷新时机（挂载 / 插拔盘 / 回到首页）
  * 只在页面里有一处决定，组件不需要知道。
  */
-import { nextTick, ref } from 'vue';
+import { nextTick, ref, watch } from 'vue';
 import { NIcon, NPopover } from 'naive-ui';
 import { FolderOutline, ChevronDownOutline } from '@vicons/ionicons5';
 import diskIcon from '@/assets/disk-hdd.svg';
@@ -76,13 +78,75 @@ import type { DiskTop, HomeDisk } from './useHomeDisks';
 // 浮层内容被 n-popover teleport 到 body，scoped 够不到 ⇒ 复用右键菜单那份非 scoped 样式
 import './ctx-menu.css';
 
-defineProps<{ disks: HomeDisk[] }>();
+const props = defineProps<{ disks: HomeDisk[] }>();
 const emit = defineEmits<{ (e: 'open', path: string): void }>();
 
 const ariaOf = (d: HomeDisk) =>
     `${d.name}：${d.folders} 个缓存目录、${d.entries} 个条目${d.online ? '' : '（这块盘未插入）'}`;
 
 const selectedKey = ref<string | null>(null);
+
+/* ── 键盘：方向键在盘之间移动（2026-11-14 业主："首页不该用 tab 切换，应该用方向键"） ──
+ *
+ * 做法是 WAI-ARIA 的 **roving tabindex**：同一时刻只有一张卡 `tabindex=0`，其余 `-1`。
+ *   · Tab  = **进入 / 离开**这一组盘（一次落点到"当前那块"，再按就出去）；
+ *   · 方向键 = 组内换人；
+ *   · Enter = 打开。
+ * 原来每张卡都是可 Tab 的按钮 ⇒ 5 块盘得按 5 次 Tab 才能穿过去，而且 Tab 是"逐元素"
+ * 不是"逐组" —— 资源管理器 / Finder / 任何 grid 控件都不这么做。
+ *
+ * ⚠️ 焦点即选中：`@focus` 同时写 `selectedKey`，只有这样"Tab 进来时"和"方向键移动后"
+ *    看到的才是同一个高亮（Windows 的单选列表就是这个语义）。 */
+const focusIdx = ref(0);
+const gridEl = ref<HTMLDivElement | null>(null);
+
+/**
+ * 列数：`auto-fill` 算出来的实际列数**只能量**（窗口一宽一窄它就变），
+ * 所以 ↑↓ 一次跨"一行的格数"，而不是跨 1 格。
+ */
+const colCount = () => {
+    const el = gridEl.value;
+    if (!el) return 1;
+    const tpl = getComputedStyle(el).gridTemplateColumns;
+    return tpl.split(/\s+/).filter(Boolean).length || 1;
+};
+
+/** 移动焦点。`from` 由按键那一张卡算出来，不读 `focusIdx` —— 少一层时序依赖 */
+const moveFocus = (from: number, delta: number) => {
+    const list = props.disks;
+    const n = list.length;
+    if (!n || !delta) return;
+    const dir = Math.sign(delta);
+    // 跳过不可用的卡：`disabled` 的 button 上 `focus()` 是**无效**的，
+    // 落过去等于焦点凭空消失（比"跳过"难排查得多）
+    let i = from + delta;
+    while (i >= 0 && i < n && !list[i].tops.length) i += dir;
+    if (i < 0 || i >= n) return;        // 到头就停，不环绕（与盘菜单同一条纪律）
+    focusIdx.value = i;
+    selectedKey.value = list[i].key;
+    void nextTick(() => (gridEl.value?.children[i] as HTMLElement | undefined)?.focus());
+};
+
+const onCardFocus = (i: number) => {
+    focusIdx.value = i;
+    selectedKey.value = props.disks[i]?.key ?? null;
+};
+
+/**
+ * 初始落点：指向**第一张可用的卡**。
+ * 不做的话，若第 0 张恰好没有缓存记录（disabled），它的 `tabindex=0` 是无效的
+ * ⇒ 整个盘列表在 Tab 序列里消失。
+ */
+watch(
+    () => props.disks,
+    (list) => {
+        if (!list.length) return;
+        if (list[focusIdx.value]?.tops.length) return;
+        const i = list.findIndex((d) => d.tops.length);
+        focusIdx.value = i < 0 ? 0 : i;
+    },
+    { immediate: true },
+);
 
 const menu = ref<{ visible: boolean; x: number; y: number; tops: DiskTop[]; key: string }>({
     visible: false, x: 0, y: 0, tops: [], key: '',
@@ -208,8 +272,35 @@ const onCardDblClick = (e: MouseEvent, d: HomeDisk) => {
     openDisk(e, d);
 };
 
-/** 键盘回车：打开选中的盘 */
+/**
+ * 卡片上的键盘。方向键 = 组内换人（见 `moveFocus` 上方那段），Enter = 打开。
+ *
+ * ⚠️ 这里 `preventDefault` 是必须的：方向键在可聚焦元素上会触发**滚动**，
+ *    不挡的话按 → 卡片没换、页面先横滚一下。
+ */
 const onCardKeydown = (e: KeyboardEvent, d: HomeDisk) => {
+    const i = props.disks.findIndex((x) => x.key === d.key);
+    if (i < 0) return;
+    if (e.key === 'ArrowRight') {
+        e.preventDefault();
+        moveFocus(i, 1);
+        return;
+    }
+    if (e.key === 'ArrowLeft') {
+        e.preventDefault();
+        moveFocus(i, -1);
+        return;
+    }
+    if (e.key === 'ArrowDown') {
+        e.preventDefault();
+        moveFocus(i, colCount());
+        return;
+    }
+    if (e.key === 'ArrowUp') {
+        e.preventDefault();
+        moveFocus(i, -colCount());
+        return;
+    }
     if (e.key === 'Enter') {
         e.preventDefault();
         selectedKey.value = d.key;

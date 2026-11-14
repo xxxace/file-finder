@@ -65,13 +65,9 @@
                      `visibility: hidden`（见 App.vue），尺寸照常读得到，本层只负责"画得好看"。 -->
                 <GalaxyLoadingBar />
 
-                <!-- 首页时地址槽是空的（没有路径可说），空着会被读成"这条坏了"。
-                     给一个静态段「这台电脑」，与首页的盘列表同一个说法（资源管理器同形制）。
-                     它**不在** TransitionGroup 里：不是一屏、不参与进离场、不该被 FLIP 挪。
-                     ⚠️ 判据是 `atHome`：首页是导航栈里常驻的第 0 条，`!hasAny` 已经恒为假。 -->
-                <span v-if="atHome" class="nav-home">这台电脑</span>
-
-                <!-- 面包屑 = 从**盘符 / 离线锚点**到当前的完整链，由 `ancestorsOf(currentPath)` 现算。
+                <!-- 面包屑 = **「此电脑」+ 从盘符/离线锚点到当前的完整链**，由 `ancestorsOf(currentPath)` 现算。
+                     「此电脑」是链的第一段（2026-11-14 业主裁决：与资源管理器同形制）——
+                     它在 `crumbs` 里，所以进离场/宽度收缩都走同一套，不再是一段挂在外面的静态文字。
                      为什么不按导航栈渲染：跳转到达的目录**不是"栈顶的子级"**，用栈拼会拼出
                      一条物理上不存在的路径（`videos › a › y`）——
                      见 docs/DESIGN-NAV-2026-09-30.md §12.3 的反证推演。
@@ -89,20 +85,37 @@
                      首段 / 其余段拆成两段渲染，是为了避开 `<template v-for>` + `v-if` 混用
                      （TransitionGroup 的 FLIP 拿不到 fragment）。 -->
                 <TransitionGroup name="fx" tag="div" class="crumbs" @before-leave="pinLeaving">
+                <!-- 首段恒为「此电脑」：带首页图标。
+                     ⚠️ 它**不算** `crumb-root` —— 那个类同时带着"不可点"的含义（`cursor: default`），
+                     而这一段在非首页时是可以点的。盘符根（第二段）才是不可点的那个。
+                     ⚠️ 「此电脑」段**不给 title**：它没有"被截断的全路径"可看（path 是 `@home` 哨兵），
+                     而"点了会去哪"由 hover 底色 + 图标表达，多一句提示只是噪音；
+                     其余段的 `title` 是"看全文"，性质不同，不混用。 -->
                 <n-tag v-if="crumbLayout.head" :key="crumbLayout.head.key" class="crumb"
-                    :class="{ 'crumb-root': crumbLayout.head.kind === 'root', 'crumb-current': crumbLayout.headCurrent }"
-                    :title="crumbLayout.head.path" :data-count="crumbLayout.headCurrent ? crumbCount : null"
-                    @click="onCrumbClick(crumbLayout.head)">
+                    :class="{
+                        'crumb-root': crumbLayout.head.kind === 'root' && crumbLayout.head.path !== HOME_PATH,
+                        'crumb-home': crumbLayout.head.path === HOME_PATH,
+                        'crumb-current': crumbLayout.headCurrent,
+                    }"
+                    :title="crumbLayout.head.path === HOME_PATH ? undefined : crumbLayout.head.path"
+                    :data-count="crumbLayout.headCurrent ? crumbCount : null"
+                    @click="onCrumbClick(crumbLayout.head)"
+                    @contextmenu.prevent="onCrumbContextMenu($event, crumbLayout.head)">
                     <!-- ⚠️ 首段必须绑 `@click`（2026-11-08 code review 找回的回归）：
                          `onCrumbClick` 里 `kind === 'root'` 那支是**清单屏点根段回货架**的捷径。
                          head / tail 拆成两段渲染后首段独立成 `head`，当时没绑 ⇒ 那支变死代码。
                          磁盘根不必担心：`onCrumbClick` 自己会 return（点它不读盘）。 -->
+                    <!-- 首页图标（房子）：业主 2026-11-14 裁决 —— 不自绘，用能表达"首页"的现成图标。
+                         只给首段，其余段是纯文字路径。 -->
+                    <n-icon v-if="crumbLayout.head.path === HOME_PATH" class="crumb-home-icon" :size="14"
+                        :component="HomeOutline" />
                     <span class="crumb-text">{{ crumbLayout.head.name }}</span>
                 </n-tag>
                 <n-tag v-for="(row, i) in crumbLayout.tail" :key="row.key" class="crumb"
                     :class="{ 'crumb-root': row.kind === 'root', 'crumb-current': i === crumbLayout.tail.length - 1 }"
                     :title="row.path" :data-count="i === crumbLayout.tail.length - 1 ? crumbCount : null"
-                    @click="onCrumbClick(row)">
+                    @click="onCrumbClick(row)"
+                    @contextmenu.prevent="onCrumbContextMenu($event, row)">
                     <span class="crumb-text">{{ row.name }}</span>
                     <!-- ⚠️ 2026-11-08 第七轮：这里原来有一个
                          `<n-spin v-if="loading && i === last" :size="12" style="margin-left:8px" />`。
@@ -450,6 +463,20 @@
             <!-- 2026-11-09 重构：横排小按钮 → Apple 式纵向菜单（图标+标签+分组发丝线）。
                  内容被 n-popover teleport 到 body ⇒ 样式走文件末尾的非 scoped 块（.ctx-*）。 -->
             <div class="ctx-menu" tabindex="-1" @keydown.stop="onCtxMenuKeydown">
+                <!-- 面包屑组（2026-11-14）：只有"对这一段做点什么"的两件事。
+                     ⚠️ 刻意**不含**目录工具组（刷新 / 补封面 / 重新读取）：那一组作用于"当前这一层"，
+                     挂在祖先段上会让人分不清补的是哪一层，而且"从这里重新读取"等于给读盘开了
+                     第 4 个入口 —— 业主 2026-11-14 的口径是读盘只归文件视图那三个扫描入口。 -->
+                <template v-if="ctxMenu.mode === 'crumb'">
+                    <button type="button" class="ctx-item" @click="copyCrumbPath">
+                        <n-icon :size="16" :component="LinkOutline" />
+                        <span class="ctx-label">复制路径</span>
+                    </button>
+                    <button type="button" class="ctx-item" @click="openCrumbInExplorer">
+                        <n-icon :size="16" :component="FolderOpenOutline" />
+                        <span class="ctx-label">在资源管理器中打开</span>
+                    </button>
+                </template>
                 <!-- 文件组：只有卡片右键才有（空白处没有"这一张"）。
                      只读层（锚点路径）没有真磁盘路径 ⇒ 复制地址/打开文件夹禁用。 -->
                 <template v-if="ctxMenu.mode === 'card'">
@@ -485,23 +512,27 @@
                     </template>
                     <div class="ctx-sep" aria-hidden="true"></div>
                 </template>
-                <!-- 目录工具组：卡片/空白两处都有，与「更多」下拉共用同一份 DIR_ACTIONS -->
-                <button v-for="a in dirActions" :key="a.key" type="button" class="ctx-item"
-                    :disabled="a.disabled" @click="runDirAction(a.key)">
-                    <n-icon :size="16" :component="a.icon" />
-                    <span class="ctx-label">{{ a.label }}</span>
-                </button>
-                <!-- 导航组：只此一条，单独一组压在末尾（2026-11-10 业主裁决：清空导航住右键菜单）。
-                     为什么不并进上面的目录工具组：那一组是"这一层的工具"（可反复做）；
-                     清空重置的是**视图状态**、不删任何数据 ⇒ 不加确认（业主同日裁决）。
-                     判据 `atHome` = 有没有走过路；扫描 / 挑封面期间也禁掉 ——
-                     那两种状态下清空会把正在进行的活儿的舞台抽走（选中的格子还在、但看不见了）。 -->
-                <div class="ctx-sep" aria-hidden="true"></div>
-                <button type="button" class="ctx-item" :disabled="atHome || scanning || picking"
-                    @click="onCtxClearNav">
-                    <n-icon :size="16" :component="CloseOutline" />
-                    <span class="ctx-label">清空导航历史</span>
-                </button>
+                <!-- 目录工具组：卡片/空白两处都有，与「更多」下拉共用同一份 DIR_ACTIONS。
+                     ⚠️ 面包屑右键（mode='crumb'）必须排除这一组和下面的导航组 ——
+                     它们是"当前这一层"的工具，挂在祖先段上没有语义。 -->
+                <template v-if="ctxMenu.mode !== 'crumb'">
+                    <button v-for="a in dirActions" :key="a.key" type="button" class="ctx-item"
+                        :disabled="a.disabled" @click="runDirAction(a.key)">
+                        <n-icon :size="16" :component="a.icon" />
+                        <span class="ctx-label">{{ a.label }}</span>
+                    </button>
+                    <!-- 导航组：只此一条，单独一组压在末尾（2026-11-10 业主裁决：清空导航住右键菜单）。
+                         为什么不并进上面的目录工具组：那一组是"这一层的工具"（可反复做）；
+                         清空重置的是**视图状态**、不删任何数据 ⇒ 不加确认（业主同日裁决）。
+                         判据 `atHome` = 有没有走过路；扫描 / 挑封面期间也禁掉 ——
+                         那两种状态下清空会把正在进行的活儿的舞台抽走（选中的格子还在、但看不见了）。 -->
+                    <div class="ctx-sep" aria-hidden="true"></div>
+                    <button type="button" class="ctx-item" :disabled="atHome || scanning || picking"
+                        @click="onCtxClearNav">
+                        <n-icon :size="16" :component="CloseOutline" />
+                        <span class="ctx-label">清空导航历史</span>
+                    </button>
+                </template>
             </div>
         </n-popover>
         <!-- 「加入收藏夹…」选单：右键菜单的第二级，原地展开在同一坐标（同 submenu 手势） -->
@@ -558,7 +589,7 @@ import type { NavEntry } from './useNavStack';
 import { HOME_PATH, homeEntry } from './useNavStack';
 import { dissolveGrid } from './gridDissolve';
 import { decideOpen, isMultiFileCard } from './openDecision';
-import { SearchOutline, RefreshOutline, SyncOutline, ArrowBackOutline, ArrowForwardOutline, CloseOutline, CopyOutline, StarOutline, ChevronForwardOutline, LinkOutline, FolderOpenOutline, CloudDownloadOutline, ImageOutline, PersonOutline, SettingsOutline, ImagesOutline, VideocamOutline, MusicalNotesOutline, DocumentOutline } from '@vicons/ionicons5';
+import { SearchOutline, RefreshOutline, SyncOutline, ArrowBackOutline, ArrowForwardOutline, CloseOutline, CopyOutline, StarOutline, ChevronForwardOutline, LinkOutline, FolderOpenOutline, CloudDownloadOutline, ImageOutline, PersonOutline, SettingsOutline, ImagesOutline, VideocamOutline, MusicalNotesOutline, DocumentOutline, HomeOutline } from '@vicons/ionicons5';
 import { MoreVertical28Filled } from '@/components/icons/fluent';
 import { FlatCards24 } from '@/components/icons/grid';
 import { playSfx } from '@/utils/sfx';
@@ -766,21 +797,34 @@ const ensureHome = () => {
  * 所以在 setup 里做是安全的。
  */
 ensureHome();
+/**
+ * 「此电脑」= 面包屑的**根之上**（2026-11-14 业主裁决：与资源管理器同形制）。
+ *
+ * 它恒为第一段：首页时它就是**当前位置**（`.crumb-current`，不可点）；
+ * 非首页时点它回磁盘首页（盘列表）。
+ *
+ * ⚠️ 紧跟其后的**盘符根仍然不可点**（`kind === 'root'` ⇒ `onCrumbClick` 早退）——
+ *    它不是"去处"：点它会打开盘根，而盘根通常没被缓存过 ⇒ 真读一次盘。
+ *    业主原话："真正的根不可点，装饰用"。
+ */
+const HOME_CRUMB: PathCrumb = { name: '此电脑', path: HOME_PATH, kind: 'root' };
+
 /** 面包屑：从起点到当前的完整链。**纯推导** ⇒ 跳转后自动正确，不需要任何同步代码。 */
 const crumbs = computed(() => {
-    // 首页：一条真实路径都没有 —— `ancestorsOf('@home')` 会把它当成 UNC 拆出一段假的
-    // 根段（名就叫 `@home`）。地址槽那边由 `.nav-home` 静态段接管（见模板）。
-    if (atHome.value) return [];
-    // 清单屏：面包屑是「清单 / 名称」两段，不是磁盘路径 —— ancestorsOf 会把
-    // `@pl:` 当 UNC 拆成物理上不存在的层级。根段不可点（点它开货架，见 onCrumbClick）。
+    // 首页：一条真实路径都没有 —— `ancestorsOf('@home')` 会把它当成 UNC 拆出一段假的根段
+    // （名就叫 `@home`）。⇒ 首页的链就只有「此电脑」这一段。
+    if (atHome.value) return [HOME_CRUMB];
+    // 清单屏：面包屑是「此电脑 / 收藏 / 名称」，不是磁盘路径 —— ancestorsOf 会把
+    // `@pl:` 当 UNC 拆成物理上不存在的层级。「收藏」段不可点（点它开货架，见 onCrumbClick）。
     const top = nav.current.value;
     if (top?.pl) {
         return [
+            HOME_CRUMB,
             { name: '收藏', path: '', kind: 'root' as const },
             { name: top.pl.name, path: top.path, kind: 'dir' as const },
         ];
     }
-    return ancestorsOf(currentPath.value);
+    return [HOME_CRUMB, ...ancestorsOf(currentPath.value)];
 });
 /**
  * 平铺视图（Flat 模式）：**从当前这一层向下**摊开所有作品，跳过中间的女优/分类目录。
@@ -1383,6 +1427,16 @@ const jumpTo = (path: string) => {
  * （现状是 `slice()` 截断：点完就回不到刚才那一层，这是同一个病的第二处症状。）
  */
 const onCrumbClick = (c: PathCrumb) => {
+    /**
+     * 「此电脑」= 回磁盘首页。
+     *
+     * ⚠️ 首页时必须**什么都不做**：那段是当前位置（`.crumb-current`），
+     * `cursor: default` 只改外观、拦不住 click，不判就是"在首页点一下又多压一条首页进栈"。
+     */
+    if (c.path === HOME_PATH) {
+        if (c.path !== currentPath.value) enterScreen(HOME_PATH);
+        return;
+    }
     if (c.kind === 'root') {
         // 磁盘屏的首段依旧不可点（点它会打开盘根，而盘根通常没被缓存过 ⇒ 真读一次盘）。
         // 清单屏的「清单」根段例外：点它开货架 —— 那是回总览的捷径，零读盘。
@@ -1411,6 +1465,95 @@ const resolveAnchor = async (anchor: string): Promise<string> => {
         // 不用在每个调用点各区分一遍 kind（那种写法迟早漏一处）。
         return '';
     }
+};
+
+/**
+ * 面包屑某一段右键 = 对「这一段」做点什么（2026-11-14）。
+ *
+ * 只有两件事，都**零读盘**：复制路径、在资源管理器中打开。
+ * 刻意**不放**目录工具组（刷新 / 补封面 / 重新读取）：那些作用于"当前这一层"，
+ * 挂在祖先段上分不清作用对象；而且"从这里重新读取"会给读盘多开一个入口 ——
+ * 业主口径：读盘只归文件视图那三个扫描入口。
+ *
+ * 首页（`atHome`，只有「此电脑」一段）与清单屏（`@pl:` 伪路径）不挂这个菜单 ——
+ * 前者没有"另一个地方"可复制，后者的 path 根本不是磁盘路径。
+ */
+const onCrumbContextMenu = (e: MouseEvent, c: PathCrumb) => {
+    if (atHome.value || playlistLevel.value) return;
+    // 「此电脑」段没有可复制的磁盘路径（它的 path 是 `@home` 哨兵），别让菜单复制出这个串。
+    // 清单屏的「收藏」段 path 是空串，一并挡掉。
+    if (!c.path || c.path === HOME_PATH) return;
+    ctxMenu.value.visible = true;
+    ctxMenu.value.x = e.clientX;
+    ctxMenu.value.y = e.clientY;
+    ctxMenu.value.mode = 'crumb';
+    ctxMenu.value.item = null;
+    ctxMenu.value.crumbPath = c.path;
+};
+
+/**
+ * 面包屑段 → 真实磁盘路径。
+ *
+ * ⚠️ 判据必须落在**事实**上，不是路径形态上：只读锚点（`#序列号/…`）在那块盘插回来之后
+ * 是能换到真路径的，光看前缀就判"离线"等于拿快照当事实。
+ * 换不到只说明一个事实：这块盘此刻真的不在。
+ * 普通盘符 / UNC 路径原样返回，不问服务端。
+ */
+const crumbRealPath = async (p: string): Promise<string> =>
+    p.startsWith(ANCHOR_PREFIX) ? await resolveAnchor(p) : p;
+
+/** 复制那一段的完整路径（不是当前目录） */
+const copyCrumbPath = async () => {
+    const p = ctxMenu.value.crumbPath;
+    closeCtxMenu();
+    if (!p) return;
+    const real = await crumbRealPath(p);
+    if (!real) {
+        notify('warning', '这块盘不在线', '插上盘再试 —— 离线时只有缓存，没有可复制的路径');
+        return;
+    }
+    const err = await ipcRenderer.invoke('copyText', real);
+    if (err) notify('error', '复制失败', String(err));
+    else notify('success', '已复制路径', real);
+};
+
+/** 在系统资源管理器里打开这一段对应的目录（复用 `openFile` 那条 IPC，它对目录就是开资源管理器） */
+const openCrumbInExplorer = async () => {
+    const p = ctxMenu.value.crumbPath;
+    closeCtxMenu();
+    if (!p) return;
+    const real = await crumbRealPath(p);
+    if (!real) {
+        notify('warning', '这块盘不在线', '插上盘再试');
+        return;
+    }
+    const err = await ipcRenderer.invoke('openFile', real);
+    if (err) notify('error', '打开失败', String(err));
+};
+
+/**
+ * `Alt+↑` = 回到**父目录**（资源管理器同款）。
+ *
+ * 与「返回上一屏」是两件事：`←` 走历史，这个走层级 —— 从搜索结果直接跳进深目录时，
+ * `←` 回的是搜索屏，不是上一层文件夹。这正是它存在的理由。
+ *
+ * 三种父级的处理各不相同（判据按顺序）：
+ *   ① 父级是「此电脑」⇒ 回磁盘首页。盘根按 `Alt+↑` 就该到这，与资源管理器一致；
+ *   ② 父级是盘符根 / 清单根 ⇒ **不动**。那不是"去处"：跳过去要打开那个目录，
+ *      而盘根通常没被缓存过 ⇒ 真读一次盘（`onCrumbClick` 同一条判据）；
+ *   ③ 其余 ⇒ 正常跳。
+ */
+const goParent = () => {
+    if (atHome.value || playlistLevel.value) return;
+    const list = crumbs.value;
+    if (list.length < 2) return;
+    const parent = list[list.length - 2];
+    if (parent.path === HOME_PATH) {
+        enterScreen(HOME_PATH);
+        return;
+    }
+    if (parent.kind === 'root') return;
+    jumpTo(parent.path);
 };
 
 /**
@@ -2102,7 +2245,7 @@ const onKeyup = (e: KeyboardEvent) => {
             return;
         }
         if (e.key.toUpperCase() === 'S' || e.key.toUpperCase() === 'D' || e.key === 'Backspace') return;
-        if (e.altKey && (e.key === 'ArrowLeft' || e.key === 'ArrowRight')) return;
+        if (e.altKey && (e.key === 'ArrowLeft' || e.key === 'ArrowRight' || e.key === 'ArrowUp')) return;
     }
 
     if (e.altKey && (e.key === 'ArrowLeft' || e.key === 'ArrowRight')) {
@@ -2116,6 +2259,16 @@ const onKeyup = (e: KeyboardEvent) => {
          */
         e.preventDefault();
         void (e.key === 'ArrowLeft' ? onBack() : onForward());
+    } else if (e.altKey && e.key === 'ArrowUp') {
+        /**
+         * `Alt+↑` = 回父目录（2026-11-14）。走**层级**而不是历史，与上面那两个同族、同处处理。
+         *
+         * ⚠️ 不会和网格方向键打架：`useGridCursor` 的 keydown 开头就有 `if (e.altKey) return;`
+         *    ⇒ 带修饰键的上下左右它一律不接。所以这里不必像 `←/→` 那样再补一条守卫。
+         * ⚠️ 父级是盘根时不跳（`goParent` 内部判），与点面包屑同一条判据。
+         */
+        e.preventDefault();
+        goParent();
     } else if (e.key.toUpperCase() === 'S') {
         // 收起态它只是一颗图标 —— 先展开再聚焦（`openSearch` 内部 nextTick 才 focus）
         openSearch();

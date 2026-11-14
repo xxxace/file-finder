@@ -1,0 +1,23 @@
+
+--- A. enabled button (80,20) ---
+after enter => ["on:pointerenter"]
+after leave => ["on:pointerenter","on:pointerleave"]
+
+--- B. disabled button (80,60) ---
+after enter => ["on:pointerenter","on:pointerleave","off:pointerenter"]
+after leave => ["on:pointerenter","on:pointerleave","off:pointerenter","off:pointerleave"]
+
+--- C. disabled + pointer-events:none (80,100) ---
+after enter => ["on:pointerenter","on:pointerleave","off:pointerenter","off:pointerleave"]
+after leave => ["on:pointerenter","on:pointerleave","off:pointerenter","off:pointerleave"]
+
+--- hit test ---
+elementFromPoint y=20  => on
+elementFromPoint y=60  => off
+elementFromPoint y=100 => BODY
+
+--- verdict rules ---
+BOTH off:pointerenter and off:pointerleave present => v-tip WORKS on disabled
+only enter, no leave => v-tip would stick forever (unusable)
+no off:* at all => v-tip dead on disabled (must keep native title)
+offPN should show NO events => proves the probe can detect pointer-events:none

@@ -27,9 +27,10 @@
                         </n-input>
                     </div>
                     <!-- 2026-11-08 图标化（主人裁决）：对齐主界面 11-08 顶栏语言（28×28 图标钮）。
-                         loading 态 naive 会把图标换成转圈，语义不丢；title 补"刷新"二字的可发现性。 -->
+                         loading 态 naive 会把图标换成转圈，语义不丢；`v-tip` 补"刷新"二字的可发现性。
+                         ⚠️ 2026-11-14：它现在**不碰盘**（不传 `?refresh=true`），见 `refreshList` 的注释。 -->
                     <n-button size="small" circle quaternary :loading="diskLoading || loading"
-                        @click="onRefresh" title="刷新（重探盘符并重取列表）" aria-label="刷新">
+                        @click="refreshList" v-tip="{ text: '刷新' }" aria-label="刷新">
                         <template #icon><n-icon :component="RefreshOutline" /></template>
                     </n-button>
                 </div>
@@ -694,29 +695,25 @@ watch(() => model.value.path, () => {
 });
 
 /**
- * 「刷新」= **真的重探一遍盘符** + 重取列表。这是面板里唯一会碰盘根探测的入口。
+ * 「重取列表」—— 面板里所有"数据变了，重读一遍"的出口都走这一个（2026-11-14 收敛）。
  *
- * ⚠️ **必须串行**：`/getDisks?refresh=true` 才会让服务端重探，而 `/getHistory` 用的是
- * **进程内缓存的盘列表**（阶段 C 起不再每次重探）。两个并发发出去的话，
- * 列表请求很可能在重探完成**之前**读到旧列表 —— 表现就是"下拉里盘已经在线了，表格里还是离线/只读"。
- * 所以：先等盘列表回来，再取列表。
+ * ⚠️ **不碰盘**：不传 `?refresh=true`。
+ * 盘符归属由主进程 `diskWatch` **独占** —— WM_DEVICECHANGE 到了它自己会跑一次
+ * `getDrives(true)`，并把结果推到本页（`ff-disks-changed`）。这里再带一次 refresh，
+ * 就是"拿 26 次 stat 换一次刚做过的事"（原注释自己写的那句话）。
+ * 认盘只该有一个入口，UI 不做第二次。业主 2026-11-14 的口径：**读盘是扫描入口的事**
+ * （文件视图的「更新读取 / 重新读取」），不是面板刷新的职责。
+ *
+ * 那为什么还要重取盘列表、而不是只取历史：每条记录的目录数/条目数变了，
+ * 下拉里的统计得跟上 —— 而 `loadDisks()` 走的是**进程内盘列表缓存**，零读盘。
+ *
+ * ⚠️ **必须串行**：先等盘列表回来，再取列表。两个并发发出去的话，`/getHistory`
+ * 很可能在盘表更新**之前**读到旧列表 —— 表现就是"下拉里盘已经在线了，表格里还是离线/只读"。
  *
  * 也不再需要重入守卫：请求序号已经保证并发安全，守卫只会表现成"点了没反应"。
  */
-const onRefresh = async () => {
-    await loadDisks(true);
-    getHistrotyList();
-}
-
-/**
- * 「列表数据变了但盘没变」时用的刷新 —— 删除 / 还原 / 合并之后走它。
- *
- * 和 `onRefresh` 的区别只有一点：**不重探盘符**。那三个动作都不会改变"插着哪些盘"，
- * 让它们顺带做 26 次 `stat` 纯属浪费（用户的第一优先级就是少碰盘）。
- * 但仍要重取盘列表 —— 每条记录的目录数/条目数变了，下拉里的统计得跟上。
- */
-const reloadAfterDataChange = () => {
-    loadDisks();
+const refreshList = async () => {
+    await loadDisks();
     getHistrotyList();
 }
 
@@ -878,8 +875,8 @@ const onRemove = async () => {
         notify('success', '成功', `删除成功`)
         setTimeout(() => {
             handleCheck([])
-            // 删除只改了数据、没改"插着哪些盘" ⇒ 走 reloadAfterDataChange（不重探盘符）
-            reloadAfterDataChange()
+            // 删除只改了数据、没改"插着哪些盘" ⇒ 走 refreshList（不碰盘）
+            refreshList()
         }, 500)
     } catch (err) {
         notify('error', '错误', `删除失败:${err}`)
@@ -930,11 +927,11 @@ onDeactivated(() => {
  * 插拔盘：**本页在前台才重取**。后台页为一次看不见的刷新花一次请求没有意义；
  * 原来靠文件页转发（页面拆开之后那条线没了），所以这里自己订阅 `ff-disks-changed`。
  *
- * 走 `reloadAfterDataChange`（**不重探盘符**）：主进程刚用 `getDrives(true)` 刷过盘表，
+ * 走 `refreshList`（**不碰盘**）：主进程刚用 `getDrives(true)` 刷过盘表，
  * 这里再带 `?refresh=true` 等于拿 26 次 `stat` 换一次刚做过的事。
  */
 const onDisksChangedIpc = () => {
-    if (pageActive.value) reloadAfterDataChange();
+    if (pageActive.value) refreshList();
 };
 onMounted(() => ipcRenderer.on('ff-disks-changed', onDisksChangedIpc));
 onUnmounted(() => ipcRenderer.off('ff-disks-changed', onDisksChangedIpc));

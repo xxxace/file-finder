@@ -30,7 +30,7 @@
                     type="button"
                     class="fc__btn"
                     :disabled="!!busy"
-                    title="只重算系统盘上的缓存与记录，不碰移动硬盘"
+                    v-tip="{ text: '只重算系统盘上的缓存与记录，不碰移动硬盘' }"
                     @click="load(false)"
                 >
                     {{ busy === 'inv' ? '刷新中…' : '刷新' }}
@@ -39,7 +39,7 @@
                     type="button"
                     class="fc__btn"
                     :disabled="!!busy || !inv.total"
-                    :title="!inv.total
+                    v-tip="!inv.total
                         ? '还没有帧可核实'
                         : (onlineAny ? '对仍判在用的帧按盘上真实路径各 stat 一次（会碰一下移动硬盘）' : '这些盘都不在线，插上盘再核实')"
                     @click="load(true)"

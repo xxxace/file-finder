@@ -14,7 +14,7 @@
         <!-- 顶部 HUD 工具栏 -->
         <div class="hud-top">
             <div class="hud-left">
-                <button v-if="showBack" type="button" class="hud-btn hud-btn-back" title="返回" @click="$emit('back')">
+                <button v-if="showBack" type="button" class="hud-btn hud-btn-back" @click="$emit('back')">
                     <svg viewBox="0 0 24 24" class="hud-icon">
                         <path fill="currentColor" d="M20 11H7.83l5.59-5.59L12 4l-8 8l8 8l1.41-1.41L7.83 13H20v-2z" />
                     </svg>
@@ -33,7 +33,8 @@
             </div>
 
             <div class="hud-right">
-                <button type="button" class="hud-btn" :class="{ 'is-active': isPaused }" :title="isPaused ? '继续自动穿行 (空格)' : '暂停漫游 (空格)'" @click="togglePause">
+                <button type="button" class="hud-btn" :class="{ 'is-active': isPaused }" @click="togglePause"
+                    v-tip="isPaused ? { text: '继续自动穿行', keys: 'Space' } : { text: '暂停漫游', keys: 'Space' }">
                     <svg viewBox="0 0 24 24" class="hud-icon">
                         <path v-if="isPaused" fill="currentColor" d="M8 5v14l11-7z" />
                         <path v-else fill="currentColor" d="M6 19h4V5H6v14zm8-14v14h4V5h-4z" />
@@ -41,14 +42,14 @@
                     <span>{{ isPaused ? '已暂停' : '自动漫游' }}</span>
                 </button>
 
-                <button type="button" class="hud-btn" :title="isFullscreen ? '退出全屏' : '全屏体验'" @click="toggleFullscreen">
+                <button type="button" class="hud-btn" v-tip="isFullscreen ? '退出全屏' : '全屏体验'" @click="toggleFullscreen">
                     <svg viewBox="0 0 24 24" class="hud-icon">
                         <path v-if="isFullscreen" fill="currentColor" d="M5 16h3v3h2v-5H5v2zm3-8H5v2h5V5H8v3zm6 11h2v-3h3v-2h-5v5zm2-11V5h-2v5h5V8h-3z" />
                         <path v-else fill="currentColor" d="M7 14H5v5h5v-2H7v-3zm-2-4h2V7h3V5H5v5zm12 7h-3v2h5v-5h-2v3zM14 5v2h3v3h2V5h-5z" />
                     </svg>
                 </button>
 
-                <div class="hud-fps" title="实时渲染帧率">
+                <div class="hud-fps" v-tip="{ text: '实时渲染帧率' }">
                     {{ fps }} FPS
                 </div>
             </div>
@@ -102,7 +103,7 @@
                         v-if="activeCover.raw?.dir"
                         size="small"
                         secondary
-                        title="在文件列表中定位"
+                        v-tip="{ text: '在文件列表中定位' }"
                         @click="handleNavigateDir"
                     >
                         <template #icon>

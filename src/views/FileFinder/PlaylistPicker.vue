@@ -4,10 +4,11 @@
     <div class="pl-picker">
         <!-- 已收录的行**禁用**（打 ✓）：允许再点一次就是给"重复条目"开口子 -->
         <n-button v-for="pl in index.playlists" :key="pl.id" size="small" block class="pl-row"
-            :disabled="pl.keys.includes(itemKey)" @click="pick(pl)">
+            :disabled="pl.keys.includes(itemKey)"
+            v-tip="pl.keys.includes(itemKey) ? '已在这个收藏夹里' : ''" @click="pick(pl)">
             <span class="pl-row-name">{{ pl.system ? '★ ' : '' }}{{ pl.name }}</span>
             <span class="pl-row-count">{{ pl.count }}</span>
-            <b v-if="pl.keys.includes(itemKey)" class="pl-row-check" title="已在这个收藏夹里">✓</b>
+            <b v-if="pl.keys.includes(itemKey)" class="pl-row-check">✓</b>
         </n-button>
         <div class="pl-new">
             <n-input v-model:value="newName" size="small" placeholder="新收藏夹名称" clearable @keyup.enter="createAndAdd" />

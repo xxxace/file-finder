@@ -41,10 +41,19 @@ export function useContextMenu(deps: ContextMenuDeps) {
         y: number;
         name: string;
         stem: string;
-        /** card = 卡片右键（全部组）；blank = 空白右键（只有目录工具组） */
-        mode: 'card' | 'blank';
+        /**
+         * card = 卡片右键（全部组）；blank = 空白右键（只有目录工具组）；
+         * crumb = **面包屑某一段**右键（2026-11-14）：只有"复制路径 / 在资源管理器中打开"。
+         *
+         * ⚠️ crumb 模式**绝不能**渲染目录工具组（`dirActions`）——那一组是"当前这一层的工具"
+         * （刷新 / 补封面 / 重新读取）。挂在面包屑的某个祖先段上，用户根本分不清它作用于哪一层，
+         * 点下去还可能真的去扫另一层的盘。所以模板里那组要显式排除 crumb。
+         */
+        mode: 'card' | 'blank' | 'crumb';
         /** 右击的那张卡。「加入收藏 / 加入收藏夹…」的快照来源 */
         item: WiredFileInfo | null;
+        /** crumb 模式：被右击那一段的路径（可能是 `D:/a/b`，也可能是只读锚点 `#序列号/a/b`） */
+        crumbPath: string;
     }>({
         visible: false,
         x: 0,
@@ -53,6 +62,7 @@ export function useContextMenu(deps: ContextMenuDeps) {
         stem: '',
         mode: 'card',
         item: null,
+        crumbPath: '',
     });
 
     /** 「加入收藏夹…」选单（二级菜单，原地展开在同一坐标） */

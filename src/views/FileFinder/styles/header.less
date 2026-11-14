@@ -80,18 +80,9 @@
         z-index: 1;
     }
 
-    /* 首页时地址槽里的静态段「这台电脑」（2026-11-11）。
-       与 `.crumb` 同一套字，但**不带任何交互**：它不是一个可以去的"位置"，
-       做成可点/带 hover 底就是在骗人（点它没有任何去处）。 */
-    .nav-home {
-        flex: 0 0 auto;
-        color: var(--ff-text-2);
-        font-size: 13px;
-        white-space: nowrap;
-        /* galaxy 画布在 z-index 0，文字必须压上去 */
-        position: relative;
-        z-index: 1;
-    }
+    /* ⚠️ `.nav-home`（首页那段静态「此电脑」）2026-11-14 已删：
+       「此电脑」现在是 `crumbs` 的**第一段**（走 `.crumb` 那套），不再是挂在 TransitionGroup 外面的
+       静态文字。理由见 `crumbs` computed 的注释：段在链里，进离场/收缩/分隔符才有一套统一规则。 */
 
     /* 面包屑每一段：**单个名字有界**（层级深度问题已由折叠解决，这里只管"一段太长"）。
        ⚠️ 中文不能用 Fluent 那条「超过 30 字符就截断」——那是**拉丁文**语境的量级：
@@ -152,9 +143,41 @@
                只过渡颜色 —— `font-weight` 已经在第七轮整个去掉，不要加回来。 */
             transition: color var(--ff-dur-hover) var(--ff-ease-move);
         }
+
+        /**
+         * 「此电脑」首段（2026-11-14）：前面一枚首页图标（房子），非首页时可点回磁盘列表。
+         *
+         * ⚠️ 它**不带** `crumb-root`：那个类同时意味着"不可点"（`cursor: default`），
+         *    而这一段在非首页时是能点的。所以它的差异只能写在这里。
+         * ⚠️ `flex: 0 0 auto`：它是最短、最稳定的锚点，缩它没有信息价值 ——
+         *    压力应该给历史段。与"当前段永不被压"是同一条逻辑。
+         */
+        &.crumb-home {
+            flex: 0 0 auto;
+
+            /* n-tag 的 content 默认不是 flex ⇒ 图标与文字只能靠这里排 */
+            :deep(.n-tag__content) {
+                display: inline-flex;
+                align-items: center;
+                gap: 5px;
+                min-width: 0;
+            }
+
+            .crumb-text {
+                /* 作为 flex item 时 `min-width` 默认是 auto（= 内容宽）⇒ 不收缩 ⇒ 省略号失效 */
+                min-width: 0;
+            }
+
+            .crumb-home-icon {
+                flex: 0 0 auto;
+            }
+        }
     }
 
     /* 层级之间的方向符。
+       ⚠️ 判据是「前面还有没有同一排的段」，不是「是不是 root」——
+       2026-11-14 加了首段「此电脑」之后，盘符段（也是 root）**前面有东西了**，它需要分隔符。
+       `.crumb + .crumb` 比 `:first-child` 更贴语义：它问的是"我前面那个也是段吗"。
        ⚠️ 用 CSS 生成，**不插 DOM 子元素** —— 这一组的子元素个数在本项目是敏感量
        （n-space 重复 key 事故同族）。
        `position: absolute` 让它不占 tag 内部空间（tag 自带 `position: relative`）；
@@ -169,7 +192,7 @@
        ⇒ 所以这里往上顶 1.2px，让**墨迹**回到中线（边距仍是"盒居中 + 这一档补偿"两件事分开写）。
        ⚠️ 换主字体 / 改 `--crumb-gap` 之外的任何字号相关的值时，这个数要重量：
           `node docs/probes/header-optical/measure.mjs <截图>` 会直接打每块墨迹与中线的差。 */
-    .crumb:not(.crumb-root)::before {
+    .crumb + .crumb::before {
         content: '›';
         position: absolute;
         left: calc(-1 * var(--crumb-gap));
@@ -195,6 +218,15 @@
     .crumb-current {
         flex: 0 0 auto;
         --n-text-color: var(--ff-text-1) !important;
+        /**
+         * 当前段**不受悬停影** —— 它不是可点目标。
+         *
+         * ⚠️ 这是补上 11-08 只写进注释、没写进代码的那一条（原文："当前段没有底色 = 不可点，
+         * 比下划线更清楚"）。缺了它，当前层悬停有 `--ff-ctl-on` 底色、点下去没有任何反应
+         * （`onCrumbClick` 里 `path === currentPath` 直接 return）—— 典型的死交互。
+         * 2026-11-14 首页的「此电脑」也成了当前段，同一个毛病会更显眼（首页只有这一段）。
+         */
+        --n-color-hover: transparent !important;
         position: relative;
     }
 

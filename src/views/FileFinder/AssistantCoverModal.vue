@@ -50,7 +50,7 @@
                     <!-- 系统盘上没人引用的抽帧帧：只给一条去设置清理的入口，不在工作流里插动作 -->
                     <template v-if="orphanCount">
                         <i />
-                        <button type="button" class="ffw-meta-link" :title="`抽帧缓存里有 ${orphanCount} 张已无引用（${mb(orphanBytes)}），在设置里处理`" @click="goFrameCache">
+                        <button type="button" class="ffw-meta-link" v-tip="`抽帧缓存里有 ${orphanCount} 张已无引用（${mb(orphanBytes)}），在设置里处理`" @click="goFrameCache">
                             旧帧 {{ orphanCount }}
                         </button>
                     </template>
@@ -139,7 +139,7 @@
                             type="button"
                             class="ffw-check"
                             :class="{ 'is-on': counts.selected > 0 }"
-                            :title="allSelected ? '取消全选' : '全选'"
+                            v-tip="allSelected ? '取消全选' : '全选'"
                             @click="toggleAll"
                         >
                             <n-icon v-if="allSelected" :component="CheckmarkOutline" :size="12" />
@@ -154,7 +154,7 @@
                             type="button"
                             class="ffw-btn ffw-btn--ghost"
                             :disabled="!canOperate"
-                            :title="canOperate ? '把没有封面的用视频关键帧补上' : '这块盘现在不在线，插上盘再操作'"
+                            v-tip="canOperate ? '把没有封面的用视频关键帧补上' : '这块盘现在不在线，插上盘再操作'"
                             @click="startFrame()"
                         >
                             没封面的 {{ needFrameCount }} 部抽帧
@@ -165,7 +165,7 @@
                                 type="button"
                                 class="ffw-btn ffw-btn--primary"
                                 :disabled="!counts.selected || scanLoading || !canOperate"
-                                :title="canOperate ? '' : '这块盘现在不在线，插上盘再操作'"
+                                v-tip="canOperate ? '' : '这块盘现在不在线，插上盘再操作'"
                                 @click="startGrab()"
                             >
                                 开始抓取 {{ counts.selected }} 部
@@ -177,7 +177,7 @@
                                 type="button"
                                 class="ffw-btn"
                                 :disabled="!canOperate"
-                                :title="canOperate ? '' : '这块盘现在不在线，插上盘再操作'"
+                                v-tip="canOperate ? '' : '这块盘现在不在线，插上盘再操作'"
                                 @click="startApply"
                             >
                                 确认写入 {{ counts.ready }} 部
@@ -217,7 +217,7 @@
                                 type="button"
                                 class="ffw-btn ffw-btn--primary"
                                 :disabled="!counts.ready || !canOperate"
-                                :title="canOperate ? '' : '这块盘现在不在线，插上盘再操作'"
+                                v-tip="canOperate ? '' : '这块盘现在不在线，插上盘再操作'"
                                 @click="startApply"
                             >
                                 确认写入 {{ counts.ready }} 部
@@ -240,7 +240,7 @@
                                 type="button"
                                 class="ffw-btn"
                                 :disabled="!!grabActing || !!applyActing || !canOperate"
-                                :title="canOperate ? '' : '这块盘现在不在线，插上盘再操作'"
+                                v-tip="canOperate ? '' : '这块盘现在不在线，插上盘再操作'"
                                 @click="startApply"
                             >
                                 写入已抓到的 {{ counts.ready }} 部
@@ -275,7 +275,7 @@
                                 type="button"
                                 class="ffw-btn"
                                 :disabled="!canOperate"
-                                :title="canOperate ? '' : '这块盘现在不在线，插上盘再操作'"
+                                v-tip="canOperate ? '' : '这块盘现在不在线，插上盘再操作'"
                                 @click="startGrab(retryTargets, grabJob?.id)"
                             >
                                 补抓 {{ retryTargets.length }} 条

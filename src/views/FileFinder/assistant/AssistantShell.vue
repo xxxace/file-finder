@@ -1,7 +1,7 @@
 <template>
     <div class="ffw-shell">
         <header class="ffw-bar">
-            <button type="button" class="ffw-icon-btn" :disabled="busy" title="返回" @click="emit('close')">
+            <button type="button" class="ffw-icon-btn" :disabled="busy" v-tip="{ text: '返回' }" @click="emit('close')">
                 <n-icon :component="ChevronBackOutline" :size="16" />
             </button>
             <span class="ffw-title">{{ title }}</span>

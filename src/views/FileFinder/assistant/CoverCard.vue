@@ -27,7 +27,7 @@
                 type="button"
                 class="ffw-card__act"
                 :disabled="actionDisabled"
-                :title="actionDisabled
+                v-tip="actionDisabled
                     ? '已经到中段了，再往后信息量不比这里高'
                     : (action === 'reframe' ? '换一帧（往后走一档）' : '抽一帧当封面')"
                 @click.stop="emit('frame')"
@@ -38,7 +38,7 @@
                 type="button"
                 class="ffw-card__check"
                 :disabled="locked"
-                :title="locked ? '任务进行中，先暂停或终止' : selected ? '取消选择' : '选择'"
+                v-tip="locked ? '任务进行中，先暂停或终止' : selected ? '取消选择' : '选择'"
                 @click="emit('toggle')"
             >
                 <n-icon :component="CheckmarkOutline" :size="12" />
