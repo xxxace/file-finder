@@ -35,7 +35,7 @@ type PaneKey = 'general' | 'rules';
 
 /** 一级目的地必须表达**稳定的心智模型**，不为单项设置开一级页（Apple/GNOME 同准则） */
 const PANELS: { key: PaneKey; name: string; desc: string; tip?: string }[] = [
-    { key: 'general', name: '通用', desc: '音效 · 备份与迁移', tip: '通用偏好' },
+    { key: 'general', name: '通用', desc: '音效 · 彩蛋 · 备份与迁移', tip: '通用偏好' },
     { key: 'rules', name: '站点规则', desc: '封面抓取站点配置' },
 ];
 

@@ -176,6 +176,32 @@
   --ff-bar-glow: #d3aaff;
   --ff-bar-glow-soft: #eddcff;
 
+  /* ════════ L2 语义 · 选区开花（2026-11-14 · 彩蛋） ════════
+     ⚠️ 与进度条同性质：不可点、纯装饰，是「业务只用中性灰」的唯一另一个例外。
+     唯一消费方 = `components/SelectionFlower/`（Canvas 不吃 CSS 变量，靠 getComputedStyle 读）。
+     整体关掉：`SelectionFlower/index.vue` 顶部的 `ENABLED`，或删 `App.vue` 里那一行。
+     ⚠️ `ink`（勾轮廓那支笔）**浅深必须换**：浅底要深墨把花瓣边界勾出来；深底再用 #20241b
+        等于没勾，花会糊成一坨色块。 */
+  --ff-flower-petal-1: #f21b3f;
+  --ff-flower-petal-2: #ffb35b;
+  --ff-flower-petal-3: #f4d64c;
+  --ff-flower-petal-4: #9bc9ec;
+  --ff-flower-petal-5: #a47bdf;
+  --ff-flower-petal-6: #f1afd0;
+  --ff-flower-petal-7: #fff7db;
+  --ff-flower-centre-1: #f6d65d;
+  --ff-flower-centre-2: #f8b54c;
+  --ff-flower-centre-3: #f5b4c8;
+  --ff-flower-ink: #20241b;
+  --ff-flower-stem: #24482c;
+  --ff-flower-stem-hi: #67b868;
+  --ff-flower-leaf: #6fbe72;
+  --ff-flower-leaf-line: #243725;
+  /* 压在所有内容**之上**：面板是不透明底，压下面等于永远看不见。
+     ⚠️ 必须高于 toast(3100) / confirm(3200) / FluidTip(4000)，
+        否则在弹窗、提示旁边选文字就没有花（全屏层被它们盖住）。 */
+  --ff-flower-z: 5000;
+
   /* ════════ L2 语义 · 动作（主按钮 = 反色，不引入色相） ════════ */
   --ff-action: var(--ff-text-1);
   --ff-action-hover: #000000;
@@ -467,6 +493,15 @@
   /* 封面角标底：深色下比浅色再淡一档（画布本身黑，0.40 就够分边界）。
      `--ff-badge-blur` / `--ff-badge-shadow` 两主题同值，故意不重写。 */
   --ff-badge-bg: rgba(0, 0, 0, 0.4);
+
+  /* 选区开花（深色）：只换"勾轮廓"的两支笔 —— 花瓣/叶子在深底上本来就够亮，同值即可。
+     ⚠️ 深色的描边必须**纯黑**：它只需要在花瓣边缘内侧勾一道暗线（把相邻花瓣分开），
+        在背景上本来就看不见是正常的 —— 花瓣与深底之间不靠这条线分界。
+     ⚠️ 主茎的深色必须**提亮**（#24482c 在 #0e0e0e 上几乎看不见），
+        它是 2.4px 那道底笔，消失后茎就只剩一根单像素亮的细丝。 */
+  --ff-flower-ink: #000000;
+  --ff-flower-stem: #3f7a4a;
+  --ff-flower-leaf-line: #10240f;
 
   /* 浮层：深色下浮层要比面板再抬一档（#242424），悬停用 8% 白 —— 比"抬一档灰"更容易看见 */
   --ff-popover: var(--ff-raised);

@@ -22,6 +22,9 @@
       <OverlayHost />
       <!-- 功能页 Fluid Tip 的全局宿主（全局唯一一颗胶囊，左轨 RailTip 不走这里） -->
       <FluidTipHost />
+      <!-- 彩蛋：选中文字长花（全屏 Canvas 层，自己 Teleport 到 body）。
+           不想要了 = 删这一行 + 上面那行 import + `components/SelectionFlower/` 目录。 -->
+      <SelectionFlower />
     </n-loading-bar-provider>
   </n-config-provider>
 </template>
@@ -31,6 +34,7 @@ import { ref } from 'vue';
 import AppShell from './views/Shell/index.vue';
 import OverlayHost from './components/Overlay/OverlayHost.vue';
 import FluidTipHost from './components/FluidTip/FluidTipHost.vue';
+import SelectionFlower from './components/SelectionFlower/index.vue';
 import {
   NConfigProvider, NLoadingBarProvider,
   zhCN, dateZhCN, darkTheme,

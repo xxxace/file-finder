@@ -20,6 +20,17 @@
             </div>
         </section>
 
+        <!-- 卡 · 彩蛋：纯装饰，默认开启。关掉即连那层全屏画布一起撤走 -->
+        <section class="set-card">
+            <div class="set-row">
+                <div class="set-text">
+                    <span class="set-title">文字选区开花</span>
+                    <span class="set-desc">选中文字时沿字边长出小花小草，松手缩回；不影响复制和拖拽</span>
+                </div>
+                <n-switch :value="bloomPrefs.on" @update:value="setBloomEnabled" />
+            </div>
+        </section>
+
         <!-- 卡 · 备份与迁移：整块复用 BackupPanel（2026-11-08 抽离时就预留了"移进设置页"）。
              还原/合并成功后的 migrated 事件在设置页没有列表要刷，通知音已由 notify 承担。 -->
         <section class="set-card">
@@ -61,6 +72,7 @@
 <script setup lang="ts">
 import { NSwitch, NSlider } from 'naive-ui';
 import { playSfx, sfxPrefs, setSfxEnabled, setSfxVolume } from '@/utils/sfx';
+import { bloomPrefs, setBloomEnabled } from '@/components/SelectionFlower/pref';
 import BackupPanel from '@/views/Cache/BackupPanel.vue';
 import FrameCacheBlock from './FrameCacheBlock.vue';
 import pkg from '../../../package.json';

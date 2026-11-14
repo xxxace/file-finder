@@ -1,29 +1,14 @@
 <template>
     <div class="file-finder">
         <div class="header-bar">
-            <!-- 顶栏三段（2026-11-08 定稿）：
-                 `[▤ 起点][← 后退][→ 前进][↻ 刷新] │ [ 盘: › 段 › 当前段 ⑫ ] │ [⌕][▦][⊞] | [⋯]`
-                 中间那条槽是头部**唯一的弹性槽位**（`flex: 1`）—— 它吃掉剩余宽度，
-                 所以面包屑右边永远是空的：一次 append / remove 里，排在变动点右边的东西
-                 必然被推着走；右边没东西，变化就只剩"多一段 / 少一段"。
-                 继续用**裸 flex**、不用 n-space：naive-ui 2.45.3 的 Space 会给每个子项写死
-                 同一个 key（`key: 1`），而这一组的子元素个数是**会变**的（v-for + 折叠占位），
-                 一变就会重复 key、错位复用节点（docs/FIX-2026-09-24-nspace-duplicate-keys.md）。
-                 ⚠️ 槽里每个子项都必须有 key（TransitionGroup 的进出场按 key 认人）。 -->
-            <!-- 左侧四颗：起点 / 后退 / 前进 / 刷新（2026-11-10 双向导航）。
-                 ⚠️ 它们**刻意不放进 TransitionGroup** —— 面包屑"零位移"的前提是
-                 「排在变动点右边的东西必然被推着走」；常驻按钮挪出槽之后，槽里只剩面包屑，
-                 这条约束就退化成"只多一段 / 只少一段"，干扰源被直接删掉。
-                 顺序抄 Windows 资源管理器 / Chrome：`[←][→][↻][地址栏]`。
-
-                 ⚠️ 后退 / 前进**两颗都常驻、不 `v-if`**，只在无路可走时置灰：
-                 按钮一出现/消失就把整条面包屑推走 ~32px，正是 2026-11-08 修掉的那类跳动。
-                 28px 方格定宽 ⇒ 图标怎么换连 1px 都不动（11-08 用 `←`/`⨯` 换字形验证过）。
-
-                 ⚠️ 2026-11-10 裁决：原来那套"末尾一颗按 `history.length` 三态变形
-                 （`←` 返回 → `⨯` 清空 → 空栈置灰）"**已撤**。加了前进之后
-                 "后退不可用"与"该清空了"是两件事，一颗按钮表达不了。
-                 ⇒ 「清空导航历史」搬到**右键菜单**末尾（出口没消失，只是搬家）。 -->
+            <!-- 顶栏三段 `[▤][←][→][↻] │ [地址槽 flex:1] │ [⌕][▦][⊞] | [⋯]`
+                 ⚠️ 地址槽是唯一弹性位、右边必须留空（否则面包屑增减会推着后面元素走）。
+                 ⚠️ 用裸 flex、不用 n-space：naive 的 Space 给子项写死 `key: 1`，子元素个数一变就
+                    重复 key（docs/FIX-2026-09-24-nspace-duplicate-keys.md）。槽里每子项都必须有 key。 -->
+            <!-- 左侧四颗常驻，**刻意不放进 TransitionGroup**（面包屑零位移的前提）。
+                 ⚠️ 后退/前进用 disabled 不用 v-if：按钮出现/消失会把整排推走 ~32px；28px 定宽 ⇒ 换字形 1px 不动。
+                 ⚠️ 原「末尾一颗三态变形（←/⨯/置灰）」已撤：加了前进后"不可用"与"该清空"是两件事。
+                    「清空导航历史」在右键菜单末尾单独一组。 -->
             <div class="nav-btns">
                 <FolderSelector ref="folderSelector" v-model="dir" label="请选择文件夹" keys="D" @change="setRoot" />
                 <n-button size="small" :disabled="!canBack" aria-label="返回上一屏"
@@ -65,20 +50,11 @@
                      `visibility: hidden`（见 App.vue），尺寸照常读得到，本层只负责"画得好看"。 -->
                 <GalaxyLoadingBar />
 
-                <!-- 面包屑 = **「此电脑」+ 从盘符/离线锚点到当前的完整链**，由 `ancestorsOf(currentPath)` 现算。
-                     「此电脑」是链的第一段（2026-11-14 业主裁决：与资源管理器同形制）——
-                     它在 `crumbs` 里，所以进离场/宽度收缩都走同一套，不再是一段挂在外面的静态文字。
-                     为什么不按导航栈渲染：跳转到达的目录**不是"栈顶的子级"**，用栈拼会拼出
-                     一条物理上不存在的路径（`videos › a › y`）——
-                     见 docs/DESIGN-NAV-2026-09-30.md §12.3 的反证推演。
-                     ⚠️ 2026-11-10 主人裁决：**不再按段数折叠**（原 `max = 4`，第 5 段起就折成
-                     `盘符 › … › 当前`）。那个 4 是「地址槽只占半条顶栏」时代定的常量，
-                     而 11-08 顶栏升级已经把 `max-width: 50%` 取消、槽变成"吃掉全部剩余宽度"
-                     ⇒ 常量活着，它服务的那个预算早死了。现在**能放几段放几段**：
-                     放不下时由 CSS 逐段收窄 + 省略号（历史段先让路，当前段 `flex: 0 0 auto`
-                     永不被压），与 11-09「不设 max-width」是同一条裁决的延伸。
-                     ⇒ 顺带修强了 11-08 的一条验收：结构不再随宽度变 ⇒ 搜索框展开挤压时
-                     **不可能**引起整排重新折叠。 -->
+                <!-- 面包屑 = 「此电脑」+ 当前路径的完整链，由 `ancestorsOf` 现算。
+                     ⚠️ 不能用导航栈拼：跳转到达的目录不是"栈顶子级"，会拼出物理上不存在的路径
+                        （docs/DESIGN-NAV-2026-09-30.md §12.3）。
+                     ⚠️ 不再按段数折叠（max=4 是"槽只占半条顶栏"时代的过期常量）：能放几段放几段，
+                        放不下由 CSS 逐段省略，当前段 `flex: 0 0 auto` 永不被压。 -->
                 <!-- ⚠️ 2026-11-08 重构：原来是 `v-if="crumbFold"` / `v-else` **两棵互斥的树**。
                      层级跨过阈值的那一下，Vue 会销毁整棵子树、再重建另一棵 ⇒ 视觉上是
                      "整排地址重新渲染一次"（主人原话）。现在统一由 `crumbRows` 这一个数组驱动。
@@ -277,21 +253,11 @@
                          现在由 `onCoverLoad`（图片自己加载完之后）再写这个变量，
                          而同一张图的字节已经在 HTTP 缓存里 ⇒ **零额外请求**。 -->
                     <div class="card-cover">
-                        <!-- ⚠️ 2026-11-10 渲染层优化：图片/视频封面改用**原生 `<img>`**。
-                             原来这里是 `n-image`：一张卡 = 一个组件实例 + 一套 props/watch +
-                             一个 `IntersectionObserver`。平铺（从任意层向下）把卡片数从"几十"
-                             变成"几千"时，这一项是挂载与内存里最贵的部分；而原生
-                             `loading="lazy" decoding="async"` 干的是**同一件事**（进视口才解码），
-                             还不占 Vue 实例。
-                             ⚠️ **不挂 `.stop`**：点封面 = 开大图 + **继续冒泡给卡片**
-                             （`.image-box-item` 的 `@click` 在「换封面」模式里是选中/取消，
-                             它顺手把刚弹出的预览关掉 —— 那正是"两个动作打架"的既有解法）。
-                             加了 `.stop` 会让"此刻正在挑封面"静默失效。
-                             ⚠️ 目录的脸（`.card-avatar`）**仍是 `n-image`**：它那套
-                             `preview-disabled` + 70%/100% `transform` 语义不值得为它重写，
-                             而且平铺结果里根本没有目录条目（只摊叶子），换了是零收益。
-                             ⚠️ 必须同时判 `item.thumb`：`thumbUrl(undefined)` 是空串，而
-                             `<img src="">` 会被浏览器当成"当前页面地址"去加载 HTML ⇒ 裂图。 -->
+                        <!-- ⚠️ 封面图用原生 `<img loading="lazy" decoding="async">`：平铺几千张时
+                             `n-image` 的组件实例 + IntersectionObserver 是最贵的开销，原生懒加载干的是同一件事。
+                             ⚠️ 不挂 `.stop`：点封面要继续冒泡给卡片（换封面模式靠它选中/取消并关掉刚弹的预览）。
+                             ⚠️ 目录的脸仍是 `n-image`（那套 transform 语义不值得重写，平铺结果里也没有目录条目）。
+                             ⚠️ 必须判 `item.thumb`：`src=""` 会被当成当前页面地址去加载 HTML ⇒ 裂图。 -->
                         <img v-if="(item.type === 'image' || item.type === 'video') && !!item.thumb"
                             class="card-img can-preview" :src="thumbUrl(item.thumb)" :alt="item.dir"
                             loading="lazy" decoding="async" @load="onCoverLoad" @click="openPreview(item)" />
@@ -366,19 +332,12 @@
              ⚠️ 取消只在**目录边界**生效（当前这个目录会扫完）—— 那是刻意的：
              半途中断会留下写了一半的缓存。所以文案要说"当前这个扫完就停"，
              不能让用户以为点了就应该立刻停。 -->
-        <!-- ⚠️ 外面这层 `.scan-bar-slot` 只为一件事：**让"挂上 / 摘掉"这件事有高度可过渡**。
-             这条状态条**在文档流里**（`.file-finder` 是 flex 列），所以只做淡入是不够的：
-             卸载那一帧网格就会跳 50px、然后条自己再淡出去，等于没做。
-             要平滑，**高度必须一起过渡**；而 `height: auto` 不能过渡、`max-height` 要写魔数
-             （内容一变就剪错高度）。`grid-template-rows: minmax(0,1fr) ↔ minmax(0,0fr)`
-             零魔数、内容多高都能收干净。Chromium 152 实测可插值（docs/probes/bar-collapse/）。
-             ⚠️ 两个前提缺一不可，少一个就"收不起来"（第一版就是这么失败的）：
-                ① 轨道写 `minmax(0, …)` —— 裸写 `0fr` = `minmax(auto, 0fr)`，
-                   自动最小尺寸取内容的 min-content，`.scan-bar` 的 `min-height: 40px` 会把它顶死；
-                ② 里层 `.scan-bar` 要 `overflow: hidden` —— 网格项的自动最小尺寸
-                   只有非 visible 才归 0。
-             ⚠️ 扫描条和挑选条**共用**这一条（同一个元素），动画自然也是同一份：
-             它们不会同时出现（进模式前会等扫描结束）。 -->
+        <!-- ⚠️ `.scan-bar-slot` 只为让"挂上/摘掉"的高度可过渡：状态条在文档流里，
+             只淡入不够（卸载那帧网格会跳 50px）。用 `grid-template-rows: minmax(0,1fr) ↔ minmax(0,0fr)`
+             —— 零魔数，内容多高都收得干净（Chromium 152 实测，docs/probes/bar-collapse/）。
+             ⚠️ 两个前提缺一不可：① 轨道必须 `minmax(0,…)`（裸 `0fr` 的 auto 最小尺寸会被
+                `.scan-bar` 的 `min-height:40px` 顶死）；② 里层必须 `overflow:hidden`（网格项最小尺寸才归 0）。
+             ⚠️ 扫描条与挑选条共用这一条（不会同时出现），动画自然同一份。 -->
         <!-- ⚠️ glow 期间**不出这一条**（2026-11-08 主人定位）：
              它在文档流里，挂上时靠 `grid-template-rows: 1fr→0fr` 从 0 长到 40px，
              而这 40px 是**从网格里扣的** ⇒ `.image-box-wrap` 变矮、里面的遮罩与 canvas
@@ -423,22 +382,12 @@
                 </div>
             </div>
         </Transition>
-        <!-- 「这个封面下有哪几个文件」那一层 —— 2026-11-11 重构为**纵向菜单**。
-             为什么不是卡片网格：这一层是"从 2~5 个近似项里挑一个"的短列表，不是内容网格。
-             原来的 150×116 卡片带系统大图标（Windows 紫色立体方块）、名字居中折行、
-             大小被推到卡片底部，和右键菜单那套 Apple 尺度完全两个语言。
-             现在照 `ctx-menu.css`：32 行高、16 线条图标、名字左对齐、大小右对齐。
-
-             ⚠️ 名字拆两段（`fileNameSplit.ts`）而不是 `text-overflow: ellipsis`：
-             这几个文件名的前缀往往一模一样，区分点（A/B、前編/後編）和扩展名都在尾部，
-             尾部省略正好把唯一的区分点藏起来。两段在宽度够时首尾相接、无省略号。
-
-             ⚠️ 键盘进出全靠**焦点**，不是靠额外的守卫分支：
-             `isGridKeyBlocked` 的 `e.target !== document.body` 在焦点落在某一项上时
-             自动为真 ⇒ 网格的方向键监听收不到事件，**两个选择器不会打架**。
-             而这一层若不给焦点，网格方向键就会穿透进来（用户以为在网格里按了方向键，
-             结果焦点还停在一个看得见却没焦点的弹层上）。
-             两条都是**必做项**，少任何一条键盘就失灵。-->
+        <!-- 「这个封面下有哪几个文件」层：2026-11-11 改成**纵向菜单**（2~5 项里挑一个，不是内容网格）。
+             尺度照 `ctx-menu.css`：32 行高、16 线条图标、名字左对齐、大小右对齐。
+             ⚠️ 名字拆两段（`fileNameSplit.ts`）不用 `text-overflow: ellipsis`：
+                前缀往往相同，区分点（A/B、前編/後編）和扩展名都在尾部，尾部省略正好藏起唯一区分点。
+             ⚠️ 键盘进出全靠**焦点**：焦点落在项上时 `isGridKeyBlocked` 自动为真 ⇒ 网格方向键
+                收不到事件，两个选择器不打架；不给焦点的话方向键会穿透进来。两条都是必做项。 -->
         <n-popover :show="popover.visible" :x="popover.x" :y="popover.y" trigger="manual" placement="bottom-start"
             :show-arrow="false" @clickoutside="closeFileList">
             <!-- 裸 flex（不是 n-space / .hstack）：这里 v-for 的是文件列表，个数天生会变 -->
@@ -567,6 +516,7 @@ import { usePickMode } from './usePickMode';
 import { useSearchSlot } from './useSearchSlot';
 import { useScreenData } from './useScreenData';
 import { filterByName } from './filterByName';
+import { displaySrcOf, fileNameOf, fullPathOf, isReadOnlyPath, keyOf, previewUrlOf, thumbUrl } from './file-meta';
 import { buildMemberMap, playlistIndex, refreshIndex } from './playlist';
 import type { CardSnapshot } from '../../../electron/server/playlist';
 import folderIcon from '@/assets/fileTypeIcon/folder.png';
@@ -626,82 +576,6 @@ const VIDEO_EXT_RE = /\.(mp4|mkv|avi|wmv|flv|mpeg|m4v|mov|mpg|ts|m2ts|mts|webm|o
  * 都不是磁盘上的真实路径。身份信息在 `NavEntry.pl` 上，path 只作寻址与面包屑显示。
  */
 const PL_PREFIX = '@pl:';
-
-/**
- * 缩略图按需取，不再内嵌进 /openFolder 的响应里。
- * 渲染层拿到的是个短 key，图走 /thumb —— 一个目录的响应体因此从几百 KB 降到几十 KB，
- * 而且 `loading="lazy"` 只让真正进入视口的那些发请求（2026-11-10 起是原生懒加载）。
- *
- * ⚠️ 带缓存：它在模板里**每条目每次全量渲染**都要算一遍（换屏、每次按键过滤），
- * 而 `encodeURIComponent` 是逐字符扫描 ⇒ 平铺 5000 条就是 5000 次。
- * 键是 `sig` 派生的短串，同一屏反复渲染时命中率 100%，缓存表几百条量级。
- * ⚠️ 缓存整条 URL 是安全的：`API_BASE` 是常量、`TOKEN` 在模块加载时由 sendSync 一次取定
- * （两者都不会在运行中变）⇒ 不会出现"缓存了旧端口/旧口令"导致裂图。
- */
-const thumbUrlCache = new Map<string, string>();
-const thumbUrl = (key?: string) => {
-    if (!key) return '';
-    const hit = thumbUrlCache.get(key);
-    if (hit) return hit;
-    const url = apiUrl(`${API_BASE}/thumb?k=${encodeURIComponent(key)}`);
-    if (thumbUrlCache.size > 4096) thumbUrlCache.clear();    // 有界：满了整表丢，不做淘汰算法
-    thumbUrlCache.set(key, url);
-    return url;
-};
-
-/**
- * 条目的真实文件名。
- *
- * `item.name` 是**显示名** —— 封面条目取的是封面图文件名（不含扩展名），目录取目录名。
- * 所以还原磁盘上的名字必须带上 ext；而 ext 可能为空（没有扩展名的文件、目录），
- * 那就不能再补那个点了，否则 "README" 会变成 "README."。
- */
-const fileNameOf = (item: WiredFileInfo) => (item.ext ? `${item.name}.${item.ext}` : item.name);
-
-/** 条目在磁盘上的完整路径。dir 是服务端补过当前盘符的完整目录 */
-const fullPathOf = (item: WiredFileInfo) => `${item.dir}/${fileNameOf(item)}`;
-
-/**
- * 预览大图的地址。
- *
- * 服务端那个 `/preview` 出口有三种情形（见 server/index.ts 的 previewController）：
- * 本地已有 → 直接给（0 读盘）；本地没有但给了源路径 `p` → **读一次原图、生成、落盘**；
- * 都没有 → 404。
- *
- * 所以这里只在**该给 `p` 的时候**给：
- *   · 视频**永远不给** —— 它的"图"是抽帧，而且在扫描那一刻就已经生成好了；
- *     真给 `p` 就等于让浏览器去 GET 一个 5–7GB 的原片（第一目标严禁）。
- *   · 离线（只读层）不给 —— 地址是锚点，服务端读不了；给了只会白跑一次。
- */
-const previewUrlOf = (item: WiredFileInfo) => {
-    if (!item.preview) return '';
-    const q = `k=${encodeURIComponent(item.preview)}`;
-    // ⚠️ 2026-10-21（清单功能）从屏幕级 `readOnlyLevel` 改成**条目级** `isReadOnlyPath(item.dir)`：
-    // 清单详情屏是在线/离线**混合屏**（每条目的盘在不在各自独立），屏幕级判据会把
-    // 在线条目的图也当成"生成不了"。
-    // 在原有两类屏幕上两者等价（在线屏所有 dir 都是实时路径、只读屏全是锚点）⇒ 行为不变。
-    const canBuild = !item.previewReady && item.type === 'image' && !isReadOnlyPath(item.dir);
-    return apiUrl(`${API_BASE}/preview?${q}${canBuild ? `&p=${encodeURIComponent(fullPathOf(item))}` : ''}`);
-};
-
-/**
- * 条目的身份。与网格那一格的 `:key`、`:data-key`、预览序列**同源** ——
- * 「定位」就是靠它把预览里的这一条对回网格里的那一格。
- * `dir` 是条目**自己所在**的目录（封面条目取的是那个子目录，见 server 的 handleCover）
- * ⇒ (dir, name) 唯一，同一层的两个子目录各有一张同名封面也不会撞。
- */
-const keyOf = (item: WiredFileInfo) => `${item.dir}/${item.name}`;
-
-/**
- * 预览层**立刻**显示的那张 —— 与网格里那张卡片**逐条同一规则**（"卡片的大图版"）：
- *   图片 / 视频 → 它自己的缩略图；目录 → 它的脸，没有脸就是文件夹图标。
- * 这些都是**本地已有**的图（缩略图在主进程内存/bin 里、浏览器也缓存着）⇒ 打开是瞬时的、零读盘。
- * 其他文件不参与序列（原因见 `previewEntries`）。
- */
-const displaySrcOf = (item: WiredFileInfo) => {
-    if (item.type === 'folder') return item.avatar ? thumbUrl(item.avatar) : folderIcon;
-    return thumbUrl(item.thumb);
-};
 
 // ── 预览层（上一条/下一条 + 定位 + 渐进清晰）────────────────────────────────
 // ⚠️ 调用点必须在下面 `fileList` / `picking` / `imageBox` 三个声明之后 —— 依赖没准备好就
@@ -842,34 +716,18 @@ const isFlatView = ref(false);
  */
 const canToggleFlat = computed(() => !playlistLevel.value && !!currentPath.value && !atHome.value);
 /**
- * 面包屑的**渲染布局**（head + tail）。
- *
- * ⚠️ 2026-11-10：**不再折叠**（原 `foldCrumbList(crumbs, max = 4)`，第 5 段起折成
- * `盘符 › … › 当前`）。判据从"段数常量"撤掉的理由写在模板 `.crumbs` 那段；
- * 放不下由 CSS 逐段省略兜底，`foldCrumbList` / `buildCrumbLayout` 的 fold 形参仍在
- * （纯函数、有探针），只是这里不再传。
- *
- * ⚠️ 2026-11-08：原来模板里是 `v-if="crumbFold"` / `v-else` 两棵互斥的树，
- * 阈值一跨整棵子树被销毁重建 ⇒ 观感是"整排地址重新渲染"。
- * 推导逻辑在 `crumbRows.ts`（纯函数，可被 `docs/probes/crumbs/layout.mjs` 直接跑）。
+ * 面包屑渲染布局（head + tail）。
+ * ⚠️ 2026-11-10 起**不按段数折叠**（原 max=4 是"槽只占半条顶栏"时代的过期常量），
+ *    放不下由 CSS 逐段省略（`crumbRows.ts` 的 fold 形参仍在，这里不传）。
+ * ⚠️ 不能用 `v-if/v-else` 两棵树：跨阈值时整棵销毁重建 ⇒ 整排地址重渲染。
  */
 const crumbLayout = computed(() => buildCrumbLayout(crumbs.value));
 /**
- * 离场那一格的"幽灵"：把它**钉在最后的屏幕位置上**，再交给 CSS 淡出。
- *
- * 为什么需要它（两条硬约束同时成立，缺一条就变形）：
- * ① **必须脱离文档流** —— 留着占位的话整排在这 180ms 里一动不动、结束时一帧塌回去，
- *    Vue 的 FLIP 也只在 `onUpdated` 量一次位移 ⇒ 一帧都滑不出来（第二轮踩过）。
- * ② **必须位置钉死** —— `position: absolute` 单独撤出时，flex 容器里的绝对定位子项
- *    静态位置按"它是唯一的 flex 项"算 ⇒ 元素会瞬移到内容区最左边（第二轮也踩过）。
- * 所以：在 `before-leave`（此刻元素还在文档流里、rect 是真的）抄一份几何，
- * 再用绝对定位钉回原位。定位祖先 = `el.parentElement` = 内层 `.crumbs`（它有 `position: relative`）；
- * 外层 `.nav-zone` 只是"那块面"并负责装进度画布，别把两者记混。
- *
- * ⚠️ 用 `absolute` + 自己算偏移，不用 `fixed`：fixed 的坐标系会被祖先的
- * transform / filter 改写。
- * ⚠️ 必须显式 `box-sizing: border-box`：本项目**没有**全局 box-sizing reset，
- * 而抄来的 width 是 border-box 尺寸 —— 不声明的话幽灵会胖出一圈 padding。
+ * 离场那一格：在 `before-leave` 抄一份几何、用 absolute 钉回原位，再交给 CSS 淡出。
+ * ⚠️ 必须脱离文档流（留着占位整排一动不动、结束时一帧塌回去）。
+ * ⚠️ 必须位置钉死（flex 里绝对定位子项的静态位置会瞬移到内容区最左边）。
+ * ⚠️ 用 absolute 不用 fixed（fixed 坐标系会被祖先 transform/filter 改写）；
+ *    必须显式 `box-sizing: border-box`（项目无全局 reset，抄来的 width 是 border-box）。
  */
 const pinLeaving = (el: Element) => {
     if (!(el instanceof HTMLElement)) return;
@@ -996,8 +854,6 @@ const emptyTip = computed(() => {
  * 锚点自带这个信息 —— 两边就不会出现"状态说在线、地址却是锚点"这种不一致。
  * 渲染层不解析锚点内容，只认这一个前缀。
  */
-const isReadOnlyPath = (path: string) => path.startsWith(ANCHOR_PREFIX);
-
 /** 只看栈顶那一层：用户眼下看到的这屏是不是只读的 */
 const readOnlyLevel = computed(() => isReadOnlyPath(currentPath.value));
 
@@ -1019,16 +875,9 @@ const playlistLevel = computed(() => !!nav.current.value?.pl);
 const plMember = computed(() => buildMemberMap(playlistIndex().playlists));
 
 /**
- * 失败横幅的内容。`text` 为空 = 不显示。
- *
- * 返回空对象而不是 `null`：模板里的 `v-if` 收窄不了 computed 的类型，
- * 用"有没有文案"当开关既躲开 `banner.type` 可能为 null 的告警，语义也更直白。
- *
- * 顺序 = 优先级：**失败先说**（"该有内容却读不到"比"这是只读视图"更急），
- * 然后是只读说明。只读那条不是失败，别和失败混成一件事。
- *
- * 三句话都**告诉用户下一步做什么**：盘不在他自己能解决（插回去按 F5），
- * 读不到只能等，没缓存过就插上盘重扫。只说一句"失败了"等于没说。
+ * 失败横幅；`text` 为空 = 不显示（返回空对象而不是 null，模板 v-if 收窄不了 computed 类型）。
+ * 顺序 = 优先级：失败先说，只读说明在后；只读不是失败，别混成一件事。
+ * ⚠️ 三句都要告诉用户下一步做什么，只说"失败了"等于没说。
  */
 const banner = computed(() => {
     if (failKind.value === 'offline') {
@@ -1087,25 +936,12 @@ const getSize = (size: number | undefined) => {
 };
 
 /**
- * 封面底色：把同一张图放大、模糊、压暗铺在下面。
- *
- * 解决的是"`contain` 必然留白"：封面框固定 16:9，而缩略图比例五花八门，
- * 不裁切就一定有边（原来那些边露出的是 `--ff-fill` 的深灰，看着像卡里有个空洞）。
- * 用图片自己的放大模糊版填底 ⇒ **不裁切、也没有空隙**（B 站/YouTube 竖版封面同一手法）。
- *
- * 走 CSS 变量 + `::before`（见样式块）：不新增 DOM 节点，同一张图命中浏览器缓存、**不额外请求**。
- * 没有图的目录不设这个变量 ⇒ 保持原来的底色 + 文件夹图标。
- *
- * ⚠️⚠️ **2026-11-10 的关键修正：这个变量必须在图片本身加载完之后才写，不能预置。**
- * 原来模板里是 `:style="coverBackdrop(item)"` —— 也就是给**每一张**卡都提前写上
- * `--cover-src: url(...)`。而它是 CSS `background-image`，**背景图没有 `loading="lazy"`**：
- * 样式一解析浏览器就发请求 ⇒ 打开一屏 500 张卡 = **瞬间 500 个 `/thumb`**，
- * 不管它们在不在视口里（业主在 DevTools 网络面板里数出来的）。
- * `<img loading="lazy">` 省下的请求被这一行全部抵消，而且它还多占一份解码内存。
- * ⇒ 现在由 `@load` 把**已经下载完的那张**写回去：字节已在 HTTP 缓存里 ⇒ **零额外请求**；
- *    没进视口的卡连 `<img>` 都不加载，自然也就没有模糊底（那片显示卡片底色，正确）。
- * ⚠️ 直接改 DOM（`style.setProperty`）而不是动响应式状态：一屏几百张卡，每张过一次
- *    重渲染毫无必要；这个变量也没有第二个读者。
+ * 封面底色：把同一张图放大模糊压暗铺在下面，解决 `contain` 必然留白（不裁切、无空隙）。
+ * 走 CSS 变量 + `::before`（样式块）：不新增 DOM、命中浏览器缓存、不额外请求。
+ * ⚠️ 变量**必须在 `<img>` 的 `@load` 之后才写**：它是 `background-image`，没有 lazy 属性，
+ *    预置 = 一屏 500 张卡瞬间发 500 个 `/thumb`，把 `<img loading="lazy">` 省下的请求全抵消掉。
+ *    `@load` 时字节已在 HTTP 缓存里 ⇒ 零额外请求。
+ * ⚠️ 直接 `style.setProperty` 不动响应式状态：一屏几百张卡没必要为这个变量重渲染。
  */
 const onCoverLoad = (e: Event) => {
     const img = e.target as HTMLImageElement | null;
@@ -1212,26 +1048,11 @@ const refreshAfterApply = () => {
 }
 
 /**
- * 卡片在视口里的**锚点坐标** —— 弹层贴在这一格**下沿**（文件名称下面）往下展开。
- * **键盘路径专用**（鼠标路径有事件坐标）。
- *
- * ## 为什么是 `r.bottom - 6`
- *
- * `r.bottom` 是卡片**盒子**的底边，而卡片底部还留着 `--item-pad-b`（`grid.less`：
- * 宽松档 6 / 紧凑档 4）的内边距，用来给标题留呼吸空间。直接贴盒子底边 ⇒ 视觉上
- * 弹层离文件名还差这一截（业主 2026-11-11：「默认能不能上调 4-8px？太靠下了，
- * 离名称太远了」）。减 6 正好落在标题文字的下沿。
- * ⚠️ 不读 `--item-pad-b`：它在 `.image-box` 上按密度档设，JS 侧读不到，
- *    而两档只差 2px，取值 6 对紧凑档也不会错位到能看出来。
- *
- * ## 这一行被改过三次，判据记在这别再摆
- *
- *   · 初版：`r.bottom`，**没有**视口收敛 ⇒ 卡片靠屏幕底时整层溢出，业主「太靠下」。
- *     当时真因是**缺收敛**，不是锚点错。
- *   · 第二版：`r.top` + 收敛 ⇒ 改过头，业主「又太靠上了」。
- *   · 现在：`r.bottom - 6` + 收敛 ⇒ 够空间就贴名称下面；撞视口底才上移恰好够的距离。
- *
- * 拿不到元素时退回视口中心 —— 宁可弹在中间，也不能不弹。
+ * 卡片锚点：弹层贴在格子下沿，键盘路径专用（鼠标有事件坐标）。
+ * ⚠️ `r.bottom - 6`：底部还有 `--item-pad-b`（6/4px）内边距，直接贴盒子底会离文件名太远；
+ *    两档只差 2px，写死 6 不会错位（JS 读不到那个变量）。
+ * ⚠️ 必须做**视口收敛**：初版缺收敛导致靠屏幕底时整层溢出（真因不是锚点错）。
+ * ⚠️ 拿不到元素时退回视口中心 —— 宁可弹中间，也不能不弹。
  */
 const cardAnchorOf = (item: WiredFileInfo) => {
     const el = imageBox.value?.querySelector<HTMLElement>(
@@ -1327,19 +1148,11 @@ const enterScreen = (path: string, mode: OpenMode = 'cover', pl?: NavEntry['pl']
     const entry = nav.push({ path, mode, pl, searchText: '', scrollY: 0, cursorKey: '' });
     isFlatView.value = !!keepFlat;
     /**
-     * 进新的一屏不带上一屏的搜索词（原有行为，不动）。
-     *
-     * ⚠️⚠️ 但**不许在这里写 `searchText`**（业主 2026-11-10 报：过滤出的几个文件夹，
-     * 点进去等待期间"过滤失效、整份数据闪一下"，抽帧完才进新屏）。原因：
-     * `fileList = computed(filterByName(dataSource, searchText))`，而此刻 `dataSource`
-     * 还是**上一屏**的数据 ⇒ 提前清词 = 立刻渲染"上一屏整份数据 × 空关键词"。
-     * 这段窗口的长度就是**接口的耗时**（含视频抽帧时以秒计）⇒ 不是闪一下，是杵在那儿。
-     * ⇒ 词的切换与数据的落地**同一拍**发生，唯一写入点是 `useScreenData.commit()`；
-     *   这里只声明"这一屏接管自己的词"（`adoptSearch`）。
-     *
-     * ⚠️ `noteIntent()`（= 「这一屏需要焦点」）仍必须在**任何会改列表的动作之后**才声明
-     * —— 那个 watch 是一次性消费 `armed` 的。现在本函数不再改列表，顺序自然满足；
-     * 别再把词的写入搬回来。
+     * 进新屏不带上一屏的搜索词（原有行为）。
+     * ⚠️⚠️ **不许在这里写 `searchText`**：此刻 `dataSource` 还是上一屏 ⇒ 提前清词会渲染
+     *    "上一屏全量 × 空词"，而这段窗口就是接口耗时（抽帧时以秒计）⇒ 整份数据杵在那儿。
+     *    词与数据必须同一拍落地，唯一写入点是 `useScreenData.commit()`（这里只给 `adoptSearch`）。
+     * ⚠️ `noteIntent()` 仍须在任何会改列表的动作之后声明（那个 watch 一次性消费 armed）。
      */
     noteIntent();
     /**
@@ -1763,19 +1576,10 @@ const waitForGridOf = async (path: string, maxFrames = 20) => {
         const first = fileList.value[0];
         const el = imageBox.value?.querySelector<HTMLElement>('.image-box-item');
         /**
-         * 判据 = 「数据里的第一条」与「DOM 里的第一条」**是同一条**。
-         *
-         * ⚠️ 进入这里时 `dataSource` **一定已经是新屏**了（`await fetchFolder` 的 then 里设的）
-         * ⇒ 所以只要 DOM 跟上了数据，就说明新内容真的铺上去了。
-         *
-         * ⚠️⚠️ **不要再加 `first.dir === path` 这种"屏身份"校验** —— 我加过，它是错的：
-         * `cover` 模式下**子目录会收敛成封面条目**，那些条目的 `dir` 是"封面图所在的目录"，
-         * 与"这一屏的路径"**不一定相同**（例如整屏都是收敛出来的目录脸时，`dir` 全都对不上）。
-         * ⇒ 那个条件会**永远为 false** ⇒ 恢复分支被跳过 ⇒
-         * **返回到哪都停在上一屏的滚动位置**（业主报的"A 返回后停在 B 的高度"）。
-         *
-         * 孤立证据（探针 `docs/probes/onback-real/` 复现）：
-         * `NavEntry` 里记的值是对的（800），但诊断报"未就位" ⇒ 说明问题在判据，不在记录。
+         * 判据 = 「数据里的第一条」与「DOM 里的第一条」是同一条（进入时 dataSource 已是新屏）。
+         * ⚠️⚠️ **不要再加 `first.dir === path` 屏身份校验**：cover 模式下子目录收敛成封面条目，
+         *    那些条目的 dir 是"封面图所在目录"，与屏路径不一定相同 ⇒ 该条件恒 false，
+         *    恢复分支被跳过（业主报的"返回后停在上一屏滚动高度"）。探针：`docs/probes/onback-real/`。
          */
         if (first && el && el.dataset.key === keyOf(first)) return true;
     }
@@ -2196,21 +2000,12 @@ const onKeyup = (e: KeyboardEvent) => {
     // 那里说明了为什么不能改成 DOM 类名探测）。
     if (isGridKeyBlocked(e)) return;
 
-    /**
-     * 预览层（全屏遮罩）开着时：`回车` = 定位，其余单键**全部短路**。
-     *
-     * 与下面「换封面」那条同族、同理由：预览层是**盖在网格上**的，这时按下 S / D /
-     * Backspace / F5 打的是**背后那一屏**（跳搜索框 / 跳文件夹选择器 / 返回 / 重读），
-     * 屏幕上却看不出跑偏；F5 还会把列表换掉（预览序列跟着变）。
-     * ⚠️ `← / →` 不在这里管 —— 那是 naive-ui 自己监听的 keydown（`ImagePreview.mjs:78-100`），
-     * 它只在预览打开时挂上，与这里不重复；`Esc` 同理（它自己关）。
-     * ⚠️ **方向键与回车在 keydown 阶段就已被 `useGridCursor` bail 掉了**（它先注册、
-     *     且带 `isPreviewOpen()` 判断），所以这里处理 `Enter` 不会"定位 + 打开"一起触发。
-     * ⚠️ 这里用 **keyup**，naive-ui 与网格都用 **keydown**，两者不会互相吃掉。
-     * ⚠️ **`e.repeat` 也要挡**（与网格那边同一条纪律）：keyup 在长按时**同样重复**
-     *     （实测按住回车 1 秒 = 33 次 keyup）⇒ 不挡就是"一次长按定位 33 次"，
-     *     而每次定位都会 `scrollIntoView` + 滚一次，视觉上是画面抽搐。
-     */
+/**
+ * 预览层开着时：`Enter` = 定位，其余单键全短路（否则 S/D/Backspace/F5 会打到背后那一屏）。
+ * ⚠️ `←/→`、`Esc` 由 naive-ui 自己管；方向键/回车已被 `useGridCursor` 在 keydown 挡掉。
+ * ⚠️ 这里用 keyup（naive 与网格都用 keydown，不会互相吃掉）；
+ *    `e.repeat` 必须挡（长按回车实测 1 秒 33 次 keyup ⇒ 定位 33 次，画面抽搐）。
+ */
     if (previewOpen.value) {
         if (e.key === 'Enter' && !e.repeat) locateInGrid();
         return;
@@ -2285,17 +2080,9 @@ const onKeyup = (e: KeyboardEvent) => {
 };
 
 /**
- * 鼠标点过任何按钮后，把焦点从它身上摘掉。
- *
- * 不摘的后果（2026-11-07 真机）：焦点残留在按钮上，浏览器会把之后的回车当成
- * "再点一次那个按钮" —— 现象就是「点过 flat 切换后按回车，又切了一次 flat」。
- *
- * 三条限定，只为解决这一个问题、不碰别的：
- *  - `e.detail === 0` 跳过：那是键盘触发的 click（Tab + Enter），焦点必须留着，无障碍还要用；
- *  - 只在目标是 `<button>` 时才摘：输入框、下拉触发器一概不碰；
- *  - `setTimeout 0`：等这次 click 自己的处理跑完再摘，不打断控件逻辑。
- *
- * 成本：一次 `closest('button')` + 一次定时器，只在鼠标点击时发生（用户点击频率极低）。
+ * 鼠标点过按钮后摘掉焦点：否则焦点残留，之后按回车会被当成"再点一次那个按钮"。
+ * ⚠️ 三条限定：`e.detail === 0` 跳过（键盘触发的 click，焦点要留给无障碍）；
+ *    只对 `<button>` 摘；`setTimeout 0` 等本次 click 处理跑完再摘。
  */
 const onDocClickBlurButton = (e: MouseEvent) => {
     if (e.detail === 0) return;
@@ -2383,21 +2170,11 @@ const getAnchor = async (path: string): Promise<string> => {
 };
 
 /**
- * 主进程报「盘列表变了」。**插拔是对称的两件事，这里都管**：
- *
- *   【插】正停在只读层、而那块盘回来了 ⇒ **自动切到实时**。
- *   【拔】正停在实时层、而那个盘符没了 ⇒ **自动降级成只读锚点**，继续用缓存看。
- *
- * 【拔】那条不这么做的话：列表靠内存还撑着、看着一切正常，可**一刷新就报 offline、
- * 双击也打不开** —— 用户根本不知道发生了什么。降级之后目录和缩略图都还在，
- * 服务端走 `findCache`，**零读盘**。
- *
- * 另外每次都让「缓存记录」面板重取一次数据 —— 否则它每行的「在线 / 离线」
- * 会一直停在插拔前的状态（面板打开时刻意不重探盘符，见那边的注释）。
- *
- * ⚠️ 两条路都**不解析锚点内容**（那是服务端的活，只有它才有 serial →盘符 映射）：
- * 靠 `/resolveAnchor`（锚点→路径）与 `/anchorOf`（路径→锚点）两个方向相反的接口，
- * 把转换整个交给服务端。渲染层对锚点的认知仍然只有"前缀是不是 `#`"。
+ * 主进程报「盘列表变了」：【插】只读层→自动切实时；【拔】实时层→自动降级成只读锚点。
+ * ⚠️ 拔盘不降级的话列表靠内存看着正常，但一刷新就 offline、双击也打不开；
+ *    降级后服务端走 `findCache`，**零读盘**。
+ * ⚠️ 两条路都不解析锚点内容（只有服务端有 serial→盘符 映射），
+ *    靠 `/resolveAnchor` 与 `/anchorOf` 转换；渲染层对锚点只认「# 前缀」。
  */
 const onDisksChanged = async (disks: { serial: string; drive: string }[]) => {
     // 2026-10-21 清单屏：插拔盘只影响"条目在线/离线"与星标 key 的当前形态

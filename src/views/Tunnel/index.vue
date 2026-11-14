@@ -39,14 +39,15 @@
 </template>
 
 <script setup lang="ts">
-import { ref, onMounted } from 'vue';
+import { ref, onMounted, onActivated, onDeactivated, onBeforeUnmount } from 'vue';
 import { useRouter } from 'vue-router';
 import { NSpin } from 'naive-ui';
 import { ipcRenderer } from 'electron';
 import AlbumCoverTunnel from '@/components/AlbumCoverTunnel/AlbumCoverTunnel.vue';
 import { dedupeCovers } from '@/components/AlbumCoverTunnel/types';
 import type { TunnelCover } from '@/components/AlbumCoverTunnel/types';
-import { API_BASE, getAction, apiUrl } from '@/utils/request';
+import { API_BASE, getAction } from '@/utils/request';
+import { assetUrl } from '@/utils/thumb';
 import { openInFiles } from '@/views/FileFinder/target';
 import useNotify from '@/hooks/useNotify';
 import { useTheme } from '@/hooks/useTheme';
@@ -59,6 +60,22 @@ const loading = ref(true);
 const covers = ref<TunnelCover[]>([]);
 const disks = ref<Array<{ serial: string; name: string }>>([]);
 const selectedSerial = ref('');
+
+/**
+ * 离开本页多久后把 3D 引擎**连同封面数据一起注销**。
+ *
+ * ⚠️ 为什么在父页做而不是去改组件：外壳用 KeepAlive，切页不会触发子组件的
+ *    `onBeforeUnmount`，而那条路径里的 `controller.destroy()` 本来就已经把
+ *    纹理/几何/材质 dispose + `renderer.forceContextLoss()` 做得干干净净。
+ *    这里清空 `covers` ⇒ 模板走 `v-if` 的另一支 ⇒ 子组件真正卸载 ⇒ 复用那条销毁路径。
+ *    顺带把封面数组也还回去，不用再发明第二套销毁接口。
+ * ⚠️ 回来时重新加载（会看到"正在汇聚封面"），这是"2 分钟内回来秒开、超过就彻底还内存"的取舍。
+ */
+const IDLE_DISPOSE_MS = 2 * 60 * 1000;
+let idleTimer: ReturnType<typeof setTimeout> | null = null;
+let disposed = false;
+/** 在途请求序号：注销后必须作废旧请求，否则它晚一步回来会把 covers 填回去、在后台偷偷重建 WebGL */
+let loadSeq = 0;
 
 const VIDEO_EXT_RE = /\.(mp4|mkv|avi|wmv|mov|flv|webm|ts|m4v)$/i;
 
@@ -86,10 +103,12 @@ async function loadDisks() {
 }
 
 async function loadAllCovers(serial?: string) {
+    const seq = ++loadSeq;
     loading.value = true;
     try {
         const url = `${API_BASE}/getAllCovers${serial ? `?serial=${encodeURIComponent(serial)}` : ''}`;
         const res = await getAction(url);
+        if (seq !== loadSeq) return;
         if (res && res.code === 200 && Array.isArray(res.data?.items)) {
             const rawItems = res.data.items as Array<{
                 id: string;
@@ -109,8 +128,8 @@ async function loadAllCovers(serial?: string) {
                 id: item.id,
                 title: item.name,
                 sig: item.sig,
-                src: apiUrl(`${API_BASE}/thumb?k=${encodeURIComponent(`t-${item.sig}.enc`)}`),
-                previewSrc: item.sig ? apiUrl(`${API_BASE}/preview?k=${encodeURIComponent(`p-${item.sig}.enc`)}`) : undefined,
+                src: assetUrl('thumb', `t-${item.sig}.enc`),
+                previewSrc: item.sig ? assetUrl('preview', `p-${item.sig}.enc`) : undefined,
                 raw: item,
             }));
             covers.value = shuffle(dedupeCovers(list));
@@ -118,11 +137,12 @@ async function loadAllCovers(serial?: string) {
             covers.value = [];
         }
     } catch (e) {
+        if (seq !== loadSeq) return;
         console.error('[TunnelPage] Failed to load covers:', e);
         notify('error', '获取全库封面失败', String(e));
         covers.value = [];
     } finally {
-        loading.value = false;
+        if (seq === loadSeq) loading.value = false;
     }
 }
 
@@ -181,9 +201,40 @@ function goHome() {
     void router.push('/');
 }
 
+/** 注销：作废旧请求 + 清数据 ⇒ 子组件卸载 ⇒ 它自己的 `onBeforeUnmount` 释放 WebGL 与显存 */
+function disposeIdle() {
+    idleTimer = null;
+    disposed = true;
+    loadSeq++;              // 在途的 loadAllCovers 不许晚一步把数据写回来（那会在后台偷偷重建引擎）
+    covers.value = [];
+    loading.value = true;   // 回来时先显示"正在汇聚"，不闪那张空状态卡
+}
+
 onMounted(() => {
     void loadDisks();
     void loadAllCovers();
+});
+
+onDeactivated(() => {
+    if (idleTimer) clearTimeout(idleTimer);
+    idleTimer = setTimeout(disposeIdle, IDLE_DISPOSE_MS);
+});
+
+onActivated(() => {
+    if (idleTimer) {
+        clearTimeout(idleTimer);
+        idleTimer = null;
+    }
+    // 首次进入也会触发 onActivated：那时 disposed=false，不会重复拉一次数据
+    if (disposed) {
+        disposed = false;
+        void loadAllCovers(selectedSerial.value || undefined);
+    }
+});
+
+onBeforeUnmount(() => {
+    if (idleTimer) clearTimeout(idleTimer);
+    idleTimer = null;
 });
 </script>
 
