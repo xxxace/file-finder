@@ -31,11 +31,11 @@
             <template v-else>
                 <canvas ref="fxRef" class="fx" aria-hidden="true" />
 
-                <LuckyDiscCase
+                <LuckyPack
                     v-if="phase !== 'open'"
                     ref="caseRef"
                     :phase="phase"
-                    :tint="tint"
+                    :skin="skin"
                     @opened="onOpened"
                 />
 
@@ -91,7 +91,7 @@
  *   · 抽哪几张     → `drawModel.ts`（纯逻辑，探针覆盖）
  *   · 池子从哪来   → `usePool.ts`（两个已有接口，零读盘）
  *   · 怎么打开     → `views/FileFinder/openCover.ts`（与 3D 漫游共用）
- *   · 卡片 / 包装盒 → `components/LuckyDiscCard`、`components/LuckyDiscCase`
+ *   · 卡片 / 卡包 → `components/LuckyDiscCard`、`components/LuckyPack`
  *   · 扇形落点     → `discCase.ts` 的 `fanOf`
  *
  * 时间轴也**只在这里**（0 / 180 / 320 / 1400ms）。盒子组件内部只有 CSS class，
@@ -101,12 +101,13 @@ import { computed, nextTick, onActivated, onBeforeUnmount, onDeactivated, onMoun
 import { useRouter } from 'vue-router';
 import { NButton, NCheckbox, NSpin } from 'naive-ui';
 import LuckyDiscCard from '@/components/LuckyDiscCard/index.vue';
-import LuckyDiscCase from '@/components/LuckyDiscCase/index.vue';
-import { burst } from '@/components/LuckyDiscCase/confetti';
+import LuckyPack from '@/components/LuckyPack/index.vue';
+import { burst } from './confetti';
 import { cardOf, drawPack, rememberRecent } from './drawModel';
 import type { DrawCard } from './drawModel';
 import { fetchPool } from './usePool';
 import { fanOf } from './discCase';
+import { nextSkin } from './packSkin';
 import { openCover } from '@/views/FileFinder/openCover';
 import { playSfx } from '@/utils/sfx';
 import useNotify from '@/hooks/useNotify';
@@ -123,11 +124,9 @@ const foil = 'deco' as const;
 /**
  * 本次专辑的主题色。
  *
- * 参考站每包换一种包装配色（且不连续重复）；我们的实体只有 CD 盒一种形态，
- * 换的是**封面纸的主色** —— 真实 CD 专辑也是这样，每张专辑有自己的视觉。
+ * 参考站每包换一种封面色，且**绝不与上一包重复** —— 这是"再来一包"最便宜的新鲜感。
  */
-const TINTS = ['a', 'b', 'c'] as const;
-const tint = ref<(typeof TINTS)[number]>('a');
+const skin = ref('cobalt');
 
 /** 拆封时间轴（ms）。改这里就够了，盒子与卡片的 CSS 延迟都按这几个数对齐 */
 const T_BURST = 180;   // 盒盖弹开 + 爆开音 + 彩带
@@ -229,7 +228,7 @@ function fireConfetti() {
  * 页面只做两件事：① 按钮/空格去叫它撕；② 它撕到底（`opened`）之后接着演卡片。
  * 时间轴以 `opened` 为 0 点 —— 撕多久由手决定，不能由一个固定延时假装。
  */
-const caseRef = ref<InstanceType<typeof LuckyDiscCase> | null>(null);
+const caseRef = ref<InstanceType<typeof LuckyPack> | null>(null);
 
 function tearAll() {
     if (phase.value !== 'sealed' || !cards.value.length) return;
@@ -263,9 +262,7 @@ function redraw() {
         exclude: new Set(recent.value),
     });
     cards.value = pack.map(item => cardOf(item, pool.onlineSerials, pool.letters));
-    // 下一包换一个主题色（允许与上一包不同即可，三色循环随机足够）
-    const others = TINTS.filter(x => x !== tint.value);
-    tint.value = others[Math.floor(Math.random() * others.length)];
+    skin.value = nextSkin(skin.value).key;
     recent.value = rememberRecent(recent.value, cards.value);
     activeIndex.value = 0;
     phase.value = 'sealed';

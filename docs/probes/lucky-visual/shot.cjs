@@ -39,8 +39,8 @@ require(path.join(__dirname, '../../../dist/electron/main/index.js'));
  */
 async function waitSettled(win, timeout = 12000) {
     const expr = `(() => {
-        const c = document.querySelector('.case');
-        const s = document.querySelector('.case-stage');
+        const c = document.querySelector('.pack');
+        const s = document.querySelector('.pack-stage');
         if (!c || !s) return false;
         const a = c.getBoundingClientRect(), b = s.getBoundingClientRect();
         return Math.abs((a.left + a.width / 2) - (b.left + b.width / 2)) < 24
@@ -76,17 +76,17 @@ const DIAG = `(() => {
     phase: get('.fan') ? get('.fan').dataset.phase : null,
     slots: document.querySelectorAll('.slot').length,
     articles: document.querySelectorAll('article.card').length,
-    caseStage: r(get('.case-stage')),
-    caseTransform: get('.case') ? get('.case').style.transform : 'NO_CASE',
+    caseStage: r(get('.pack-stage')),
+    caseTransform: get('.pack') ? get('.pack').style.transform : 'NO_CASE',
     flowOpacity: get('.flow') ? get('.flow').style.opacity : 'NO_FLOW',
     flowBands: document.querySelectorAll('.ff-band').length,
     filmClip: get('.film') ? (get('.film').style.clipPath || 'none').slice(0, 60) : 'NO_FILM',
-    caseBox: r(get('.case')),
-    frontBox: r(get('.front')),
-    frontBg: get('.front') ? getComputedStyle(get('.front')).backgroundColor : null,
+    caseBox: r(get('.pack')),
+    frontBox: r(get('.skin--front')),
+    frontBg: get('.skin--front') ? getComputedStyle(get('.skin--front')).backgroundColor : null,
     discBox: r(get('.disc')),
     flowBox: r(get('.flow')),
-    caseOpacity: get('.case') ? getComputedStyle(get('.case')).opacity : null,
+    caseOpacity: get('.pack') ? getComputedStyle(get('.pack')).opacity : null,
     fan: r(get('.fan')),
     stage: r(document.querySelector('.stage')),
     buttons: [...document.querySelectorAll('button')].map(b => b.textContent.trim()).filter(Boolean),
@@ -105,7 +105,7 @@ app.whenReady().then(async () => {
     win.setContentSize(1280, 800);
     await win.loadURL(`${DEV_URL}/#/lucky`);
     // 先等到页面把盒子渲染出来，再等它落位
-    for (let i = 0; i < 60 && !(await win.webContents.executeJavaScript(`!!document.querySelector('.case')`)); i++) {
+    for (let i = 0; i < 60 && !(await win.webContents.executeJavaScript(`!!document.querySelector('.pack')`)); i++) {
         await wait(200);
     }
     await waitSettled(win);

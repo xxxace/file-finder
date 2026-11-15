@@ -269,6 +269,17 @@
   --ff-foil-b: #e8c98a;
   --ff-foil-c: #9ad9ec;
 
+  /* ════════ L2 物料 · 卡包皮肤（2026-11-15） ════════
+     这是**实体印刷色**，不是界面色 —— "无彩裁决"管的是界面（按钮/文字/边框），
+     而手里这张卡包本来就是彩印的。六色循环，且**不连续重复**（同参考站）。
+     只在 `views/Lucky` 与 `components/LuckyPack` 里出现，别的地方不许引用。 */
+  --ff-pack-cobalt: #2b3ff0;
+  --ff-pack-ember: #f0542c;
+  --ff-pack-grape: #7a42f0;
+  --ff-pack-pine: #0e9c79;
+  --ff-pack-night: #23273d;
+  --ff-pack-bubblegum: #ec4f9a;
+
   /* 计数角标与状态图形共用的**图形级**红（2026-11-08 主人要求用回红 badge）。
      ⚠️ 别拿 `--ff-danger` 替它：那个只做文字与 1px 描边，而这个要撑色块 / 当图标填充。 */
   --ff-danger-badge: #d03050;
