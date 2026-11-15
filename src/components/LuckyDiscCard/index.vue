@@ -338,9 +338,13 @@ function onLeave(ev: PointerEvent) {
     opacity: calc(0.1 + var(--hyp) * 0.18);
 }
 
-/* 装饰件箔（配方 C）：同样的彩虹，只框在信息条 / 贴纸 / 书脊里 */
+/**
+ * 装饰件箔（配方 C）：同样的彩虹，只框在**贴纸与书脊**里。
+ *
+ * ⚠️ 信息条不参与：它是 `--ff-inner-band` 的近黑底，`color-dodge` 叠上去会把
+ *    一条黑带染成脏红紫（真机截图确认），而它上面是要读的文字。
+ */
 .card[data-foil='deco'] {
-    .bar::after,
     .tag::after,
     .spine::after {
         content: '';

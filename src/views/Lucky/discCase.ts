@@ -48,16 +48,20 @@ export interface FanSpot {
     z: number;
 }
 
-/** 相邻两张的旋转差。5 张跨度 -9°~+9°；9 张就压到 -6.75°~+6.75°（仍互不重叠） */
+/**
+ * 一字排开的落点。
+ *
+ * ⚠️ 角度必须**小**：±9°×2 会让整排读成"一条斜带"，而不是"五张卡摆在桌上"。
+ *    参考站宽屏是每档 2°，位移走抛物线（`m²·5`：中间最低、两侧依次抬高）。
+ */
 export function fanOf(index: number, count: number): FanSpot {
     if (count <= 1) return { rot: 0, dy: 0, z: 1 };
     const mid = (count - 1) / 2;
     const offset = index - mid;
-    const step = 9 * Math.min(1, 4 / Math.max(1, mid * 2));
     return {
-        rot: offset * step,
-        dy: Math.abs(offset) * 14,
-        z: count - Math.round(Math.abs(offset)),
+        rot: offset * 2,
+        dy: offset * offset * 5,
+        z: count - Math.round(Math.abs(offset) * 2),
     };
 }
 

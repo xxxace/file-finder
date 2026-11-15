@@ -31,6 +31,33 @@ const log = (...a) => console.log('[shot]', ...a);
 /** 复用真实主进程：服务、token、窗口全由它负责 */
 require(path.join(__dirname, '../../../dist/electron/main/index.js'));
 
+/**
+ * 等到盒子**落位**再截图。
+ *
+ * ⚠️ 不能用固定延时：dev 首次冷编译要几秒，进场飞入又是 0.7s 的弹簧 ——
+ *    固定 3 秒时常拍到"盒子还在屏幕外"的那一帧，看起来像页面坏了（假故障）。
+ */
+async function waitSettled(win, timeout = 12000) {
+    const expr = `(() => {
+        const c = document.querySelector('.case');
+        const s = document.querySelector('.case-stage');
+        if (!c || !s) return false;
+        const a = c.getBoundingClientRect(), b = s.getBoundingClientRect();
+        return Math.abs((a.left + a.width / 2) - (b.left + b.width / 2)) < 24
+            && Math.abs((a.top + a.height / 2) - (b.top + b.height / 2)) < 24;
+    })()`;
+    const t0 = Date.now();
+    while (Date.now() - t0 < timeout) {
+        if (await win.webContents.executeJavaScript(expr)) {
+            log('settled in', Date.now() - t0, 'ms');
+            return true;
+        }
+        await wait(150);
+    }
+    log('NOT settled within', timeout, 'ms');
+    return false;
+}
+
 async function snap(win, name) {
     const img = await win.capturePage();
     fs.writeFileSync(path.join(OUT, name), img.toPNG());
@@ -50,6 +77,16 @@ const DIAG = `(() => {
     slots: document.querySelectorAll('.slot').length,
     articles: document.querySelectorAll('article.card').length,
     caseStage: r(get('.case-stage')),
+    caseTransform: get('.case') ? get('.case').style.transform : 'NO_CASE',
+    flowOpacity: get('.flow') ? get('.flow').style.opacity : 'NO_FLOW',
+    flowBands: document.querySelectorAll('.ff-band').length,
+    filmClip: get('.film') ? (get('.film').style.clipPath || 'none').slice(0, 60) : 'NO_FILM',
+    caseBox: r(get('.case')),
+    frontBox: r(get('.front')),
+    frontBg: get('.front') ? getComputedStyle(get('.front')).backgroundColor : null,
+    discBox: r(get('.disc')),
+    flowBox: r(get('.flow')),
+    caseOpacity: get('.case') ? getComputedStyle(get('.case')).opacity : null,
     fan: r(get('.fan')),
     stage: r(document.querySelector('.stage')),
     buttons: [...document.querySelectorAll('button')].map(b => b.textContent.trim()).filter(Boolean),
@@ -67,7 +104,11 @@ app.whenReady().then(async () => {
 
     win.setContentSize(1280, 800);
     await win.loadURL(`${DEV_URL}/#/lucky`);
-    await wait(3200);
+    // 先等到页面把盒子渲染出来，再等它落位
+    for (let i = 0; i < 60 && !(await win.webContents.executeJavaScript(`!!document.querySelector('.case')`)); i++) {
+        await wait(200);
+    }
+    await waitSettled(win);
 
     /**
      * 接口直查 —— 这一步是为了把"池子为空"分成三种完全不同的病：
@@ -105,9 +146,12 @@ app.whenReady().then(async () => {
     })()`);
     log('tear:', clicked);
 
-    await wait(420);
-    await snap(win, '02-opening.png');
-    await wait(1400);
+    // 撕口 96 段、光流 35 条 —— 撕的中间那一帧比"落定"更有信息量
+    await wait(300);
+    await snap(win, '02-tearing.png');
+    await wait(1100);
+    await snap(win, '02b-flush.png');
+    await wait(500);
     log('diag(open):\n' + await win.webContents.executeJavaScript(DIAG));
     await snap(win, '03-open.png');
 

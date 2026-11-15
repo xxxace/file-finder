@@ -30,20 +30,22 @@
             <div class="lid" aria-hidden="true" />
 
             <!-- 撕口的彩虹光：夹在膜和盒盖之间，只有膜裂开后才露出来 -->
-            <div class="rays" aria-hidden="true" />
+            <svg ref="flowEl" class="flow" viewBox="0 0 100 76" aria-hidden="true" />
 
-            <!-- 收缩膜：两半，各自的锯齿边由 `tearPolygon` 生成（直线撕口像剪刀剪的） -->
-            <div class="film film--l" :style="{ clipPath: polyLeft }" aria-hidden="true" />
-            <div class="film film--r" :style="{ clipPath: polyRight }" aria-hidden="true" />
+            <!-- 收缩膜：整张一层，`clip-path` 逐帧按 96 段撕口裁掉已撕的部分 -->
+            <div ref="filmEl" class="film" aria-hidden="true" />
 
-            <!-- 拉条：整张膜的开关。按下即撕（不做跟手拖拽 —— 撕口跟随手指需要逐帧重算
-                 锯齿轮廓，成本远大于收益；动画本身已经足够爽） -->
+            <!-- 拉条：按下即撕、横向拖动跟手、松手停在中途（再点一次撕完） -->
             <button
                 v-if="phase === 'sealed'"
                 class="tab"
                 type="button"
                 aria-label="撕开包装"
-                @pointerdown.stop="emit('tear')"
+                @pointerdown.stop="onTabDown"
+                @pointermove.stop="onTabMove"
+                @pointerup.stop="onTabUp"
+                @pointercancel.stop="onTabUp"
+                @click.stop
             />
         </div>
     </div>
@@ -51,64 +53,62 @@
 
 <script setup lang="ts">
 /**
- * 未拆封的标准 CD 盒 —— 一个受力的**物体**，不是一个会动的图标。
+ * 未拆封的标准 CD 盒 —— 一个受力的**物体**，撕开是**逐帧算出来的**。
  *
- * ## 这一版和上一版的区别（2026-11-15 返工）
- *
- * 上一版用 CSS `transition` 描述"从 A 到 B"：不动时完全静止、鼠标动了才动、
- * 打开后"淡出"了事。参考站的包装**一直在呼吸**、跟着手转、打开后被牌堆**踢下去**。
- * 差别不在参数，在驱动方式（见 `docs/RETRO-LUCKY-VS-HOLO-2026-11-15.md`）。
- *
- * 现在：6 个弹簧（位置 3 + 旋转 3）逐帧积分，`t` 由 `useStage` 统一供给。
- * 三件事因此成立：① 静止时轻微呼吸；② 鼠标离开也带着残余速度回正；
- * ③ 打开时给一个初速就能自己掉下去。
+ * 三个来源，一条都不许简化（全部移植自 `holo-reverse/src/app.js`）：
+ *   ① `spring.ts`   —— 位置/朝向是弹簧：静止时呼吸、跟手转、开包后被踢下去；
+ *   ② `tearPath.ts` —— 撕口是 96 段曲线，未撕的部分跟着手弯；
+ *   ③ `flow.ts`     —— 35 条 SVG 彩虹带从撕口喷出，撕到哪喷到哪。
  *
  * ## 它不负责的事
- * - 五张卡（在页面里，从盒心飞到扇形）
- * - 时间轴（`phase` 由页面推，组件内部没有任何计时器）
+ * - 五张卡（在页面里，从盒心飞出）
+ * - 时间轴（`phase` 由页面推；本组件只在"撕到 1"时 `emit('opened')`）
  * - 颜色（全部走 `tokens.css` 的 `--ff-*`）
  */
-import { computed, onBeforeUnmount, onMounted, ref } from 'vue';
-import { FEEL, pose, stepAll, values } from '@/views/Lucky/spring';
+import { onBeforeUnmount, onMounted, ref } from 'vue';
+import { FEEL, Spring, pose, stepAll, values } from '@/views/Lucky/spring';
 import { useStage } from '@/views/Lucky/useStage';
-import { tearPolygon } from '@/views/Lucky/discCase';
+import { createJag, restOutline, toPolygon } from '@/views/Lucky/tearPath';
+import { RainbowFlow } from '@/views/Lucky/flow';
 
 const props = defineProps<{
     phase: 'sealed' | 'opening' | 'open';
-    /** 本次专辑的主题色。由页面每包随机给 —— 参考站"六种配色不连续重复"的等价物 */
+    /** 本次专辑的主题色，由页面每包随机给 */
     tint: 'a' | 'b' | 'c';
 }>();
-const emit = defineEmits<{ tear: [] }>();
+
+const emit = defineEmits<{ opened: [] }>();
 
 const caseEl = ref<HTMLElement | null>(null);
 const groundEl = ref<HTMLElement | null>(null);
+const filmEl = ref<HTMLElement | null>(null);
+const flowEl = ref<SVGSVGElement | null>(null);
 
-/** 位置与朝向。静止时由一条缓慢正弦给它"活气"，不是死摆着 */
+/** 位置与朝向 */
 const P = pose({ x: 0, y: 0, rx: 0, ry: 0, rz: 0 }, ...FEEL.pointer);
+/** 撕裂进度（0~1）。`.1` 的手感 = 很快 —— 跟手拖动时它会紧紧追着目标 */
+const tearP = new Spring(0, 0.1);
 
 const pointer = { nx: 0, ny: 0 };
-/**
- * 盒子的**基础姿态**：略微左转 + 微微前倾。
- *
- * ⚠️ 这不是装饰。`rotateY(0)` 时书脊那面是 `rotateY(-90deg)`，正好侧对镜头 ——
- *    一条彩色都看不见，整盒读起来就是一张平面纸。给 -18° 之后左侧书脊与顶面同时露出来。
- *    它是常量而不是弹簧：弹簧只负责"在这个基础上再多转多少"。
- */
-const BASE_RX = 3;
-const BASE_RY = -18;
-/** 开包后被牌堆踢下去的位移（null = 还没开始掉） */
+let tearDir: 1 | -1 = 1;
+const jag = createJag();
+let flow: RainbowFlow | null = null;
+
+/** 开包后被牌堆踢下去的位移 */
 let fall: { y: number; v: number } | null = null;
-/** 多久之后盒子开始下落（秒）。卡片 320ms 起飞，盒子 240ms 后跟上 —— 顺序反了就是"盒子先没了" */
 const FALL_DELAY = 0.24;
-/** 到点开始下落的时刻（`t` 的坐标系；-1 = 还没排上） */
 let fallAt = -1;
-/** 上一帧的 phase，用来检测"刚刚进入 opening" */
 let lastPhase = props.phase;
-/** 盒子的像素尺寸（下落初速按它算，与屏幕大小无关） */
+
+let openedFired = false;
+/** 盒子掉下去后光流只收一次 */
+let flowDropped = false;
+/** 开包时刻（`t` 坐标系），光流"冲出去"的计时起点 */
+let openedAt = 0;
 let size = 300;
 
-const polyLeft = computed(() => tearPolygon('left', 12, 4));
-const polyRight = computed(() => tearPolygon('right', 12, 4));
+interface DragState { id: number; x0: number; p0: number; moved: boolean }
+let drag: DragState | null = null;
 
 function clamp(v: number, a: number, b: number): number {
     return Math.min(b, Math.max(a, v));
@@ -118,55 +118,119 @@ const stage = useStage((dt, t) => {
     const el = caseEl.value;
     if (!el) return;
 
-    // ── 目标姿态 ──────────────────────────────────────────────────
-    // 静止时上下呼吸 7px；撕开/开包时收小，因为"它正被按着"
-    const breath = props.phase === 'sealed' ? 7 : 2;
-    P.y.to = Math.sin(t * 1.4) * breath;
-    // 跟手：水平 ±22°、垂直 ±16°；打开后减半（盒子已经不属于手了）
+    // ── 撕裂进度 ──────────────────────────────────────────────
+    stepAll([tearP], dt);
+    const p = clamp(tearP.x, 0, 1);
+    if (p >= 0.995 && !openedFired) {
+        openedFired = true;
+        openedAt = t;
+        emit('opened');
+    }
+    // 撕口形状逐帧重算：手一动，未撕的那段就跟着弯下去
+    if (filmEl.value && p > 0) {
+        filmEl.value.style.clipPath = toPolygon(restOutline(jag, p, tearDir));
+    }
+
+    // ── 包装的姿态 ────────────────────────────────────────────
+    P.y.to = Math.sin(t * 1.4) * (props.phase === 'sealed' ? 7 : 2);
     const follow = props.phase === 'sealed' ? 1 : 0.35;
     P.ry.to = pointer.nx * 22 * follow;
     P.rx.to = -pointer.ny * 16 * follow;
-    // 极慢的侧倾，像被放在桌上没放平
-    P.rz.to = Math.sin(t * 0.9) * 1.6;
+    P.rz.to = Math.sin(t * 0.9) * 1.6 - (p > 0 && p < 1 ? tearDir * p * 3 : 0);
 
     stepAll(values(P), dt);
 
-    // ── 下落：卡片先射出，盒子随后被踢开 ──────────────────────────
     if (props.phase !== lastPhase) {
         lastPhase = props.phase;
         if (props.phase === 'opening') fallAt = t + FALL_DELAY;
     }
-    if (!fall && fallAt >= 0 && t >= fallAt) {
-        fall = { y: 0, v: (1500 * size) / 420 };
-    }
+    if (!fall && fallAt >= 0 && t >= fallAt) fall = { y: 0, v: (1500 * size) / 420 };
     if (fall) {
         fall.v += 2600 * dt;
         fall.y += fall.v * dt;
-        // 掉下去的过程中是"翻着"落的，不是平着平移
-        P.rz.to = 9;
+        P.rz.to = tearDir * 9;
     }
 
     const fy = fall ? fall.y : 0;
     el.style.transform =
         `translate3d(${P.x.x.toFixed(2)}px, ${(P.y.x + fy).toFixed(2)}px, 0) ` +
-        `rotateX(${(P.rx.x + BASE_RX).toFixed(2)}deg) rotateY(${(P.ry.x + BASE_RY).toFixed(2)}deg) ` +
+        `rotateX(${(P.rx.x + 3).toFixed(2)}deg) rotateY(${(P.ry.x - 18).toFixed(2)}deg) ` +
         `rotateZ(${P.rz.x.toFixed(2)}deg)`;
 
-    // ── 光照跟着朝向走：转向哪边，高光就滑向哪边 ──────────────────
-    // 这一条是"它是实物"的关键：拿在手里转，反光会动；贴纸转，反光不动。
     el.style.setProperty('--gx', clamp(-P.ry.x * 0.12, -1.5, 3).toFixed(2));
     el.style.setProperty('--gt', clamp(0.85 + P.rx.x * 0.015, 0.5, 1).toFixed(2));
 
-    // ── 地面投影：随浮动缩放，掉出屏幕后消失 ──────────────────────
+    // ── 彩虹光流 ──────────────────────────────────────────────
+    // 盒子开始下落 = 光流的"根"没了，必须立刻收（否则会在半空留一片彩虹，
+    // 因为它挂在盒子内部、跟着盒子一起移出屏幕时 filter 层会留下脏块）
+    if (fall && !flowDropped) {
+        flowDropped = true;
+        flow?.reset();
+    }
+    flow?.tick({
+        t, dt,
+        reduce: stage.reduce,
+        tearP: p,
+        tearDir,
+        tearing: p > 0 && p < 1,
+        opened: openedFired,
+        openedAt,
+        anchorRz: P.rz.x,
+    });
+
     const ground = groundEl.value;
     if (ground) {
-        const shrink = clamp(1 - P.y.x / 300, 0.6, 1.15);
-        ground.style.transform = `translate3d(${P.x.x.toFixed(2)}px, 0, 0) scale(${shrink.toFixed(3)})`;
+        ground.style.transform = `translate3d(${P.x.x.toFixed(2)}px, 0, 0) scale(${clamp(1 - P.y.x / 300, 0.6, 1.15).toFixed(3)})`;
         ground.style.opacity = fall ? clamp(1 - fall.y / 160, 0, 1).toFixed(3) : '0.55';
     }
 });
 
-/** 鼠标在**整个舞台**上移动都要算：指针离开盒子边缘时不该突然"松手回正" */
+/** 按下：开始一次可能的撕 */
+function onTabDown(ev: PointerEvent) {
+    if (props.phase !== 'sealed') return;
+    (ev.currentTarget as HTMLElement).setPointerCapture(ev.pointerId);
+    drag = { id: ev.pointerId, x0: ev.clientX, p0: tearP.to, moved: false };
+}
+
+/** 拖动：横向跟手。第一次真往侧面拖时才决定从哪边撕 */
+function onTabMove(ev: PointerEvent) {
+    if (!drag || ev.pointerId !== drag.id) return;
+    const dx = ev.clientX - drag.x0;
+    if (!drag.moved) {
+        if (Math.abs(dx) < 6) return;
+        drag.moved = true;
+    }
+    if (tearP.to === 0) {
+        tearDir = dx < 0 ? -1 : 1;
+        drag.x0 = ev.clientX;
+    }
+    tearP.to = clamp(drag.p0 + (drag.p0 ? Math.abs(dx) : dx * tearDir) / (size * 0.85), tearP.to, 1);
+}
+
+/** 抬手：没拖动 = 点了一下（撕到一半）；拖到中途 = 留着那道口子 */
+function onTabUp() {
+    if (!drag) return;
+    const moved = drag.moved;
+    drag = null;
+    if (!moved) {
+        if (tearP.to === 0) tearDir = Math.random() < 0.5 ? -1 : 1;
+        tearP.set(0.55);
+        tearP.to = 1;
+        return;
+    }
+    if (tearP.to < 0.95) tearP.to = Math.max(tearP.to, 0.35);
+}
+
+/** 外部按钮入口：一撕到底 */
+function tearAll() {
+    if (props.phase !== 'sealed') return;
+    if (tearP.to === 0) tearDir = Math.random() < 0.5 ? -1 : 1;
+    tearP.set(0.55);
+    tearP.to = 1;
+}
+
+defineExpose({ tearAll });
+
 function onMove(ev: PointerEvent) {
     const el = caseEl.value;
     if (!el) return;
@@ -180,29 +244,37 @@ function onLeave() {
     pointer.ny = 0;
 }
 
+function onResize() {
+    const next = caseEl.value?.offsetWidth || 300;
+    if (next === size) return;
+    size = next;
+    flow?.setSize(size, size, window.innerWidth, window.innerHeight);
+}
+
 onMounted(() => {
     size = caseEl.value?.offsetWidth || 300;
-
+    if (flowEl.value) {
+        flow = new RainbowFlow(flowEl.value);
+        flow.setSize(size, size, window.innerWidth, window.innerHeight);
+    }
     if (!stage.reduce) {
-        // 进场：从右侧旋转飞入（参考站同一手法）。只在首帧前摆好，随后交给弹簧收敛
+        // 进场：从右侧旋转飞入（参考站同一手法）
         P.x.x = window.innerWidth * 0.62;
         P.y.x = -50;
         P.ry.x = -200;
         P.rz.x = 16;
     }
     stage.start();
-
-    // 指针挂在 window 上：`.case-stage` 是 `pointer-events: none`（要让点击穿透到盒子），
-    // 而且 3D 子层会吃掉边缘的 pointermove —— 挂 window 不会漏事件。
     window.addEventListener('pointermove', onMove);
     window.addEventListener('pointerleave', onLeave);
+    window.addEventListener('resize', onResize);
 });
-
-
 
 onBeforeUnmount(() => {
     window.removeEventListener('pointermove', onMove);
     window.removeEventListener('pointerleave', onLeave);
+    window.removeEventListener('resize', onResize);
+    stage.stop();
 });
 </script>
 
@@ -469,34 +541,25 @@ onBeforeUnmount(() => {
 }
 
 /* 撕口喷出的彩虹：一圈箔色的环，随膜裂开被"放出来"然后放大淡去 */
-.rays {
+/**
+ * 彩虹光流的容器。
+ *
+ * ⚠️ 尺寸与位置**精确对应**，改一个数整片扇形就会歪：
+ *   · `viewBox="0 0 100 76"`：x 0~100 = 包装宽度，y≈60 是撕口线；
+ *   · 元素宽 = 包装宽、高 = 包装宽 × 0.76 ⇒ 1 个 svg 单位恰好 = 包装宽的 1%；
+ *   · `top` 把它上移到"撕口线往上 0.6 个包装宽"，光带才从口子里冒出来；
+ *   · `overflow: visible` 必须开着 —— 光带要冲出屏幕顶边，超出 viewBox 是常态。
+ */
+.flow {
     position: absolute;
-    left: 50%;
-    top: 44%;
-    width: 46%;
-    aspect-ratio: 1;
-    translate: -50% -50%;
-    border-radius: 50%;
-    background: radial-gradient(closest-side,
-        transparent 30%,
-        var(--ff-foil-a) 46%,
-        var(--ff-foil-b) 60%,
-        var(--ff-foil-c) 72%,
-        transparent 86%);
+    left: 0;
+    width: 100%;
+    top: calc(10.5% - var(--size) * .6);
+    height: calc(var(--size) * .76);
+    overflow: visible;
     opacity: 0;
-    transform: translateZ(4px) scale(0.2);
+    transform: translateZ(4px);
     pointer-events: none;
-    filter: blur(2px);
-}
-
-.is-opening .rays {
-    animation: rays-out 560ms 100ms cubic-bezier(0.19, 1, 0.22, 1) forwards;
-}
-
-@keyframes rays-out {
-    0% { opacity: 0; transform: translateZ(4px) scale(0.2); }
-    35% { opacity: 0.78; }
-    100% { opacity: 0; transform: translateZ(4px) scale(1.55); }
 }
 
 /* ── 收缩膜 ────────────────────────────────────────────────────────────────
@@ -543,15 +606,11 @@ onBeforeUnmount(() => {
     }
 }
 
-/* 两半膜朝各自方向飞走 */
-.is-opening .film--l {
-    transform: translate3d(-64%, -30%, 9px) rotate(-14deg);
+/* 撕到底：已被 clip-path 挖空，剩下的残膜淡出 */
+.is-opening .film,
+.is-open .film {
     opacity: 0;
-}
-
-.is-opening .film--r {
-    transform: translate3d(64%, -34%, 9px) rotate(12deg);
-    opacity: 0;
+    transition: opacity 300ms ease;
 }
 
 @media (prefers-reduced-motion: reduce) {

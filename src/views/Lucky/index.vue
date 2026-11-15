@@ -31,7 +31,13 @@
             <template v-else>
                 <canvas ref="fxRef" class="fx" aria-hidden="true" />
 
-                <LuckyDiscCase v-if="phase !== 'open'" :phase="phase" :tint="tint" @tear="startOpen" />
+                <LuckyDiscCase
+                    v-if="phase !== 'open'"
+                    ref="caseRef"
+                    :phase="phase"
+                    :tint="tint"
+                    @opened="onOpened"
+                />
 
                 <div
                     ref="fanEl"
@@ -69,7 +75,7 @@
                 v-else-if="phase === 'sealed' && cards.length"
                 size="small"
                 type="primary"
-                @click="startOpen"
+                @click="tearAll"
             >
                 拆开这一包
             </n-button>
@@ -217,9 +223,21 @@ function fireConfetti() {
     });
 }
 
-/** 撕开：整条时间轴唯一入口（点击拉条与空格都走这里） */
-function startOpen() {
+/**
+ * 拆开这一段由**包装盒自己**负责（撕口、跟手、光流全在它的逐帧循环里）。
+ *
+ * 页面只做两件事：① 按钮/空格去叫它撕；② 它撕到底（`opened`）之后接着演卡片。
+ * 时间轴以 `opened` 为 0 点 —— 撕多久由手决定，不能由一个固定延时假装。
+ */
+const caseRef = ref<InstanceType<typeof LuckyDiscCase> | null>(null);
+
+function tearAll() {
     if (phase.value !== 'sealed' || !cards.value.length) return;
+    caseRef.value?.tearAll();
+}
+
+function onOpened() {
+    if (phase.value !== 'sealed') return;
     phase.value = 'opening';
     playSfx('lucky-tear');
 
@@ -312,7 +330,7 @@ function onKey(ev: KeyboardEvent) {
     if (phase.value === 'sealed') {
         if (ev.key === ' ' || ev.key === 'Enter') {
             ev.preventDefault();
-            startOpen();
+            tearAll();
         }
         return;
     }
