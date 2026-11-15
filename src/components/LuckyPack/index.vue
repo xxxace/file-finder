@@ -122,6 +122,8 @@ let lastPhase = props.phase;
 let openedFired = false;
 /** 下一次"自己抖一下"的时刻（秒，`t` 坐标系） */
 let nudgeAt = 5;
+/** 上一帧的撕裂进度，用来算"这一帧撕了多少" */
+let tearLast = 0;
 let openedAt = 0;
 let pw = 280;
 let ph = 405;
@@ -230,6 +232,23 @@ const stage = useStage((dt, t) => {
         emit('opened');
     }
     if (p > 0) applyClips(p);
+
+    /**
+     * 撕动一下 → 整包抖一下、光带往前涌一截、攥紧一点。
+     *
+     * 这是"撕开"和"彩虹"之间唯一的耦合点（参考站同一处：`dp` 驱动四根弹簧）。
+     * 没有它，撕口在动、彩虹在匀速扩散，看起来就是两段不相干的动画。
+     */
+    const dp = p - tearLast;
+    tearLast = p;
+    if (dp > 0 && !stage.reduce) {
+        const seed = Math.min(dp, 0.02);
+        P.rz.v += (Math.random() - 0.5) * seed * 900;
+        P.y.v += dp * 420;
+        tearTh.v += dp * 300;
+        squeeze.v += dp * 20;
+        flow?.kick(dp);
+    }
     if (flapEl.value) {
         // 松手后撕条在"从撕口吹出的气流"里飘：两个不同频率的正弦叠加
         const draft = drag ? 0 : (Math.sin(t * 5.3) + Math.sin(t * 8.7) * 0.5) * (p > 0 && p < 1 ? 1 : 0);

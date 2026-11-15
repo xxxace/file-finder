@@ -132,6 +132,17 @@ export class RainbowFlow {
         this.fit();
     }
 
+    /**
+     * 撕动一下的冲量。
+     *
+     * 参考站每帧按"这一帧撕了多少"给光带一个 `g.v += dp*6`：光带不是匀速长出来的，
+     * 而是**手每扯一下、就往前涌一截**。少了这个，撕口和彩虹就是两件事各演各的
+     * （这就是"配合差点意思"）。
+     */
+    kick(amount: number): void {
+        for (const b of this.ribbons) if (b.on) b.g.v += amount * 6;
+    }
+
     reset(): void {
         this.glow.x = this.glow.to = this.glow.v = 0;
         this.drained = false;

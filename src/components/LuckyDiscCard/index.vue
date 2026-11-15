@@ -126,11 +126,17 @@ function onLeave(ev: PointerEvent) {
     }
 }
 
-/* 厚度：三层叠片。底色必须是"两套主题下都比卡面暗一档"的那个 —— `--ff-canvas` 恰好成立 */
+/**
+ * 厚度：三层叠片。
+ *
+ * ⚠️ 圆角必须用 `calc(var(--cw) * .05)`，**不能用 cqw**。
+ *    `cqw` 是"最近的容器"的 1%，而 `.slab` 不在 `.face` 里面 ⇒ 它一路找上去，
+ *    最后落在**视口**上 —— 5cqw 变成 64px，卡片被削成圆饼（真机就是这么丑的）。
+ */
 .slab {
     position: absolute;
     inset: 0;
-    border-radius: 5cqw;
+    border-radius: calc(var(--cw) * 0.05);
     background: var(--ff-canvas);
     pointer-events: none;
 
@@ -152,7 +158,9 @@ function onLeave(ev: PointerEvent) {
 .face {
     position: absolute;
     inset: 0;
-    border-radius: 5cqw;
+    /* 同上：`container-type` 的元素**不能查询自己** ⇒ 这里的 cqw 也会落到视口。
+       5% 卡宽 = 一张实体卡的标准圆角。 */
+    border-radius: calc(var(--cw) * 0.05);
     overflow: hidden;
     isolation: isolate;
     container-type: inline-size;
@@ -168,7 +176,7 @@ function onLeave(ev: PointerEvent) {
     right: 6%;
     top: 4.3%;
     height: 60%;
-    border-radius: 4cqw;
+    border-radius: calc(var(--cw) * 0.04);
     overflow: hidden;
     background: var(--ff-card-paper-bottom);
     box-shadow:
@@ -186,7 +194,7 @@ function onLeave(ev: PointerEvent) {
 .art--paper {
     display: grid;
     place-items: center;
-    font: 500 9cqw/1 var(--ff-font);
+    font: 500 calc(var(--cw) * .09)/1 var(--ff-font);
     letter-spacing: 0.06em;
     color: color-mix(in srgb, var(--ff-card-ink) 55%, transparent);
 }
@@ -210,7 +218,7 @@ function onLeave(ev: PointerEvent) {
        不留空间就会顶到胶囊上 —— 参考站的名字短（"Cubit"）所以没这个问题。 */
     right: 34%;
     top: 68.5%;
-    font: 500 7.6cqw/1.15 var(--ff-font);
+    font: 500 calc(var(--cw) * .076)/1.15 var(--ff-font);
     letter-spacing: -0.01em;
     white-space: nowrap;
     overflow: hidden;
@@ -221,9 +229,9 @@ function onLeave(ev: PointerEvent) {
     position: absolute;
     right: 7%;
     top: 69.6%;
-    padding: 1.4cqw 2.2cqw;
-    border-radius: 9cqw;
-    font: 500 3.8cqw/1 var(--ff-font);
+    padding: calc(var(--cw) * .014) calc(var(--cw) * .022);
+    border-radius: calc(var(--cw) * .09);
+    font: 500 calc(var(--cw) * .038)/1 var(--ff-font);
     letter-spacing: 0.05em;
     white-space: nowrap;
 }
@@ -252,7 +260,7 @@ function onLeave(ev: PointerEvent) {
 .rar {
     position: absolute;
     bottom: 5.5%;
-    font: 400 3.4cqw/1 var(--ff-font);
+    font: 400 calc(var(--cw) * .034)/1 var(--ff-font);
     font-variant-numeric: tabular-nums;
     color: color-mix(in srgb, var(--ff-card-ink) 58%, transparent);
 }
