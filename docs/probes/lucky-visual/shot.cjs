@@ -73,7 +73,7 @@ const DIAG = `(() => {
   const get = sel => document.querySelector(sel);
   return JSON.stringify({
     hash: location.hash,
-    phase: get('.fan') ? get('.fan').dataset.phase : null,
+    phase: get('.scene') ? get('.scene').dataset.phase : null,
     slots: document.querySelectorAll('.slot').length,
     articles: document.querySelectorAll('article.card').length,
     caseStage: r(get('.pack-stage')),
@@ -81,13 +81,17 @@ const DIAG = `(() => {
     flowOpacity: get('.flow') ? get('.flow').style.opacity : 'NO_FLOW',
     flowBands: document.querySelectorAll('.ff-band').length,
     filmClip: get('.film') ? (get('.film').style.clipPath || 'none').slice(0, 60) : 'NO_FILM',
+    slotBox: r(get('.slot')),
+    slotWidth: get('.slot') ? getComputedStyle(get('.slot')).width : 'NO_SLOT',
+    cwVar: (() => { const el = document.querySelector('.lucky'); return el ? getComputedStyle(el).getPropertyValue('--cw') : 'NO_LUCKY'; })(),
+    cardBox: r(get('article.card')),
     caseBox: r(get('.pack')),
     frontBox: r(get('.skin--front')),
     frontBg: get('.skin--front') ? getComputedStyle(get('.skin--front')).backgroundColor : null,
     discBox: r(get('.disc')),
     flowBox: r(get('.flow')),
     caseOpacity: get('.pack') ? getComputedStyle(get('.pack')).opacity : null,
-    fan: r(get('.fan')),
+    fan: r(get('.scene')),
     stage: r(document.querySelector('.stage')),
     buttons: [...document.querySelectorAll('button')].map(b => b.textContent.trim()).filter(Boolean),
   }, null, 1);
@@ -102,6 +106,12 @@ app.whenReady().then(async () => {
         return;
     }
 
+    // 抓渲染进程的 console —— 页面报错时 Electron 不会主动告诉外面，
+    // 表现就是"节点都找到了、位置却一直不对"，很难猜。
+    win.webContents.on('console-message', (...args) => {
+        const msg = args.find(a => typeof a === 'string' && a.length > 1);
+        if (msg) log('[renderer]', msg);
+    });
     win.setContentSize(1280, 800);
     await win.loadURL(`${DEV_URL}/#/lucky`);
     // 先等到页面把盒子渲染出来，再等它落位
@@ -149,9 +159,13 @@ app.whenReady().then(async () => {
     // 撕口 96 段、光流 35 条 —— 撕的中间那一帧比"落定"更有信息量
     await wait(300);
     await snap(win, '02-tearing.png');
-    await wait(1100);
-    await snap(win, '02b-flush.png');
-    await wait(500);
+    // 射出（卡片竖直冲出来）
+    await wait(520);
+    await snap(win, '02b-shot.png');
+    // 螺旋中途（绕屏幕中心转圈）
+    await wait(520);
+    await snap(win, '02c-orbit.png');
+    await wait(1400);
     log('diag(open):\n' + await win.webContents.executeJavaScript(DIAG));
     await snap(win, '03-open.png');
 

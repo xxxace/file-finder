@@ -39,18 +39,18 @@
                     @opened="onOpened"
                 />
 
-                <div
-                    ref="fanEl"
-                    class="fan"
-                    :data-phase="phase"
-                    :style="{ '--n': cards.length, '--t-cards': `${T_CARDS}ms` }"
-                >
-                    <span class="sweep" aria-hidden="true" />
+                <!--
+                    卡片层：每张卡绝对定位在舞台中心，位置**全部由 JS 每帧写**
+                    （射出 → 螺旋 → 落位）。所以这里没有任何 transform/transition ——
+                    一旦给 CSS transition，JS 写的每一帧都会被它拖回上一帧，
+                    表现为"卡片跟着走但慢半拍、螺旋变成一条抖动的直线"。
+                -->
+                <div ref="sceneEl" class="scene" :data-phase="phase">
                     <div
                         v-for="(card, i) in cards"
                         :key="card.key"
+                        :ref="el => setSlot(i, el)"
                         class="slot"
-                        :style="slotStyle(i)"
                     >
                         <LuckyDiscCard
                             :card="card"
@@ -97,7 +97,7 @@
  * 时间轴也**只在这里**（0 / 180 / 320 / 1400ms）。盒子组件内部只有 CSS class，
  * 自己不带任何计时器 —— 两处各管一半时间轴必然对不上。
  */
-import { computed, nextTick, onActivated, onBeforeUnmount, onDeactivated, onMounted, ref, watch } from 'vue';
+import { computed, onActivated, onBeforeUnmount, onDeactivated, onMounted, ref, watch } from 'vue';
 import { useRouter } from 'vue-router';
 import { NButton, NCheckbox, NSpin } from 'naive-ui';
 import LuckyDiscCard from '@/components/LuckyDiscCard/index.vue';
@@ -106,7 +106,9 @@ import { burst } from './confetti';
 import { cardOf, drawPack, rememberRecent } from './drawModel';
 import type { DrawCard } from './drawModel';
 import { fetchPool } from './usePool';
-import { fanOf } from './discCase';
+import { CardShow } from './cardShow';
+import type { PackPose } from './cardShow';
+import { useStage } from './useStage';
 import { nextSkin } from './packSkin';
 import { openCover } from '@/views/FileFinder/openCover';
 import { playSfx } from '@/utils/sfx';
@@ -165,33 +167,12 @@ const onlineKnown = computed(() => sources.value?.onlineKnown ?? false);
  */
 const effectiveIncludeOffline = computed(() => includeOffline.value || !onlineKnown.value);
 
-/**
- * 每张卡相对舞台中心要**回退**多少像素。
- *
- * 为什么必须有：卡片在 `sealed` 阶段要缩在**盒心**，而不是在自己扇形的位置上缩小
- * （那样看起来是"五张卡原地长大"，不是"从盒子里飞出来"）。flex 布局不知道中心在哪，
- * 只能在布局完成后量一次，把这个反向位移喂给 CSS。
- */
-const fanEl = ref<HTMLElement | null>(null);
-const dx = ref<number[]>([]);
+/** 卡片编排全在 `CardShow` 里：射出 → 螺旋 → 落位。页面只负责把 DOM 交给它。 */
+const sceneEl = ref<HTMLElement | null>(null);
+const show = new CardShow();
 
-function measureFan() {
-    const fan = fanEl.value;
-    if (!fan) return;
-    const slots = [...fan.querySelectorAll('.slot')] as HTMLElement[];
-    const mid = fan.clientWidth / 2;
-    dx.value = slots.map(el => mid - (el.offsetLeft + el.offsetWidth / 2));
-}
-
-function slotStyle(index: number) {
-    const spot = fanOf(index, cards.value.length);
-    return {
-        '--rot': `${spot.rot}deg`,
-        '--dy': `${spot.dy}px`,
-        '--dx': `${(dx.value[index] ?? 0).toFixed(1)}px`,
-        '--z': String(spot.z),
-        '--i': String(index),
-    } as Record<string, string>;
+function setSlot(index: number, el: unknown) {
+    show.setSlot(index, el instanceof HTMLElement ? el : null);
 }
 
 function clearTimers() {
@@ -203,22 +184,17 @@ function stopConfetti() {
     stopFx = null;
 }
 
-/** 从令牌里取箔的三段色 —— canvas 里不能用 `var()`，只能读出来传进去 */
-function foilColors(): string[] {
-    const cs = getComputedStyle(document.documentElement);
-    return ['--ff-foil-a', '--ff-foil-b', '--ff-foil-c']
-        .map(name => cs.getPropertyValue(name).trim())
-        .filter(Boolean);
-}
-
 function fireConfetti() {
     const canvas = fxRef.value;
-    if (!canvas) return;
+    const packer = caseRef.value;
+    if (!canvas || !packer) return;
     stopConfetti();
     stopFx = burst(canvas, {
-        count: 120,
-        origin: { x: 0.5, y: 0.44 },
-        colors: foilColors(),
+        vw: window.innerWidth,
+        vh: window.innerHeight,
+        getPose: () => packer.pose(),
+        tearYAt: packer.tearYAt,
+        count: 240,
     });
 }
 
@@ -230,6 +206,51 @@ function fireConfetti() {
  */
 const caseRef = ref<InstanceType<typeof LuckyPack> | null>(null);
 
+/**
+ * 卡片编排：射出 → 螺旋 → 落位。全部在 `CardShow` 里逐帧算，页面只喂时间和指针。
+ *
+ * `pendingStart` 是因为 `opened` 事件里拿不到舞台时间 `t` —— 置个标志，
+ * 下一帧主循环用当时的 `t` 作为"射出"的零点。别在事件里用 `performance.now()`：
+ * 那和 `useStage` 的 `t` 不是同一个零点，卡片会整体飘几帧。
+ */
+let pendingStart = false;
+const hoverIndex = ref(-1);
+let lastPack: PackPose | null = null;
+
+/** 与 CSS 的 `--ph / --pw / --cw / --ch` 同一套公式（两处必须同值） */
+function packWidth(): number {
+    return Math.min(400, window.innerHeight * 0.52) * 0.69;
+}
+function cardW(): number {
+    return packWidth() * 0.84;
+}
+function cardH(): number {
+    return cardW() * 1.4;
+}
+
+const stage = useStage((dt, t) => {
+    // 包在 `open` 阶段会被 v-if 摘掉，所以缓存最后一帧的姿态给卡片用
+    const pose = caseRef.value?.pose() ?? lastPack;
+    if (!pose) return;
+    lastPack = pose;
+
+    if (pendingStart) {
+        pendingStart = false;
+        show.start(t);
+    }
+    show.setActive(activeIndex.value);
+    show.tick(t, dt, pose, hoverIndex.value);
+});
+
+/** 指针落在哪张卡上（用落位几何算，不用它当前飞到的位置 —— 否则悬停会闪） */
+function onPointer(ev: PointerEvent) {
+    if (phase.value !== 'open') return;
+    const i = show.hitTest(ev.clientX, ev.clientY);
+    if (i === hoverIndex.value) return;
+    hoverIndex.value = i;
+    show.setHover(i);
+}
+
 function tearAll() {
     if (phase.value !== 'sealed' || !cards.value.length) return;
     caseRef.value?.tearAll();
@@ -238,6 +259,7 @@ function tearAll() {
 function onOpened() {
     if (phase.value !== 'sealed') return;
     phase.value = 'opening';
+    pendingStart = true;
     playSfx('lucky-tear');
 
     timers.push(window.setTimeout(() => {
@@ -266,7 +288,7 @@ function redraw() {
     recent.value = rememberRecent(recent.value, cards.value);
     activeIndex.value = 0;
     phase.value = 'sealed';
-    void nextTick(measureFan);
+    show.reset(cards.value.length, cardW(), cardH());
 }
 
 async function load() {
@@ -377,8 +399,8 @@ function disposeIdle() {
 }
 
 onMounted(() => {
-    // 窗口变宽变窄，扇形间距跟着变 ⇒ 回退量必须重量，否则卡片会从错的地方飞出来
-    window.addEventListener('resize', measureFan);
+    stage.start();
+    window.addEventListener('pointermove', onPointer);
 });
 
 onActivated(() => {
@@ -400,6 +422,8 @@ onActivated(() => {
 
 onDeactivated(() => {
     window.removeEventListener('keydown', onKey);
+    window.removeEventListener('pointermove', onPointer);
+    stage.stop();
     stopConfetti();
     clearTimers();
     idleTimer = window.setTimeout(disposeIdle, IDLE_DISPOSE_MS);
@@ -407,7 +431,8 @@ onDeactivated(() => {
 
 onBeforeUnmount(() => {
     window.removeEventListener('keydown', onKey);
-    window.removeEventListener('resize', measureFan);
+    window.removeEventListener('pointermove', onPointer);
+    stage.stop();
     if (idleTimer !== null) window.clearTimeout(idleTimer);
     stopConfetti();
     clearTimers();
@@ -517,78 +542,139 @@ onBeforeUnmount(() => {
  * 扇形。卡片各自的倾斜在子组件内部（preserve-3d），所以旋转与位移必须落在**外面这层**
  * `.slot` 上 —— 同一个元素上两套 transform 会互相覆盖。
  *
+ * 卡片层：**绝对定位 + 每帧由 `CardShow` 写 transform**。
+ *
+ * ⚠️ 这里不许出现任何 `transition`。射出、螺旋、落位每一帧的位置都由 JS 算，
+ *    CSS 过渡会把每一帧拖回上一帧 —— 表现是"跟着走但慢半拍、螺旋变成抖动的直线"。
+ */
+.scene {
+    position: absolute;
+    inset: 0;
+    transform-style: preserve-3d;
+    pointer-events: none;
+    z-index: 6;
+}
+
+.slot {
+    position: absolute;
+    left: 50%;
+    top: 50%;
+    width: var(--cw);
+    height: var(--ch);
+    margin: calc(var(--ch) / -2) 0 0 calc(var(--cw) / -2);
+    transform-style: preserve-3d;
+    will-change: transform;
+    pointer-events: auto;
+}
+
+.bottom {
+    display: flex;
+    align-items: center;
+    gap: var(--ff-sp-3);
+    padding: 0 var(--ff-sp-6);
+    flex: none;
+}
+
+.top {
+    height: var(--ff-header-h);
+    justify-content: space-between;
+}
+
+.top__left {
+    display: flex;
+    align-items: baseline;
+    gap: var(--ff-sp-3);
+    min-width: 0;
+}
+
+.pool-count {
+    font-size: var(--ff-fs-meta);
+    color: var(--ff-text-2);
+}
+
+.warn {
+    font-size: var(--ff-fs-meta);
+    color: var(--ff-warn);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+/* 舞台：盒子与扇形卡片共用同一个中心 —— 卡片要从盒心飞出去，两个中心必须重合。
+   ⚠️ 2026-11-15：必须显式 `grid-area: 1/1` 让所有直接子项**叠在同一格**。
+      默认的 grid 是单列多行 —— 盒子占一行、扇形占一行，盒子会被挤到上方甚至挤出容器，
+      真机表现就是"根本没看到开包，一进来就是五张卡"。
+      同理 `grid-template` 要用 `minmax(0,1fr)`：写 `100%` 会把 padding 算到外面去。 */
+/* 与 `LuckyPack` 里同一套尺寸：包高、包宽、卡宽、卡高。
+   ⚠️ 两处必须同值 —— 卡片是从包口飞出来的，尺寸对不上就"从包外面冒出来"。 */
+.lucky {
+    --ph: min(400px, 52vh);
+    --pw: calc(var(--ph) * .69);
+    --cw: calc(var(--pw) * .84);
+    --ch: calc(var(--cw) * 1.4);
+}
+
+.stage {
+    position: relative;
+    flex: 1;
+    min-height: 0;
+    display: grid;
+    grid-template: minmax(0, 1fr) / minmax(0, 1fr);
+    place-items: center;
+    padding: var(--ff-sp-4);
+}
+
+.stage > * {
+    grid-area: 1 / 1;
+}
+
+.fx {
+    position: absolute;
+    inset: 0;
+    width: 100%;
+    height: 100%;
+    pointer-events: none;
+}
+
+.state {
+    display: flex;
+    align-items: center;
+    gap: var(--ff-sp-2);
+    font-size: var(--ff-fs-body);
+    color: var(--ff-text-2);
+}
+
+.state--empty {
+    flex-direction: column;
+    text-align: center;
+    max-width: 380px;
+    gap: var(--ff-sp-2);
+}
+
+.empty__title {
+    margin: 0;
+    font-size: var(--ff-fs-title);
+    color: var(--ff-text-1);
+}
+
+.empty__desc {
+    margin: 0 0 var(--ff-sp-2);
+    font-size: var(--ff-fs-body);
+    line-height: 1.7;
+    color: var(--ff-text-2);
+}
+
+/**
+ * 扇形。卡片各自的倾斜在子组件内部（preserve-3d），所以旋转与位移必须落在**外面这层**
+ * `.slot` 上 —— 同一个元素上两套 transform 会互相覆盖。
+ *
  * 三个阶段的差异全部靠 CSS 变量：
  *   sealed  卡片缩在盒心、透明、不吃点击
  *   opening 依次弹出到扇形落点（每张 +60ms）
  *   open    静置
  */
-.fan {
-    position: relative;
-    /* 卡片必须压在包装盒之上：爆开时盒子还带着 3D 变换，同层级下它会把飞出的卡切掉一半 */
-    z-index: 6;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    gap: 18px;
-    width: 100%;
-    padding: var(--ff-sp-6) 0;
-}
 
-.slot {
-    width: min(190px, calc((100% - 120px) / var(--n)));
-    flex: none;
-    z-index: var(--z);
-    transform: translate(var(--fx, 0px), calc(var(--dy) + var(--fy, 0px))) scale(var(--fs, 1)) rotate(var(--rot));
-    opacity: var(--fo, 1);
-    transition:
-        transform 620ms cubic-bezier(0.19, 1, 0.22, 1) var(--delay, 0ms),
-        opacity 320ms ease var(--delay, 0ms);
-}
 
-.fan[data-phase='sealed'] .slot {
-    /* 从盒心出发：`--dx` 是量出来的反向位移，把它抵消掉 = 所有卡叠在舞台中央 */
-    --fx: var(--dx);
-    --fy: 30px;
-    --fs: 0.42;
-    --fo: 0;
-    pointer-events: none;
-}
-
-.fan[data-phase='opening'] .slot {
-    --fx: 0px;
-    --fy: 0px;
-    --fs: 1;
-    --fo: 1;
-    /* 起点由页面传下来的 `--t-cards` 决定 —— 盒子掀盖与卡片起飞必须同一条时间轴 */
-    --delay: calc(var(--t-cards, 320ms) + var(--i) * 60ms);
-    pointer-events: none;
-}
-
-.fan[data-phase='open'] .slot {
-    --delay: 0ms;
-}
-
-/* 爆开瞬间横扫过五张卡的一道彩虹 —— 只跑一次，静置画面不留色相 */
-.sweep {
-    position: absolute;
-    inset: -8% -4%;
-    pointer-events: none;
-    opacity: 0;
-    background: linear-gradient(104deg,
-        transparent 38%, var(--ff-foil-a) 46%, var(--ff-foil-b) 50%,
-        var(--ff-foil-c) 54%, transparent 62%);
-    mix-blend-mode: screen;
-}
-
-.fan[data-phase='opening'] .sweep {
-    animation: sweep-across 760ms 340ms ease-out forwards;
-}
-
-@keyframes sweep-across {
-    0% { opacity: 0; transform: translateX(-46%); }
-    28% { opacity: 0.6; }
-    100% { opacity: 0; transform: translateX(46%); }
-}
 
 .bottom {
     height: 56px;
@@ -616,22 +702,17 @@ kbd {
 }
 
 @media (max-width: 900px) {
-    .fan {
-        gap: 10px;
-    }
-
-    .slot {
-        width: min(150px, calc((100% - 60px) / var(--n)));
+    .lucky {
+        --ph: min(340px, 46vh);
     }
 }
 
 @media (prefers-reduced-motion: reduce) {
+    /* 卡片的位移全部由逐帧循环写，`prefers-reduced-motion` 时循环把 dt 归零、
+       直接落位（见 `useStage`），此处无需再声明任何过渡 */
+    .scene,
     .slot {
-        transition: opacity 240ms ease;
-    }
-
-    .fan[data-phase='opening'] .sweep {
-        animation: none;
+        transition: none;
     }
 }
 </style>

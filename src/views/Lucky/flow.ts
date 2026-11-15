@@ -1,3 +1,5 @@
+import { rainbow } from './rainbow';
+
 /**
  * 彩虹光流 —— 移植自 `holo-reverse/src/app.js` 的 `sprout / fit / pour` 三函数。
  *
@@ -17,7 +19,6 @@
  * 少任何一条都会退化成"一坨发光的彩带"，所以我一条都没省。
  */
 
-const BANDS = ['#ff3d6e', '#ff8a3d', '#ffd34d', '#4fd9a0', '#4fb2ff', '#8b6cff', '#ff5cc8'];
 const NR = 35;          // ribbon 数（边数 = NR + 1）
 const CY = 107.5;       // 发散中心在 svg 单位里的 y
 const STEP = 2.5;       // 折线采样步长（svg 单位）
@@ -171,7 +172,7 @@ export class RainbowFlow {
                 gx: (this.lines[j].x + this.lines[j + 1].x) / 2,
                 r,
                 L: 0,
-                c: BANDS[(j + k0) % 7],
+                c: rainbow()[(j + k0) % 7],
                 on: false,
                 len: 0,
                 g,

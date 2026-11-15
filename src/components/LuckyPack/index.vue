@@ -30,10 +30,10 @@
                 <div v-for="k in PLIES" :key="k" :ref="el => setPly(k - 1, el)" class="ply">
                     <div class="skin skin--front ply-skin">
                         <i class="lip ply-lip" />
-                        <i ref="toneFrontEls" class="tone" />
+                        <i class="tone" />
                     </div>
                     <div class="skin skin--foil">
-                        <i ref="toneFoilEls" class="tone" />
+                        <i class="tone" />
                     </div>
                 </div>
             </div>
@@ -98,8 +98,6 @@ const lipEl = ref<HTMLElement | null>(null);
 const flowEl = ref<SVGSVGElement | null>(null);
 const hitEl = ref<HTMLElement | null>(null);
 const plyEls: HTMLElement[] = [];
-const toneFrontEls: HTMLElement[] = [];
-const toneFoilEls: HTMLElement[] = [];
 
 const packColor = computed(() => `var(--ff-pack-${props.skin})`);
 const skinLabel = computed(() => PACK_SKINS.find(s => s.key === props.skin)?.label ?? '');
@@ -358,7 +356,28 @@ function tearAll() {
     tearP.to = 1;
 }
 
-defineExpose({ tearAll });
+/**
+ * 给页面用的三样东西：撕、包的姿态、包口高度。
+ *
+ * ⚠️ `pose()` 每帧都会被调用两次（一次给卡片编排、一次给纸屑的 `onStage`），
+ * 所以它只**读**现有状态、不做任何计算 —— 别往这里加逻辑。
+ */
+defineExpose({
+    tearAll,
+    pose: () => ({
+        rx: P.rx.x,
+        ry: P.ry.x,
+        rz: P.rz.x,
+        px: P.x.x,
+        py: P.y.x,
+        pw,
+        ph,
+        fallY: fall ? fall.y : 0,
+        // 包口 = 撕口最深处的那个点，相对包中心
+        mouth: ph * (Math.max(...jag.map(q => q.y)) / 100 - 0.5),
+    }),
+    tearYAt: (x: number) => yAt(jag, x),
+});
 
 function onPointerTrack(ev: PointerEvent) {
     const el = packEl.value;
@@ -520,11 +539,11 @@ onBeforeUnmount(() => {
             transparent 2px 5px) 0 100% / 100% var(--crimp) no-repeat,
         var(--pack, var(--ff-pack-cobalt));
     mask:
-        conic-gradient(from 135deg at 50% 0, #0000, #000 1deg 89deg, #0000 90deg)
+        conic-gradient(from 135deg at 50% 0, transparent, black 1deg 89deg, transparent 90deg)
             0 0 / var(--tooth) calc(var(--tooth) / 2) repeat-x,
         url("data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100' preserveAspectRatio='none'><path d='M0 0H100V5.6C100 8 97.6 7.6 97.6 10V90C97.6 92.4 100 92 100 94.4V100H0V94.4C0 92 2.4 92.4 2.4 90V10C2.4 7.6 0 8 0 5.6Z'/></svg>")
             0 50% / 100% calc(100% - var(--tooth)) no-repeat,
-        conic-gradient(from -45deg at 50% 100%, #0000, #000 1deg 89deg, #0000 90deg)
+        conic-gradient(from -45deg at 50% 100%, transparent, black 1deg 89deg, transparent 90deg)
             0 100% / var(--tooth) calc(var(--tooth) / 2) repeat-x;
 }
 
@@ -551,7 +570,7 @@ onBeforeUnmount(() => {
         var(--ff-film-sheen) 3%,
         color-mix(in srgb, white 28%, transparent) 5%,
         transparent 9%);
-    mask: linear-gradient(transparent 7%, #000 13% 48%, transparent 84%);
+    mask: linear-gradient(transparent 7%, black 13% 48%, transparent 84%);
     translate: calc(var(--gx, 0) * 1%) 0;
     opacity: var(--gl, 0.8);
 }
@@ -561,7 +580,7 @@ onBeforeUnmount(() => {
     opacity: var(--gt, 0.85);
     mask: linear-gradient(90deg,
         color-mix(in srgb, black 45%, transparent),
-        #000 40% 60%,
+        black 40% 60%,
         color-mix(in srgb, black 45%, transparent))
         calc(var(--gm, 50) * 1%) 0 / 250% 100%;
 }
@@ -629,7 +648,7 @@ onBeforeUnmount(() => {
         var(--ff-foil-c), var(--ff-foil-b), var(--ff-foil-a));
     mix-blend-mode: screen;
     opacity: 0.5;
-    mask: radial-gradient(circle, transparent 22%, #000 34%, #000 86%, transparent 99%);
+    mask: radial-gradient(circle, transparent 22%, black 34%, black 86%, transparent 99%);
 }
 
 .disc::before {

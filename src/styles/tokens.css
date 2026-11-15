@@ -273,6 +273,17 @@
      这是**实体印刷色**，不是界面色 —— "无彩裁决"管的是界面（按钮/文字/边框），
      而手里这张卡包本来就是彩印的。六色循环，且**不连续重复**（同参考站）。
      只在 `views/Lucky` 与 `components/LuckyPack` 里出现，别的地方不许引用。 */
+  /* 彩虹光带与纸屑的七色。这是**光**的颜色（棱镜色散顺序），不是界面配色 ——
+     所以它不属于"无彩裁决"管辖；同时它是 TS 里唯一合法的来源（那边不许写色值）。
+     顺序不要调：相邻两色在 `color-dodge` 叠加下过渡最顺。 */
+  --ff-rainbow-1: #ff3d6e;
+  --ff-rainbow-2: #ff8a3d;
+  --ff-rainbow-3: #ffd34d;
+  --ff-rainbow-4: #4fd9a0;
+  --ff-rainbow-5: #4fb2ff;
+  --ff-rainbow-6: #8b6cff;
+  --ff-rainbow-7: #ff5cc8;
+
   --ff-pack-cobalt: #2b3ff0;
   --ff-pack-ember: #f0542c;
   --ff-pack-grape: #7a42f0;

@@ -128,8 +128,10 @@ function onLeave(ev: PointerEvent) {
 <style scoped lang="less">
 .card {
     position: relative;
+    /* 尺寸由外层 `.slot` 决定（`--cw × --ch`，5:7 —— 与参考站的卡同一比例，
+       也正好塞得进包） */
     width: 100%;
-    aspect-ratio: 3 / 4;
+    height: 100%;
     cursor: pointer;
     outline: none;
     transform-style: preserve-3d;
