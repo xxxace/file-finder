@@ -254,6 +254,12 @@
   --ff-jewel-shadow: rgba(18, 16, 34, 0.18);
   --ff-inner-paper: var(--ff-panel);
   --ff-on-paper: var(--ff-text-1);
+  /* 内页底部那条"印刷黑条"。
+     ⚠️ 两套主题**同一个值**，所以只在 :root 定义、深色不覆盖 —— CD 内页的黑条
+        压在白纸上就是黑的，深色模式没道理把它变白（深色下会出现一条刺眼的白色横带）。
+        这是"实体的颜色"，不是"界面的面"，别拿 `--ff-text-1` 反色那套替它。 */
+  --ff-inner-band: #141519;
+  --ff-on-band: #f1f2f3;
   --ff-foil-a: #f09ab6;
   --ff-foil-b: #e8c98a;
   --ff-foil-c: #9ad9ec;
