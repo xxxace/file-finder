@@ -31,9 +31,14 @@
             <template v-else>
                 <canvas ref="fxRef" class="fx" aria-hidden="true" />
 
-                <LuckyDiscCase v-if="phase !== 'open'" :phase="phase" @tear="startOpen" />
+                <LuckyDiscCase v-if="phase !== 'open'" :phase="phase" :tint="tint" @tear="startOpen" />
 
-                <div class="fan" :data-phase="phase" :style="{ '--n': cards.length, '--t-cards': `${T_CARDS}ms` }">
+                <div
+                    ref="fanEl"
+                    class="fan"
+                    :data-phase="phase"
+                    :style="{ '--n': cards.length, '--t-cards': `${T_CARDS}ms` }"
+                >
                     <span class="sweep" aria-hidden="true" />
                     <div
                         v-for="(card, i) in cards"
@@ -86,7 +91,7 @@
  * 时间轴也**只在这里**（0 / 180 / 320 / 1400ms）。盒子组件内部只有 CSS class，
  * 自己不带任何计时器 —— 两处各管一半时间轴必然对不上。
  */
-import { computed, onActivated, onBeforeUnmount, onDeactivated, ref, watch } from 'vue';
+import { computed, nextTick, onActivated, onBeforeUnmount, onDeactivated, onMounted, ref, watch } from 'vue';
 import { useRouter } from 'vue-router';
 import { NButton, NCheckbox, NSpin } from 'naive-ui';
 import LuckyDiscCard from '@/components/LuckyDiscCard/index.vue';
@@ -108,6 +113,15 @@ const notify = useNotify();
 /** 质感配方 —— 对应 `docs/probes/lucky-texture/spike.html` 的三档。
  *  `deco` = 箔只在信息条 / 贴纸 / 书脊。真实封面不吃色相，这是「保质感 + 兼容自定义」的落点。 */
 const foil = 'deco' as const;
+
+/**
+ * 本次专辑的主题色。
+ *
+ * 参考站每包换一种包装配色（且不连续重复）；我们的实体只有 CD 盒一种形态，
+ * 换的是**封面纸的主色** —— 真实 CD 专辑也是这样，每张专辑有自己的视觉。
+ */
+const TINTS = ['a', 'b', 'c'] as const;
+const tint = ref<(typeof TINTS)[number]>('a');
 
 /** 拆封时间轴（ms）。改这里就够了，盒子与卡片的 CSS 延迟都按这几个数对齐 */
 const T_BURST = 180;   // 盒盖弹开 + 爆开音 + 彩带
@@ -146,11 +160,30 @@ const onlineKnown = computed(() => sources.value?.onlineKnown ?? false);
  */
 const effectiveIncludeOffline = computed(() => includeOffline.value || !onlineKnown.value);
 
+/**
+ * 每张卡相对舞台中心要**回退**多少像素。
+ *
+ * 为什么必须有：卡片在 `sealed` 阶段要缩在**盒心**，而不是在自己扇形的位置上缩小
+ * （那样看起来是"五张卡原地长大"，不是"从盒子里飞出来"）。flex 布局不知道中心在哪，
+ * 只能在布局完成后量一次，把这个反向位移喂给 CSS。
+ */
+const fanEl = ref<HTMLElement | null>(null);
+const dx = ref<number[]>([]);
+
+function measureFan() {
+    const fan = fanEl.value;
+    if (!fan) return;
+    const slots = [...fan.querySelectorAll('.slot')] as HTMLElement[];
+    const mid = fan.clientWidth / 2;
+    dx.value = slots.map(el => mid - (el.offsetLeft + el.offsetWidth / 2));
+}
+
 function slotStyle(index: number) {
     const spot = fanOf(index, cards.value.length);
     return {
         '--rot': `${spot.rot}deg`,
         '--dy': `${spot.dy}px`,
+        '--dx': `${(dx.value[index] ?? 0).toFixed(1)}px`,
         '--z': String(spot.z),
         '--i': String(index),
     } as Record<string, string>;
@@ -212,9 +245,13 @@ function redraw() {
         exclude: new Set(recent.value),
     });
     cards.value = pack.map(item => cardOf(item, pool.onlineSerials, pool.letters));
+    // 下一包换一个主题色（允许与上一包不同即可，三色循环随机足够）
+    const others = TINTS.filter(x => x !== tint.value);
+    tint.value = others[Math.floor(Math.random() * others.length)];
     recent.value = rememberRecent(recent.value, cards.value);
     activeIndex.value = 0;
     phase.value = 'sealed';
+    void nextTick(measureFan);
 }
 
 async function load() {
@@ -324,6 +361,11 @@ function disposeIdle() {
     loading.value = true;   // 回来时先转圈，不闪那张空态卡
 }
 
+onMounted(() => {
+    // 窗口变宽变窄，扇形间距跟着变 ⇒ 回退量必须重量，否则卡片会从错的地方飞出来
+    window.addEventListener('resize', measureFan);
+});
+
 onActivated(() => {
     window.addEventListener('keydown', onKey);
     if (idleTimer !== null) {
@@ -350,6 +392,7 @@ onDeactivated(() => {
 
 onBeforeUnmount(() => {
     window.removeEventListener('keydown', onKey);
+    window.removeEventListener('resize', measureFan);
     if (idleTimer !== null) window.clearTimeout(idleTimer);
     stopConfetti();
     clearTimers();
@@ -480,7 +523,7 @@ onBeforeUnmount(() => {
     width: min(190px, calc((100% - 120px) / var(--n)));
     flex: none;
     z-index: var(--z);
-    transform: translate(0, calc(var(--dy) + var(--fy, 0px))) scale(var(--fs, 1)) rotate(var(--rot));
+    transform: translate(var(--fx, 0px), calc(var(--dy) + var(--fy, 0px))) scale(var(--fs, 1)) rotate(var(--rot));
     opacity: var(--fo, 1);
     transition:
         transform 620ms cubic-bezier(0.19, 1, 0.22, 1) var(--delay, 0ms),
@@ -488,13 +531,16 @@ onBeforeUnmount(() => {
 }
 
 .fan[data-phase='sealed'] .slot {
-    --fy: 36px;
-    --fs: 0.5;
+    /* 从盒心出发：`--dx` 是量出来的反向位移，把它抵消掉 = 所有卡叠在舞台中央 */
+    --fx: var(--dx);
+    --fy: 30px;
+    --fs: 0.42;
     --fo: 0;
     pointer-events: none;
 }
 
 .fan[data-phase='opening'] .slot {
+    --fx: 0px;
     --fy: 0px;
     --fs: 1;
     --fo: 1;
