@@ -3,9 +3,9 @@
         <header class="top">
             <div class="top__left">
                 <span class="pool-count">池中 {{ total }} 部</span>
-                <span v-if="!onlineKnown" class="warn">磁盘状态未知，已包含全部缓存</span>
+                <span v-if="!onlineKnown && !loading" class="warn">磁盘状态未知，已包含全部缓存</span>
             </div>
-            <n-checkbox v-model:checked="includeOffline" :disabled="loading || !onlineKnown">
+            <n-checkbox v-model:checked="includeOffline" :disabled="loading || !onlineKnown || phase !== 'sealed'">
                 包含离线盘缓存
             </n-checkbox>
         </header>
@@ -22,70 +22,98 @@
                 <n-button size="small" @click="goFiles">前往文件浏览</n-button>
             </div>
 
-            <div v-else class="fan" :style="{ '--n': cards.length }">
-                <div
-                    v-for="(card, i) in cards"
-                    :key="card.key"
-                    class="slot"
-                    :style="slotStyle(i)"
-                >
-                    <LuckyDiscCard
-                        :card="card"
-                        :index="i"
-                        :count="cards.length"
-                        :active="i === activeIndex"
-                        :foil="foil"
-                        @open="open"
-                        @focus="activeIndex = $event"
-                    />
+            <template v-else>
+                <canvas ref="fxRef" class="fx" aria-hidden="true" />
+
+                <LuckyDiscCase v-if="phase !== 'open'" :phase="phase" @tear="startOpen" />
+
+                <div class="fan" :data-phase="phase" :style="{ '--n': cards.length, '--t-cards': `${T_CARDS}ms` }">
+                    <span class="sweep" aria-hidden="true" />
+                    <div
+                        v-for="(card, i) in cards"
+                        :key="card.key"
+                        class="slot"
+                        :style="slotStyle(i)"
+                    >
+                        <LuckyDiscCard
+                            :card="card"
+                            :index="i"
+                            :count="cards.length"
+                            :active="i === activeIndex"
+                            :foil="foil"
+                            @open="open"
+                            @focus="activeIndex = $event"
+                        />
+                    </div>
                 </div>
-            </div>
+            </template>
         </div>
 
-        <footer v-if="!loading && cards.length" class="bottom">
-            <n-button size="small" @click="redraw">再来一包</n-button>
-            <span class="keys"><kbd>←</kbd><kbd>→</kbd> 选 · <kbd>Enter</kbd> 播 · <kbd>空格</kbd> 换一包</span>
+        <footer class="bottom">
+            <template v-if="phase === 'open'">
+                <n-button size="small" @click="redraw">再来一包</n-button>
+                <span class="keys"><kbd>←</kbd><kbd>→</kbd> 选 · <kbd>Enter</kbd> 播 · <kbd>空格</kbd> 换一包</span>
+            </template>
+            <span v-else-if="phase === 'sealed' && cards.length" class="keys">
+                点一下拉条，或者按 <kbd>空格</kbd>
+            </span>
         </footer>
     </div>
 </template>
 
 <script setup lang="ts">
 /**
- * 手气不错 —— 页面编排。
+ * 手气不错 —— 页面编排（只放"什么时候做什么"，不含抽卡规则、不含视觉参数）。
  *
- * 分工（本文件只管"什么时候做什么"，不含任何抽卡规则与视觉参数）：
- *   · 抽哪几张   → `drawModel.ts`（纯逻辑，探针覆盖）
- *   · 池子从哪来 → `usePool.ts`（两个已有接口，零读盘）
- *   · 怎么打开   → `views/FileFinder/openCover.ts`（与 3D 漫游共用）
- *   · 卡片长什么样 → `components/LuckyDiscCard`
- *   · 摆成扇形   → `discCase.ts` 的 `fanOf`
+ * 分工：
+ *   · 抽哪几张     → `drawModel.ts`（纯逻辑，探针覆盖）
+ *   · 池子从哪来   → `usePool.ts`（两个已有接口，零读盘）
+ *   · 怎么打开     → `views/FileFinder/openCover.ts`（与 3D 漫游共用）
+ *   · 卡片 / 包装盒 → `components/LuckyDiscCard`、`components/LuckyDiscCase`
+ *   · 扇形落点     → `discCase.ts` 的 `fanOf`
+ *
+ * 时间轴也**只在这里**（0 / 180 / 320 / 1400ms）。盒子组件内部只有 CSS class，
+ * 自己不带任何计时器 —— 两处各管一半时间轴必然对不上。
  */
 import { computed, onActivated, onBeforeUnmount, onDeactivated, ref, watch } from 'vue';
 import { useRouter } from 'vue-router';
 import { NButton, NCheckbox, NSpin } from 'naive-ui';
 import LuckyDiscCard from '@/components/LuckyDiscCard/index.vue';
+import LuckyDiscCase from '@/components/LuckyDiscCase/index.vue';
+import { burst } from '@/components/LuckyDiscCase/confetti';
 import { cardOf, drawPack, rememberRecent } from './drawModel';
 import type { DrawCard } from './drawModel';
 import { fetchPool } from './usePool';
 import { fanOf } from './discCase';
 import { openCover } from '@/views/FileFinder/openCover';
+import { playSfx } from '@/utils/sfx';
 import useNotify from '@/hooks/useNotify';
+
+type Phase = 'sealed' | 'opening' | 'open';
 
 const router = useRouter();
 const notify = useNotify();
 
 /** 质感配方 —— 对应 `docs/probes/lucky-texture/spike.html` 的三档。
- *  `deco` = 箔只在信息条/贴纸/书脊。真实封面不吃色相，这是「保质感 + 兼容自定义」的落点。 */
+ *  `deco` = 箔只在信息条 / 贴纸 / 书脊。真实封面不吃色相，这是「保质感 + 兼容自定义」的落点。 */
 const foil = 'deco' as const;
 
+/** 拆封时间轴（ms）。改这里就够了，盒子与卡片的 CSS 延迟都按这几个数对齐 */
+const T_BURST = 180;   // 盒盖弹开 + 爆开音 + 彩带
+const T_CARDS = 320;   // 第一张卡起飞（与 fan 的 CSS delay 起点同值）
+const T_DONE = 1450;   // 盒子退场完毕（CSS: 900ms 延迟 + 520ms 动画 = 1420ms），切到 open
+
 const loading = ref(true);
+const phase = ref<Phase>('sealed');
 const sources = ref<Awaited<ReturnType<typeof fetchPool>> | null>(null);
 const cards = ref<DrawCard[]>([]);
-/** 最近抽过的 sig（最多 3 包）—— 连按两次不会出现一模一样的五张 */
 const recent = ref<string[]>([]);
 const activeIndex = ref(0);
-
 const includeOffline = ref(true);
+
+const fxRef = ref<HTMLCanvasElement | null>(null);
+let stopFx: (() => void) | null = null;
+const timers: number[] = [];
 
 const total = computed(() => sources.value?.total ?? 0);
 const onlineKnown = computed(() => sources.value?.onlineKnown ?? false);
@@ -93,23 +121,72 @@ const onlineKnown = computed(() => sources.value?.onlineKnown ?? false);
 /**
  * 实际生效的"含离线"开关。
  *
- * ⚠️ `/getDisks` 失败时 `onlineSerials` 是空集 —— 若此时仍按"不含离线"筛，
- * 整个池子会被滤成空，用户只会看到"没有可抽的封面"。所以状态未知时**强制包含**，
- * 并把勾选框禁用（上头那行小字说明原因）。
+ * ⚠️ `/getDisks` 失败时 `onlineSerials` 是空集 —— 若此时仍按"不含离线"筛，整个池子
+ * 会被滤成空，用户只会看到"没有可抽的封面"。所以状态未知时**强制包含**并禁用勾选框。
  */
 const effectiveIncludeOffline = computed(() => includeOffline.value || !onlineKnown.value);
 
 function slotStyle(index: number) {
     const spot = fanOf(index, cards.value.length);
     return {
-        transform: `rotate(${spot.rot}deg) translateY(${spot.dy}px)`,
-        zIndex: String(spot.z),
-    };
+        '--rot': `${spot.rot}deg`,
+        '--dy': `${spot.dy}px`,
+        '--z': String(spot.z),
+        '--i': String(index),
+    } as Record<string, string>;
+}
+
+function clearTimers() {
+    while (timers.length) window.clearTimeout(timers.pop());
+}
+
+function stopConfetti() {
+    stopFx?.();
+    stopFx = null;
+}
+
+/** 从令牌里取箔的三段色 —— canvas 里不能用 `var()`，只能读出来传进去 */
+function foilColors(): string[] {
+    const cs = getComputedStyle(document.documentElement);
+    return ['--ff-foil-a', '--ff-foil-b', '--ff-foil-c']
+        .map(name => cs.getPropertyValue(name).trim())
+        .filter(Boolean);
+}
+
+function fireConfetti() {
+    const canvas = fxRef.value;
+    if (!canvas) return;
+    stopConfetti();
+    stopFx = burst(canvas, {
+        count: 120,
+        origin: { x: 0.5, y: 0.44 },
+        colors: foilColors(),
+    });
+}
+
+/** 撕开：整条时间轴唯一入口（点击拉条与空格都走这里） */
+function startOpen() {
+    if (phase.value !== 'sealed' || !cards.value.length) return;
+    phase.value = 'opening';
+    playSfx('lucky-tear');
+
+    timers.push(window.setTimeout(() => {
+        playSfx('lucky-burst');
+        fireConfetti();
+    }, T_BURST));
+
+    timers.push(window.setTimeout(() => {
+        phase.value = 'open';
+        activeIndex.value = 0;
+    }, T_DONE));
 }
 
 function redraw() {
     const pool = sources.value;
     if (!pool) return;
+    clearTimers();
+    stopConfetti();
+
     const pack = drawPack(pool.sources, pool.onlineSerials, {
         includeOffline: effectiveIncludeOffline.value,
         exclude: new Set(recent.value),
@@ -117,6 +194,7 @@ function redraw() {
     cards.value = pack.map(item => cardOf(item, pool.onlineSerials, pool.letters));
     recent.value = rememberRecent(recent.value, cards.value);
     activeIndex.value = 0;
+    phase.value = 'sealed';
 }
 
 async function load() {
@@ -134,6 +212,7 @@ async function load() {
 }
 
 async function open(card: DrawCard) {
+    if (phase.value !== 'open') return;
     const result = await openCover(card.src);
     if (result.ok) {
         notify('success', '已交给播放器', card.title);
@@ -158,12 +237,27 @@ watch(includeOffline, redraw);
  *
  * ⚠️ 必须挂/卸在 activated/deactivated 上：外壳用 KeepAlive，离开本页组件不会卸载，
  *    只在 `onMounted` 挂监听的话，人在文件页按空格也会在这儿换一包。
- * ⚠️ 焦点在输入类元素上时一律放行：`NCheckbox` 内部是 `<input>`，空格属于它。
+ * ⚠️ 焦点在输入类元素上时放行：`NCheckbox` 内部是 `<input>`，空格属于它。
  */
 function onKey(ev: KeyboardEvent) {
     const el = ev.target as HTMLElement | null;
     if (el && (el.tagName === 'INPUT' || el.tagName === 'TEXTAREA' || el.isContentEditable)) return;
+
+    if (ev.key === 'Escape') {
+        ev.preventDefault();
+        goFiles();
+        return;
+    }
     if (!cards.value.length) return;
+
+    if (phase.value === 'sealed') {
+        if (ev.key === ' ' || ev.key === 'Enter') {
+            ev.preventDefault();
+            startOpen();
+        }
+        return;
+    }
+    if (phase.value !== 'open') return;
 
     switch (ev.key) {
         case 'ArrowLeft':
@@ -182,26 +276,62 @@ function onKey(ev: KeyboardEvent) {
             ev.preventDefault();
             redraw();
             break;
-        case 'Escape':
-            ev.preventDefault();
-            goFiles();
-            break;
         default:
             break;
     }
 }
 
-/** KeepAlive 下首次进入也会触发 onActivated ⇒ 用 loaded 挡住重复加载 */
+/**
+ * 离页多久后把数据与画布一起还回去。
+ *
+ * 外壳是 KeepAlive ⇒ 切页不会触发 `onBeforeUnmount`；不显式停，彩带的 RAF 会在后台
+ * 一直跑（隧道页那个 idle dispose 是同一个坑，照它的 2 分钟阈值）。
+ */
+const IDLE_DISPOSE_MS = 2 * 60 * 1000;
+let idleTimer: number | null = null;
+let disposed = false;
 let loaded = false;
+
+function disposeIdle() {
+    idleTimer = null;
+    disposed = true;
+    clearTimers();
+    stopConfetti();
+    cards.value = [];
+    phase.value = 'sealed';
+    loading.value = true;   // 回来时先转圈，不闪那张空态卡
+}
+
 onActivated(() => {
     window.addEventListener('keydown', onKey);
-    if (loaded) return;
-    loaded = true;
-    void load();
+    if (idleTimer !== null) {
+        window.clearTimeout(idleTimer);
+        idleTimer = null;
+    }
+    if (disposed) {
+        disposed = false;
+        void load();
+        return;
+    }
+    if (!loaded) {
+        loaded = true;
+        void load();
+    }
 });
 
-onDeactivated(() => window.removeEventListener('keydown', onKey));
-onBeforeUnmount(() => window.removeEventListener('keydown', onKey));
+onDeactivated(() => {
+    window.removeEventListener('keydown', onKey);
+    stopConfetti();
+    clearTimers();
+    idleTimer = window.setTimeout(disposeIdle, IDLE_DISPOSE_MS);
+});
+
+onBeforeUnmount(() => {
+    window.removeEventListener('keydown', onKey);
+    if (idleTimer !== null) window.clearTimeout(idleTimer);
+    stopConfetti();
+    clearTimers();
+});
 </script>
 
 <style scoped lang="less">
@@ -248,12 +378,22 @@ onBeforeUnmount(() => window.removeEventListener('keydown', onKey));
     text-overflow: ellipsis;
 }
 
+/* 舞台：盒子与扇形卡片共用同一个中心 —— 卡片要从盒心飞出去，两个中心必须重合 */
 .stage {
+    position: relative;
     flex: 1;
     min-height: 0;
     display: grid;
     place-items: center;
     padding: var(--ff-sp-4);
+}
+
+.fx {
+    position: absolute;
+    inset: 0;
+    width: 100%;
+    height: 100%;
+    pointer-events: none;
 }
 
 .state {
@@ -284,10 +424,17 @@ onBeforeUnmount(() => window.removeEventListener('keydown', onKey));
     color: var(--ff-text-2);
 }
 
-/* 扇形：五张并排，各自的 rotate / translateY 由 `fanOf` 给出（写在内联 style 上）。
-   ⚠️ 卡片本身还有 preserve-3d + 自己的倾斜 transform，所以旋转必须落在**外面这层**
-      `.slot` 上 —— 同一个元素上两个 rotate 会互相覆盖。 */
+/**
+ * 扇形。卡片各自的倾斜在子组件内部（preserve-3d），所以旋转与位移必须落在**外面这层**
+ * `.slot` 上 —— 同一个元素上两套 transform 会互相覆盖。
+ *
+ * 三个阶段的差异全部靠 CSS 变量：
+ *   sealed  卡片缩在盒心、透明、不吃点击
+ *   opening 依次弹出到扇形落点（每张 +60ms）
+ *   open    静置
+ */
 .fan {
+    position: relative;
     display: flex;
     align-items: center;
     justify-content: center;
@@ -299,7 +446,54 @@ onBeforeUnmount(() => window.removeEventListener('keydown', onKey));
 .slot {
     width: min(190px, calc((100% - 120px) / var(--n)));
     flex: none;
-    transition: transform 320ms cubic-bezier(0.19, 1, 0.22, 1);
+    z-index: var(--z);
+    transform: translate(0, calc(var(--dy) + var(--fy, 0px))) scale(var(--fs, 1)) rotate(var(--rot));
+    opacity: var(--fo, 1);
+    transition:
+        transform 620ms cubic-bezier(0.19, 1, 0.22, 1) var(--delay, 0ms),
+        opacity 320ms ease var(--delay, 0ms);
+}
+
+.fan[data-phase='sealed'] .slot {
+    --fy: 36px;
+    --fs: 0.5;
+    --fo: 0;
+    pointer-events: none;
+}
+
+.fan[data-phase='opening'] .slot {
+    --fy: 0px;
+    --fs: 1;
+    --fo: 1;
+    /* 起点由页面传下来的 `--t-cards` 决定 —— 盒子掀盖与卡片起飞必须同一条时间轴 */
+    --delay: calc(var(--t-cards, 320ms) + var(--i) * 60ms);
+    pointer-events: none;
+}
+
+.fan[data-phase='open'] .slot {
+    --delay: 0ms;
+}
+
+/* 爆开瞬间横扫过五张卡的一道彩虹 —— 只跑一次，静置画面不留色相 */
+.sweep {
+    position: absolute;
+    inset: -8% -4%;
+    pointer-events: none;
+    opacity: 0;
+    background: linear-gradient(104deg,
+        transparent 38%, var(--ff-foil-a) 46%, var(--ff-foil-b) 50%,
+        var(--ff-foil-c) 54%, transparent 62%);
+    mix-blend-mode: screen;
+}
+
+.fan[data-phase='opening'] .sweep {
+    animation: sweep-across 760ms 340ms ease-out forwards;
+}
+
+@keyframes sweep-across {
+    0% { opacity: 0; transform: translateX(-46%); }
+    28% { opacity: 0.6; }
+    100% { opacity: 0; transform: translateX(46%); }
 }
 
 .bottom {
@@ -334,6 +528,16 @@ kbd {
 
     .slot {
         width: min(150px, calc((100% - 60px) / var(--n)));
+    }
+}
+
+@media (prefers-reduced-motion: reduce) {
+    .slot {
+        transition: opacity 240ms ease;
+    }
+
+    .fan[data-phase='opening'] .sweep {
+        animation: none;
     }
 }
 </style>

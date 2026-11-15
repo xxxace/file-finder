@@ -41,8 +41,16 @@ export async function fetchPool(): Promise<PoolSnapshot> {
         getAction(`${API_BASE}/getDisks`).catch(() => null),
     ]);
 
+    /**
+     * ⚠️ 两个端点的响应形状**不一样**，这是服务端现状（2026-11-15 实测）：
+     *   `/getAllCovers` → `{ code, data: { items, total } }`  （controller 显式包了 code/data）
+     *   `/getDisks`     → `{ disks, duplicated, … }`          （直接平铺，**没有** code/data）
+     * 因为 `sendJson` 只是 `JSON.stringify(body)`，包不包由每个 controller 自己决定。
+     * 假设两者一致 ⇒ `disks.data.disks` 恒 undefined ⇒ 全部卡被判离线（首版真机就是这个症状）。
+     * 别改成"兼容两种形状"：那会让下一个人永远不知道哪个才是对的。
+     */
     const sources: TunnelCoverItem[] = Array.isArray(covers?.data?.items) ? covers.data.items : [];
-    const diskList: DiskLike[] = Array.isArray(disks?.data?.disks) ? disks.data.disks : [];
+    const diskList: DiskLike[] = Array.isArray(disks?.disks) ? disks.disks : [];
 
     const onlineSerials = new Set<string>();
     for (const d of diskList) {
@@ -53,7 +61,7 @@ export async function fetchPool(): Promise<PoolSnapshot> {
         sources,
         onlineSerials,
         letters: letterMapOf(diskList),
-        onlineKnown: Array.isArray(disks?.data?.disks),
+        onlineKnown: Array.isArray(disks?.disks),
         total: sources.length,
     };
 }

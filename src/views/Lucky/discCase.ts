@@ -60,3 +60,26 @@ export function fanOf(index: number, count: number): FanSpot {
         z: count - Math.round(Math.abs(offset)),
     };
 }
+
+/**
+ * 收缩膜撕开后左右两半的 `clip-path`。
+ *
+ * 为什么用锯齿而不是直线：直线撕口是"剪刀剪的"，锯齿才是"手撕的"——
+ * 这是参考站整段撕包动画里最便宜、也最决定真实感的一处。
+ *
+ * @param side  `left` = 从左边缘到中线；`right` = 从右边缘到中线
+ * @param teeth 锯齿段数（12 段在 300px 宽度上约每段 25px，肉眼正好）
+ * @param jitter 每段横向偏移的百分比（4% 在 300px 上是 12px，够乱但不夸张）
+ */
+export function tearPolygon(side: 'left' | 'right', teeth = 12, jitter = 4): string {
+    const edge = side === 'left' ? '0' : '100';
+    const pts: string[] = [`${edge} 0`, '50 0'];
+    for (let i = 1; i <= teeth; i += 1) {
+        const y = (100 / teeth) * i;
+        // 交替左右偏，最后一段回到正中 —— 不然两半拼不回原来那道口子
+        const x = i === teeth ? 50 : 50 + (i % 2 === 0 ? jitter : -jitter);
+        pts.push(`${x} ${y.toFixed(2)}`);
+    }
+    pts.push('50 100', `${edge} 100`);
+    return `polygon(${pts.join(', ')})`;
+}

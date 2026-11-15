@@ -252,6 +252,11 @@
   --ff-disc-sheen: rgba(255, 255, 255, 0.78);
   --ff-jewel-edge: rgba(255, 255, 255, 0.55);
   --ff-jewel-shadow: rgba(18, 16, 34, 0.18);
+  /* 收缩膜的两层：`veil` 是膜本身那层雾（不撕开就看不透），`sheen` 是膜上的折痕高光。
+     ⚠️ 深色下膜必须是**暗雾**：用白色半透会把整个深色界面照成灰白一块，
+        与"一片灰暗"那个症状方向相反但同样难看（spike 里两套都试过）。 */
+  --ff-film-veil: rgba(255, 255, 255, 0.6);
+  --ff-film-sheen: rgba(255, 255, 255, 0.9);
   --ff-inner-paper: var(--ff-panel);
   --ff-on-paper: var(--ff-text-1);
   /* 内页底部那条"印刷黑条"。
@@ -493,6 +498,9 @@
   --ff-jewel-shadow: rgba(0, 0, 0, 0.55);
   --ff-inner-paper: var(--ff-raised);
   --ff-on-paper: var(--ff-text-1);
+  /* 膜在深色主题下是暗雾（理由见浅色同段） */
+  --ff-film-veil: rgba(24, 26, 30, 0.66);
+  --ff-film-sheen: rgba(255, 255, 255, 0.22);
   --ff-foil-a: #ff8fba;
   --ff-foil-b: #ffd98a;
   --ff-foil-c: #86e8ff;

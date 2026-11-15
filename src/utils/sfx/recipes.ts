@@ -183,4 +183,39 @@ export const SFX_RECIPES = {
             { type: 'tone', freq: 659.26, at: 0.11, gain: 0, partials: [[1, 1, 1], [3.93, 0.16, 0.25], [9.2, 0.025, 0.1]], env: { attack: 0.002, decay: 0.12, curve: 6 } },
         ],
     },
+    /**
+     * 抽卡 · 撕开收缩膜（2026-11-15）
+     *
+     * 真声是"宽频爆点 + 一串逐渐变细的摩擦" —— 所以第一层是白噪极短爆发（膜的脆），
+     * 后面三层是**频率逐级抬高、响度逐级衰减**的窄带噪声（撕裂在往上走、力在变小）。
+     * 三层错开 60~100ms 才像"一路撕下去"，一层长噪声只会像"嘶"。
+     */
+    'lucky-tear': {
+        duration: 0.55, seed: 77, loudness: -13, lowpass: 9000,
+        reverb: { mix: 0.08, decay: 0.5, predelay: 0.01, damp: 4000 },
+        layers: [
+            { type: 'noise', color: 'white', at: 0, gain: -5, punch: true, filter: [{ type: 'highpass', freq: 900, q: 0.7 }, { type: 'lowpass', freq: 7000, q: 0.6 }], env: { attack: 0.0015, decay: 0.09, curve: 5 } },
+            { type: 'noise', color: 'pink', at: 0.06, gain: -11, filter: [{ type: 'bandpass', freq: 1800, q: 1.1 }], env: { attack: 0.004, decay: 0.13, curve: 4 } },
+            { type: 'noise', color: 'pink', at: 0.17, gain: -16, filter: [{ type: 'bandpass', freq: 2400, q: 1.3 }], env: { attack: 0.004, decay: 0.11, curve: 4 } },
+            { type: 'noise', color: 'pink', at: 0.27, gain: -20, filter: [{ type: 'bandpass', freq: 3100, q: 1.4 }], env: { attack: 0.004, decay: 0.1, curve: 4 } },
+        ],
+    },
+    /**
+     * 抽卡 · 爆开（2026-11-15）
+     *
+     * 三件事叠在一起：① 低频下落 = 盒盖弹开的"咚"；② G5→D6→G6 三个上行音 =
+     * "打开了"的明亮感（与 `bloom` 同一族的泛音比例，听起来是同一个产品）；③ 尾部高频碎噪 =
+     * 彩带散落。②那三个音**必须错开 70ms 以上**，同时响就是一声和弦糊，听不出"往上走"。
+     */
+    'lucky-burst': {
+        duration: 1.2, seed: 91, loudness: -12, lowpass: 8500,
+        reverb: { mix: 0.22, decay: 1.1, predelay: 0.012, damp: 5200 },
+        layers: [
+            { type: 'tone', freq: { from: 120, to: 52, time: 0.16, curve: 3 }, at: 0, gain: 0, partials: [[1, 1, 1], [2, 0.2, 0.5]], env: { attack: 0.002, decay: 0.3, curve: 5 } },
+            { type: 'tone', freq: 783.99, at: 0.02, gain: -7, partials: [[1, 1, 1], [2, 0.12, 0.5], [3, 0.03, 0.3]], env: { attack: 0.003, decay: 0.42, curve: 6 } },
+            { type: 'tone', freq: 1174.66, at: 0.09, gain: -10, partials: [[1, 1, 1], [2, 0.12, 0.5], [3, 0.03, 0.3]], env: { attack: 0.003, decay: 0.6, curve: 6 } },
+            { type: 'tone', freq: 1567.98, at: 0.16, gain: -16, partials: [[1, 1, 1], [2, 0.1, 0.5]], env: { attack: 0.004, decay: 0.7, curve: 6 } },
+            { type: 'noise', color: 'white', at: 0.3, gain: -26, filter: [{ type: 'highpass', freq: 5200, q: 0.6 }], env: { attack: 0.01, decay: 0.35, curve: 3 } },
+        ],
+    },
 } satisfies Record<string, SfxRecipe>;

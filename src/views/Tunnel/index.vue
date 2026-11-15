@@ -89,10 +89,21 @@ function shuffle<T>(arr: T[]): T[] {
 async function loadDisks() {
     try {
         const res = await getAction(`${API_BASE}/getDisks`);
-        if (res && res.code === 200 && Array.isArray(res.data?.disks)) {
-            disks.value = res.data.disks.map((d: any) => ({
+        /**
+         * ⚠️ 2026-11-15 修：这里原来读 `res.data?.disks`，而 `/getDisks` 的响应是
+         * **平铺**的 `{ disks, duplicated, … }` —— 没有 `code`/`data` 包装（`sendJson`
+         * 只做 `JSON.stringify(body)`，包不包由每个 controller 自己决定；`/getAllCovers`
+         * 恰好包了）。条件恒假 ⇒ 页首的盘下拉**一直是空的**。
+         * 判据只认 `Array.isArray(res?.disks)`：`assertOk` 已经保证非 200 会抛，不必再看 code。
+         */
+        if (Array.isArray(res?.disks)) {
+            disks.value = res.disks.map((d: { serial: string; letter?: string; drive?: string; name?: string }) => ({
                 serial: d.serial,
-                name: d.letter ? `${d.letter}盘 (${d.name || d.serial})` : `${d.name || d.serial} (离线)`,
+                // ⚠️ 服务端给的是 `drive`（`C:`），不是 `letter` —— 原来这里读 d.letter 恒 undefined，
+                // 所以每一项都显示成"(离线)"。两个都兜一下，将来服务端补字段也不用再改。
+                name: d.letter || d.drive
+                    ? `${(d.letter || d.drive || '').replace(/:$/, '')}盘 (${d.name || d.serial})`
+                    : `${d.name || d.serial} (离线)`,
             }));
         }
     } catch {

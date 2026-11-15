@@ -32,7 +32,7 @@
             <span class="spine" aria-hidden="true" />
 
             <span class="tag" :class="card.online ? 'tag--online' : 'tag--offline'">
-                {{ card.online ? `${card.letter || '?'}盘` : '离线' }}
+                {{ card.online ? (card.letter ? `${card.letter}盘` : '在线') : '离线' }}
             </span>
 
             <div class="bar">
@@ -352,10 +352,13 @@ function onLeave(ev: PointerEvent) {
 }
 
 /* ── 离线态 ─────────────────────────────────────────────────────────────────
-   不整卡降透明：厚度层与投影跟着淡会显得"人不在但影子还在"。只处理正面。 */
-.is-offline .face {
-    opacity: 0.42;
-    filter: grayscale(0.6);
+   ⚠️ 2026-11-15 纠错：首版给整张脸 `opacity .42 + grayscale(.6)`，业主真机第一句话
+      就是"怎么一片灰暗、没色彩"。那个处理错在**判据用错了对象**：
+      "盘没插"是"这张暂时播不了"，不是"这东西坏了"。而封面正是他挑片的唯一依据，
+      把它弄灰等于把唯一有用的信息毁掉。
+      现在离线只体现为**右上贴纸变成红色"离线"**，封面一个字都不动。 */
+.is-offline .tag--offline {
+    box-shadow: 0 0 0 1px var(--ff-inner-band) inset;
 }
 
 .is-active .face {

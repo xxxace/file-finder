@@ -41,7 +41,9 @@ export type SfxEvent =
     | 'file-move'    // 多分片弹层：方向键/悬浮移动一格（音色 = Sound Lab「Halo」）
     | 'file-open'    // 多分片弹层：回车/双击选定（音色 = Sound Lab「Halo」）
     | 'warn'          // 警告 / 注意（nudge）
-    | 'fail';         // 失败 / 没成（shrug）—— 与 warn 是两件事：警告是"注意一下"，失败是"没成"
+    | 'fail'          // 失败 / 没成（shrug）—— 与 warn 是两件事：警告是"注意一下"，失败是"没成"
+    | 'lucky-tear'    // 抽卡：撕开收缩膜
+    | 'lucky-burst';  // 抽卡：爆开（盒盖弹开 + 五张飞出）
 
 const EVENT_RECIPE: Record<SfxEvent, SfxRecipe> = {
     mode: SFX_RECIPES.notch,
@@ -64,6 +66,8 @@ const EVENT_RECIPE: Record<SfxEvent, SfxRecipe> = {
     'file-open': SFX_RECIPES.halo,
     warn: SFX_RECIPES.nudge,
     fail: SFX_RECIPES.shrug,
+    'lucky-tear': SFX_RECIPES['lucky-tear'],
+    'lucky-burst': SFX_RECIPES['lucky-burst'],
 };
 
 /** 个别事件在配方响度之上再压一档。Hover 配方本身已是 -23dB 的"微光"（官方按 hover 调的），
