@@ -553,6 +553,19 @@ onBeforeUnmount(() => {
     transform-style: preserve-3d;
     pointer-events: none;
     z-index: 6;
+    /* 包还没开时，五张卡就叠在包的**前面**（同一格、z-index 更高）——
+       真机表现是"包装还没撕，卡片已经出来了"。所以拆开前整层不显示，
+       且层级压到包之下，连点击都碰不到。 */
+    opacity: 0;
+}
+
+.scene[data-phase='opening'],
+.scene[data-phase='open'] {
+    opacity: 1;
+}
+
+.scene[data-phase='sealed'] {
+    z-index: 2;
 }
 
 .slot {

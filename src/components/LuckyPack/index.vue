@@ -120,12 +120,14 @@ let fall: { y: number; v: number } | null = null;
 let fallAt = -1;
 let lastPhase = props.phase;
 let openedFired = false;
+/** 下一次"自己抖一下"的时刻（秒，`t` 坐标系） */
+let nudgeAt = 5;
 let openedAt = 0;
 let pw = 280;
 let ph = 405;
 
 const pointer = { nx: 0, ny: 0, in: false };
-interface DragState { id: number; x0: number; y0: number; p0: number; moved: boolean }
+interface DragState { id: number; x0: number; y0: number; p0: number; moved: boolean; dy: number }
 let drag: DragState | null = null;
 
 function clamp(v: number, a: number, b: number): number {
@@ -236,14 +238,36 @@ const stage = useStage((dt, t) => {
     }
 
     // ── 姿态 ────────────────────────────────────────────────
-    squeeze.to = props.phase === 'sealed' && drag?.moved ? 1 : 0;
+    /**
+     * 纵向拉动（还没开始撕时）：包被手拉长，松手弹回去。
+     * `170·(1 − 1/(1+|dy|/170))` 是一条饱和曲线 —— 拉得越远越"拉不动"，
+     * 与真实的软包装一致（线性会显得像橡皮筋）。
+     */
+    const tug = drag?.moved && tearP.to === 0
+        ? Math.sign(drag.dy) * 170 * (1 - 1 / (1 + Math.abs(drag.dy) / 170))
+        : 0;
+
+    // 捏住时蜷缩（弹性衣料被攥住的样子），撕开后松开
+    squeeze.to = tug ? -Math.abs(tug) / 90 : (drag?.moved && props.phase === 'sealed' ? 1 : 0);
+
     const nx = pointer.in ? pointer.nx : 0;
     const ny = pointer.in ? pointer.ny : 0;
     const hold = drag?.moved ? 0.25 : 1;
-    P.y.to = Math.sin(t * 1.4) * (props.phase === 'sealed' ? 7 : 2);
+
+    P.y.to = Math.sin(t * 1.4) * (props.phase === 'sealed' ? 7 : 2) + tug;
     P.ry.to = nx * 22 * hold;
     P.rx.to = -ny * 16 * hold - squeeze.x * 6;
     P.rz.to = Math.sin(t * 0.9) * 1.6 - (p > 0 && p < 1 ? tearDir * p * 3 : 0);
+
+    /**
+     * 没人碰它的时候，过几秒自己抖一下（像放在桌上被风带了一下）。
+     * 这是"它是个活物"的最后一笔：一个完全静止的物体在动效里读作"图"。
+     */
+    if (props.phase === 'sealed' && !drag && tearP.to < 1 && !stage.reduce && t > nudgeAt) {
+        P.rz.v += (Math.random() < 0.5 ? -1 : 1) * 70;
+        if (tearP.to > 0) tearTh.v += 120;
+        nudgeAt = t + 4 + Math.random() * 3;
+    }
 
     stepAll(values(P), dt);
 
@@ -303,13 +327,14 @@ let flowDropped = false;
 function onDown(ev: PointerEvent) {
     if (props.phase !== 'sealed') return;
     (ev.currentTarget as HTMLElement).setPointerCapture(ev.pointerId);
-    drag = { id: ev.pointerId, x0: ev.clientX, y0: ev.clientY, p0: tearP.to, moved: false };
+    drag = { id: ev.pointerId, x0: ev.clientX, y0: ev.clientY, p0: tearP.to, moved: false, dy: 0 };
 }
 
 function onMove(ev: PointerEvent) {
     if (!drag || ev.pointerId !== drag.id) return;
     const dx = ev.clientX - drag.x0;
     const dy = ev.clientY - drag.y0;
+    drag.dy = dy;
     if (!drag.moved) {
         if (Math.hypot(dx, dy) < 6) return;
         drag.moved = true;
@@ -379,13 +404,18 @@ defineExpose({
     tearYAt: (x: number) => yAt(jag, x),
 });
 
+/**
+ * ⚠️ 归一化用**整个窗口**，不是包自身的矩形。
+ *
+ * 参考站就是这么做的（`pointer.x / innerWidth * 2 - 1`）。差别很直观：
+ *   · 窗口归一化 ⇒ 鼠标在屏幕左半边任何一个位置，包都转到一定程度（像被"远处的手"牵动）；
+ *   · 包内归一化 ⇒ 只有鼠标贴到包的边缘才转到底，稍一离开就弹回 —— 反馈显得又急又假。
+ * 这一条就是"鼠标在其上的反馈和源码不一样"的主因。
+ */
 function onPointerTrack(ev: PointerEvent) {
-    const el = packEl.value;
-    if (!el) return;
-    const rect = el.getBoundingClientRect();
     pointer.in = true;
-    pointer.nx = clamp(((ev.clientX - rect.left) / rect.width) * 2 - 1, -1, 1);
-    pointer.ny = clamp(((ev.clientY - rect.top) / rect.height) * 2 - 1, -1, 1);
+    pointer.nx = clamp((ev.clientX / window.innerWidth) * 2 - 1, -1, 1);
+    pointer.ny = clamp((ev.clientY / window.innerHeight) * 2 - 1, -1, 1);
 }
 
 function onPointerLeave() {
