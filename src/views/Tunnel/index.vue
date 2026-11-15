@@ -42,13 +42,13 @@
 import { ref, onMounted, onActivated, onDeactivated, onBeforeUnmount } from 'vue';
 import { useRouter } from 'vue-router';
 import { NSpin } from 'naive-ui';
-import { ipcRenderer } from 'electron';
 import AlbumCoverTunnel from '@/components/AlbumCoverTunnel/AlbumCoverTunnel.vue';
 import { dedupeCovers } from '@/components/AlbumCoverTunnel/types';
 import type { TunnelCover } from '@/components/AlbumCoverTunnel/types';
 import { API_BASE, getAction } from '@/utils/request';
 import { assetUrl } from '@/utils/thumb';
 import { openInFiles } from '@/views/FileFinder/target';
+import { openCover } from '@/views/FileFinder/openCover';
 import useNotify from '@/hooks/useNotify';
 import { useTheme } from '@/hooks/useTheme';
 
@@ -76,8 +76,6 @@ let idleTimer: ReturnType<typeof setTimeout> | null = null;
 let disposed = false;
 /** 在途请求序号：注销后必须作废旧请求，否则它晚一步回来会把 covers 填回去、在后台偷偷重建 WebGL */
 let loadSeq = 0;
-
-const VIDEO_EXT_RE = /\.(mp4|mkv|avi|wmv|mov|flv|webm|ts|m4v)$/i;
 
 function shuffle<T>(arr: T[]): T[] {
     const res = [...arr];
@@ -155,27 +153,17 @@ async function handleSelect(cover: TunnelCover) {
     const raw = cover.raw;
     if (!raw) return;
 
-    // 寻找视频文件或首个文件
-    const video = raw.files?.find((f: { name: string }) => VIDEO_EXT_RE.test(f.name));
-    const filename = video?.name || raw.files?.[0]?.name || (raw.ext ? `${raw.name}.${raw.ext}` : raw.name);
-    const target = `#${raw.serial}/${raw.dir ? `${raw.dir}/` : ''}${filename}`;
+    // 「挑视频 → 拼锚点 → 解析 → 交给系统」已经收进 `openCover`（抽卡页共用同一份）。
+    // 这里只负责把三种结果翻成人话，文案与抽取前逐字一致。
+    const result = await openCover(raw);
+    if (result.ok) return;
 
-    try {
-        const res = await getAction(`${API_BASE}/resolveAnchor?path=${encodeURIComponent(target)}`);
-        if (res?.path) {
-            const err = await ipcRenderer.invoke('openFile', res.path);
-            if (err) {
-                notify('error', '打开失败', err);
-            }
-        } else {
-            notify('warning', '磁盘未在线', `文件所在磁盘（序列号 ${raw.serial}）当前未连接。`);
-        }
-    } catch (e: any) {
-        if (e?.kind === 'offline' || e?.message?.includes('不在') || String(e).includes('offline')) {
-            notify('warning', '磁盘未在线', `文件所在磁盘（序列号 ${raw.serial}）当前未连接。`);
-        } else {
-            notify('error', '打开出错', String(e));
-        }
+    if (result.reason === 'offline') {
+        notify('warning', '磁盘未在线', `文件所在磁盘（序列号 ${result.serial}）当前未连接。`);
+    } else if (result.stage === 'open') {
+        notify('error', '打开失败', result.message);
+    } else {
+        notify('error', '打开出错', result.message);
     }
 }
 

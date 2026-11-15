@@ -4,9 +4,9 @@
  *
  * 上面三个是"内容目的地"；设置放底部（B 站也是把设置压在最下面）。
  */
-import { BookmarkOutline, HomeOutline, TimeOutline, CubeOutline } from '@vicons/ionicons5';
+import { BookmarkOutline, HomeOutline, TimeOutline, CubeOutline, DiceOutline } from '@vicons/ionicons5';
 
-export type RailKey = 'files' | 'playlists' | 'cache' | 'tunnel' | 'settings';
+export type RailKey = 'files' | 'playlists' | 'cache' | 'tunnel' | 'lucky' | 'settings';
 
 export const RAIL_ITEMS = [
     { key: 'files' as const, label: '文件', icon: HomeOutline },
@@ -24,6 +24,9 @@ export const RAIL_ITEMS = [
      */
     { key: 'playlists' as const, label: '收藏', icon: BookmarkOutline },
     { key: 'tunnel' as const, label: '3D 漫游', icon: CubeOutline },
+    // 「手气不错」= 随机抽一包。骰子而不是 Shuffle：20px 下 Shuffle 是两条细交叉线，
+    // 墨迹太轻、和旁边三个填得满的图标不成一体（同 2026-11-11 换书签那条判据）。
+    { key: 'lucky' as const, label: '手气不错', icon: DiceOutline },
 ];
 
 export const RAIL_PATHS: Record<RailKey, string> = {
@@ -31,5 +34,6 @@ export const RAIL_PATHS: Record<RailKey, string> = {
     playlists: '/playlists',
     cache: '/cache',
     tunnel: '/tunnel',
+    lucky: '/lucky',
     settings: '/settings',
 };

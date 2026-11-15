@@ -238,6 +238,26 @@
   --ff-badge-blur: blur(12.5px);
   --ff-badge-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
 
+  /* ════════ L2 语义 · 抽卡（手气不错 · CD 专辑，2026-11-15） ════════
+     只服务 `views/Lucky` 与 `components/LuckyDisc*`。**两族，不许混用**：
+       · 介质族（disc / jewel / paper）—— 实体本体的颜色（像不像一块塑料/一张纸）；
+       · 箔族（foil-a/b/c）—— 彩虹箔的三段取样色。
+     ⚠️ 箔**只许落在装饰件**（信息条 / 贴纸 / 书脊 / 光盘面），不许铺到真实封面上：
+        参考站 `holo-reverse` 的全息之所以好看，是它底下自己的高饱和插画；同样的
+        彩虹铺到人像照片上会把脸染成彩色（`docs/probes/lucky-texture/` 实测过）。
+        封面只吃 `--ff-jewel-edge` 的玻璃倒角与眩光。
+     ⚠️ 两套主题的箔**不是同一个值**：深底上原值发闷、浅底上原值像塑料糖纸 ——
+        浅色降饱和、深色提亮度，各给各的值。 */
+  --ff-disc-face: #b9bec7;
+  --ff-disc-sheen: rgba(255, 255, 255, 0.78);
+  --ff-jewel-edge: rgba(255, 255, 255, 0.55);
+  --ff-jewel-shadow: rgba(18, 16, 34, 0.18);
+  --ff-inner-paper: var(--ff-panel);
+  --ff-on-paper: var(--ff-text-1);
+  --ff-foil-a: #f09ab6;
+  --ff-foil-b: #e8c98a;
+  --ff-foil-c: #9ad9ec;
+
   /* 计数角标与状态图形共用的**图形级**红（2026-11-08 主人要求用回红 badge）。
      ⚠️ 别拿 `--ff-danger` 替它：那个只做文字与 1px 描边，而这个要撑色块 / 当图标填充。 */
   --ff-danger-badge: #d03050;
@@ -459,6 +479,17 @@
   --ff-status-warn: #fbbf24;
   --ff-status-err: #f87171;
   --ff-status-info: var(--ff-text-2);
+
+  /* 抽卡 · 介质与箔（深色）。理由与浅色同段；两处唯一差异是"深底要更亮、纸要抬一档" */
+  --ff-disc-face: #8d939d;
+  --ff-disc-sheen: rgba(255, 255, 255, 0.34);
+  --ff-jewel-edge: rgba(255, 255, 255, 0.26);
+  --ff-jewel-shadow: rgba(0, 0, 0, 0.55);
+  --ff-inner-paper: var(--ff-raised);
+  --ff-on-paper: var(--ff-text-1);
+  --ff-foil-a: #ff8fba;
+  --ff-foil-b: #ffd98a;
+  --ff-foil-c: #86e8ff;
 
   /* 高亮：深色下同一个 #049eff 直接可用（在 #0e0e0e 上足够亮），只把淡底加一档 */
   --ff-highlight: #049eff;

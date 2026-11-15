@@ -1,0 +1,429 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>抽卡质感标定 · A / B / C</title>
+<style>
+/**
+ * 质感标定工件 —— 只用来选配方，不进构建、不进 src/。
+ *
+ * 唯一目的：同一张真实封面，三组叠加层并排，让业主一眼定「箔要不要、给谁」。
+ * 这里的颜色一律硬编码：它是探针工件，不受 src/ 的 tokens 纪律约束。
+ *
+ * 三组：
+ *   A 只光照      —— glaze(清漆) + glare(眩光)，封面上没有任何色相
+ *   B 光照 + 薄箔全身 —— A + 彩虹 color-dodge 铺满整卡（参考站的做法）
+ *   C 光照 + 箔只给装饰件 —— A + 箔只在信息条 / 贴纸 / 书脊上
+ */
+
+* { box-sizing: border-box; }
+
+:root {
+    --canvas: #f1f2f3;
+    --panel: #ffffff;
+    --ink: #18191c;
+    --muted: #61666d;
+    --line: rgba(0, 0, 0, .12);
+    --stage: #e8e9ea;
+}
+
+body.dark {
+    --canvas: #0e0e0e;
+    --panel: #17181a;
+    --ink: #f1f1f2;
+    --muted: #9a9ea6;
+    --line: rgba(255, 255, 255, .14);
+    --stage: #121315;
+}
+
+html, body { margin: 0; }
+
+body {
+    min-height: 100vh;
+    background: var(--canvas);
+    color: var(--ink);
+    font: 13px/1.6 system-ui, "Segoe UI", sans-serif;
+    padding: 28px 24px 48px;
+    transition: background .2s, color .2s;
+}
+
+header {
+    display: flex;
+    align-items: baseline;
+    gap: 16px;
+    flex-wrap: wrap;
+    max-width: 880px;
+    margin: 0 auto 6px;
+}
+
+h1 { font-size: 15px; font-weight: 500; margin: 0; }
+.hint { color: var(--muted); font-size: 12px; }
+
+.actions { margin-left: auto; display: flex; gap: 8px; }
+
+button {
+    font: inherit;
+    font-size: 12px;
+    padding: 6px 12px;
+    border-radius: 8px;
+    border: 1px solid var(--line);
+    background: var(--panel);
+    color: var(--ink);
+    cursor: pointer;
+}
+
+button:active { transform: translateY(1px); }
+
+.drop {
+    max-width: 880px;
+    margin: 14px auto 26px;
+    border: 1px dashed var(--line);
+    border-radius: 10px;
+    padding: 12px 16px;
+    color: var(--muted);
+    font-size: 12px;
+    text-align: center;
+}
+
+.drop.over { border-color: #378add; color: #378add; }
+
+.row {
+    display: flex;
+    gap: 32px;
+    justify-content: center;
+    align-items: flex-start;
+    flex-wrap: wrap;
+    max-width: 880px;
+    margin: 0 auto;
+}
+
+.col { width: 240px; }
+
+.card {
+    position: relative;
+    width: 240px;
+    aspect-ratio: 3 / 4;
+    border-radius: 6px;
+    overflow: hidden;
+    isolation: isolate;
+    background: #23262c;
+    cursor: crosshair;
+    /* 鼠标位置(0~100) 与倾斜量(0~1)，由脚本写入；三个配方的层都读它们 */
+    --px: 50;
+    --py: 50;
+    --hyp: 0;
+    --rx: 0deg;
+    --ry: 0deg;
+    transform: perspective(900px) rotateX(var(--rx)) rotateY(var(--ry));
+    transform-style: preserve-3d;
+    box-shadow: 0 18px 34px -22px rgba(0, 0, 0, .7);
+    transition: box-shadow .3s;
+}
+
+.card:hover { box-shadow: 0 24px 44px -22px rgba(0, 0, 0, .8); }
+
+/* 封面：拖进来的图或内置占位，铺满且裁切 */
+.art { position: absolute; inset: 0; }
+.art > img { width: 100%; height: 100%; object-fit: cover; display: block; }
+
+/* 内置占位：一张"典型竖版封面"的抽象脸孔，用来在没拖图时也能看出明暗层次 */
+.ph { position: absolute; inset: 0; background: linear-gradient(168deg, #6f6156, #2f2a26 58%, #171513); }
+.ph i {
+    position: absolute;
+    left: 50%; top: 26%;
+    width: 46%; aspect-ratio: 1;
+    translate: -50% 0;
+    border-radius: 50% 50% 46% 46%;
+    background: linear-gradient(150deg, #d9c3ad, #8d7562 70%);
+    filter: blur(0.2px);
+}
+.ph b {
+    position: absolute;
+    left: 12%; right: 12%; bottom: 24%;
+    height: 34%;
+    border-radius: 48% 48% 0 0;
+    background: linear-gradient(160deg, #3b3631, #1d1a18);
+}
+
+/* 底部信息条 + 右上贴纸 + 左侧书脊：三组配方共用同一套骨架 */
+.bar {
+    position: absolute;
+    left: 0; right: 0; bottom: 0;
+    height: 46px;
+    padding: 8px 10px;
+    background: #101114;
+    color: #f1f1f2;
+    overflow: hidden;
+}
+.bar .t {
+    font-size: 12px; font-weight: 500;
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.bar .m { font-size: 11px; color: #9a9ea6; }
+
+.sticker {
+    position: absolute;
+    top: 10px; right: 10px;
+    width: 26px; height: 26px;
+    border-radius: 50%;
+    display: grid; place-items: center;
+    font-size: 11px; font-weight: 500;
+    background: #ba7517;
+    color: #412402;
+    overflow: hidden;
+}
+
+.spine {
+    position: absolute;
+    left: 0; top: 0; bottom: 0;
+    width: 7px;
+    background: #8a6d12;
+    overflow: hidden;
+}
+
+/* ── 光照层：A / B / C 全都有的两层 ───────────────────────────── */
+
+.glare {
+    position: absolute; inset: 0;
+    pointer-events: none;
+    border-radius: inherit;
+    background: radial-gradient(farthest-corner circle at calc(var(--px) * 1%) calc(var(--py) * 1%),
+        rgba(255, 255, 255, .52), rgba(255, 255, 255, .10) 38%, rgba(0, 0, 0, .34));
+    mix-blend-mode: overlay;
+    opacity: calc(.25 + var(--hyp) * .5);
+}
+
+.glaze {
+    position: absolute; inset: 0;
+    pointer-events: none;
+    border-radius: inherit;
+    box-shadow:
+        inset 0 0 0 1px rgba(255, 255, 255, .22),
+        inset 0 2px 1.5px rgba(255, 255, 255, .78),
+        inset 0 -2px 4px rgba(0, 0, 0, .18);
+    background:
+        radial-gradient(42% 26% at calc(var(--px) * 1%) calc(var(--py) * 1%),
+            rgba(255, 255, 255, calc(.10 + var(--hyp) * .42)), transparent),
+        linear-gradient(rgba(255, 255, 255, .20), transparent 16%);
+}
+
+/* 两条"影棚窗"反射：随倾斜反向滑动 */
+.glaze::before {
+    content: "";
+    position: absolute; inset: 0;
+    border-radius: inherit;
+    mask: linear-gradient(#000 30%, transparent 88%);
+    background: linear-gradient(112deg,
+        transparent 44%, rgba(255, 255, 255, .42) 44.4%, rgba(255, 255, 255, .12) 52%,
+        transparent 52.4%, transparent 54%, rgba(255, 255, 255, .22) 54.3%,
+        rgba(255, 255, 255, .05) 56.4%, transparent 56.7%)
+        calc((100 - var(--px)) * 1%) 0 / 220% 100%;
+}
+
+/* ── 彩虹箔：B 铺满整卡，C 只在装饰件上 ─────────────────────────── */
+
+.holo {
+    position: absolute; inset: 0;
+    pointer-events: none;
+    border-radius: inherit;
+    background: repeating-linear-gradient(110deg,
+        #ff7aa8 0%, #ffcf6b 5%, #a8ff8a 10%, #6be2ff 15%, #9b8cff 20%, #ff7aa8 25%)
+        calc(var(--px) * 1%) calc(var(--py) * 1%) / 400% 400%;
+    mix-blend-mode: color-dodge;
+    filter: brightness(.75) contrast(1.4) saturate(1.2);
+    /* 上限压在 .28：真实照片最怕这层，再高脸就变彩色了 */
+    opacity: calc(.10 + var(--hyp) * .18);
+}
+
+/* C：装饰件上的箔（同样的彩虹，但只框在这三块里） */
+.bar::after,
+.sticker::after,
+.spine::after {
+    content: "";
+    position: absolute; inset: 0;
+    background: repeating-linear-gradient(110deg,
+        #ff7aa8 0%, #ffcf6b 5%, #a8ff8a 10%, #6be2ff 15%, #9b8cff 20%, #ff7aa8 25%)
+        calc(var(--px) * 1%) calc(var(--py) * 1%) / 400% 400%;
+    mix-blend-mode: color-dodge;
+    filter: brightness(.85) contrast(1.4) saturate(1.3);
+    opacity: calc(.22 + var(--hyp) * .38);
+}
+
+/* 只有 C 才显示装饰件箔；A/B 关掉 */
+.card[data-recipe="A"] .bar::after,
+.card[data-recipe="A"] .sticker::after,
+.card[data-recipe="A"] .spine::after { display: none; }
+
+.card[data-recipe="B"] .bar::after,
+.card[data-recipe="B"] .sticker::after,
+.card[data-recipe="B"] .spine::after { display: none; }
+
+.card[data-recipe="A"] .holo { display: none; }
+.card[data-recipe="C"] .holo { display: none; }
+
+/* ── 说明 ───────────────────────────────────────────────────── */
+
+.label { margin-top: 12px; }
+.label .n { font-size: 13px; font-weight: 500; }
+.label .d { font-size: 12px; color: var(--muted); margin-top: 2px; }
+
+.stage {
+    max-width: 880px;
+    margin: 22px auto 0;
+    padding: 18px;
+    border-radius: 12px;
+    background: var(--stage);
+    transition: background .2s;
+}
+.stage .cap { font-size: 12px; color: var(--muted); text-align: center; }
+</style>
+</head>
+<body>
+
+<header>
+    <h1>抽卡质感标定</h1>
+    <span class="hint">鼠标在卡上左右划，看反光跟不跟手</span>
+    <div class="actions">
+        <button id="theme">切深色</button>
+    </div>
+</header>
+
+<label class="drop" id="drop">
+    拖一张真实封面到这里，或点这里选图（不选就用内置的占位脸孔）
+    <input type="file" id="file" accept="image/*" hidden>
+</label>
+
+<div class="row">
+    <div class="col">
+        <div class="card" data-recipe="A">
+            <div class="art"><div class="ph"><i></i><b></b></div></div>
+            <div class="spine"></div>
+            <div class="sticker">5</div>
+            <div class="bar">
+                <div class="t">作品名占一行，超长省略</div>
+                <div class="m">03 / 05 · C盘 · 2.4 GB</div>
+            </div>
+            <div class="glare"></div>
+            <div class="glaze"></div>
+        </div>
+        <div class="label">
+            <div class="n">A · 只光照</div>
+            <div class="d">清漆 + 眩光。封面上没有任何色相。</div>
+        </div>
+    </div>
+
+    <div class="col">
+        <div class="card" data-recipe="B">
+            <div class="art"><div class="ph"><i></i><b></b></div></div>
+            <div class="spine"></div>
+            <div class="sticker">5</div>
+            <div class="bar">
+                <div class="t">作品名占一行，超长省略</div>
+                <div class="m">03 / 05 · C盘 · 2.4 GB</div>
+            </div>
+            <div class="holo"></div>
+            <div class="glare"></div>
+            <div class="glaze"></div>
+        </div>
+        <div class="label">
+            <div class="n">B · 光照 + 薄箔全身</div>
+            <div class="d">参考站的做法，彩虹铺满整卡（强度已压到 0.28 上限）。</div>
+        </div>
+    </div>
+
+    <div class="col">
+        <div class="card" data-recipe="C">
+            <div class="art"><div class="ph"><i></i><b></b></div></div>
+            <div class="spine"></div>
+            <div class="sticker">5</div>
+            <div class="bar">
+                <div class="t">作品名占一行，超长省略</div>
+                <div class="m">03 / 05 · C盘 · 2.4 GB</div>
+            </div>
+            <div class="glare"></div>
+            <div class="glaze"></div>
+        </div>
+        <div class="label">
+            <div class="n">C · 光照 + 箔只在装饰件</div>
+            <div class="d">箔只落在信息条、贴纸、书脊上，封面只吃光。</div>
+        </div>
+    </div>
+</div>
+
+<div class="stage">
+    <div class="cap">以上三张同时是同一张底图；按右上角可切深色再比一遍。</div>
+</div>
+
+<script>
+const cards = [...document.querySelectorAll('.card')];
+const artSlots = [...document.querySelectorAll('.art')];
+
+/* 鼠标位置 → 三个 CSS 变量。px/py 是 0~100 的百分比，hyp 是"离中心多远"（0~1）。
+   ⚠️ hyp 驱动反光强度：越靠边越亮，这是参考站的做法，符合"倾斜越大越反光"。 */
+function paint(card, ev) {
+    const r = card.getBoundingClientRect();
+    const nx = (ev.clientX - r.left) / r.width * 2 - 1;
+    const ny = (ev.clientY - r.top) / r.height * 2 - 1;
+    const hyp = Math.min(1, Math.hypot(nx, ny) / Math.SQRT2 * 1.6);
+    card.style.setProperty('--px', ((nx + 1) / 2 * 100).toFixed(1));
+    card.style.setProperty('--py', ((ny + 1) / 2 * 100).toFixed(1));
+    card.style.setProperty('--hyp', hyp.toFixed(3));
+    card.style.setProperty('--ry', (nx * 7).toFixed(2) + 'deg');
+    card.style.setProperty('--rx', (-ny * 7).toFixed(2) + 'deg');
+}
+
+function reset(card) {
+    card.style.setProperty('--px', 50);
+    card.style.setProperty('--py', 50);
+    card.style.setProperty('--hyp', 0);
+    card.style.setProperty('--ry', '0deg');
+    card.style.setProperty('--rx', '0deg');
+}
+
+cards.forEach(card => {
+    card.addEventListener('pointermove', ev => paint(card, ev));
+    card.addEventListener('pointerleave', () => reset(card));
+});
+
+/* 三张卡共享同一张底图：拖进来一次，全部替换 */
+function useImage(url) {
+    artSlots.forEach(slot => {
+        slot.innerHTML = '';
+        const img = document.createElement('img');
+        img.src = url;
+        img.alt = '';
+        slot.appendChild(img);
+    });
+}
+
+const drop = document.getElementById('drop');
+const file = document.getElementById('file');
+
+drop.addEventListener('click', () => file.click());
+file.addEventListener('change', () => {
+    const f = file.files && file.files[0];
+    if (f) useImage(URL.createObjectURL(f));
+});
+
+['dragenter', 'dragover'].forEach(t => drop.addEventListener(t, ev => {
+    ev.preventDefault();
+    drop.classList.add('over');
+}));
+
+['dragleave', 'drop'].forEach(t => drop.addEventListener(t, ev => {
+    ev.preventDefault();
+    drop.classList.remove('over');
+}));
+
+drop.addEventListener('drop', ev => {
+    const f = ev.dataTransfer && ev.dataTransfer.files && ev.dataTransfer.files[0];
+    if (f && f.type.startsWith('image/')) useImage(URL.createObjectURL(f));
+});
+
+document.getElementById('theme').addEventListener('click', ev => {
+    const dark = document.body.classList.toggle('dark');
+    ev.currentTarget.textContent = dark ? '切浅色' : '切深色';
+});
+</script>
+</body>
+</html>

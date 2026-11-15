@@ -23,7 +23,7 @@
 import { computed } from 'vue';
 import { RouterView, useRoute, useRouter } from 'vue-router';
 import RailNav from './RailNav.vue';
-import { RAIL_PATHS } from './nav';
+import { RAIL_PATHS, RAIL_ITEMS } from './nav';
 import type { RailKey } from './nav';
 import { useTheme } from '@/hooks/useTheme';
 import { playSfx } from '@/utils/sfx';
@@ -32,9 +32,19 @@ const route = useRoute();
 const router = useRouter();
 const { isDark, toggleTheme } = useTheme();
 
+/**
+ * 高亮哪一项 = 当前路由名。
+ *
+ * ⚠️ 2026-11-15：原来是写死的 `name === 'playlists' || 'cache' || 'tunnel' || 'settings'`
+ * 一条长条件 —— 加「手气不错」时**必须记得回来改**，忘了就是"左轨亮的是文件页、
+ * 点的却是抽卡页"这种静默错位。改成从 `RAIL_ITEMS` 反查：新增一项自动生效，
+ * 前提是 `route.name` 与 rail key 同名（现在五项全部同名，新页照此约定即可）。
+ */
+const RAIL_KEYS = new Set<string>(RAIL_ITEMS.map(item => item.key));
+
 const active = computed<RailKey>(() => {
     const name = String(route.name || 'files');
-    return name === 'playlists' || name === 'cache' || name === 'tunnel' || name === 'settings' ? name : 'files';
+    return RAIL_KEYS.has(name) ? (name as RailKey) : 'files';
 });
 
 const go = (key: RailKey) => {

@@ -18,6 +18,7 @@ const PlaylistsPage = () => import('@/views/Playlists/index.vue');
 const CachePage = () => import('@/views/Cache/index.vue');
 const SettingsPage = () => import('@/views/Settings/index.vue');
 const TunnelPage = () => import('@/views/Tunnel/index.vue');
+const LuckyPage = () => import('@/views/Lucky/index.vue');
 
 export const router = createRouter({
     history: createWebHashHistory(),
@@ -26,6 +27,7 @@ export const router = createRouter({
         { path: '/playlists', name: 'playlists', component: PlaylistsPage },
         { path: '/cache', name: 'cache', component: CachePage },
         { path: '/tunnel', name: 'tunnel', component: TunnelPage },
+        { path: '/lucky', name: 'lucky', component: LuckyPage },
         { path: '/settings', name: 'settings', component: SettingsPage },
         { path: '/:pathMatch(.*)*', redirect: '/' },
     ],
