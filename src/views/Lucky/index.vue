@@ -16,6 +16,12 @@
                 <span>正在汇总已缓存封面…</span>
             </div>
 
+            <div v-else-if="loadError" class="state state--empty">
+                <p class="empty__title">连不上本地服务</p>
+                <p class="empty__desc">{{ loadError }}</p>
+                <n-button size="small" @click="load">重试</n-button>
+            </div>
+
             <div v-else-if="!cards.length" class="state state--empty">
                 <p class="empty__title">还没有可以抽的封面</p>
                 <p class="empty__desc">先去「文件」里浏览并扫描一次，认出封面的作品才会进池子。</p>
@@ -51,12 +57,17 @@
 
         <footer class="bottom">
             <template v-if="phase === 'open'">
-                <n-button size="small" @click="redraw">再来一包</n-button>
-                <span class="keys"><kbd>←</kbd><kbd>→</kbd> 选 · <kbd>Enter</kbd> 播 · <kbd>空格</kbd> 换一包</span>
+                <n-button size="small" type="primary" @click="redraw">再来一包</n-button>
+                <span class="keys"><kbd>←</kbd><kbd>→</kbd> 选 · <kbd>Enter</kbd> 播</span>
             </template>
-            <span v-else-if="phase === 'sealed' && cards.length" class="keys">
-                点一下拉条，或者按 <kbd>空格</kbd>
-            </span>
+            <n-button
+                v-else-if="phase === 'sealed' && cards.length"
+                size="small"
+                type="primary"
+                @click="startOpen"
+            >
+                拆开这一包
+            </n-button>
         </footer>
     </div>
 </template>
@@ -104,6 +115,15 @@ const T_CARDS = 320;   // 第一张卡起飞（与 fan 的 CSS delay 起点同�
 const T_DONE = 1450;   // 盒子退场完毕（CSS: 900ms 延迟 + 520ms 动画 = 1420ms），切到 open
 
 const loading = ref(true);
+/**
+ * 拉池子失败的原文。
+ *
+ * ⚠️ 为什么单列一个状态、而不是"失败就当空池"（2026-11-15 探针实测）：
+ *    服务被另一个实例占端口 / 口令对不上时，两个接口都 403，而界面会显示
+ *    「还没有可以抽的封面」+「前往文件浏览」—— 把人引去扫描，方向完全错了。
+ *    这两种情况必须长得不一样：一个要你去扫描，一个要你重启。
+ */
+const loadError = ref('');
 const phase = ref<Phase>('sealed');
 const sources = ref<Awaited<ReturnType<typeof fetchPool>> | null>(null);
 const cards = ref<DrawCard[]>([]);
@@ -199,13 +219,15 @@ function redraw() {
 
 async function load() {
     loading.value = true;
+    loadError.value = '';
     try {
         sources.value = await fetchPool();
         redraw();
     } catch (e) {
-        notify('error', '读取封面池失败', e instanceof Error ? e.message : String(e));
+        loadError.value = e instanceof Error ? e.message : String(e);
         sources.value = null;
         cards.value = [];
+        notify('error', '读取封面池失败', loadError.value);
     } finally {
         loading.value = false;
     }
@@ -378,14 +400,23 @@ onBeforeUnmount(() => {
     text-overflow: ellipsis;
 }
 
-/* 舞台：盒子与扇形卡片共用同一个中心 —— 卡片要从盒心飞出去，两个中心必须重合 */
+/* 舞台：盒子与扇形卡片共用同一个中心 —— 卡片要从盒心飞出去，两个中心必须重合。
+   ⚠️ 2026-11-15：必须显式 `grid-area: 1/1` 让所有直接子项**叠在同一格**。
+      默认的 grid 是单列多行 —— 盒子占一行、扇形占一行，盒子会被挤到上方甚至挤出容器，
+      真机表现就是"根本没看到开包，一进来就是五张卡"。
+      同理 `grid-template` 要用 `minmax(0,1fr)`：写 `100%` 会把 padding 算到外面去。 */
 .stage {
     position: relative;
     flex: 1;
     min-height: 0;
     display: grid;
+    grid-template: minmax(0, 1fr) / minmax(0, 1fr);
     place-items: center;
     padding: var(--ff-sp-4);
+}
+
+.stage > * {
+    grid-area: 1 / 1;
 }
 
 .fx {
@@ -435,6 +466,8 @@ onBeforeUnmount(() => {
  */
 .fan {
     position: relative;
+    /* 卡片必须压在包装盒之上：爆开时盒子还带着 3D 变换，同层级下它会把飞出的卡切掉一半 */
+    z-index: 6;
     display: flex;
     align-items: center;
     justify-content: center;

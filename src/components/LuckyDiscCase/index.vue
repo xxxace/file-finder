@@ -91,6 +91,8 @@ function onLeave(ev: PointerEvent) {
 
 <style scoped lang="less">
 .case-stage {
+    --size: clamp(240px, 38vh, 360px);
+    position: relative;
     display: grid;
     place-items: center;
     /* 盒子必须压在扇形卡片之上：卡片在 sealed 阶段虽然 `opacity: 0`，但仍占着
@@ -101,13 +103,30 @@ function onLeave(ev: PointerEvent) {
     pointer-events: none;
 }
 
+/* 背后的光晕。
+   ⚠️ 深色主题下**投影是无效的**：黑色阴影落在 #0e0e0e 上等于没画。暗背景要靠"光"
+   分层 —— 盒子浮在一团柔光里，轮廓才立得起来（浅色主题这团光几乎看不出，无害）。 */
+.case-stage::before {
+    content: '';
+    position: absolute;
+    width: calc(var(--size) * 2.4);
+    aspect-ratio: 1;
+    border-radius: 50%;
+    background: radial-gradient(closest-side, var(--ff-jewel-edge), transparent 72%);
+    opacity: 0.5;
+    filter: blur(22px);
+    pointer-events: none;
+}
+
 .case {
-    --size: clamp(220px, 34vh, 320px);
     position: relative;
     width: var(--size);
     height: var(--size);
     transform-style: preserve-3d;
-    transform: rotateX(var(--rx, 0deg)) rotateY(var(--ry, 0deg));
+    /* ⚠️ 必须有**基础倾斜**（2026-11-15 实测）：正面 0° 时书脊那面是
+       `rotateY(-90deg)`，正好侧对着镜头 —— 一条金色都看不见，整盒读起来是张平面纸。
+       给 -13° 之后左侧书脊与顶面同时露出来，"这是个盒子"才成立。 */
+    transform: rotateX(calc(3deg + var(--rx, 0deg))) rotateY(calc(-18deg + var(--ry, 0deg)));
     transition: transform 420ms cubic-bezier(0.19, 1, 0.22, 1);
     pointer-events: auto;
     cursor: grab;
@@ -115,13 +134,15 @@ function onLeave(ev: PointerEvent) {
 
 /* 掀开 780ms 后整个盒子淡出让位给卡片；`phase=open` 时父级会把它 v-if 掉 */
 .case.is-opening {
-    animation: case-away 520ms 900ms ease forwards;
+    animation: case-away 520ms 260ms ease forwards;
 }
 
 @keyframes case-away {
+    /* ⚠️ 只动 `opacity` 与独立的 `translate`：写 `transform` 会覆盖掉 `.case` 上那个
+       基础倾斜（-13°），退场瞬间盒子会突然"转正"一下，很扎眼。 */
     to {
         opacity: 0;
-        transform: translateY(26px) scale(0.94);
+        translate: 0 26px;
     }
 }
 
@@ -145,6 +166,19 @@ function onLeave(ev: PointerEvent) {
     flex-direction: column;
     justify-content: space-between;
     box-shadow: inset 0 0 0 1px var(--ff-line);
+}
+
+/* 顶光：纸面从上方吃到一道光，底部渐渐暗下去。
+   没有它，深色主题下整块纸是均质的一块灰 —— 有明暗走向才像"被灯照着的实物" */
+.front::after {
+    content: '';
+    position: absolute;
+    inset: 0;
+    pointer-events: none;
+    background:
+        linear-gradient(180deg, var(--ff-jewel-edge), transparent 42%),
+        linear-gradient(0deg, var(--ff-jewel-shadow), transparent 24%);
+    opacity: 0.5;
 }
 
 /* 匿名封面：光盘正面俯视。同心圆 + 中心孔，用 `--ff-disc-*` 而不是图片 */
@@ -187,6 +221,26 @@ function onLeave(ev: PointerEvent) {
     box-shadow: inset 0 0 0 1px var(--ff-jewel-edge);
 }
 
+/**
+ * 光盘的彩虹衍射。
+ *
+ * 这不是"为了好看硬加的色相" —— 真实光盘表面有沟槽，白光打上去就是一圈衍射彩环。
+ * 它是这个页面**唯一合法的彩色来源**：它属于"介质本身"，不覆盖任何真实封面内容。
+ * `mask` 挖掉中心孔与外缘，让彩虹只落在盘面上（否则会糊成一个彩色圆饼）。
+ */
+.disc::after {
+    content: '';
+    position: absolute;
+    inset: 0;
+    border-radius: 50%;
+    background: conic-gradient(from 24deg,
+        var(--ff-foil-a), var(--ff-foil-b), var(--ff-foil-c), var(--ff-foil-a),
+        var(--ff-foil-c), var(--ff-foil-b), var(--ff-foil-a));
+    mix-blend-mode: screen;
+    opacity: 0.62;
+    mask: radial-gradient(circle, transparent 15%, #000 28%, #000 84%, transparent 98%);
+}
+
 .brand {
     position: relative;
     margin: 7% 0 0 8%;
@@ -224,19 +278,22 @@ function onLeave(ev: PointerEvent) {
     font: 500 13px/1 var(--ff-font);
 }
 
-/* 书脊：绕左边缘转 90°，`transform-origin: left` 让它贴着盒子左边立起来 */
+/* 书脊：绕左边缘转 90°，`transform-origin: left` 让它贴着盒子左边立起来。
+   宽度 5% 而不是固定 px —— 它要在 240~360px 的盒子上都保持同一条比例。
+   ⚠️ 它只有在 `.case` 有基础倾斜（-13°）时才可见，见上面那条注释。 */
 .spine {
     position: absolute;
     left: 0;
     top: 0;
-    width: 16px;
+    width: 5%;
     height: 100%;
     transform-origin: left center;
     transform: rotateY(-90deg) translateZ(0);
-    background: var(--ff-foil-b);
+    background: linear-gradient(90deg, var(--ff-foil-b), var(--ff-foil-a));
     overflow: hidden;
     display: grid;
     place-items: center;
+    box-shadow: inset -1px 0 0 var(--ff-jewel-shadow);
 
     span {
         font: 500 7px/1 var(--ff-font);
@@ -292,13 +349,13 @@ function onLeave(ev: PointerEvent) {
 }
 
 .is-opening .rays {
-    animation: rays-out 720ms 120ms cubic-bezier(0.19, 1, 0.22, 1) forwards;
+    animation: rays-out 560ms 100ms cubic-bezier(0.19, 1, 0.22, 1) forwards;
 }
 
 @keyframes rays-out {
     0% { opacity: 0; transform: translateZ(4px) scale(0.2); }
-    35% { opacity: 0.9; }
-    100% { opacity: 0; transform: translateZ(4px) scale(2.6); }
+    35% { opacity: 0.78; }
+    100% { opacity: 0; transform: translateZ(4px) scale(1.55); }
 }
 
 /* ── 收缩膜 ────────────────────────────────────────────────────────────────
