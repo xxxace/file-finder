@@ -184,7 +184,7 @@ import { NButton, NCheckbox, NSpin } from 'naive-ui';
 import LuckyDiscCard from '@/components/LuckyDiscCard/index.vue';
 import LuckyPack from '@/components/LuckyPack/index.vue';
 import { burst } from './confetti';
-import { cardOf, drawPack, rememberRecent, rollRarities } from './drawModel';
+import { cardOf, drawPack, presenceOf, rememberRecent, rollRarities } from './drawModel';
 import type { DrawCard } from './drawModel';
 import { ORBIT } from './cardStage';
 import { applyDisksUpdate, fetchPool } from './usePool';
@@ -242,7 +242,6 @@ const fxRef = ref<HTMLCanvasElement | null>(null);
 let stopFx: (() => void) | null = null;
 const timers: number[] = [];
 
-const total = computed(() => sources.value?.total ?? 0);
 const onlineKnown = computed(() => sources.value?.onlineKnown ?? false);
 
 /**
@@ -587,20 +586,14 @@ async function revealCard(card: DrawCard) {
 const onDisksChangedIpc = (_e: unknown, diskList: { serial: string; drive: string }[]) => {
     const list = Array.isArray(diskList) ? diskList : [];
     applyDisksUpdate(sources.value, list);
-    if (sources.value) {
-        const onlineSerials = sources.value.onlineSerials;
-        const letters = sources.value.letters;
-        for (const card of cards.value) {
-            const online = onlineSerials.has(card.serial);
-            card.online = online;
-            card.letter = online ? (letters.get(card.serial) ?? '') : '';
-        }
-        if (inspectingCard.value) {
-            const online = onlineSerials.has(inspectingCard.value.serial);
-            inspectingCard.value.online = online;
-            inspectingCard.value.letter = online ? (letters.get(inspectingCard.value.serial) ?? '') : '';
-            resolveCardAddress(inspectingCard.value);
-        }
+    const snap = sources.value;
+    if (!snap) return;
+    // 在线/盘符的算法与 `cardOf` 共用 `presenceOf`，别在这里再写一遍
+    for (const card of cards.value) Object.assign(card, presenceOf(card.serial, snap.onlineSerials, snap.letters));
+    const focused = inspectingCard.value;
+    if (focused) {
+        Object.assign(focused, presenceOf(focused.serial, snap.onlineSerials, snap.letters));
+        resolveCardAddress(focused);
     }
 };
 
@@ -700,6 +693,32 @@ async function load() {
         notify('error', '读取封面池失败', loadError.value);
     } finally {
         loading.value = false;
+    }
+}
+
+/**
+ * 只换池子，不动屏幕上这一包。
+ *
+ * 封面池会在**离开本页期间**变化（助手补封面、浏览时生成缩略图），旧缓存不刷新就是
+ * "新补的封面永远抽不到，只能重启"。切页回来静默换一份，当前这一包与它的卡片原样留着，
+ * 下次抽卡才用新池子。
+ *
+ * 失败不打断画面：旧池子仍然可用，下一次切页还会再试一次 —— 不弹错、不清屏。
+ */
+async function syncPool(): Promise<void> {
+    try {
+        const next = await fetchPool();
+        /**
+         * ⚠️ 新池子为空、旧的不空 ⇒ 当作没拿到，别换。
+         *
+         * 服务端还没起来 / token 失效时 `/getAllCovers` 会回一个没有 `data.items` 的响应，
+         * 解出来就是空数组。照着换，下一包就成了"还没有可以抽的封面" —— 旧池子明明还能用。
+         * 真的一池皆空（缓存清过）时会在下次 `load()` 里正常走空态。
+         */
+        if (!next.sources.length && sources.value?.sources.length) return;
+        sources.value = next;
+    } catch {
+        // 静默：切页刷新的辅助动作，失败没有可执行的补救
     }
 }
 
@@ -877,7 +896,10 @@ onActivated(() => {
     if (!loaded) {
         loaded = true;
         void load();
+        return;
     }
+    // 只是切页回来（没被回收）：屏幕上这一包不动，只把池子换新 —— 见 `syncPool`
+    void syncPool();
 });
 
 onDeactivated(() => {

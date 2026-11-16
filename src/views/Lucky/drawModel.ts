@@ -184,6 +184,21 @@ export function drawPack(
     return picked.concat(fill.slice(0, count - picked.length));
 }
 
+/**
+ * 一个序列号"此刻在不在线、对应哪个盘符"。
+ *
+ * ⚠️ 拔插磁盘时页面会原地改 `cards[]`（不重抽），它跟 `cardOf` 必须是**同一份判据** ——
+ *    分成两处写，下次改规则（比如离线也保留盘符）就只能改到一处。
+ */
+export function presenceOf(
+    serial: string,
+    onlineSerials: ReadonlySet<string>,
+    letters: ReadonlyMap<string, string>,
+): { online: boolean; letter: string } {
+    const online = onlineSerials.has(serial);
+    return { online, letter: online ? (letters.get(serial) ?? '') : '' };
+}
+
 /** 条目 → 卡片。渲染层只认 `DrawCard`，不直接碰 `TunnelCoverItem`。 */
 export function cardOf(
     src: TunnelCoverItem,
@@ -191,13 +206,13 @@ export function cardOf(
     letters: ReadonlyMap<string, string>,
     rarity: Rarity,
 ): DrawCard {
-    const online = onlineSerials.has(src.serial);
+    const { online, letter } = presenceOf(src.serial, onlineSerials, letters);
     return {
         key: `${src.dir}/${src.name}`,
         title: src.name,
         sig: src.sig,
         serial: src.serial,
-        letter: online ? (letters.get(src.serial) ?? '') : '',
+        letter,
         online,
         sizeText: formatBytes(src.size),
         ...rarity,
