@@ -42,8 +42,11 @@ export type SfxEvent =
     | 'file-open'    // 多分片弹层：回车/双击选定（音色 = Sound Lab「Halo」）
     | 'warn'          // 警告 / 注意（nudge）
     | 'fail'          // 失败 / 没成（shrug）—— 与 warn 是两件事：警告是"注意一下"，失败是"没成"
-    | 'lucky-tear'    // 抽卡：撕开收缩膜
-    | 'lucky-burst';  // 抽卡：爆开（盒盖弹开 + 五张飞出）
+    // ⚠️ 2026-11-15：抽卡页已改用参考站的实时合成（`views/Lucky/voices.ts`）——
+    //    撕包声要随手的快慢连续变化，配方引擎（预渲染成 Buffer）表达不了。
+    //    这两个事件**目前没有调用方**，配方保留在库里备查，别照名字猜它在响。
+    | 'lucky-tear'
+    | 'lucky-burst';
 
 const EVENT_RECIPE: Record<SfxEvent, SfxRecipe> = {
     mode: SFX_RECIPES.notch,
