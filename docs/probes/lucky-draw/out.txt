@@ -29,6 +29,8 @@ PASS  ⑦ 卡 key = dir/name
 PASS  ⑦ 卡 sizeText
 PASS  ⑦ 离线卡 online
 PASS  ⑦ 离线卡 letter 必须为空
+PASS  ⑦b 50 包构成恒为 2C/1R/1H/1U（顺序随机）
+PASS  ⑦b 池子只有 3 张时只给 3 个
 PASS  ⑧ 最多记 3 包（15 个 sig）
 ─────────────────────────────
-32 PASS / 0 FAIL
+33 PASS / 0 FAIL

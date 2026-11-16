@@ -156,15 +156,31 @@ eq('① B 取整', M.formatBytes(900), '900 B');
     eq('⑦ 离线盘不给盘符', letters.get('S2'), undefined);
     eq('⑦ 空盘符不入表', letters.get('S3'), undefined);
 
-    const onlineCard = M.cardOf(cover(7, { size: 2.4 * 1024 ** 3 }), new Set(['S1']), letters);
+    const onlineCard = M.cardOf(cover(7, { size: 2.4 * 1024 ** 3 }), new Set(['S1']), letters, M.rollRarities(5)[0]);
     eq('⑦ 在线卡 online', onlineCard.online, true);
     eq('⑦ 在线卡 letter', onlineCard.letter, 'C');
     eq('⑦ 卡 key = dir/name', onlineCard.key, '/d7/作品7');
     eq('⑦ 卡 sizeText', onlineCard.sizeText, '2.4 GB');
 
-    const offCard = M.cardOf(cover(8, { serial: 'S9' }), new Set(['S1']), letters);
+    const offCard = M.cardOf(cover(8, { serial: 'S9' }), new Set(['S1']), letters, M.rollRarities(5)[0]);
     eq('⑦ 离线卡 online', offCard.online, false);
     eq('⑦ 离线卡 letter 必须为空', offCard.letter, '');
+}
+
+// ── ⑦b 一包的等级构成（照参考站：2 Common / 1 Rare / 1 Holo / 1 Ultra） ──────
+{
+    const count = (list, tier, label) => list.filter(r => r.tier === tier && r.label === label).length;
+    for (let round = 0; round < 50; round++) {
+        const mix = M.rollRarities(5);
+        const ok = mix.length === 5
+            && count(mix, 'common', 'Common') === 2
+            && count(mix, 'rare', 'Rare') === 1
+            && count(mix, 'rare', 'Holo rare') === 1
+            && count(mix, 'ultra', 'Ultra rare') === 1;
+        if (!ok) { eq(`⑦b 第 ${round} 包构成错`, mix.map(r => r.label).join(','), '2C/1R/1H/1U'); break; }
+        if (round === 49) lines.push('PASS  ⑦b 50 包构成恒为 2C/1R/1H/1U（顺序随机）');
+    }
+    eq('⑦b 池子只有 3 张时只给 3 个', M.rollRarities(3).length, 3);
 }
 
 // ── ⑧ 最近记账本上限 ────────────────────────────────────────────────────────

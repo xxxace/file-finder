@@ -1,0 +1,74 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>lucky visual probe</title>
+<style>
+    html, body { margin: 0; height: 100%; }
+    body { background: #0e0e0e; }
+    .page {
+        --ph: min(400px, 52vh);
+        --pw: calc(var(--ph) * .69);
+        --cw: calc(var(--pw) * .84);
+        --ch: calc(var(--cw) * 1.4);
+        --pack-drop: clamp(14px, 4.4vh, 56px);
+        display: flex;
+        flex-direction: column;
+        height: 100vh;
+        background: var(--ff-canvas);
+        color: var(--ff-text-1);
+    }
+    .bar {
+        flex: none;
+        height: 44px;
+        display: grid;
+        place-items: center;
+        font-size: var(--ff-fs-meta);
+        color: var(--ff-text-3);
+        border-bottom: 1px solid var(--ff-line);
+    }
+    .bar--bottom { height: 56px; border-bottom: 0; border-top: 1px solid var(--ff-line); }
+    .stage {
+        position: relative;
+        flex: 1;
+        min-height: 0;
+        display: grid;
+        grid-template: minmax(0, 1fr) / minmax(0, 1fr);
+        place-items: center;
+        padding: var(--ff-sp-4);
+    }
+    .stage > * { grid-area: 1 / 1; }
+    /* 产品里彩带的画布（`views/Lucky/index.vue` 的 `.fx`）：全舞台、不吃指针 */
+    .fx { position: absolute; inset: 0; width: 100%; height: 100%; pointer-events: none; }
+    .scene {
+        position: absolute;
+        inset: 0;
+        translate: 0 var(--pack-drop);
+        transform-style: preserve-3d;
+        perspective: 1400px;
+        perspective-origin: 50% 40%;
+        pointer-events: none;
+        z-index: 6;
+        opacity: 0;
+    }
+    .scene[data-phase='opening'], .scene[data-phase='open'] { opacity: 1; }
+    .slot {
+        position: absolute;
+        left: 50%;
+        top: 50%;
+        width: var(--cw);
+        height: var(--ch);
+        margin: calc(var(--ch) / -2) 0 0 calc(var(--cw) / -2);
+        transform-style: preserve-3d;
+        will-change: transform;
+        pointer-events: auto;
+    }
+    #err { position: fixed; left: 0; bottom: 0; z-index: 99; color: #ff6b6b; font: 12px/1.4 monospace; white-space: pre-wrap; }
+</style>
+</head>
+<body>
+<div id="app"></div>
+<pre id="err"></pre>
+<script type="module" src="./main.ts"></script>
+</body>
+</html>
