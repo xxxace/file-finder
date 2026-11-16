@@ -82,7 +82,6 @@
                 （包装正面就印着 "Tear here ⟶"）。
             -->
             <button
-                ref="hitEl"
                 class="hit"
                 type="button"
                 v-tip="hitTip"
@@ -149,7 +148,6 @@ const flapEl = ref<HTMLElement | null>(null);
 const lipEl = ref<HTMLElement | null>(null);
 const flowEl = ref<HTMLElement | null>(null);
 const raysEl = ref<HTMLCanvasElement | null>(null);
-const hitEl = ref<HTMLElement | null>(null);
 const plyEls: HTMLElement[] = [];
 const rimEls: HTMLElement[] = [];
 const eyeEls: HTMLElement[] = [];
@@ -865,8 +863,18 @@ function measure() {
     const el = packEl.value;
     const wrapper = stageEl.value;
     if (!el || !wrapper) return;
-    pw = el.offsetWidth || 280;
-    ph = el.offsetHeight || 405;
+    const w = el.offsetWidth;
+    const h = el.offsetHeight;
+    /**
+     * ⚠️ 量不到就**什么都不写**，别拿 280 / 405 顶上去。
+     *
+     * 空闲回收会在这个页面被 KeepAlive 收起时挂载卡包，那时 `offsetWidth` 是 0 ——
+     * 兜底值会让光流可达高度、裁剪换算、地面投影全按一个不存在的尺寸算，且无声无息。
+     * 激活时 `onActivated` 会再量一次，那次才是真的。
+     */
+    if (!w || !h) return;
+    pw = w;
+    ph = h;
     el.style.setProperty('--tooth', `${(pw / 26).toFixed(2)}px`);
 
     const r = wrapper.getBoundingClientRect();
