@@ -25,6 +25,10 @@ export interface TipPayload {
      * ⚠️ 由调用方 `import { h }` 自己造节点：提示宿主只负责定位与材质，不认识业务结构。
      */
     body?: () => VNodeChild;
+    /** 纵向额外偏移（px）—— 当目标有较大悬浮/呼吸运动时，向下推开避让 */
+    offsetY?: number;
+    /** 自定义定位锚点元素（如外层稳定容器，避免随子元素内部漂浮抖动） */
+    anchorEl?: HTMLElement | null;
 }
 
 export const tipState = reactive({
@@ -34,6 +38,7 @@ export const tipState = reactive({
     text: '',
     keys: '',
     body: null as (() => VNodeChild) | null,
+    offsetY: 0,
     anchor: null as DOMRect | null,
     /** 锚点元素本体 —— 宿主每帧校验它的活性（isConnected / rect 漂移），见 FluidTipHost */
     anchorEl: null as HTMLElement | null,
@@ -57,13 +62,15 @@ function isAdjacent(a: DOMRect, b: DOMRect): boolean {
 }
 
 function apply(el: HTMLElement, payload: TipPayload, adjacent: boolean) {
-    const rect = el.getBoundingClientRect();
+    const targetEl = payload.anchorEl && payload.anchorEl.isConnected ? payload.anchorEl : el;
+    const rect = targetEl.getBoundingClientRect();
     tipState.text = payload.text;
     tipState.keys = payload.keys ?? '';
     tipState.body = payload.body ?? null;
+    tipState.offsetY = payload.offsetY ?? 0;
     tipState.snap = !adjacent;
     tipState.anchor = rect;
-    tipState.anchorEl = el;
+    tipState.anchorEl = targetEl;
     lastAnchor = rect;
     tipState.visible = true;
 }
@@ -71,10 +78,11 @@ function apply(el: HTMLElement, payload: TipPayload, adjacent: boolean) {
 export function showTip(el: HTMLElement, payload: TipPayload) {
     window.clearTimeout(hideTimer);
     hideTimer = 0;
+    const targetEl = payload.anchorEl && payload.anchorEl.isConnected ? payload.anchorEl : el;
     if (tipState.visible && lastAnchor) {
         window.clearTimeout(showTimer);
         showTimer = 0;
-        apply(el, payload, isAdjacent(lastAnchor, el.getBoundingClientRect()));
+        apply(el, payload, isAdjacent(lastAnchor, targetEl.getBoundingClientRect()));
         return;
     }
     // 首现：等一拍再出现（leave 会取消它），扫过一大片内容时不会噼里啪啦闪

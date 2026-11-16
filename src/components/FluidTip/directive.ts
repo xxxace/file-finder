@@ -41,7 +41,13 @@ import { hideTip, showTip, type TipPayload } from './fluidTip';
 const toBinding = (value: string | TipPayload | undefined): TipPayload =>
     typeof value === 'string'
         ? { text: value }
-        : { text: value?.text ?? '', keys: value?.keys, body: value?.body };
+        : {
+            text: value?.text ?? '',
+            keys: value?.keys,
+            body: value?.body,
+            offsetY: value?.offsetY,
+            anchorEl: value?.anchorEl,
+        };
 
 const store = new WeakMap<HTMLElement, TipPayload>();
 

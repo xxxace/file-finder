@@ -62,8 +62,9 @@ function place() {
     const w = node.offsetWidth;
     const h = node.offsetHeight;
     const cx = anchor.left + anchor.width / 2;
-    let y = anchor.bottom + 8;
-    if (y + h > window.innerHeight - 8) y = anchor.top - h - 8;
+    const extraY = tipState.offsetY || 0;
+    let y = anchor.bottom + 8 + extraY;
+    if (y + h > window.innerHeight - 8) y = anchor.top - h - 8 - extraY;
     const x = Math.min(Math.max(12, cx - w / 2), window.innerWidth - w - 12);
     pos.x = x;
     pos.y = Math.max(8, y);
