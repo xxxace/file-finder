@@ -10,6 +10,9 @@
  * 全部生成成 SVG data URI，零图片资产。
  */
 
+import { mirror, toPolygon } from './tearPath';
+import type { Pt } from './tearPath';
+
 /** 六种封面色。值是 `tokens.css` 里的变量名 —— 颜色本身不写在 TS 里（色值纪律） */
 export const PACK_SKINS = [
     { key: 'cobalt', label: 'Cobalt' },
@@ -45,7 +48,60 @@ export interface PackLight {
 }
 
 /**
- * 现画这一包的光与影。
+ * 卡包的"圆角鼓起侧面" —— 移植自 `holo-reverse/src/app.js` 的 `rims` 段（466~477 行）。
+ *
+ * 铝箔袋的左右两条边不是直角：它是**鼓起来**的。做法是沿"厚度那个圆"排 9 条薄片，
+ * 每条往外推一点、越靠后越短越暗，拼出一条卷过去的边。
+ *
+ * 纯几何，零 DOM：返回的 `style` 直接绑在模板上（这样 scoped 样式才认得出这些节点 ——
+ * 用 `document.createElement` 造出来的元素拿不到 `data-v-*`，样式会整片失效）。
+ */
+
+export interface PackRim {
+    key: string;
+    side: 'l' | 'r';
+    /** 基准顶边（%）。撕开时被撕到的那一侧要抬起来，得记住原值 */
+    baseTop: number;
+    style: Record<string, string>;
+}
+
+export function buildRims(): PackRim[] {
+    const out: PackRim[] = [];
+    for (const s of [-1, 1]) {
+        for (const deg of [80, 60, 40, 20, 0, -20, -40, -60, -80]) {
+            const a = (deg * Math.PI) / 180;
+            const back = (1 - Math.sin(a)) / 2;
+            const o = 4;
+            const b = 5 * Math.cos(a);
+            // 一条从 0 鼓到 100 再收回的弧，指数 .8 让它更像"面"而不是"半圆"
+            const edge: Pt[] = Array.from({ length: 13 }, (_, i) => {
+                const x = ((o + b * Math.sin((Math.PI * i) / 12) ** 0.8) / (o + b)) * 100;
+                return [x, (i / 12) * 100] as Pt;
+            });
+            const shape: Pt[] = [[0, 0], ...edge, [0, 100]];
+            const top = 11.5 + back * 13;
+            out.push({
+                key: `${s}/${deg}`,
+                side: s > 0 ? 'r' : 'l',
+                baseTop: top,
+                style: {
+                    [s > 0 ? 'left' : 'right']: `calc(50% + var(--pw) * .476 - ${o}px)`,
+                    width: `${(o + b).toFixed(2)}px`,
+                    top: `${top.toFixed(2)}%`,
+                    bottom: `${top.toFixed(2)}%`,
+                    transform: `translateZ(calc(var(--depth) * ${(Math.sin(a) / 2).toFixed(3)}))`,
+                    clipPath: toPolygon(s > 0 ? shape : mirror(shape)),
+                    // 色调与混入比例：右侧压暗（背光），左侧提亮（受光）
+                    '--rim-tone': s > 0 ? 'black' : 'white',
+                    '--rim-mix': `${Math.round(s > 0 ? 10 + back * 40 : 45 * (1 - back))}%`,
+                },
+            });
+        }
+    }
+    return out;
+}
+
+/** 现画这一包的光与影。
  *
  * `shine`：从封边往下走的一批细竖条，每条宽度、长度、亮度都随机，越往下越淡；
  * 它们表示"铝箔在封口处被压出褶皱，褶皱吃到光"。

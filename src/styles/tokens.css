@@ -252,6 +252,9 @@
   --ff-disc-sheen: rgba(255, 255, 255, 0.78);
   --ff-jewel-edge: rgba(255, 255, 255, 0.55);
   --ff-jewel-shadow: rgba(18, 16, 34, 0.18);
+  --ff-pack-ground-shadow: rgba(18, 16, 34, 0.28);
+  --ff-pack-ground-glow: transparent;
+  --ff-pack-drop-shadow: rgba(18, 16, 34, 0.16);
   /* 收缩膜的两层：`veil` 是膜本身那层雾（不撕开就看不透），`sheen` 是膜上的折痕高光。
      ⚠️ 深色下膜必须是**暗雾**：用白色半透会把整个深色界面照成灰白一块，
         与"一片灰暗"那个症状方向相反但同样难看（spike 里两套都试过）。 */
@@ -269,6 +272,36 @@
   --ff-foil-b: #e8c98a;
   --ff-foil-c: #9ad9ec;
 
+  /* ════════ 抽卡实体物料 · 包装内层与撕口金属（2026-11-16） ════════
+     ⚠️ 这是包装袋撕开后的实体铝箔内层与断面金属亮边（两套主题恒同值，深色模式不覆盖）。
+     铝箔材质属于物理实体，深色模式绝不能随界面面板变黑。 */
+  --ff-pack-inner-foil: linear-gradient(97deg,
+    #b9bec7, #ffffff 12%,
+    #b9bec7 26%, #ffffff 44%,
+    #b9bec7 58%, #ffffff 76%,
+    #b9bec7);
+  --ff-pack-tear-lip: linear-gradient(100deg,
+    #ffffff, rgba(255, 255, 255, 0.78) 14%,
+    #b9bec7 27%, #ffffff 42%,
+    #b9bec7 58%, #ffffff 72%,
+    #b9bec7 86%, #ffffff);
+
+  /* ════════ L2 语义 · 抽卡卡片空间立体阴影（手气不错，2026-11-16） ════════
+     依据 UI/UX 空间纵深体系：
+       · 浅色主题：多级自然环境漫射深影（接触深影 + 扩散漫射深影 + 微弱接触倒角）；
+       · 深色主题：暗色落影与轮廓辉光融合（密实暗部接触影 + 柔和环境漫射晕 + 1px 发丝轮廓反光）。
+     彻底解决暗色底上卡片因缺少阴影与边缘光融于背景（"看不清"）的体验缺陷。 */
+  --ff-card-stage-shadow:
+    0 2px 6px -1px rgba(18, 16, 34, 0.14),
+    0 12px 28px -6px rgba(18, 16, 34, 0.22),
+    0 24px 44px -12px rgba(18, 16, 34, 0.16),
+    0 0 0 1px rgba(18, 16, 34, 0.06);
+  --ff-card-stage-shadow-lift:
+    0 4px 12px -2px rgba(18, 16, 34, 0.18),
+    0 24px 48px -8px rgba(18, 16, 34, 0.28),
+    0 42px 68px -14px rgba(18, 16, 34, 0.2),
+    0 0 0 1px rgba(18, 16, 34, 0.08);
+
   /* ════════ L2 物料 · 卡包皮肤（2026-11-15） ════════
      这是**实体印刷色**，不是界面色 —— "无彩裁决"管的是界面（按钮/文字/边框），
      而手里这张卡包本来就是彩印的。六色循环，且**不连续重复**（同参考站）。
@@ -279,9 +312,42 @@
   /* 卡纸：**恒定暖白，两套主题同值**。
      ⚠️ 这是"实体"的颜色，不是界面的面 —— 一张印出来的卡不会因为应用切了深色模式
         就变成黑卡。参考站的卡就是暖白卡纸，那是它"像实物"的第一来源。 */
-  --ff-card-paper-top: #fbf9f4;
-  --ff-card-paper-bottom: #e7e3da;
+  --ff-card-paper-top: #fdfcf9;
+  --ff-card-paper-bottom: #ebe8e1;
   --ff-card-ink: #1b1a17;
+  /* 卡纸的侧边（三层叠片）：比卡面暗一档的暖灰，才像"一叠纸"而不是"一张贴纸" */
+  --ff-card-edge: #cfcac0;
+  /* 全息的"闪点"：阈值化的白噪点，**只当 mask 用**。
+     ⚠️ 彩虹只以这种稀疏亮点的形式落在真实封面上：整片彩虹铺到封面上会把人像染成彩色
+        （`docs/probes/lucky-texture/` 实测过）。整片彩虹仅用于卡纸/装饰件。 */
+  --ff-glitter: url("data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' width='160' height='160'><filter id='g'><feTurbulence type='fractalNoise' baseFrequency='.8' seed='7' stitchTiles='stitch'/><feColorMatrix values='0 0 0 0 1 0 0 0 0 1 0 0 0 0 1 14 0 0 0 -8.6'/></filter><rect width='160' height='160' filter='url(%23g)'/></svg>");
+  /* 卡面彩虹箔的取样色 —— **这是参考站卡面的那一套**（粉/金/绿/青/紫的柔和五色），
+     与光流/纸屑的七色（`--ff-rainbow-1..7`）不是同一组：卡面是印在纸上的箔，
+     七色太艳，套上去像塑料贴纸。两者各有归宿，别合并。 */
+  --ff-card-foil: repeating-linear-gradient(110deg,
+    #ff7aa8 0%, #ffcf6b 5%, #a8ff8a 10%, #6be2ff 15%, #9b8cff 20%, #ff7aa8 25%);
+
+  /* 稀有档的卡面（参考站 `.rare` / `.ultra` 的取样）：
+     `rare` = 深蓝夜空底 + 浅字；`ultra` = 金箔底 + 棕字。两档都是"实体印刷色"，
+     与主题无关（深色模式下的金卡也是金的）。 */
+  --ff-card-rare-top: #272d63;
+  --ff-card-rare-bottom: #11142e;
+  --ff-card-rare-ink: #eef0ff;
+  --ff-card-rare-edge: #0b0d20;
+  --ff-card-ultra-frame: linear-gradient(135deg, #f9e7a8, #d6a43a 28%, #fff2c4 50%, #c38a26 72%, #f4d57e);
+  --ff-card-ultra-ink: #3a2600;
+  --ff-card-ultra-edge: #94661a;
+
+  /* "只剩卡框"的 mask：整块 100×100 挖掉图窗那块（6%~94% × 4.3%~64.3%，带 4% 圆角倒角），
+     用 evenodd 一次成形。 */
+  --ff-frame-mask: url("data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100' preserveAspectRatio='none'><path fill-rule='evenodd' d='M0 0H100V100H0Z M10 4.3H90Q94 4.3 94 7.1V61.5Q94 64.3 90 64.3H10Q6 64.3 6 61.5V7.1Q6 4.3 10 4.3Z'/></svg>");
+
+  /* 源项目 holo-reverse 经典图窗背景（无封面图或卡牌回退底纹） */
+  --ff-card-win-blip: repeating-radial-gradient(circle at 50% 62%, #ffb59c 0 7%, #ffa384 7% 14%);
+  --ff-card-win-cubit: repeating-linear-gradient(30deg, rgba(255, 255, 255, 0.14) 0 1px, transparent 1px 16px), repeating-linear-gradient(150deg, rgba(255, 255, 255, 0.14) 0 1px, transparent 1px 16px), linear-gradient(#1f8a6f, #0f5446);
+  --ff-card-win-facet: radial-gradient(circle at 50% 42%, #7d66ff, #2c1f86 55%, #160f4a);
+  --ff-card-win-ringo: radial-gradient(circle, #ffffff 0 1px, transparent 1.6px) 0 0 / 26px 26px, radial-gradient(circle, rgba(255, 255, 255, 0.6) 0 0.8px, transparent 1.3px) 13px 9px / 19px 19px, linear-gradient(165deg, #0a1033, #1f34c8);
+  --ff-card-win-star: radial-gradient(circle at 50% 56%, rgba(255, 232, 160, 0.95), transparent 55%), repeating-conic-gradient(from 0deg at 50% 56%, #ff5fa2 0 7.5deg, #ff8f5c 7.5deg 15deg);
 
   --ff-rainbow-1: #ff3d6e;
   --ff-rainbow-2: #ff8a3d;
@@ -526,6 +592,21 @@
   --ff-disc-sheen: rgba(255, 255, 255, 0.58);
   --ff-jewel-edge: rgba(255, 255, 255, 0.26);
   --ff-jewel-shadow: rgba(0, 0, 0, 0.55);
+  --ff-pack-ground-shadow: rgba(0, 0, 0, 0.95);
+  --ff-pack-ground-glow: rgba(255, 255, 255, 0.22);
+  --ff-pack-drop-shadow: rgba(0, 0, 0, 0.85);
+
+  /* 抽卡卡片空间立体阴影（深色）：密实暗部接触影 + 柔和环境漫射晕 + 1px 发丝轮廓反光 */
+  --ff-card-stage-shadow:
+    0 2px 8px rgba(0, 0, 0, 0.95),
+    0 16px 36px -4px rgba(0, 0, 0, 0.85),
+    0 0 24px 1px rgba(255, 255, 255, 0.06),
+    0 0 0 1px rgba(255, 255, 255, 0.12);
+  --ff-card-stage-shadow-lift:
+    0 4px 14px rgba(0, 0, 0, 0.98),
+    0 28px 56px -6px rgba(0, 0, 0, 0.92),
+    0 0 40px 3px rgba(255, 255, 255, 0.11),
+    0 0 0 1px rgba(255, 255, 255, 0.18);
   --ff-inner-paper: var(--ff-raised);
   --ff-on-paper: var(--ff-text-1);
   /* 膜在深色下是**浅雾**，不是暗雾 —— 2026-11-15 实测截图：深色用暗雾时盒子是
