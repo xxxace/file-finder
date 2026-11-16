@@ -1,4 +1,3 @@
-import url from 'node:url';
 import http from 'node:http';
 import path from 'node:path';
 import os from 'node:os';
@@ -2130,10 +2129,10 @@ function cors(req: Req, res: http.ServerResponse) {
 }
 
 const app = http.createServer((req: Req, res) => {
-    const u = url.parse(req.url!);
+    const parsedUrl = new URL(req.url || '/', 'http://127.0.0.1');
     const method = req.method?.toUpperCase();
-    const route = u.pathname || '/';
-    req.params = new URLSearchParams(u.search || '');
+    const route = parsedUrl.pathname;
+    req.params = parsedUrl.searchParams;
 
     cors(req, res);
 
