@@ -33,8 +33,43 @@ export interface PoolSnapshot {
     total: number;
 }
 
-/** 拉一次池子。两个请求并行；`/getDisks` 失败不阻断（见 `onlineKnown`）。 */
-export async function fetchPool(): Promise<PoolSnapshot> {
+let poolCache: PoolSnapshot | null = null;
+
+export function clearPoolCache(): void {
+    poolCache = null;
+}
+
+/**
+ * 响应主进程 diskWatch（`ff-disks-changed` 事件）：零读盘、零请求直接更新内存盘符与在线集合。
+ */
+export function applyDisksUpdate(
+    snapshot: PoolSnapshot | null,
+    disks: readonly { serial: string; drive?: string }[],
+): void {
+    const onlineSerials = new Set<string>();
+    const letters = new Map<string, string>();
+    for (const d of disks) {
+        if (d?.serial) {
+            onlineSerials.add(d.serial);
+            const letter = (d.drive || '').replace(/:.*$/, '').trim().toUpperCase();
+            if (letter) letters.set(d.serial, letter);
+        }
+    }
+    if (snapshot) {
+        snapshot.onlineSerials = onlineSerials;
+        snapshot.letters = letters;
+        snapshot.onlineKnown = true;
+    }
+    if (poolCache && poolCache !== snapshot) {
+        poolCache.onlineSerials = onlineSerials;
+        poolCache.letters = letters;
+        poolCache.onlineKnown = true;
+    }
+}
+
+/** 拉一次池子。优先使用内存缓存，彻底杜绝切页/重抽时的重复 JSON 反序列化与主线程卡顿。 */
+export async function fetchPool(force = false): Promise<PoolSnapshot> {
+    if (poolCache && !force) return poolCache;
     const [covers, disks] = await Promise.all([
         getAction(`${API_BASE}/getAllCovers`),
         // 盘列表只用来"标在线/离线"，是辅助信息 ⇒ 失败降级，不拖垮整页
@@ -57,11 +92,12 @@ export async function fetchPool(): Promise<PoolSnapshot> {
         if (d?.serial && d.online !== false) onlineSerials.add(d.serial);
     }
 
-    return {
+    poolCache = {
         sources,
         onlineSerials,
         letters: letterMapOf(diskList),
         onlineKnown: Array.isArray(disks?.disks),
         total: sources.length,
     };
+    return poolCache;
 }

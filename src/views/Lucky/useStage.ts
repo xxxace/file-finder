@@ -35,12 +35,18 @@ export function useStage(onFrame: (dt: number, t: number) => void): StageHandle 
     let last = 0;
     let t = 0;
     let running = false;
+    let warmFrames = 2;
 
     const loop = (now: number) => {
         if (!running) return;
         const raw = last ? (now - last) / 1000 : 0;
         last = now;
-        const dt = reduce ? 0 : Math.min(0.05, raw);
+        let dt = reduce ? 0 : Math.min(0.05, raw);
+        // 冷启动防抖：首两帧可能经历 DOM 插入与着色器编译耗时，夹紧 dt 避免物理弹簧突跳
+        if (warmFrames > 0) {
+            warmFrames -= 1;
+            dt = Math.min(dt, 1 / 60);
+        }
         t += dt;
         onFrame(dt, t);
         raf = requestAnimationFrame(loop);
@@ -50,6 +56,7 @@ export function useStage(onFrame: (dt: number, t: number) => void): StageHandle 
         if (running) return;
         running = true;
         last = 0;
+        warmFrames = 2;
         raf = requestAnimationFrame(loop);
     };
 

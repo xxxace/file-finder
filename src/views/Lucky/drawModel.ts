@@ -10,6 +10,47 @@
  */
 import type { TunnelCoverItem } from '../../../electron/server/nedb';
 
+/** 卡片等级 —— 三个视觉档，四个标签（参考站就是这套：Common / Rare / Holo rare / Ultra rare） */
+export type CardTier = 'common' | 'rare' | 'ultra';
+
+export interface Rarity {
+    tier: CardTier;
+    /** 等级标记：● ◆ ◆◆ ★ */
+    mark: string;
+    /** 等级名：Common / Rare / Holo rare / Ultra rare */
+    label: string;
+}
+
+/**
+ * 一包的等级构成 —— **照抄参考站**。
+ *
+ * 参考站的五张卡是固定的四档：`● Common` ×2、`◆ Rare` ×1、`◆◆ Holo rare` ×1、
+ * `★ Ultra rare` ×1（它的包装背面就印着 "One holo in every pack"）。
+ * 每包**重新洗牌顺序**，所以位置随机、构成固定 —— 这就是它的"概率"。
+ *
+ * 我上一版拿"容量档"当等级（<1G/<3G/<8G），那是错的：真实收藏里 1~3G 占绝大多数，
+ * 结果一包五张里四张都是 Rare —— 概率完全不是抽卡的样子。
+ */
+const PACK_MIX: readonly Rarity[] = [
+    { tier: 'common', mark: '●', label: 'Common' },
+    { tier: 'common', mark: '●', label: 'Common' },
+    { tier: 'rare', mark: '◆', label: 'Rare' },
+    { tier: 'rare', mark: '◆◆', label: 'Holo rare' },
+    { tier: 'ultra', mark: '★', label: 'Ultra rare' },
+];
+
+/** 洗一包等级（5 张就是上面那套构成；池子不满 5 张时取前 n 个） */
+export function rollRarities(n: number): Rarity[] {
+    const a = PACK_MIX.slice(0, Math.max(0, Math.min(n, PACK_MIX.length)));
+    for (let i = a.length - 1; i > 0; i -= 1) {
+        const j = Math.floor(Math.random() * (i + 1));
+        [a[i], a[j]] = [a[j], a[i]];
+    }
+    // 池子比 5 多出来的（理论上不会，`drawPack` 最多给 5）按 Common 补
+    while (a.length < n) a.push(PACK_MIX[0]);
+    return a;
+}
+
 /** 一张抽出来的卡。字段是渲染与打开所需的**全部**信息，页面不用再回头查池子。 */
 export interface DrawCard {
     /** `${dir}/${name}` —— 与网格 `keyOf` 同形，方便将来"定位到这一格" */
@@ -24,6 +65,11 @@ export interface DrawCard {
     online: boolean;
     /** `2.4 GB`；服务端没给 size 时为空串 */
     sizeText: string;
+    tier: CardTier;
+    /** 等级标记：● ◆ ◆◆ ★ */
+    mark: string;
+    /** 等级名：Common / Rare / Holo rare / Ultra rare */
+    label: string;
     /** 原始条目 —— 打开时要 `files` / `ext` */
     src: TunnelCoverItem;
 }
@@ -143,6 +189,7 @@ export function cardOf(
     src: TunnelCoverItem,
     onlineSerials: ReadonlySet<string>,
     letters: ReadonlyMap<string, string>,
+    rarity: Rarity,
 ): DrawCard {
     const online = onlineSerials.has(src.serial);
     return {
@@ -153,6 +200,7 @@ export function cardOf(
         letter: online ? (letters.get(src.serial) ?? '') : '',
         online,
         sizeText: formatBytes(src.size),
+        ...rarity,
         src,
     };
 }

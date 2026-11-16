@@ -89,11 +89,15 @@ export function burst(canvas: HTMLCanvasElement, opts: ConfettiOptions): () => v
     const ctx = canvas.getContext('2d');
     if (!ctx) return () => {};
 
-    const dpr = Math.min(window.devicePixelRatio || 1, 2);
+    const dpr = Math.min(window.devicePixelRatio || 1, 1.25);
     const cssW = canvas.clientWidth || opts.vw;
     const cssH = canvas.clientHeight || opts.vh;
-    canvas.width = Math.round(cssW * dpr);
-    canvas.height = Math.round(cssH * dpr);
+    const targetW = Math.max(1, Math.round(cssW * dpr));
+    const targetH = Math.max(1, Math.round(cssH * dpr));
+    if (canvas.width !== targetW || canvas.height !== targetH) {
+        canvas.width = targetW;
+        canvas.height = targetH;
+    }
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
 
     const paths = makePaths();
@@ -102,9 +106,8 @@ export function burst(canvas: HTMLCanvasElement, opts: ConfettiOptions): () => v
     const ox = cssW / 2;
     const oy = cssH * 0.4;
 
-    /** 包内一点 → 舞台坐标（跟着包当前的朝向一起转） */
-    const onStage = (lx: number, ly: number, lz: number): [number, number, number] => {
-        const pose = opts.getPose();
+    /** 包内一点 → 舞台坐标（跟着包当前的朝向一起转）。`pose` 由调用方每帧取一次传进来 */
+    const onStage = (pose: ConfettiPose, lx: number, ly: number, lz: number): [number, number, number] => {
         const R = Math.PI / 180;
         const cx = Math.cos(pose.rx * R);
         const sx = Math.sin(pose.rx * R);
@@ -165,6 +168,8 @@ export function burst(canvas: HTMLCanvasElement, opts: ConfettiOptions): () => v
         ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
         ctx.clearRect(0, 0, cssW, cssH);
 
+        // ⚠️ 每帧只读一次包姿态：以前是**每片纸**读一次（240 次/帧），每读一次都在拼对象
+        const pose = opts.getPose();
         let alive = 0;
         for (const b of bits) {
             if (b.age === undefined) continue;
@@ -176,13 +181,13 @@ export function burst(canvas: HTMLCanvasElement, opts: ConfettiOptions): () => v
 
             if (b.inside) {
                 // 在包里往上冲：只改"包内高度"，此时**不画**
-                b.ly -= (b.up * dt) / opts.getPose().ph * 100;
+                b.ly -= (b.up * dt) / pose.ph * 100;
                 b.r += b.spin * dt;
                 if (b.ly > opts.tearYAt(b.lx)) {
                     alive += 1;
                     continue;
                 }
-                const [x, y, z] = onStage(b.lx, b.ly, b.lz);
+                const [x, y, z] = onStage(pose, b.lx, b.ly, b.lz);
                 b.x = x;
                 b.y = y;
                 b.z = z;
