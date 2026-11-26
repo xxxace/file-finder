@@ -8,10 +8,9 @@ import dayjs from 'dayjs';
 import crypto from 'node:crypto';
 import { imageRenditions, videoRenditions } from '../utils/thumbnail';
 import {
-    BIN_DIR, hasBin, getBin, putBin, putBinsBatch, putBinEncrypted, listBinNames, binStoreFailed, whenBinReady, binStats,
+    hasBin, getBin, putBin, putBinsBatch, binStoreFailed, whenBinReady, binStats,
     thumbNameOf, previewNameOf, readBinEntryForBackup, detectImageFmt,
 } from '../utils/binStore';
-import { listZip, readZipEntry } from '../utils/zip';
 import {
     FFBAK_VERSION, detectBackupFormat, writeFfbak, readFfbakMetaAndVerify, streamFfbakImages,
 } from '../utils/ffbak';
@@ -26,12 +25,10 @@ import {
     BEFORE_RESTORE_PATH, CACHE_DB_PATH, CACHE_VERSION, beginRestore, cacheBackup, endRestore,
     collectReferencedSigsFromCache, exportAllCacheDocs, exportCompactSnapshot, findAllCachedCovers, findCache,
     findSubtreeLeafItems, getCacheDbBytes, insertCache, loadMeta, loadSubtreeBytes,
-    migrateLegacyThumbs, readExternalCache, reloadFromDisk, removeCache, replaceAllCacheDocs,
-    restoreCacheFromSnapshot, snapshotCacheTo,
+    removeCache, replaceAllCacheDocs, restoreCacheFromSnapshot, snapshotCacheTo,
 } from './nedb';
 import type { CacheMeta, OpenMode, SearchCache } from './nedb';
 import { diskTops } from './diskTops';
-import { encryptLine } from '../utils/cacheCrypto';
 import { LOCAL_TOKEN } from './token';
 import config from '../config';
 import { createAssistantRoutes } from './assistant';
@@ -1802,30 +1799,6 @@ async function backupToFile(req: Req, res: http.ServerResponse) {
     sendJson(res, result);
 }
 
-/** 包里的图片条目（`bin/xxx.enc`）。名字要按形状校验：它会变成磁盘上的文件名 */
-function binEntriesOf(entries: { name: string }[]): string[] {
-    return entries
-        .map(e => e.name)
-        .filter(n => /^bin\/[tp]-[0-9a-f]{40}\.enc$/.test(n))
-        .map(n => n.slice(4));
-}
-
-/** 把旧版 `.zip` 包里的图片**只增不删**地并进本机 bin 仓（已有的跳过，绝不覆盖） */
-async function importBins(zipPath: string, names: string[]): Promise<number> {
-    if (!names.length) return 0;
-    const entries = await listZip(zipPath);
-    const byName = new Map(entries.map(e => [e.name, e]));
-    let added = 0;
-    for (const name of names) {
-        if (hasBin(name)) continue;
-        const e = byName.get(`bin/${name}`);
-        if (!e) continue;
-        await putBinEncrypted(name, await readZipEntry(zipPath, e));
-        added++;
-    }
-    return added;
-}
-
 /** 从 `.ffbak` 流式导入缺失图片到 `bin.sqlite`（批量事务写入，已有的跳过） */
 async function importFfbakBins(filePath: string, imagesOffset: number, binCount: number): Promise<number> {
     let added = 0;
@@ -1844,99 +1817,6 @@ async function importFfbakBins(filePath: string, imagesOffset: number, binCount:
         await putBinsBatch(batch);
     }
     return added;
-}
-
-/** 提取旧版 `.zip` 中 v2 记录内嵌的 base64 缩略图并补齐 `sig` */
-async function upgradeZipLegacyThumbs(docs: SearchCache[]): Promise<number> {
-    const batch: { name: string; buf: Buffer }[] = [];
-    for (const doc of docs) {
-        if (!Array.isArray(doc.data)) continue;
-        let touched = false;
-        for (const item of doc.data as unknown as Array<Record<string, unknown>>) {
-            const legacy = (item.thumbData || item.avatarThumbData) as string | undefined;
-            const hadLegacy = 'thumb' in item || 'thumbData' in item || 'avatar' in item
-                || 'avatarThumbData' in item || 'avatarSrc' in item;
-            if (!legacy && !hadLegacy) continue;
-            if (typeof legacy === 'string' && legacy.includes(',')) {
-                const bytes = Buffer.from(legacy.slice(legacy.indexOf(',') + 1), 'base64');
-                if (bytes.length > 0) {
-                    const sig = crypto.createHash('sha1').update(bytes).digest('hex');
-                    const name = thumbNameOf(sig);
-                    if (name && !hasBin(name)) {
-                        batch.push({ name, buf: bytes });
-                    }
-                    item.sig = sig;
-                }
-            }
-            delete item.thumb;
-            delete item.thumbData;
-            delete item.avatar;
-            delete item.avatarThumbData;
-            delete item.avatarSrc;
-            touched = true;
-        }
-        if (touched && doc.v !== CACHE_VERSION) {
-            doc.v = CACHE_VERSION;
-        }
-    }
-    if (batch.length > 0) {
-        await putBinsBatch(batch);
-    }
-    return batch.length;
-}
-
-/** 解析旧版 `.zip` 备份包内容 */
-async function extractZipBackupPayload(source: string): Promise<{
-    incoming: SearchCache[];
-    binNames: string[];
-    registry: DiskRegistry | null;
-    playlistsInPkg: unknown;
-}> {
-    let dbTmp = '';
-    let binNames: string[] = [];
-    let registry: DiskRegistry | null = null;
-    let playlistsInPkg: unknown = null;
-    try {
-        const entries = await listZip(source);
-        const dbEntry = entries.find(e => e.name === 'searchCache.db');
-        if (!dbEntry) throw new Error('包里没有 searchCache.db');
-        binNames = binEntriesOf(entries);
-
-        const mfEntry = entries.find(e => e.name === MANIFEST_NAME);
-        if (mfEntry) {
-            const mf = JSON.parse((await readZipEntry(source, mfEntry)).toString('utf8')) as { format?: number };
-            if (typeof mf.format === 'number' && mf.format > LEGACY_ZIP_BACKUP_FORMAT) {
-                throw new Error(`这份备份是更新版本（format ${mf.format}）生成的，当前版本读不了`);
-            }
-        }
-
-        const plain = (await readZipEntry(source, dbEntry)).toString('utf8');
-        dbTmp = `${CACHE_DB_PATH}.unpack-${process.pid}-${Date.now().toString(36)}`;
-        await fsasync.writeFile(dbTmp, encryptPlainDb(plain), 'utf8');
-
-        const dkEntry = entries.find(e => e.name === 'disks.json');
-        if (dkEntry) {
-            try {
-                const parsed = JSON.parse((await readZipEntry(source, dkEntry)).toString('utf8'));
-                if (parsed && typeof parsed === 'object') registry = parsed as DiskRegistry;
-            } catch { /* 注册表坏了不该挡住还原/合并 */ }
-        }
-
-        const plEntry = entries.find(e => e.name === 'playlists.json');
-        if (plEntry) {
-            try {
-                const parsed = JSON.parse((await readZipEntry(source, plEntry)).toString('utf8'));
-                if (Array.isArray(parsed)) playlistsInPkg = parsed;
-            } catch { /* 收藏夹坏了不该挡住还原/合并 */ }
-        }
-
-        const incoming = await readExternalCache(dbTmp);
-        return { incoming, binNames, registry, playlistsInPkg };
-    } catch (e) {
-        throw new Error(`不是一份可用的备份包：${e}`);
-    } finally {
-        if (dbTmp) await fsasync.unlink(dbTmp).catch(() => {});
-    }
 }
 
 /** 并入附属元数据：盘注册表（只补缺）、收藏夹（只增不删）、命中记录（只增不删） */
@@ -1975,39 +1855,24 @@ async function mergeAuxiliaryBackupData(
 }
 
 /**
- * 「从文件还原…」核心逻辑（支持 `.ffbak` 与旧版 `.zip` 双格式）。
+ * 「从文件还原…」核心逻辑（仅支持 `.ffbak`）。
  */
 export async function runRestoreFromFile(dataDir: string, source: string) {
     const format = await detectBackupFormat(source);
-    if (format === 'unknown') {
-        throw new Error('不是一份可用的备份包：不支持的文件格式（仅支持 .ffbak 或旧版 .zip）');
+    if (format !== 'ffbak') {
+        throw new Error('不是一份可用的备份包：仅支持 .ffbak 格式');
     }
 
-    let cacheEntries: SearchCache[] = [];
-    let disks: DiskRegistry | null = null;
-    let playlistsInPkg: unknown = null;
-    let hitsInPkg: unknown = null;
-    let ffbakVerified: Awaited<ReturnType<typeof readFfbakMetaAndVerify>> | null = null;
-    let zipBinNames: string[] = [];
-
-    if (format === 'ffbak') {
-        ffbakVerified = await readFfbakMetaAndVerify(source);
-        cacheEntries = Array.isArray(ffbakVerified.meta.cacheEntries)
-            ? (ffbakVerified.meta.cacheEntries as SearchCache[])
-            : [];
-        if (ffbakVerified.meta.disks && typeof ffbakVerified.meta.disks === 'object') {
-            disks = ffbakVerified.meta.disks as DiskRegistry;
-        }
-        playlistsInPkg = ffbakVerified.meta.playlists;
-        hitsInPkg = ffbakVerified.meta.hits;
-    } else {
-        const zipPayload = await extractZipBackupPayload(source);
-        cacheEntries = zipPayload.incoming;
-        zipBinNames = zipPayload.binNames;
-        disks = zipPayload.registry;
-        playlistsInPkg = zipPayload.playlistsInPkg;
-        await upgradeZipLegacyThumbs(cacheEntries);
-    }
+    const ffbakVerified = await readFfbakMetaAndVerify(source);
+    const cacheEntries: SearchCache[] = Array.isArray(ffbakVerified.meta.cacheEntries)
+        ? (ffbakVerified.meta.cacheEntries as SearchCache[])
+        : [];
+    const disks: DiskRegistry | null =
+        ffbakVerified.meta.disks && typeof ffbakVerified.meta.disks === 'object'
+            ? (ffbakVerified.meta.disks as DiskRegistry)
+            : null;
+    const playlistsInPkg = ffbakVerified.meta.playlists;
+    const hitsInPkg = ffbakVerified.meta.hits;
 
     try {
         await snapshotCacheTo(BEFORE_RESTORE_PATH);
@@ -2031,13 +1896,7 @@ export async function runRestoreFromFile(dataDir: string, source: string) {
         throw new Error(`还原失败，选中的文件不是一份可用的缓存库。${note}`);
     }
 
-    let addedImages = 0;
-    if (format === 'ffbak' && ffbakVerified) {
-        addedImages = await importFfbakBins(source, ffbakVerified.imagesOffset, ffbakVerified.binCount);
-    } else {
-        addedImages = await importBins(source, zipBinNames);
-        await migrateLegacyThumbs();
-    }
+    const addedImages = await importFfbakBins(source, ffbakVerified.imagesOffset, ffbakVerified.binCount);
 
     const aux = await mergeAuxiliaryBackupData(dataDir, {
         disks,
@@ -2060,18 +1919,6 @@ async function restoreFromFile(req: Req, res: http.ServerResponse) {
     const source = bodyPath(req);
     const result = await runRestoreFromFile(config.userBasePath, source);
     sendJson(res, result);
-}
-
-/**
- * 包里的库是**明文 JSON**（为了压缩）。写回主库要重新逐行加密。
- * 兼容旧包（2026-10-04 那版）：首行不以 `{` 开头说明已是密文，原样写回。
- */
-function encryptPlainDb(plain: string): string {
-    const lines = plain.split('\n').filter(l => l.trim());
-    if (!lines.length) return '';
-    const alreadyEncrypted = !lines[0].startsWith('{');
-    if (alreadyEncrypted) return plain;
-    return lines.map(l => encryptLine(l)).join('\n') + '\n';
 }
 
 /**
@@ -2125,49 +1972,27 @@ async function mergeCacheDocList(incoming: SearchCache[]): Promise<{ added: numb
 }
 
 /**
- * 「合并缓存…」核心逻辑（支持 `.ffbak` 与旧版 `.zip` 双格式）。
+ * 「合并缓存…」核心逻辑（仅支持 `.ffbak`）。
  */
 export async function runMergeCache(dataDir: string, source: string) {
     const format = await detectBackupFormat(source);
-    if (format === 'unknown') {
-        throw new Error('不是一份可用的备份包：不支持的文件格式（仅支持 .ffbak 或旧版 .zip）');
+    if (format !== 'ffbak') {
+        throw new Error('不是一份可用的备份包：仅支持 .ffbak 格式');
     }
 
-    let incoming: SearchCache[] = [];
-    let disks: DiskRegistry | null = null;
-    let playlistsInPkg: unknown = null;
-    let hitsInPkg: unknown = null;
-    let ffbakVerified: Awaited<ReturnType<typeof readFfbakMetaAndVerify>> | null = null;
-    let zipBinNames: string[] = [];
-
-    if (format === 'ffbak') {
-        ffbakVerified = await readFfbakMetaAndVerify(source);
-        incoming = Array.isArray(ffbakVerified.meta.cacheEntries)
-            ? (ffbakVerified.meta.cacheEntries as SearchCache[])
-            : [];
-        if (ffbakVerified.meta.disks && typeof ffbakVerified.meta.disks === 'object') {
-            disks = ffbakVerified.meta.disks as DiskRegistry;
-        }
-        playlistsInPkg = ffbakVerified.meta.playlists;
-        hitsInPkg = ffbakVerified.meta.hits;
-    } else {
-        const zipPayload = await extractZipBackupPayload(source);
-        incoming = zipPayload.incoming;
-        zipBinNames = zipPayload.binNames;
-        disks = zipPayload.registry;
-        playlistsInPkg = zipPayload.playlistsInPkg;
-        await upgradeZipLegacyThumbs(incoming);
-    }
+    const ffbakVerified = await readFfbakMetaAndVerify(source);
+    const incoming: SearchCache[] = Array.isArray(ffbakVerified.meta.cacheEntries)
+        ? (ffbakVerified.meta.cacheEntries as SearchCache[])
+        : [];
+    const disks: DiskRegistry | null =
+        ffbakVerified.meta.disks && typeof ffbakVerified.meta.disks === 'object'
+            ? (ffbakVerified.meta.disks as DiskRegistry)
+            : null;
+    const playlistsInPkg = ffbakVerified.meta.playlists;
+    const hitsInPkg = ffbakVerified.meta.hits;
 
     const { added, replaced, skipped } = await mergeCacheDocList(incoming);
-
-    let images = 0;
-    if (format === 'ffbak' && ffbakVerified) {
-        images = await importFfbakBins(source, ffbakVerified.imagesOffset, ffbakVerified.binCount);
-    } else {
-        await migrateLegacyThumbs();
-        images = await importBins(source, zipBinNames);
-    }
+    const images = await importFfbakBins(source, ffbakVerified.imagesOffset, ffbakVerified.binCount);
 
     const aux = await mergeAuxiliaryBackupData(dataDir, {
         disks,

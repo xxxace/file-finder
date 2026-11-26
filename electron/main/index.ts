@@ -267,7 +267,7 @@ ipcMain.handle('pickCacheOpenPath', async function () {
     title: '选择缓存备份包',
     defaultPath: config.userBasePath,
     properties: ['openFile'],
-    filters: [{ name: '缓存备份包 (ffbak, zip)', extensions: ['ffbak', 'zip'] }],
+    filters: [{ name: '缓存备份包 (ffbak)', extensions: ['ffbak'] }],
   });
 
   return { canceled, filePath: canceled ? '' : (filePaths[0] || '') };

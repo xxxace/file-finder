@@ -88,8 +88,6 @@ describe('.ffbak streaming backup & dual-format restore/merge', () => {
                 `export * as server from '${toPosix('electron/server/index.ts')}';`,
                 `export * as nedb from '${toPosix('electron/server/nedb.ts')}';`,
                 `export * as binStore from '${toPosix('electron/utils/binStore.ts')}';`,
-                `export * as zip from '${toPosix('electron/utils/zip.ts')}';`,
-                `export * as cacheCrypto from '${toPosix('electron/utils/cacheCrypto.ts')}';`,
                 `export * as hitsStore from '${toPosix('electron/server/assistant/hits.ts')}';`,
                 `export * as playlistStore from '${toPosix('electron/server/playlistStore.ts')}';`,
             ].join('\n'),
@@ -110,8 +108,6 @@ describe('.ffbak streaming backup & dual-format restore/merge', () => {
         server = mod.server;
         nedb = mod.nedb;
         binStore = mod.binStore;
-        zip = mod.zip;
-        cacheCrypto = mod.cacheCrypto;
         hitsStore = mod.hitsStore;
         playlistStore = mod.playlistStore;
 
@@ -366,74 +362,12 @@ describe('.ffbak streaming backup & dual-format restore/merge', () => {
             assert.ok(hitsAfterRestore.some((h) => h.id === 'hit_local'));
             assert.ok(hitsAfterRestore.some((h) => h.id === 'hit_extra'));
 
-            // 4b. Legacy .zip with AES-encrypted bin/*.enc + v2 thumbData
+            // 4b. Non-.ffbak (e.g. .zip) is cleanly rejected
             const zipPath = path.join(workDir, 'legacy.zip');
-            const legacyStage = path.join(workDir, 'legacy-stage');
-            await fs.mkdir(legacyStage, { recursive: true });
-
-            const zipImg = makeFakeJpeg(33, 96);
-            const zipSig = sha1Hex(zipImg);
-            const v2Thumb = makeFakeJpeg(34, 80);
-            const v2Sig = sha1Hex(v2Thumb);
-
-            const encBinFile = path.join(legacyStage, `t-${zipSig}.enc`);
-            await fs.writeFile(encBinFile, cacheCrypto.encryptBlob(zipImg));
-
-            const dbPlain = [
-                JSON.stringify({
-                    v: 3,
-                    serial: 'DISK-ZIP',
-                    relPath: 'FromZip',
-                    mode: 'folder',
-                    count: 1,
-                    create_at: '2026-11-26 15:00:00',
-                    data: [{ dir: 'FromZip', name: 'ZipItem', isDirectory: false, size: 200, sig: zipSig }],
-                }),
-                JSON.stringify({
-                    v: 2,
-                    serial: 'DISK-V2',
-                    relPath: 'FromV2',
-                    mode: 'folder',
-                    count: 1,
-                    create_at: '2026-11-26 15:00:00',
-                    data: [{ dir: 'FromV2', name: 'V2Item', isDirectory: false, size: 300, thumbData: `data:image/jpeg;base64,${v2Thumb.toString('base64')}` }],
-                }),
-                JSON.stringify({ $$indexCreated: { fieldName: 'serial', unique: false, sparse: false } }),
-            ].join('\n') + '\n';
-
-            const dbFile = path.join(legacyStage, 'searchCache.db');
-            const dkFile = path.join(legacyStage, 'disks.json');
-            const mfFile = path.join(legacyStage, 'manifest.json');
-            const plFile = path.join(legacyStage, 'playlists.json');
-            await fs.writeFile(dbFile, dbPlain, 'utf8');
-            await fs.writeFile(dkFile, JSON.stringify({ 'DISK-ZIP': { label: 'ZipDrive', firstSeenAt: 100, lastSeenAt: 200 } }), 'utf8');
-            await fs.writeFile(mfFile, JSON.stringify({ format: 1, app: 'file-finder' }), 'utf8');
-            await fs.writeFile(plFile, JSON.stringify([{ id: 'pl_zip', name: 'ZipList', createdAt: 3000, items: [] }]), 'utf8');
-
-            await zip.writeZip(zipPath, [
-                { name: 'manifest.json', file: mfFile, compress: 'deflate' },
-                { name: 'searchCache.db', file: dbFile, compress: 'deflate' },
-                { name: 'disks.json', file: dkFile, compress: 'deflate' },
-                { name: 'playlists.json', file: plFile, compress: 'deflate' },
-                { name: `bin/t-${zipSig}.enc`, file: encBinFile, compress: 'store' },
-            ]);
-
+            await fs.writeFile(zipPath, Buffer.from([0x50, 0x4b, 0x03, 0x04, 0x00, 0x00]));
             assert.equal(await ffbak.detectBackupFormat(zipPath), 'zip');
-
-            // Merge legacy zip
-            await server.runMergeCache(dataDir, zipPath);
-            const mergedZipDoc = await nedb.findCache('DISK-ZIP', 'FromZip', 'folder');
-            assert.ok(mergedZipDoc);
-            assert.equal(binStore.getBin(binStore.thumbNameOf(zipSig))?.buf.equals(zipImg), true);
-
-            // Restore legacy zip (including v2 thumbData migration)
-            await server.runRestoreFromFile(dataDir, zipPath);
-            const restoredV2Doc = await nedb.findCache('DISK-V2', 'FromV2', 'folder');
-            assert.ok(restoredV2Doc);
-            assert.equal(restoredV2Doc.data[0].sig, v2Sig);
-            assert.equal(binStore.getBin(binStore.thumbNameOf(v2Sig))?.buf.equals(v2Thumb), true);
-            const plsAfterZipRestore = await playlistStore.loadPlaylists(dataDir);
-            assert.ok(plsAfterZipRestore.some((p) => p.id === 'pl_zip'));
+            await assert.rejects(() => server.runRestoreFromFile(dataDir, zipPath), /仅支持 \.ffbak/);
+            await assert.rejects(() => server.runMergeCache(dataDir, zipPath), /仅支持 \.ffbak/);
         } finally {
             await fs.rm(workDir, { recursive: true, force: true }).catch(() => {});
         }
