@@ -122,7 +122,8 @@ function getCandidateUrls(originalUrl: string): string[] {
 /** 稳健下载：优先走 Chromium net.request（原生代理/防盗链），失败兜底 Node fetch */
 async function downloadBuffer(url: string, timeoutMs = 8000): Promise<Buffer | null> {
     try {
-        const r = await download(url, AbortSignal.timeout(timeoutMs));
+        // 内建超时与这里的 signal 对齐：`download` 默认 20 秒，这里要的是 8 秒
+        const r = await download(url, AbortSignal.timeout(timeoutMs), timeoutMs);
         if (r.status === 200 && r.buf && r.buf.length > 0) return r.buf;
     } catch {
         // net.request 失败或单测环境没有 electron net，回退到 Node fetch

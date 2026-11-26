@@ -23,8 +23,8 @@
  *     现在所有来源（真抓 + 落盘命中缓存）都过 `getVerifiedCover()` 这一个判据；
  *     验不过就继续走下一个站点，绝不记命中、也绝不写进命中缓存。
  */
-import { CancelledError, enqueueWithRetry, hostOf } from './queue';
-import { runExtract } from './siteFetch';
+import { CancelledError, combineSignals, enqueueWithRetry, hostOf } from './queue';
+import { runExtract, TARGET_BUDGET_MS } from './siteFetch';
 import type { FetchResult } from './siteFetch';
 import { getVerifiedCover } from './coverImage';
 import { runSteps } from './siteActions';
@@ -41,6 +41,20 @@ import { bumpProgress, finishJob, pushRow } from './jobs';
 import { cardKeyOf } from './cardKey';
 
 export type GrabStatus = 'ok' | 'no-id' | 'no-match' | 'blocked' | 'bad-cover' | 'error';
+
+/**
+ * 这张卡超出了 45 秒预算。**不是**用户取消 —— 它是"这一条判超时、继续下一条"的结果。
+ *
+ * 为什么单独一个类型：`CancelledError` 是控制流（worker 要把它归还队列重跑），
+ * 两者混用会让"暂停"和"超时"互相伪装 —— 暂停被记成超时、超时被当成暂停重跑，
+ * 都是主人真机上看得到的错。
+ */
+class BudgetExceeded extends Error {
+    constructor() {
+        super('budget exceeded');
+        this.name = 'BudgetExceeded';
+    }
+}
 
 export interface GrabActor {
     name: string;
@@ -179,8 +193,23 @@ export async function runGrab(
      */
     const outcomeMemo = new Map<string, Promise<MatchOutcome>>();
 
-    /** 真打站点：按启用站点顺序 fallback 到第一个命中为止 */
-    async function fetchOnce(id: string): Promise<MatchOutcome> {
+    /**
+     * ⚠️ 这里**刻意没有**「某站被拦几次就整批跳过」的熔断（2026-11-23 自检后撤掉）：
+     * 抓取是 5 并发，同一瞬间会有 5 张卡一起撞同一个站的墙 —— "连续两次拦截"在并发下
+     * 根本不含"试过多次"的语义，而是**一眨眼就被判定成整站报废**，后面所有卡连试都不试。
+     * 而 CF 经常只拦某些详情页（页级拦截），这一刀会把本来能命中的卡一起砍掉。
+     *
+     * 省时间的正确手段只有两条，都已经有了：挑战页 **4 秒**放弃（`WAF_GIVE_UP_MS`）
+     * 和每张卡 **45 秒**总预算（`TARGET_BUDGET_MS`）。整站被拦的代价 = 4 秒/卡 ÷ 并发，
+     * 这个代价换命中率是划算的。
+     */
+
+    /**
+     * 真打站点：按启用站点顺序 fallback 到第一个命中为止。
+     * `deadline` = 这张卡的总预算（用于**分配**，决定还有没有时间试下一站）；
+     * `signal` = 同一份预算的**中断源**，外加用户取消 —— 所有 await 都吃它。
+     */
+    async function fetchOnce(id: string, deadline: number, signal: AbortSignal): Promise<MatchOutcome> {
         let blocked = false;
         let blockedSite: string | undefined;
         let why = '所有站点都没抽到封面';
@@ -196,6 +225,9 @@ export async function runGrab(
             // `blocked` 刻意**不**重置：被拦是累积信号，它决定"能不能人工过验证再试"。
             badCover = false;
 
+            const remaining = deadline - Date.now();
+            if (remaining <= 0) break;
+
             bumpProgress(job, { current: `${id} → ${rule.id}` });
             const url = expandUrl(rule.detailUrl, id, rule.queryTransform);
             const extract = buildExtractScript(rule.fields);
@@ -207,10 +239,15 @@ export async function runGrab(
                 res = await enqueueWithRetry<FetchResult<ExtractedFields> | StepsResult>(
                     hostOf(url),
                     () => (steps.length
-                        ? runSteps(url, planned, extract, { signal: job.controller.signal })
-                        : runExtract<ExtractedFields>(url, extract, { signal: job.controller.signal })),
+                        ? runSteps(url, planned, extract, {
+                            signal, deadline, captureSnapshot: false,
+                        })
+                        : runExtract<ExtractedFields>(url, extract, {
+                            signal, deadline, captureSnapshot: false,
+                        })),
                     r => !steps.length && !r.ok && r.err === 'timeout',
-                    job.controller.signal,
+                    signal,
+                    deadline,
                 );
             } catch (e) {
                 if (e instanceof CancelledError) throw e;
@@ -224,7 +261,13 @@ export async function runGrab(
                 if (res.err === 'cloudflare') {
                     blocked = true;
                     blockedSite = rule.id;
+                    // 只记"被拦"这一事实供人工过验证，**不做累计/熔断**（理由见上方注释）
                     why = '被站点拦截（需要人工过验证）';
+                } else if (res.err === 'net') {
+                    // 连不上（DNS / 掐连接 / SSL 握手失败）——不重试，如实说原因
+                    why = `打不开页面（${res.netErr || '连接被站点掐断'}）`;
+                } else if (deadline - Date.now() <= 0) {
+                    why = `超时（${Math.round(TARGET_BUDGET_MS / 1000)} 秒内没拿到封面）`;
                 } else {
                     why = '打不开页面（超时）';
                 }
@@ -233,7 +276,10 @@ export async function runGrab(
 
             const f = res.data as ExtractedFields | undefined;
             if (f && f.cover) {
-                const check = await getVerifiedCover(f.cover, job.controller.signal);
+                // ⚠️ 图片验证也要吃同一份 signal：下载 20 秒 + 排队等槽，是这个卡
+                // 唯一能越过 45 秒预算的地方（原来它拿的是 job.controller.signal，
+                // 预算到点根本打不断它）
+                const check = await getVerifiedCover(f.cover, signal);
                 if (check.ok) {
                     match = {
                         hitSite: rule.id,
@@ -256,14 +302,22 @@ export async function runGrab(
     /**
      * 取番号的尝试结果（全过程 Promise 级别 memo，防止重复请求）：
      *   ① 落盘命中缓存（以前抓到过）→ ② 真打站点。
+     *
+     * `deadline` / `signal` 都是**第一次**领取这张卡时的那一份（同一次领取内跨站点、
+     * 跨重试共享）。暂停归还后重领会重算 —— 刻意的：用户手动暂停十分钟再继续，
+     * 不该一放行就判超时。
+     *
+     * ⚠️ memo 的 key 只有番号 ⇒ 同番号的两张卡（不同层）会共用**第一张卡的**预算。
+     * 这是可接受的取舍：多卷同卡已在 `cardGroups` 收拢，跨层同番号极少，
+     * 而给 memo 加 signal 维度等于让"同一番号抓两次"，代价更大。
      */
-    function outcomeOf(id: string): Promise<MatchOutcome> {
+    function outcomeOf(id: string, deadline: number, signal: AbortSignal): Promise<MatchOutcome> {
         let p = outcomeMemo.get(id);
         if (!p) {
             p = (async () => {
                 const hit = force ? undefined : hits.get(id);
                 if (hit) {
-                    const check = await getVerifiedCover(hit.coverUrl, job.controller.signal);
+                    const check = await getVerifiedCover(hit.coverUrl, signal);
                     if (check.ok) {
                         return {
                             match: {
@@ -279,8 +333,14 @@ export async function runGrab(
                     if (check.urlBad) appendTombstone(dataDir, id);
                     hits.delete(id);
                 }
-                return fetchOnce(id);
+                return fetchOnce(id, deadline, signal);
             })();
+            /**
+             * ⚠️ 被打断（暂停 / 终止 / 预算到点）的 promise **不能留在 memo 里**。
+             * 它是一条 rejected promise；下次重跑同一番号会原样再抛一次 ⇒ 那张卡永久失败。
+             * 症状是"暂停再继续，一半的卡直接变红"（2026-11-23 顺手堵掉）。
+             */
+            p.catch(() => outcomeMemo.delete(id));
             outcomeMemo.set(id, p);
         }
         return p;
@@ -308,9 +368,49 @@ export async function runGrab(
         }
 
         let outcome: MatchOutcome;
+        /**
+         * 这张卡的**总预算**：从领取这一刻起算 45 秒，跨站点 fallback、跨重试、跨图片验证。
+         *
+         * ⚠️ 只有 `deadline` 数字是**不够的**（2026-11-23 实测超过 45 秒的根因）：
+         *     那个数字只在"回到循环条件"时被读一次，而 `executeJavaScript` / `loadURL` /
+         *     `download` 正在 await 时，它一点作用都没有。
+         * 所以这里三件套：
+         *   ① `deadline`（数字）—— 负责**分配**：还有没有时间试下一站；
+         *   ② `budget.signal` —— 负责**掐断**：到点 abort，所有接 signal 的 await 立刻收尾；
+         *   ③ `Promise.race` 的 timeout —— 负责**兜底**：万一有哪个 await 漏接 signal，
+         *      worker 也不会被它拖住，45 秒一到就放行到下一张（主人要的"超时熔断"）。
+         */
+        const budget = new AbortController();
+        const deadline = Date.now() + TARGET_BUDGET_MS;
+        const merged = combineSignals(job.controller.signal, budget.signal);
+        let budgetTimer: ReturnType<typeof setTimeout> | undefined;
+        const timeout = new Promise<never>((_, reject) => {
+            budgetTimer = setTimeout(() => {
+                budget.abort();
+                reject(new BudgetExceeded());
+            }, TARGET_BUDGET_MS);
+        });
         try {
-            outcome = await outcomeOf(id);
+            outcome = await Promise.race([outcomeOf(id, deadline, merged.signal), timeout]);
         } catch (e) {
+            /**
+             * 预算到点与用户取消都会走到这里。必须分开：
+             * 前者是**这张卡的结果**（记超时，继续下一张），后者是控制流（归还队列）。
+             */
+            const overBudget =
+                e instanceof BudgetExceeded ||
+                (e instanceof CancelledError && !job.cancelled && budget.signal.aborted);
+            if (overBudget) {
+                for (const t of list) {
+                    pushRow(job, {
+                        writeRel: t.writeRel, query: id, hitSite: null, coverUrl: null, title: null,
+                        actresses: [], status: 'no-match',
+                        message: `超时：${Math.round(TARGET_BUDGET_MS / 1000)} 秒内没拿到封面`,
+                    });
+                }
+                step(job, 'miss');
+                return;
+            }
             if (e instanceof CancelledError) throw e;
             for (const t of list) {
                 pushRow(job, {
@@ -321,6 +421,9 @@ export async function runGrab(
             }
             step(job, 'miss');
             return;
+        } finally {
+            if (budgetTimer) clearTimeout(budgetTimer);
+            merged.dispose();
         }
 
         if (job.cancelled && !outcome.match) return;
@@ -360,15 +463,19 @@ export async function runGrab(
         }
     }
 
-    let next = 0;
+    /**
+     * 待处理队列（**不是**索引游标）。2026-11-23 改：暂停现在会**中断在飞请求**，
+     * 被打断的那张没出结果 ⇒ worker 必须能把它放回队首重跑。
+     * 用 `next++` 做不到"归还"：并发下两个 worker 同时回退游标会互相踩，直接丢卡。
+     */
+    const queued = [...cardList];
     const worker = async () => {
-        while (!job.cancelled) {
-            if (next >= cardList.length) return;
+        for (;;) {
+            if (job.cancelled) return;
             await job.gate.wait();
             if (job.cancelled) return;
-            const i = next++;
-            if (i >= cardList.length) return;
-            const card = cardList[i];
+            const card = queued.shift();
+            if (!card) return;
             /**
              * 在飞登记 —— 界面只给这几张卡转圈。
              * 放在 worker 里而不是 `grabCard` 里：`finally` 能兜住取消（CancelledError）、
@@ -378,6 +485,17 @@ export async function runGrab(
             job.inflight.push(...rels);
             try {
                 await grabCard(card);
+            } catch (e) {
+                /**
+                 * ⚠️ **暂停**打断（非终止）⇒ 这张卡还没出结果，放回队首等「继续」。
+                 * 丢了它等于让用户白等一轮；而终止（`job.cancelled`）是真丢 —— 那条
+                 * 由下面的 throw 交给 `Promise.allSettled` 收尾。
+                 */
+                if (e instanceof CancelledError && !job.cancelled) {
+                    queued.unshift(card);
+                    continue;
+                }
+                throw e;
             } finally {
                 for (const r of rels) {
                     const k = job.inflight.indexOf(r);

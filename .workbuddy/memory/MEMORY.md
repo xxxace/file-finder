@@ -61,6 +61,7 @@
 视觉去重/以图搜图**砍掉**；盘舰队看板、常驻增量索引**短期不做**；走「功能完善」路线。
 
 ## 八、管理助手（active，只做 JAV）
+- **11-23 补封面四修**：卡级 **45s 超时 = abort + `Promise.race` 双保险**（⚠️ 只写 `deadline` 数字 = 检查点式超时，一次长 await 就把 45s 撑到 70s，被主人真机抓到）· **暂停 = 立刻中断在飞**（第三版定稿，⚠️ **别再被 11-08「在飞的不掐断」旧裁决带偏**；被打断的条目归还队首，终止才不归还）· WAF 4s 快放弃（⚠️ **不做整站熔断**：5 并发下"连续 2 次"= 同一瞬间一起撞墙会误砍整站）· `did-fail-load` 致命码(-100/-107…)立即返回不再空转 · ffmpeg/ffprobe/图片转码全接 signal · `toJpeg` 移进并发槽 · grab 不再生产没人消费的 800KB 快照。`docs/FIX-COVER-BUDGET-PAUSE-2026-11-23.md`
 - **11-10 补封面两铁律**：「命中」= 能下载且能解码成真 JPEG（`coverImage.ts` 的 `getVerifiedCover()` 是**唯一判据**，grab/preview/apply 共用）；`runApply` **封面落盘成功后才搬视频**，失败⇒盘上零改动。⚠️ 旧版先搬视频后下图 ⇒ 产出 `A/A.mp4` 没封面。`docs/FIX-COVER-FALSE-HIT-2026-11-10.md`
 - 隐藏 BrowserWindow 抓取（不引 puppeteer/cheerio）；站点规则=JSON 候选链；接口 `/assistant/*`；UI=全屏 `n-modal`；apply 后**必须 `removeCache`**；`tmp→rename` 原子写 + `apply.log`
 - `cf_clearance` 绑 IP+UA+TLS ⇒ **不能**走 Node `fetch`，全程 Chromium 网络栈

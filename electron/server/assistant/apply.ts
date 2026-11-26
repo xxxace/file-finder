@@ -251,13 +251,21 @@ export async function runApply(
         bumpProgress(job, { processed: job.progress.processed + 1, current: '' });
     };
 
+    /**
+     * 待写队列（**不是**索引游标）：暂停现在会中断在飞下载 ⇒ 被打断的那一组要放回队首
+     * （2026-11-23 暂停语义反转，见 `jobs.pauseJob`）。
+     *
+     * 为什么放回是安全的：中断只可能发生在**取字节**那一步（`getVerifiedCover` 的下载/等槽），
+     * 而这一步之前盘上一个字节都没动（顶部 §5）。写到一半的 fs 调用**不接 signal**，
+     * 所以不可能停在"封面写了、视频没搬"的中间态 —— 那正是不能被打断的那一段。
+     */
+    const queued = [...groups];
     try {
-        for (const g of groups) {
+        while (queued.length) {
             if (job.cancelled) break;
-            // 暂停：当前这一部写完就停，剩下的留在队列里等「继续」——
-            // 半途停在一个分组中间（分卷搬了一半）比停下来更糟
             await job.gate.wait();
             if (job.cancelled) break;
+            const g = queued.shift()!;
 
             bumpProgress(job, { current: g.folderRel || g.layerDir });
             const notes: string[] = [];
@@ -272,7 +280,13 @@ export async function runApply(
                     : await getVerifiedCover(g.coverUrl, job.controller.signal, enqueue);
             } catch (e) {
                 // 取消是控制流，不是"这一部写失败"
-                if (job.cancelled || e instanceof CancelledError) break;
+                if (e instanceof CancelledError) {
+                    if (!job.cancelled) {
+                        queued.unshift(g); // 暂停打断：这一组还没动盘，放回队首
+                        continue;
+                    }
+                    break;
+                }
                 throw e;
             }
             if (!cover.ok) {

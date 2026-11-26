@@ -111,14 +111,22 @@ export async function getVerifiedCover(
     const cached = verifiedBytes.get(url);
     if (cached?.buf?.length) return { ok: true, jpg: cached.buf, urlBad: false, why: '' };
 
-    let raw: Buffer;
-    let status: number;
+    let status = 0;
+    let empty = false;
+    let jpg: Buffer | null = null;
     try {
         await acquireDownloadSlot(signal);
         try {
             const r = await gate(hostOf(url), () => download(url, signal), signal);
             status = r.status;
-            raw = r.buf;
+            empty = !r.buf.length;
+            /**
+             * ⚠️ 转码必须留在**这把槽里**。`nativeImage` 解码 + `toJPEG` 是**主进程同步 CPU**：
+             * 4 张 2048px 的图同时解码就是几百毫秒的整窗卡顿（IPC 也跟着停）。
+             * 上面那个信号量的注释一直写的是"最大并发图片**下载与转码**数"，
+             * 但转码原先写在 `finally` 之后 —— 限流实际只限了下载（2026-11-23 修）。
+             */
+            if (status === 200 && !empty) jpg = await toJpeg(r.buf, signal);
         } finally {
             releaseDownloadSlot();
         }
@@ -128,11 +136,19 @@ export async function getVerifiedCover(
         // 网络错误不算 URL 坏（可能只是暂时断网）⇒ 不立墓碑
         return { ok: false, jpg: null, urlBad: false, why: e instanceof Error ? e.message : String(e) };
     }
-    if (status !== 200 || !raw.length) {
-        return { ok: false, jpg: null, urlBad: true, why: `下载失败（HTTP ${status} / 空内容）` };
+    /**
+     * ⚠️ 转码被取消时也是 `null` —— 不能落到下面的"图片解不出来"，
+     * 那会给这条 URL 立墓碑（把本来好好的命中缓存删掉），并把取消记成失败。
+     */
+    if (!jpg && signal.aborted) throw new CancelledError();
+    if (status !== 200 || !jpg) {
+        return {
+            ok: false, jpg: null, urlBad: true,
+            why: status !== 200 ? `下载失败（HTTP ${status}）`
+                : empty ? '下载失败（HTTP 200 / 空内容）'
+                    : '图片解不出来（可能不是图）',
+        };
     }
-    const jpg = await toJpeg(raw);
-    if (!jpg) return { ok: false, jpg: null, urlBad: true, why: '图片解不出来（可能不是图）' };
 
     verifiedBytes.set(url, { buf: jpg, type: 'image/jpeg' });
     return { ok: true, jpg, urlBad: false, why: '' };
@@ -146,9 +162,20 @@ export async function getVerifiedCover(
  * 的 options 从类型到运行时都明确支持 `session` + `useSessionCookies` ——
  * 用它才能把「和抓取页面同一个 session（CF cookie 自动带上）」写成类型保证。
  */
+/**
+ * 单张封面图片下载的硬上限（毫秒）。
+ *
+ * ⚠️ 为什么必须有：`net.request` 没有内建超时，一个被 CDN/WAF 挂住的连接会让
+ * Promise 永远悬着 —— 外层的 45 秒卡级预算只能拦住"发新请求"，拦不住"这一条还在等"。
+ * 表现就是终止/超时之后那张卡仍然转圈（2026-11-23 主人报"杀不掉"的一条来源）。
+ * 20 秒足够下完任何一张封面；超了就按网络失败记，不立墓碑。
+ */
+const COVER_DOWNLOAD_TIMEOUT = 20_000;
+
 export function download(
     url: string,
     signal: AbortSignal,
+    timeoutMs = COVER_DOWNLOAD_TIMEOUT,
 ): Promise<{ status: number; buf: Buffer; type: string | null }> {
     return new Promise((resolve, reject) => {
         // ⚠️ 这两行是**取消/超时不挂死**的保证：Electron 的 ClientRequest 被 abort 之后
@@ -165,11 +192,18 @@ export function download(
         }
         req.setHeader('User-Agent', 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36');
         let settled = false;
+        let timer: ReturnType<typeof setTimeout> | undefined;
         const done = (fn: () => void) => {
             if (settled) return;
             settled = true;
+            if (timer) clearTimeout(timer);
             fn();
         };
+
+        timer = setTimeout(() => {
+            done(() => reject(new Error(`下载超时（${Math.round(timeoutMs / 1000)} 秒）`)));
+            try { req.abort(); } catch { /* 已结束 */ }
+        }, timeoutMs);
 
         signal.addEventListener('abort', () => {
             done(() => reject(new CancelledError()));
@@ -198,18 +232,19 @@ export function download(
  *   解不开（典型：改后缀的 WebP）→ ffmpeg 兜底转 PNG 再编，中转文件在系统盘临时目录。
  * 都失败返回 null —— 调用方把这一行记成失败，不写半截文件。
  */
-export async function toJpeg(buf: Buffer): Promise<Buffer | null> {
+export async function toJpeg(buf: Buffer, signal?: AbortSignal): Promise<Buffer | null> {
     if (isJpeg(buf)) return buf;
 
     const img = nativeImage.createFromBuffer(buf);
     if (!img.isEmpty()) return img.toJPEG(COVER_JPEG_QUALITY);
+    if (signal?.aborted) return null;
 
     const rand = Math.random().toString(36).slice(2, 8);
     const src = path.join(os.tmpdir(), `ff-cover-src-${process.pid}-${Date.now()}-${rand}.bin`);
     const out = path.join(os.tmpdir(), `ff-cover-out-${process.pid}-${Date.now()}-${rand}.png`);
     try {
         await fsasync.writeFile(src, buf);
-        if (!(await transcodeImage(src, out))) return null;
+        if (!(await transcodeImage(src, out, signal))) return null;
         const png = await fsasync.readFile(out);
         const decoded = nativeImage.createFromBuffer(png);
         return decoded.isEmpty() ? null : decoded.toJPEG(COVER_JPEG_QUALITY);

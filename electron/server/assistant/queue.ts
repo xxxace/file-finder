@@ -195,20 +195,54 @@ export async function runPaced<T>(host: string, task: () => Promise<T>, signal?:
 /**
  * 带退避重试的入队。`isRetryable` 判定上一次结果值不值得再试一次
  * （传结果值而不是异常 —— 抓取失败是**正常返回值** `{ok:false}`，不是抛错）。
+ *
+ * `deadline`（可选，绝对时刻）是**调用方的总预算**：重试延迟与下一次尝试都不许越过它。
+ * 少了这一条，"单次 45 秒 + 两次重试"会让一张卡拖到两分多钟 —— 预算就形同虚设。
  */
 export async function enqueueWithRetry<T>(
     host: string,
     task: () => Promise<T>,
     isRetryable: (result: T) => boolean,
     signal?: AbortSignal,
+    deadline?: number,
 ): Promise<T> {
     let last!: T;
     for (let i = 0; i <= RETRY_DELAYS.length; i++) {
         last = await runPaced(host, task, signal);
         if (!isRetryable(last)) return last;
-        if (i < RETRY_DELAYS.length) await sleep(RETRY_DELAYS[i], signal);
+        if (i < RETRY_DELAYS.length) {
+            if (deadline !== undefined && Date.now() + RETRY_DELAYS[i] >= deadline) return last;
+            await sleep(RETRY_DELAYS[i], signal);
+        }
     }
     return last;
+}
+
+/**
+ * 把两个取消源合成一个：**任一 abort 即 abort**。返回的 `dispose` 必须调用（解除监听）。
+ *
+ * 为什么手写而不直接用 `AbortSignal.any()`：那是较新的 API，Electron 各版本的 lib 类型
+ * 不一定都有；这段只在主进程跑，十行换掉一个类型版本赌局。
+ *
+ * 用途：一个抓取目标同时受"用户取消/暂停"（job.controller）与"这张卡的 45 秒预算"
+ * （per-card timer）约束。⚠️ 少任何一条都会出问题 —— 只有 deadline 数字没有 signal 时，
+ * 一次 `executeJavaScript` / `download` 正在 await，预算根本插不进去（2026-11-23 实测超 45 秒）。
+ */
+export function combineSignals(a: AbortSignal, b: AbortSignal): { signal: AbortSignal; dispose: () => void } {
+    if (a.aborted) return { signal: a, dispose: () => undefined };
+    if (b.aborted) return { signal: b, dispose: () => undefined };
+    const ctl = new AbortController();
+    const onA = () => ctl.abort();
+    const onB = () => ctl.abort();
+    a.addEventListener('abort', onA, { once: true });
+    b.addEventListener('abort', onB, { once: true });
+    return {
+        signal: ctl.signal,
+        dispose: () => {
+            a.removeEventListener('abort', onA);
+            b.removeEventListener('abort', onB);
+        },
+    };
 }
 
 /**

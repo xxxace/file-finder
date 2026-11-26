@@ -11,7 +11,8 @@ import { BrowserWindow } from 'electron';
 import { sleep, trackWindow, untrackWindow } from './queue';
 import {
     adoptSameOriginPopups, CHROME_UA, CF_DETECT, lazyNudge, NAV_TIMEOUT, PARTITION, POLL_INTERVAL,
-    POLL_TIMEOUT, snapshotOf, type PageSnapshot, type RunExtractOptions,
+    POLL_TIMEOUT, snapshotOf, WAF_GIVE_UP_MS, WAF_STATUS, watchNavFailure,
+    type PageSnapshot, type RunExtractOptions,
 } from './siteFetch';
 
 export interface StepOutcome {
@@ -25,9 +26,11 @@ export interface StepOutcome {
 export interface StepsResult {
     ok: boolean;
     cf: boolean;
-    err?: 'cloudflare' | 'timeout' | 'aborted';
+    err?: 'cloudflare' | 'timeout' | 'net' | 'aborted';
     steps: StepOutcome[];
     data?: unknown;
+    /** `err:'net'` 时的底层原因（Chromium 描述） */
+    netErr?: string;
     /** 主框架最后一次导航的 HTTP 状态 —— 试跑面板靠它区分「番号不存在」与「选择器不对」 */
     httpStatus?: number;
     pageTitle?: string;
@@ -56,7 +59,13 @@ export async function runSteps(
     extractScript: string,
     opts: RunExtractOptions = {},
 ): Promise<StepsResult> {
-    const { timeoutMs = POLL_TIMEOUT, signal } = opts;
+    const { timeoutMs = POLL_TIMEOUT, signal, captureSnapshot = true } = opts;
+    /**
+     * 整次尝试（导航 + 等挑战 + 走动作 + 抽取）共享的硬截止，口径同 `runExtract`。
+     * 没给 `deadline` 时按"导航 + 轮询"两段加起来算 —— 写成 `now + timeoutMs` 会让
+     * 导航一口吃掉全部预算（试跑面板就是这么用的，会变成一点开就超时）。
+     */
+    const deadline = opts.deadline ?? Date.now() + NAV_TIMEOUT + timeoutMs;
 
     const win = new BrowserWindow({
         show: !!opts.show,
@@ -77,6 +86,8 @@ export async function runSteps(
     win.webContents.on('did-navigate', (_e, _u, code) => {
         if (code) httpStatus = code;
     });
+    /** 连不上（DNS / 掐连接 / SSL 失败）⇒ 立刻收工，别等预算耗完（理由见 siteFetch 同名逻辑） */
+    const navFailed = watchNavFailure(win);
     adoptSameOriginPopups(win);
 
     const onAbort = () => {
@@ -90,23 +101,34 @@ export async function runSteps(
 
     const steps: StepOutcome[] = [];
     const aborted: StepsResult = { ok: false, cf: false, err: 'aborted', steps };
+    /** 主框架注定打不开 ⇒ 收工（三处循环共用，避免各写一份） */
+    const deadOnNav = (): StepsResult | null => {
+        const f = navFailed();
+        if (!f) return null;
+        try { win.webContents.stop(); } catch { /* 已停 */ }
+        return { ok: false, cf: false, err: 'net', steps, httpStatus, netErr: `${f.desc}（${f.code}）` };
+    };
 
     try {
         if (signal?.aborted) return aborted;
         win.webContents.setUserAgent(CHROME_UA);
+        // 导航也吃同一份预算（理由见 siteFetch 的同名注释）
         await Promise.race([
             win.loadURL(url).catch(() => undefined),
-            sleep(NAV_TIMEOUT, signal).catch(() => undefined),
+            sleep(Math.min(NAV_TIMEOUT, Math.max(deadline - Date.now(), 0)), signal).catch(() => undefined),
         ]);
 
-        // ① 等脱离 CF 挑战（挑战页也会"加载成功"，但拿不到目标 DOM）。
-        // ⚠️ 判定为挑战**不立刻放弃**：判据可能误伤正常页面（曾经只要整页里出现
-        // turnstile 字样就判死），而"动作执行完 + 抽到值"才是页面正常的硬证据。
-        // 所以继续往下走，最后再按 lastCf 解释失败原因 —— 它是解释，不是否决权。
-        const cfDeadline = Date.now() + timeoutMs;
+        // ① 等脱离挑战（挑战页也会"加载成功"，但拿不到目标 DOM）。
+        // ⚠️ 判定为挑战**不立刻返回**：判据可能误伤正常页面，而"动作执行完 + 抽到值"
+        // 才是页面正常的硬证据。所以继续往下走，最后再按 lastCf 解释失败原因。
+        // ⚠️ 但**等待**本身要有上限：原来拿整个 `timeoutMs`（20 秒）等一道过不去的挑战，
+        //    正是主人看到的"卡住"。交互式挑战隐藏窗永远过不去 ⇒ 只给 4 秒（2026-11-23）。
+        const wafDeadline = Math.min(deadline, Date.now() + WAF_GIVE_UP_MS);
         let lastCf = false;
-        while (Date.now() < cfDeadline) {
+        while (Date.now() < wafDeadline) {
             if (signal?.aborted || win.isDestroyed()) return aborted;
+            const dead = deadOnNav();
+            if (dead) return dead;
             try {
                 lastCf = !!(await win.webContents.executeJavaScript(CF_DETECT)).cf;
             } catch {
@@ -119,6 +141,8 @@ export async function runSteps(
         // ② 逐步执行：每步一次。脚本抛错 = 页面被导航销毁 ⇒ 视为该步已成功
         for (let i = 0; i < planned.length; i++) {
             if (signal?.aborted || win.isDestroyed()) return aborted;
+            const dead = deadOnNav();
+            if (dead) return dead;
             let r: { ok?: boolean; why?: string } | undefined;
             try {
                 r = (await win.webContents.executeJavaScript(planned[i].script)) as {
@@ -131,9 +155,10 @@ export async function runSteps(
             const rec: StepOutcome = { index: i, act: planned[i].act, ok: r?.ok !== false, why: r?.why };
             steps.push(rec);
             if (!rec.ok) {
+                const blockedNow = lastCf || WAF_STATUS.has(httpStatus);
                 return {
-                    ok: false, cf: lastCf, err: lastCf ? 'cloudflare' : 'timeout', steps, httpStatus,
-                    snapshot: (await snapshotOf(win)) ?? undefined,
+                    ok: false, cf: blockedNow, err: blockedNow ? 'cloudflare' : 'timeout', steps, httpStatus,
+                    snapshot: captureSnapshot ? ((await snapshotOf(win)) ?? undefined) : undefined,
                 };
             }
             await sleep(STEP_SETTLE_MS, signal);
@@ -144,9 +169,10 @@ export async function runSteps(
         let data: unknown;
         let ok = false;
         let tries = 0;
-        const exDeadline = Date.now() + timeoutMs;
-        while (Date.now() < exDeadline) {
+        while (Date.now() < deadline) {
             if (signal?.aborted || win.isDestroyed()) return aborted;
+            const dead = deadOnNav();
+            if (dead) return dead;
             try {
                 data = await win.webContents.executeJavaScript(extractScript);
             } catch {
@@ -165,10 +191,11 @@ export async function runSteps(
         } catch {
             /* ignore */
         }
-        // 抽到了就是好的（cf 只用来解释"为什么没抽到"）
+        // 抽到了就是好的（cf 只用来解释"为什么没抽到"）；403/429/503 也算被拦，不算超时
+        const blockedNow = lastCf || WAF_STATUS.has(httpStatus);
         return {
-            ok, cf: ok ? false : lastCf, steps, data, httpStatus, pageTitle: title,
-            snapshot: ok ? undefined : ((await snapshotOf(win)) ?? undefined),
+            ok, cf: ok ? false : blockedNow, steps, data, httpStatus, pageTitle: title,
+            snapshot: ok || !captureSnapshot ? undefined : ((await snapshotOf(win)) ?? undefined),
         };
     } catch {
         return signal?.aborted ? aborted : { ok: false, cf: false, err: 'timeout', steps };

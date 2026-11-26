@@ -35,6 +35,65 @@ export const POLL_TIMEOUT = 20_000;
 const CHALLENGE_TIMEOUT = 300_000;
 
 /**
+ * **一个抓取目标（一张卡）的总预算**，2026-11-23 主人定：「一个任务长时间没反馈要超时，默认 45s」。
+ *
+ * 为什么必须是"总预算"而不是"导航 25s + 轮询 20s"：两者相加只是**一次**尝试的上限，
+ * 而一张卡还要跨 2 次超时重试、跨 6 个站点 fallback、跨图片验证 ⇒ 实测能拖到几分钟，
+ * 界面上就是"这五张卡一直不动"。预算从**领取这张卡**那一刻开始算，谁花都一样。
+ *
+ * ⚠️ 它不是"网络多快"的旋钮，是**放弃阈值**。调大只会让卡顿更久，除非确认某站
+ * 正常加载真的超过 45 秒（先看底栏 `抓取中 x/y` 的推进节奏再动）。
+ */
+export const TARGET_BUDGET_MS = 45_000;
+
+/**
+ * 连续判定"卡在挑战页"多久就直接放弃这个站。
+ *
+ * 为什么敢放弃：通过 Turnstile 这类**交互式**挑战需要真人点击，隐藏窗永远过不去；
+ * 而纯 JS 的自动挑战通常 1~2 秒内自己就跳走了。所以「连续 4 秒还在挑战页」的期望收益
+ * 是"再等 16 秒也大概率过不去"，成本是"白占一个渲染进程 + 这张卡的超时预算"
+ * —— 主人 2026-11-23 的原话：「无法通过也可以直接放弃，没必要强行等待」。
+ *
+ * 放弃后仍返回 `err:'cloudflare'`：留给「人工过验证」再重抓，不是把这条路堵死。
+ */
+export const WAF_GIVE_UP_MS = 4_000;
+
+/** 这些状态码本身就是"被挡在门外"，不靠 DOM 特征也能判（有些 WAF 直接回 403 空页） */
+export const WAF_STATUS = new Set([403, 429, 503]);
+
+/**
+ * 主框架"注定打不开"的错误码：**立刻收工**，不要接着轮询。
+ *
+ * 主人 2026-11-23 贴的日志就是这一类：`SSL handshake failed … net_error -100`
+ * （ERR_CONNECTION_CLOSED）—— 站点/中间设备直接掐断 TLS，重连一百次也一样。
+ * 原来这里完全不看 `did-fail-load`，于是一个连不上的页面还要被轮询到预算耗尽，
+ * 日志刷满屏、进度一动不动。
+ */
+export const FATAL_NAV_ERRORS = new Set([
+    -100, // ERR_CONNECTION_CLOSED
+    -101, // ERR_CONNECTION_RESET
+    -102, // ERR_CONNECTION_REFUSED
+    -105, // ERR_NAME_NOT_RESOLVED
+    -107, // ERR_SSL_PROTOCOL_ERROR
+    -113, // ERR_SSL_VERSION_OR_CIPHER_MISMATCH
+    -118, // ERR_CONNECTION_TIMED_OUT
+    -200, // ERR_CERT_COMMON_NAME_INVALID
+    -202, // ERR_CERT_AUTHORITY_INVALID
+]);
+
+/**
+ * 盯主框架加载失败。返回一个 getter：非 null ⇒ 这一页注定打不开。
+ * 只在**主框架**上判定（子 iframe / 广告域失败是常态，判它会误伤正常页面）。
+ */
+export function watchNavFailure(win: BrowserWindow): () => { code: number; desc: string } | null {
+    let failed: { code: number; desc: string } | null = null;
+    win.webContents.on('did-fail-load', (_e, code, desc, _url, isMainFrame) => {
+        if (isMainFrame && FATAL_NAV_ERRORS.has(code)) failed = { code, desc };
+    });
+    return () => failed;
+}
+
+/**
  * 抓取窗里**不需要**的资源类型。
  *
  * ⚠️ **不许拦 `image`**（2026-11-14 凌晨踩到的回退）：封面站的图片基本都走懒加载
@@ -109,19 +168,32 @@ export async function lazyNudge(win: BrowserWindow, tries: number): Promise<void
     }
 }
 
-/** 页面内判断是否卡在 Cloudflare / Turnstile 挑战 */
-export const CF_DETECT = `(function(){
-  var t=(document.title||'').toLowerCase();
-  // 只认**挑战页专有**的三个强信号。
-  // ⚠️ 曾经还有一条「整页 innerHTML 里出现 turnstile / challenge-platform 就算被拦」——
-  // 那是误判源：正常站点的登录/评论组件也会用 Turnstile，页面里带个 turnstile 字样就被判成
-  // 挑战页，于是抽取脚本**一次都不执行**，界面永远显示"被拦 + 0 张图"，而人用浏览器看一切正常
-  // （用户 2026-10-22 现场）。判据宁可漏判也不能误判 —— 漏判由"抽不到"兜底。
-  var cf = /just a moment|checking your browser|verify you are (a )?human|attention required/i.test(t)
-    || !!document.querySelector('#cf-challenge-running, .cf-challenge, #challenge-form, form[action*="__cf_chl"]')
-    || !!window._cf_chl_opt;
-  return { cf: cf, url: location.href, title: document.title };
+/**
+ * 页面内判断是否卡在 **Web 防火墙挑战页**（Cloudflare / DDoS-Guard / Imperva / PerimeterX …）。
+ *
+ * 为什么从"只认 Cloudflare"扩到"认这一类"（2026-11-23 主人问「是否能识别 cf 这类 web 防火墙」）：
+ * 封面站里被拦的不止 CF 一家，而**任何**挑战页的表现都一样 —— 页面打得开、目标 DOM 不存在、
+ * 抽取脚本永远返回空。只认 CF 的三个信号，其余 WAF 会被当成"规则过期"并**白等到超时**。
+ *
+ * ⚠️ 判据仍然**宁可漏判也不能误判**：误判的代价是抽取脚本一次都不执行（正常页面被判成挑战，
+ * 界面永远"被拦 + 0 张图"），而漏判只是退回"抽不到" —— 由超时兜底。
+ * 所以这里只认**挑战页专有**的标题 / 专用容器 / 专用端点，绝不拿 "captcha"/"turnstile"
+ * 这种正常站点登录组件也爱用的字样当判据（2026-10-22 踩过）。
+ */
+export const WAF_DETECT = `(function(){
+  try {
+    var t = (document.title || '').toLowerCase();
+    var u = (location.href || '').toLowerCase();
+    var titleHit = /just a moment|checking your browser|verify you are (a )?human|attention required|one more step|ddos-guard|pardon our interruption|checking if the site connection is secure|请稍候|正在验证|人机验证|安全验证/.test(t);
+    var domHit = !!document.querySelector('#cf-challenge-running, .cf-challenge, #challenge-form, form[action*="__cf_chl"], #ddos-guard, #px-captcha, #sec-if-cpt-container, #challenge-body-text, iframe[src*="challenges.cloudflare.com"]');
+    var cfOpt = !!window._cf_chl_opt;
+    var urlHit = /\\/cdn-cgi\\/challenge-platform|\\/__cf_chl/.test(u);
+    return { cf: titleHit || domHit || cfOpt || urlHit, url: location.href, title: document.title };
+  } catch (e) { return { cf: false, url: '', title: '' }; }
 })()`;
+
+/** 旧名保留给"只关心 CF"的调用点（人工过验证）。判据是同一份，不要再抄第二份 */
+export const CF_DETECT = WAF_DETECT;
 
 /**
  * 把当前页面拍下来（URL / 标题 / HTML），**只在抓不到时**用。
@@ -186,18 +258,35 @@ export interface FetchResult<T> {
     /**
      * 'cloudflare' = 被挑战拦下（该走 `passChallenge` 人工过）
      * 'timeout'    = 超时/取不到
+     * 'net'        = 主框架根本连不上（DNS / 连接被掐断 / SSL 握手失败）⇒ **不值得重试**
      * 'aborted'    = 用户取消了（**控制流**，不是失败原因）
      */
-    err?: 'cloudflare' | 'timeout' | 'aborted';
+    err?: 'cloudflare' | 'timeout' | 'net' | 'aborted';
+    /** `err:'net'` 时的底层原因（Chromium 的描述），直接给用户看 */
+    netErr?: string;
     /** 失败时的现场快照 —— 让用户能看见"被拦"是真是假，而不是只信一句文案 */
     snapshot?: PageSnapshot;
 }
 
 export interface RunExtractOptions {
-    /** 轮询总超时（毫秒） */
+    /** 轮询总超时（毫秒）。只在**没给 `deadline`** 时生效 */
     timeoutMs?: number;
+    /**
+     * **绝对**截止时刻（`Date.now()` 口径）。给了就以它为准，导航、挑战等待、轮询全吃这一份预算
+     * —— 调用方（grab）按"一张卡"算预算，这样跨站点 fallback 与重试加在一起也不会超。
+     */
+    deadline?: number;
     /** 取消信号；abort 会立刻销毁窗口 */
     signal?: AbortSignal;
+    /**
+     * 拍不拍失败现场快照（URL/标题/整页 HTML，最长 800KB）。
+     *
+     * 默认拍（试跑面板要靠它看"到底是挑战页还是选择器不对"）。
+     * ⚠️ **批量抓取必须传 false**：`grab` 从不读 `snapshot`，而每次失败都序列化一份
+     * 800KB HTML 是纯烧主进程 CPU —— 5 个并发窗口同时干这件事，界面就跟着卡
+     * （2026-11-23 主人报"会卡顿"，这是一条实打实的来源）。
+     */
+    captureSnapshot?: boolean;
     /**
      * 把抓取窗**显示出来**（默认隐藏）。
      * 用户反馈「看不到页面访问的过程」⇒ 试跑时可以打开它，让流程看得见；
@@ -215,7 +304,15 @@ export async function runExtract<T>(
     script: string,
     opts: RunExtractOptions = {},
 ): Promise<FetchResult<T>> {
-    const { timeoutMs = POLL_TIMEOUT, signal } = opts;
+    const { timeoutMs = POLL_TIMEOUT, signal, captureSnapshot = true } = opts;
+    /**
+     * 整次尝试的硬截止。给了 `deadline` 就认它（导航也吃这份预算）。
+     *
+     * ⚠️ 没给的时候是 `NAV_TIMEOUT + timeoutMs`，**不是** `timeoutMs`：原来导航与轮询
+     * 是两段独立计时（25s + 20s）。只写 `now + timeoutMs` 会让导航一口吃掉全部预算，
+     * 试跑面板（不传 deadline）直接变成"一点开就超时"。
+     */
+    const deadline = opts.deadline ?? Date.now() + NAV_TIMEOUT + timeoutMs;
 
     const win = new BrowserWindow({
         show: !!opts.show,
@@ -266,26 +363,54 @@ export async function runExtract<T>(
          * 抽取脚本按 `src || data-src` 取值，于是抽到的是**占位地址** ⇒ 验证不过 ⇒ 换下一站 ⇒
          * 每条卡满 20 秒超时。症状就是"前面 5 个任务一直不动"。
          * 省下的那 2 秒，不值得用"抽不到 / 抽错图"去换。提速只能靠并发与限速（见 grab.ts）。
+         *
+         * ⚠️ 导航这一等也吃**同一份**预算（`deadline`）：原来它是独立计时 25 秒，于是
+         * "导航 25s + 轮询 20s"叠出来 45 秒，再乘上重试与站点 fallback 就成了几分钟。
          */
+        // 主框架真实 HTTP 状态：有些 WAF 直接回 403/429/503 空页，DOM 里连挑战特征都没有
+        let httpStatus = 0;
+        win.webContents.on('did-navigate', (_e, _u, code: number) => {
+            if (code) httpStatus = code;
+        });
+        // 连不上（DNS / 掐连接 / SSL 握手失败）⇒ 注定打不开，别轮询到预算耗尽
+        const navFailed = watchNavFailure(win);
+
         await Promise.race([
             win.loadURL(url).catch(() => undefined),
-            sleep(NAV_TIMEOUT, signal).catch(() => undefined),
+            sleep(Math.min(NAV_TIMEOUT, Math.max(deadline - Date.now(), 0)), signal).catch(() => undefined),
         ]);
 
-        const deadline = Date.now() + timeoutMs;
         let lastCf = false;
+        /** 连续被判定为挑战页的起点（0 = 当前不是挑战页）。见 `WAF_GIVE_UP_MS` */
+        let wafSince = 0;
         let tries = 0;
         while (Date.now() < deadline) {
             if (signal?.aborted || win.isDestroyed()) return aborted;
 
+            /**
+             * ⚠️ 主框架已经告诉我们"连不上"了，就别再抽。这是"报错了还在等"的唯一解：
+             * 不做这一步，一个 SSL 握手被掐断的站点会被轮询到 45 秒预算耗尽，
+             * 日志刷满屏、进度一动不动（2026-11-23 主人贴的就是这个）。
+             */
+            const failed = navFailed();
+            if (failed) {
+                try { win.webContents.stop(); } catch { /* 已停 */ }
+                return {
+                    ok: false, cf: WAF_STATUS.has(httpStatus),
+                    err: WAF_STATUS.has(httpStatus) ? 'cloudflare' : 'net',
+                    netErr: `${failed.desc}（${failed.code}）`,
+                };
+            }
+
             let cfInfo: { cf?: boolean } | undefined;
             try {
-                cfInfo = (await win.webContents.executeJavaScript(CF_DETECT)) as { cf?: boolean };
+                cfInfo = (await win.webContents.executeJavaScript(WAF_DETECT)) as { cf?: boolean };
             } catch {
                 await sleep(POLL_INTERVAL, signal);
                 continue;
             }
             lastCf = !!cfInfo?.cf;
+            wafSince = lastCf ? (wafSince || Date.now()) : 0;
 
             // ⚠️ 即使判定为挑战页也**先抽一次**：CF 判定可能误伤正常页面，而"抽得到"
             // 才是页面正常的最硬证据。抽不到，再按 cf 解释原因（它是解释，不是否决权）。
@@ -297,14 +422,25 @@ export async function runExtract<T>(
                 continue;
             }
             if (data) return { ok: true, cf: false, data: data as T };
+            /**
+             * 连续 `WAF_GIVE_UP_MS` 都还在挑战页 ⇒ **不等满 20 秒，直接放弃本站**。
+             * 交互式挑战隐藏窗永远过不去，继续等只是白占一个渲染进程 + 吃掉这张卡的超时预算
+             * —— 那正是主人看到的"卡住不动"（2026-11-23）。放弃后返回 cloudflare，
+             * 界面仍可提示"人工过验证后再重抓"。
+             */
+            if (wafSince && Date.now() - wafSince >= WAF_GIVE_UP_MS) break;
             // 抽不到：滚一下看看是不是懒加载还没触发。挑战页滚了也没用，跳过
             if (!lastCf) await lazyNudge(win, ++tries);
             await sleep(POLL_INTERVAL, signal);
         }
-        const snap = await snapshotOf(win);
+        /**
+         * 判"被拦"的两条腿：挑战页特征**或** 403/429/503。
+         * 后者不能算超时 —— 超时意味着"再等等可能就好了"，而 403 再等一万年也一样。
+         */
+        const blockedNow = lastCf || WAF_STATUS.has(httpStatus);
         return {
-            ok: false, cf: lastCf, err: lastCf ? 'cloudflare' : 'timeout',
-            snapshot: snap ?? undefined,
+            ok: false, cf: blockedNow, err: blockedNow ? 'cloudflare' : 'timeout',
+            snapshot: captureSnapshot ? ((await snapshotOf(win)) ?? undefined) : undefined,
         };
     } catch {
         // 窗口被销毁 / sleep 被 abort 都落这里
@@ -374,7 +510,11 @@ export async function passChallenge(url: string, signal?: AbortSignal): Promise<
         win.webContents.setUserAgent(CHROME_UA);
         // 验证窗同样要设：不设的话 window.open 会开出未登记窗口，应用关不掉
         adoptSameOriginPopups(win);
-        await Promise.race([win.loadURL(url).catch(() => undefined), sleep(NAV_TIMEOUT)]);
+        // ⚠️ 这一等也要能被取消：不带 `signal` 时，用户点「终止」还要白等到 25 秒导航超时
+        await Promise.race([
+            win.loadURL(url).catch(() => undefined),
+            sleep(NAV_TIMEOUT, signal).catch(() => undefined),
+        ]);
 
         const deadline = Date.now() + CHALLENGE_TIMEOUT;
         while (Date.now() < deadline) {
@@ -389,7 +529,7 @@ export async function passChallenge(url: string, signal?: AbortSignal): Promise<
             }
             if (!stuck) return { ok: true, timeout: false, abandoned: false };
 
-            await sleep(POLL_INTERVAL);
+            await sleep(POLL_INTERVAL, signal);
         }
         return { ok: false, timeout: true, abandoned: false };
     } catch {

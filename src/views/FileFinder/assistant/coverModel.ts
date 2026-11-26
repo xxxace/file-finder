@@ -404,7 +404,9 @@ export function buildCoverTask(
                 phase: 'pause',
                 ratio: ratioOf(frame),
                 status: `已暂停 ${frame.progress.processed} / ${frame.progress.total}`,
-                detail: '当前这一部抽完即停',
+                // 暂停是**真中断**（ffmpeg 被 SIGKILL）⇒ 文案不能说"抽完即停"。
+                // 抽帧是串行的，在飞的恒为"这一部"。
+                detail: '这一部已停下，结果都留着',
             };
         }
         return {
@@ -424,7 +426,9 @@ export function buildCoverTask(
                 phase: 'pause',
                 ratio: ratioOf(grab),
                 status: `已暂停 ${processed} / ${total}`,
-                detail: '在飞的几条跑完即停，结果都留着',
+                // 暂停 = 立刻断在飞（`pauseJob` 里 abort），被打断的条目已放回队首。
+                // ⚠️ 别写"跑完即停"：那是一句界面谎言，主人 2026-11-23 就是照着它发现"还在跑"的。
+                detail: '在飞的已停下，结果都留着',
             };
         }
         return {

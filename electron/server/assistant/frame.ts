@@ -137,20 +137,25 @@ async function extractCard(
     videoAbs: string,
     start: number,
     shouldStop: () => boolean,
+    /**
+     * 取消信号。抽帧是**子进程**，不接信号就只能等它自己结束 + 20 秒超时兜底 ——
+     * 用户点了「终止/暂停」还在抽，体感就是"按钮没用"（2026-11-23）。
+     */
+    signal?: AbortSignal,
 ): Promise<{ jpg: Buffer; attempt: number; pct: number; skipped: number } | null> {
     // ⚠️ 时长**只 probe 一次**：每跳一档都重 probe 等于在移动硬盘上多读一遍文件头，
     //    最多会变成 12 个子进程（2.5″ 盘最怕的形态）。之后循环里只换秒数。
-    const duration = await probeVideoSeconds(videoAbs);
+    const duration = await probeVideoSeconds(videoAbs, signal);
     if (duration === null) return null;
 
     let attempt = start;
     let skipped = 0;
     for (;;) {
-        // 终止也在这里看一眼：一张纯色卡最坏要抽 4 档，用户按了终止不该再跑完后三档
-        if (shouldStop()) return null;
+        // 终止/暂停也在这里看一眼：一张纯色卡最坏要抽 4 档，被打断后不该再跑完后三档
+        if (shouldStop() || signal?.aborted) return null;
 
         const pct = pctOf(attempt);
-        const jpg = await frameJpegAt(videoAbs, secondsOf(duration, pct));
+        const jpg = await frameJpegAt(videoAbs, secondsOf(duration, pct), undefined, signal);
         if (!jpg) return null;
 
         const flat = flatnessOf(jpg) >= FLAT_RATIO;
@@ -233,10 +238,23 @@ export async function runFrameJob(
     };
 
     try {
-        for (const [key, list] of cards) {
+        /**
+         * 待抽队列（**不是**索引游标）：暂停会中断在飞的 ffprobe/ffmpeg ⇒ 被打断的那张
+         * 要放回队首（2026-11-23 暂停语义反转，见 `jobs.pauseJob`）。
+         */
+        const queued = [...cards.entries()];
+        while (queued.length) {
             if (job.cancelled) break;
-            await job.gate.wait(); // 暂停：当前这一部抽完就停
+            await job.gate.wait();
             if (job.cancelled) break;
+            const [key, list] = queued.shift()!;
+
+            /**
+             * 本张卡用的信号。⚠️ 必须**现在取一份存着**：暂停会给 `job.controller` 换新，
+             * 事后再读 `job.controller.signal` 拿到的是没被 abort 的新 signal，
+             * "这张是不是被打断的"就永远判不出来（会把中断记成抽帧失败）。
+             */
+            const signal = job.controller.signal;
 
             bumpProgress(job, { current: list[0].name });
             /**
@@ -261,7 +279,18 @@ export async function runFrameJob(
                 const prevHit = existing.get(k16);
                 const start = Math.min(prevHit ? prevHit.attempt + 1 : 0, PCT_LADDER.length - 1);
 
-                const got = await extractCard(video.abs, start, () => job.cancelled);
+                const got = await extractCard(video.abs, start, () => job.cancelled, signal);
+                /**
+                 * ⚠️ **抽不到 ≠ 被打断**。暂停时 probe/抽帧都返回 null，若照常记 `no-frame`，
+                 * 用户点一下暂停就会看到一半的卡变成"抽帧失败"—— 而它们其实一张都还没抽。
+                 * 归还队首，等「继续」按原档位重来（`existing` 因此不能被更新）。
+                 */
+                if (!got && signal.aborted) {
+                    if (job.cancelled) break;
+                    queued.unshift([key, list]);
+                    job.inflight = [];
+                    continue;
+                }
                 // 重抽失败但**上一帧还在** ⇒ 继续用上一帧，别把已经拿到的好封面弄丢了
                 if (!got && prevHit) {
                     misses += 1;

@@ -215,7 +215,7 @@ type FfmpegCmd = ReturnType<typeof ffmpeg>;
  * `settled` 保证三条出口（end / error / timeout）里只有**第一条**生效：
  * kill 之后 fluent-ffmpeg 还会补发一个 'error'，不挡住就会重复 resolve。
  */
-function runFfmpeg(cmd: FfmpegCmd, what: string, src: string): Promise<boolean> {
+function runFfmpeg(cmd: FfmpegCmd, what: string, src: string, signal?: AbortSignal): Promise<boolean> {
     return new Promise((resolve) => {
         let settled = false;
         let timer: ReturnType<typeof setTimeout> | undefined;
@@ -224,8 +224,24 @@ function runFfmpeg(cmd: FfmpegCmd, what: string, src: string): Promise<boolean> 
             if (settled) return;
             settled = true;
             if (timer) clearTimeout(timer);
+            signal?.removeEventListener('abort', onAbort);
             resolve(ok);
         };
+
+        /**
+         * 取消 = 立刻杀子进程。没有这一步，「终止抽帧任务」要等到当前这一档跑满
+         * 20 秒超时才生效 —— 用户在界面上看到的就是"终止了还在抽"（2026-11-23）。
+         * SIGKILL 是必须的：光让 Promise 返回不够，子进程会继续攥着移动硬盘的句柄。
+         */
+        const onAbort = () => {
+            try { cmd.kill('SIGKILL'); } catch { /* 已结束 */ }
+            finish(false);
+        };
+        if (signal?.aborted) {
+            onAbort();
+            return;
+        }
+        signal?.addEventListener('abort', onAbort, { once: true });
 
         cmd.on('end', () => finish(true))
             .on('error', (e: Error) => {
@@ -258,7 +274,7 @@ function runFfmpeg(cmd: FfmpegCmd, what: string, src: string): Promise<boolean> 
  * 默认那份 `-show_streams -show_format` 的全量元数据。
  * 查"视频流"还是"容器"由调用方给（选哪个见 `probeDuration`）。
  */
-function probeSeconds(filepath: string, entries: string[]): Promise<number | null> {
+function probeSeconds(filepath: string, entries: string[], signal?: AbortSignal): Promise<number | null> {
     return new Promise((resolve) => {
         let settled = false;
         let timer: ReturnType<typeof setTimeout> | undefined;
@@ -274,8 +290,20 @@ function probeSeconds(filepath: string, entries: string[]): Promise<number | nul
             if (settled) return;
             settled = true;
             if (timer) clearTimeout(timer);
+            signal?.removeEventListener('abort', onAbort);
             resolve(seconds);
         };
+
+        /** 取消 = 立刻杀 ffprobe（理由同 `runFfmpeg`）。返回 null 由调用方按"中断"处理 */
+        const onAbort = () => {
+            try { child.kill('SIGKILL'); } catch { /* 已结束 */ }
+            finish(null);
+        };
+        if (signal?.aborted) {
+            onAbort();
+            return;
+        }
+        signal?.addEventListener('abort', onAbort, { once: true });
 
         let stdout = '';
         child.stdout?.on('data', (chunk: Buffer) => { stdout += chunk.toString(); });
@@ -314,12 +342,14 @@ function probeSeconds(filepath: string, entries: string[]): Promise<number | nul
  * mkv 等容器的 `stream=duration` 常是 `N/A` ⇒ 回退容器时长（那种容器的 format
  * duration 通常就是整段的真实值）。两次查询只在必要时才发生。
  */
-async function probeDuration(filepath: string): Promise<number | null> {
+async function probeDuration(filepath: string, signal?: AbortSignal): Promise<number | null> {
     const stream = await probeSeconds(filepath, [
         '-select_streams', 'v:0', '-show_entries', 'stream=duration',
-    ]);
+    ], signal);
     if (stream !== null) return stream;
-    return probeSeconds(filepath, ['-show_entries', 'format=duration']);
+    // 中断了就别再打第二次：那会立刻再起一个子进程，取消整体要等两轮
+    if (signal?.aborted) return null;
+    return probeSeconds(filepath, ['-show_entries', 'format=duration'], signal);
 }
 
 /** 时长（秒）—— 抽帧批量的调用方拿它 probe 一次、之后只换秒数。取不到返回 null */
@@ -393,7 +423,12 @@ export function secondsOf(duration: number, pct: number): number {
  *    = 移动硬盘上多出 4 次（format 兜底时 8 次）头部读、最多 12 个子进程 ——
  *    2.5″ 盘最怕的形态（寻道 + 供电峰值）。所以调用方**先 probe 一次**，循环里只换秒数。
  */
-export async function frameJpegAt(file: string, atSec: number, maxEdge = FRAME_LONG_EDGE): Promise<Buffer | null> {
+export async function frameJpegAt(
+    file: string,
+    atSec: number,
+    maxEdge = FRAME_LONG_EDGE,
+    signal?: AbortSignal,
+): Promise<Buffer | null> {
     const at = Math.max(atSec, 0);
     const frame = path.join(
         os.tmpdir(),
@@ -408,6 +443,7 @@ export async function frameJpegAt(file: string, atSec: number, maxEdge = FRAME_L
             }),
             '抽帧(封面)',
             file,
+            signal,
         );
         if (!ok) return null;
 
@@ -450,7 +486,7 @@ const TRANSCODE_MAX_WIDTH = 960;
  * 输出 PNG 而不是 JPEG：后面 `scaleToThumb` 还要按 82 的质量编一次 JPEG，
  * 中转这一步不该再叠一次有损压缩。
  */
-function transcodeImage(filepath: string, out: string): Promise<boolean> {
+function transcodeImage(filepath: string, out: string, signal?: AbortSignal): Promise<boolean> {
     // 分两步写：`run()` 的返回类型是 void，不能直接链上来当命令对象用
     const cmd = ffmpeg(filepath)
         .outputOptions([
@@ -459,7 +495,7 @@ function transcodeImage(filepath: string, out: string): Promise<boolean> {
         ])
         .output(out);
     cmd.run();
-    return runFfmpeg(cmd, '图片转码', filepath);
+    return runFfmpeg(cmd, '图片转码', filepath, signal);
 }
 
 /**
