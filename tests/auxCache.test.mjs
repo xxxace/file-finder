@@ -272,4 +272,94 @@ describe('auxCache: gfriends zstd & hits compaction/merge', () => {
             await fs.rm(tmpDir, { recursive: true, force: true }).catch(() => {});
         }
     });
+
+    it('5. concurrent appendHit with compactHits and mergeHits never loses appended records', async () => {
+        const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'ff-hits-race-'));
+        try {
+            const jsonlPath = path.join(tmpDir, 'assistant-hits.jsonl');
+            const seedLines = [];
+            for (let i = 0; i < 40; i++) {
+                seedLines.push(JSON.stringify({
+                    id: 'SEED-001',
+                    hitSite: 'seedSite',
+                    coverUrl: `https://seed.example/${i}.jpg`,
+                    title: `Seed ${i}`,
+                    actresses: [],
+                    at: `2026-01-01T00:00:${String(i).padStart(2, '0')}.000Z`,
+                }));
+            }
+            await fs.writeFile(jsonlPath, `${seedLines.join('\n')}\n`, 'utf8');
+
+            const recA = {
+                id: 'APPEND-A',
+                hitSite: 'siteA',
+                coverUrl: 'https://example.com/a.jpg',
+                title: 'A',
+                actresses: [],
+                at: '2026-06-01T00:00:00.000Z',
+            };
+            const recB = {
+                id: 'MERGE-B',
+                hitSite: 'siteB',
+                coverUrl: 'https://example.com/b.jpg',
+                title: 'B',
+                actresses: [],
+                at: '2026-06-01T00:01:00.000Z',
+            };
+            const recC = {
+                id: 'APPEND-C',
+                hitSite: 'siteC',
+                coverUrl: 'https://example.com/c.jpg',
+                title: 'C',
+                actresses: [],
+                at: '2026-06-01T00:02:00.000Z',
+            };
+
+            const compactPromise = hits.compactHits(tmpDir);
+            hits.appendHit(tmpDir, recA);
+            const mergePromise = hits.mergeHits(tmpDir, [recB]);
+            hits.appendHit(tmpDir, recC);
+
+            await Promise.all([compactPromise, mergePromise]);
+            // Flush queued lock operations by awaiting one more locked call
+            await hits.compactHits(tmpDir);
+
+            const loaded = await hits.loadHits(tmpDir);
+            assert.equal(loaded.get('SEED-001')?.coverUrl, 'https://seed.example/39.jpg');
+            assert.equal(loaded.get('APPEND-A')?.coverUrl, 'https://example.com/a.jpg');
+            assert.equal(loaded.get('MERGE-B')?.coverUrl, 'https://example.com/b.jpg');
+            assert.equal(loaded.get('APPEND-C')?.coverUrl, 'https://example.com/c.jpg');
+        } finally {
+            await fs.rm(tmpDir, { recursive: true, force: true }).catch(() => {});
+        }
+    });
+
+    it('6. withHitsLock does not emit unhandledRejection when a locked operation rejects', async () => {
+        const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'ff-hits-reject-'));
+        const unhandled = [];
+        const onUnhandled = (reason) => unhandled.push(reason);
+        process.on('unhandledRejection', onUnhandled);
+        try {
+            // Use a regular file path as dataDir so mkdir inside writeHitsAtomic rejects
+            const fileAsDir = path.join(tmpDir, 'not-a-dir');
+            await fs.writeFile(fileAsDir, 'occupied', 'utf8');
+
+            await assert.rejects(
+                hits.mergeHits(fileAsDir, [{
+                    id: 'ERR-1',
+                    hitSite: 'site',
+                    coverUrl: 'https://example.com/err.jpg',
+                    title: 'Err',
+                    actresses: [],
+                    at: '2026-06-01T00:00:00.000Z',
+                }])
+            );
+
+            await new Promise(r => setImmediate(r));
+            assert.equal(unhandled.length, 0, 'expected no unhandledRejection from withHitsLock');
+        } finally {
+            process.off('unhandledRejection', onUnhandled);
+            await fs.rm(tmpDir, { recursive: true, force: true }).catch(() => {});
+        }
+    });
 });

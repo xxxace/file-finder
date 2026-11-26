@@ -42,12 +42,13 @@ function withHitsLock<T>(dataDir: string, fn: () => Promise<T>): Promise<T> {
     const key = path.resolve(dataDir);
     const prev = hitsLocks.get(key) ?? Promise.resolve();
     const next = prev.then(fn, fn);
-    hitsLocks.set(key, next);
-    next.finally(() => {
+    const cleanup = () => {
         if (hitsLocks.get(key) === next) {
             hitsLocks.delete(key);
         }
-    });
+    };
+    hitsLocks.set(key, next);
+    next.then(cleanup, cleanup);
     return next;
 }
 
@@ -179,7 +180,9 @@ export async function mergeHits(
 
 /** 追加一条命中。fire-and-forget：写缓存失败只打日志，绝不连累抓取本身 */
 export function appendHit(dataDir: string, rec: HitRecord): void {
-    fsasync.appendFile(filePath(dataDir), `${JSON.stringify(rec)}\n`, 'utf8').catch(e => {
+    withHitsLock(dataDir, () =>
+        fsasync.appendFile(filePath(dataDir), `${JSON.stringify(rec)}\n`, 'utf8')
+    ).catch(e => {
         console.error('[assistant/hits] 写命中缓存失败:', e);
     });
 }
