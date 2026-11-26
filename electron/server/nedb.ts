@@ -312,16 +312,19 @@ async function migrateLegacyNedbFile(
             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         `);
 
+        const expectedKeys = new Set<string>();
         tempDb.exec('BEGIN IMMEDIATE');
         try {
             for (const doc of docs) {
                 const relPath = doc.relPath || '';
+                const relPathLower = relPath.toLowerCase();
+                expectedKeys.add(synthId(doc.serial, relPathLower, doc.mode));
                 const items = Array.isArray(doc.data) ? doc.data : [];
                 const bytes = computeBytes(items);
                 const blob = encodeCacheData(relPath, items);
                 insertStmt.run(
                     doc.serial,
-                    relPath.toLowerCase(),
+                    relPathLower,
                     doc.mode,
                     relPath,
                     doc.v ?? CACHE_VERSION,
@@ -338,9 +341,9 @@ async function migrateLegacyNedbFile(
             throw err;
         }
 
-        const countRow = tempDb.prepare('SELECT COUNT(*) AS cnt FROM cache_entries').get() as { cnt: number };
-        if (!countRow || typeof countRow.cnt !== 'number') {
-            throw new Error('迁移行数校验失败');
+        const countRow = tempDb.prepare('SELECT COUNT(*) AS cnt FROM cache_entries').get() as { cnt: number } | undefined;
+        if (!countRow || countRow.cnt !== expectedKeys.size) {
+            throw new Error(`迁移行数校验失败：预期 ${expectedKeys.size}，实际 ${countRow?.cnt ?? 'unknown'}`);
         }
         tempDb.exec('PRAGMA wal_checkpoint(TRUNCATE)');
     } finally {
@@ -385,11 +388,17 @@ export async function initCacheDb(dataDir?: string, opts?: InitCacheDbOptions): 
         db = openSqliteConnection(CACHE_DB_PATH);
     };
 
-    const p = run().catch((err) => {
-        loadError = err instanceof Error ? err : new Error(String(err));
-        console.error('[cacheDb] 缓存库载入失败:', loadError);
-        throw loadError;
-    });
+    const p = run()
+        .catch((err) => {
+            loadError = err instanceof Error ? err : new Error(String(err));
+            console.error('[cacheDb] 缓存库载入失败:', loadError);
+            throw loadError;
+        })
+        .finally(() => {
+            if (initPromise === p) {
+                initPromise = null;
+            }
+        });
     initPromise = p;
     await p;
 }
@@ -404,6 +413,7 @@ if (process.env.NODE_ENV !== 'test') {
  * 从磁盘重新打开主库文件（还原 / 回滚之后调用）。
  */
 export async function reloadFromDisk(): Promise<void> {
+    initPromise = null;
     closeDbHandle();
     try {
         db = openSqliteConnection(CACHE_DB_PATH);
@@ -889,7 +899,7 @@ export function workKeyOf(it: { name?: string; dir?: string }): string {
 }
 
 export function collectTunnelCovers(
-    rows: SearchCache[],
+    rows: Iterable<SearchCache>,
     hasBinFn: (name: string) => boolean,
     serial?: string,
 ): TunnelCoverItem[] {
@@ -943,9 +953,16 @@ export async function findAllCachedCovers(serial?: string): Promise<TunnelCoverI
     const sql = serial
         ? `SELECT serial, rel_path_lower, mode, rel_path, v, count, create_at, dir_mtime, data_zstd FROM cache_entries WHERE serial = ?`
         : `SELECT serial, rel_path_lower, mode, rel_path, v, count, create_at, dir_mtime, data_zstd FROM cache_entries`;
-    const rawRows = (serial ? conn.prepare(sql).all(serial) : conn.prepare(sql).all()) as unknown as CacheBlobRow[];
+    const stmt = conn.prepare(sql);
+    const iter = (serial ? stmt.iterate(serial) : stmt.iterate()) as IterableIterator<CacheBlobRow>;
 
-    return collectTunnelCovers(rawRows.map(rowToSearchCache), (name) => hasBin(name), serial);
+    function* streamDocs(): Generator<SearchCache> {
+        for (const row of iter) {
+            yield rowToSearchCache(row);
+        }
+    }
+
+    return collectTunnelCovers(streamDocs(), (name) => hasBin(name), serial);
 }
 
 /**
@@ -955,17 +972,19 @@ export async function collectReferencedSigsFromCache(): Promise<{ ok: boolean; c
     const sigs = new Set<string>();
     try {
         const conn = await ensureReady();
-        const rows = conn.prepare('SELECT rel_path, data_zstd FROM cache_entries').all() as Array<{
+        const iter = conn.prepare('SELECT rel_path, data_zstd FROM cache_entries').iterate() as IterableIterator<{
             rel_path: string;
             data_zstd: Uint8Array;
         }>;
-        for (const row of rows) {
+        let count = 0;
+        for (const row of iter) {
+            count++;
             const items = decodeRowData(row.rel_path, row.data_zstd);
             for (const it of items) {
                 if (it.sig) sigs.add(it.sig);
             }
         }
-        return { ok: true, count: rows.length, sigs };
+        return { ok: true, count, sigs };
     } catch {
         return { ok: false, count: 0, sigs };
     }

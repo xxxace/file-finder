@@ -440,4 +440,39 @@ describe('cacheCodec & cache.sqlite storage layer', () => {
             await fs.rm(dataDir, { recursive: true, force: true }).catch(() => {});
         }
     });
+
+    it('7. reloadFromDisk recovers cleanly after a failed/corrupted initCacheDb once a valid DB is restored', async () => {
+        const dataDir = await fs.mkdtemp(path.join(os.tmpdir(), 'ff-db-recover-'));
+        try {
+            // Create a valid snapshot first
+            await nedb.initCacheDb(dataDir);
+            await nedb.insertCache({
+                v: nedb.CACHE_VERSION,
+                serial: '66666666',
+                relPath: 'Recovered',
+                mode: 'cover',
+                count: 1,
+                data: [{ dir: 'Recovered', name: 'ok', ext: 'jpg', isDirectory: false, type: 'image', size: 123 }],
+                create_at: '2026-11-26 12:00:00',
+            });
+            const backupFile = path.join(dataDir, 'valid-backup.sqlite');
+            await nedb.snapshotCacheTo(backupFile);
+
+            // Corrupt active DB and fail initCacheDb
+            await nedb.closeCacheDbForTest();
+            await fs.writeFile(path.join(dataDir, 'cache.sqlite'), 'corrupted-bytes');
+            await assert.rejects(() => nedb.initCacheDb(dataDir));
+            await assert.rejects(() => nedb.loadMeta({}));
+
+            // Restore valid DB file and call reloadFromDisk()
+            await fs.copyFile(backupFile, path.join(dataDir, 'cache.sqlite'));
+            await nedb.reloadFromDisk();
+
+            const meta = await nedb.loadMeta({});
+            assert.equal(meta.length, 1);
+            assert.equal(meta[0].relPath, 'Recovered');
+        } finally {
+            await fs.rm(dataDir, { recursive: true, force: true }).catch(() => {});
+        }
+    });
 });
