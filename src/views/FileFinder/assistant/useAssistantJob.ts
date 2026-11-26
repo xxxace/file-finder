@@ -38,18 +38,14 @@ export function useAssistantJob(
     let timer: ReturnType<typeof setInterval> | null = null;
     let settledFor: string | null = null;
     let resolveSettled: ((job: JobSnapshot) => void) | null = null;
+    /** 每次主动操作递增，丢弃比它早发出的旧轮询响应，防止状态回闪 */
+    let fetchSeq = 0;
 
     const stopPoll = () => {
         if (timer) {
             clearInterval(timer);
             timer = null;
         }
-        /**
-         * ⚠️ 谁在 `await trackAndWait(...)`，谁就靠这个 promise 往下走。停轮询时若只是
-         * 把 resolver 丢掉，那个 `async` 会**永远悬挂** —— 人工过验证流程里
-         * `challengeRunning` 会永远停在 true，面板重开按钮还写着"等待人工过验证…"。
-         * 用一个"已取消"的快照收尾，让调用方照常往下走。
-         */
         const pending = resolveSettled;
         resolveSettled = null;
         if (pending && job.value) pending({ ...job.value, status: 'cancelled' });
@@ -71,8 +67,10 @@ export function useAssistantJob(
     };
 
     const fetchOnce = async (id: string) => {
+        const seq = ++fetchSeq;
         try {
             const res = await getAction(`${API_BASE}/assistant/jobs?id=${encodeURIComponent(id)}`);
+            if (seq < fetchSeq) return; // 已有更新的请求发出，丢弃过期快照
             apply(res.job as JobSnapshot);
         } catch {
             // 服务忙 / 网络抖一下：下一拍再试。任务在主进程内存里，不会丢

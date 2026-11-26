@@ -8,7 +8,7 @@
  */
 import { BrowserWindow } from 'electron';
 import { sleep, trackWindow, untrackWindow } from './queue';
-import { adoptSameOriginPopups, CF_DETECT, CHROME_UA, NAV_TIMEOUT, PARTITION, POLL_INTERVAL } from './siteFetch';
+import { adoptSameOriginPopups, attachStealth, CF_DETECT, NAV_TIMEOUT, PARTITION, POLL_INTERVAL } from './siteFetch';
 import {
     buildClearScript, buildPickerScript, buildReadScript, buildRecorderScript, PICK_KEY, REC_KEY,
 } from './pageScripts';
@@ -20,20 +20,23 @@ const MAX_WAIT_MS = 10 * 60 * 1000;
 /** 等用户自己过验证的上限（同 passChallenge 的尺度） */
 const CHALLENGE_WAIT_MS = 5 * 60 * 1000;
 
-export interface RecStep { act: 'type' | 'click'; selector: string; value?: string }
-export interface PickResult { ok: boolean; selector?: string; src?: string; weak?: boolean; cancelled?: boolean; err?: string }
+export interface RecStep { act: 'type' | 'click' | 'press'; selector: string; value?: string; key?: string }
+export interface PickResult { ok: boolean; selector?: string; xpath?: string; attr?: string; src?: string; weak?: boolean; cancelled?: boolean; err?: string }
 export interface RecordResult { ok: boolean; steps: RecStep[]; cancelled?: boolean; err?: string }
 
 async function runInteractive(
     url: string,
     mode: 'pick' | 'record',
     signal?: AbortSignal,
+    pickKind: 'cover' | 'text' | 'link' = 'cover',
 ): Promise<{ ok: boolean; value: unknown; err?: string; cancelled?: boolean }> {
     const win = new BrowserWindow({
         width: 1_100,
         height: 800,
         show: true,
-        title: mode === 'pick' ? '点选你要抓的那张图' : '录制：像平时那样操作一遍',
+        title: mode === 'pick'
+            ? (pickKind === 'cover' ? '点选你要抓的那张图' : pickKind === 'link' ? '点选要提取链接的元素' : '点选要提取文本的元素')
+            : '录制：像平时那样操作一遍',
         autoHideMenuBar: true,
         webPreferences: {
             partition: PARTITION,
@@ -56,12 +59,12 @@ async function runInteractive(
     signal?.addEventListener('abort', onAbort, { once: true });
 
     const key = mode === 'pick' ? PICK_KEY : REC_KEY;
-    const inject = mode === 'pick' ? buildPickerScript() : buildRecorderScript();
+    const inject = mode === 'pick' ? buildPickerScript(pickKind) : buildRecorderScript();
     const read = buildReadScript(key);
     const gone = () => closed || !!signal?.aborted || win.isDestroyed();
 
     try {
-        win.webContents.setUserAgent(CHROME_UA);
+        attachStealth(win);
         adoptSameOriginPopups(win);
         await Promise.race([
             win.loadURL(url).catch(() => undefined),
@@ -118,13 +121,19 @@ async function runInteractive(
     }
 }
 
-export async function pickImageOnPage(url: string, signal?: AbortSignal): Promise<PickResult> {
-    const r = await runInteractive(url, 'pick', signal);
+export async function pickImageOnPage(
+    url: string,
+    signal?: AbortSignal,
+    kind: 'cover' | 'text' | 'link' = 'cover',
+): Promise<PickResult> {
+    const r = await runInteractive(url, 'pick', signal, kind);
     if (!r.ok) return { ok: false, err: r.err, cancelled: r.cancelled };
-    const v = (r.value || {}) as { selector?: string; src?: string; weak?: boolean; cancel?: boolean };
+    const v = (r.value || {}) as {
+        selector?: string; xpath?: string; attr?: string; src?: string; weak?: boolean; cancel?: boolean;
+    };
     if (v.cancel) return { ok: false, cancelled: true };
-    if (!v.selector) return { ok: false, err: 'no-selector' };
-    return { ok: true, selector: v.selector, src: v.src, weak: v.weak };
+    if (!v.selector && !v.xpath) return { ok: false, err: 'no-selector' };
+    return { ok: true, selector: v.selector, xpath: v.xpath, attr: v.attr, src: v.src, weak: v.weak };
 }
 
 export async function recordOnPage(

@@ -1,23 +1,48 @@
 <template>
     <div>
-        <div v-if="!steps.length" class="empty-hint">这个站不需要先搜索？那就留空。</div>
+        <div v-if="!steps.length" class="empty-hint">若填入「入口地址」即可直达详情页，这里留空即可。</div>
         <div v-for="(s, i) in steps" :key="i" class="step-row">
-            <n-select v-model:value="s.act" :options="ACT_OPTIONS" style="width: 104px" />
-            <n-input v-model:value="s.selector" placeholder="要操作的元素选择器，如 #search-input" />
-            <n-input v-if="s.act === 'type'" v-model:value="s.value" placeholder="输入内容，写 {q} 代表番号"
-                style="width: 240px" />
-            <n-input v-else-if="s.act === 'wait'" v-model:value="s.ms" placeholder="毫秒（留空=等元素出现）"
-                style="width: 160px" />
-            <n-button size="tiny" quaternary :disabled="i === 0" @click="move(i, -1)">↑</n-button>
-            <n-button size="tiny" quaternary :disabled="i === steps.length - 1" @click="move(i, 1)">↓</n-button>
-            <n-button size="tiny" quaternary @click="steps.splice(i, 1)">删</n-button>
+            <n-select v-model:value="s.act" :options="ACT_OPTIONS" style="width: 92px; flex: 0 0 92px" />
+            <n-input v-if="s.act === 'goto'" v-model:value="s.url"
+                placeholder="跳转地址模板，如 https://站点/search?q={q}" />
+            <template v-else>
+                <n-input v-model:value="s.selector"
+                    :placeholder="s.act === 'wait' ? '等待元素选择器（留空则按毫秒等待）' : '目标元素选择器，如 #search-input'" />
+                <n-input v-if="s.act === 'type'" v-model:value="s.value" placeholder="输入内容，写 {q} 代表番号"
+                    style="width: 210px; flex: 0 0 210px">
+                    <template #prefix><span class="in-lbl">输入</span></template>
+                </n-input>
+                <n-input v-else-if="s.act === 'press'" v-model:value="s.key" placeholder="Enter"
+                    style="width: 136px; flex: 0 0 136px">
+                    <template #prefix><span class="in-lbl">按键</span></template>
+                </n-input>
+                <n-input v-else-if="s.act === 'wait'" v-model:value="s.ms" placeholder="留空=等元素"
+                    style="width: 156px; flex: 0 0 156px">
+                    <template #prefix><span class="in-lbl">毫秒</span></template>
+                </n-input>
+            </template>
+            <div class="row-btns">
+                <n-button size="tiny" quaternary :disabled="i === 0" title="上移" @click="move(i, -1)">
+                    <template #icon><n-icon><ArrowUpOutline /></n-icon></template>
+                </n-button>
+                <n-button size="tiny" quaternary :disabled="i === steps.length - 1" title="下移" @click="move(i, 1)">
+                    <template #icon><n-icon><ArrowDownOutline /></n-icon></template>
+                </n-button>
+                <n-button size="tiny" quaternary class="del-btn" title="删除此步骤" @click="steps.splice(i, 1)">
+                    <template #icon><n-icon><TrashOutline /></n-icon></template>
+                </n-button>
+            </div>
         </div>
-        <n-button size="small" dashed @click="add">添加一步</n-button>
+        <n-button size="small" dashed @click="add">
+            <template #icon><n-icon><AddOutline /></n-icon></template>
+            添加一步
+        </n-button>
     </div>
 </template>
 
 <script setup lang="ts">
-import { NButton, NInput, NSelect } from 'naive-ui';
+import { NButton, NIcon, NInput, NSelect } from 'naive-ui';
+import { AddOutline, ArrowDownOutline, ArrowUpOutline, TrashOutline } from '@vicons/ionicons5';
 import { ACT_OPTIONS, type ActionStep } from './ruleDraft';
 
 /**
@@ -48,9 +73,26 @@ function move(i: number, d: number) {
 
 .step-row .n-input { min-width: 0; }
 
-.empty-hint {
+.in-lbl {
     font-size: 12px;
-    opacity: .6;
-    margin-bottom: 8px;
+    color: var(--ff-text-2);
+    margin-right: 4px;
+}
+
+.row-btns {
+    display: flex;
+    align-items: center;
+    gap: 2px;
+    flex: 0 0 auto;
+}
+
+.del-btn {
+    color: var(--ff-danger);
+}
+
+.empty-hint {
+    font-size: 13px;
+    color: var(--ff-text-2);
+    margin-bottom: 10px;
 }
 </style>

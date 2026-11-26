@@ -24,6 +24,7 @@ export interface GrabRowLike {
     hitSite?: string | null;
     /** 被哪个站点拦的（「人工过验证」要按站点开窗） */
     blockedSite?: string;
+    blockedUrl?: string;
     /** 失败原因（人类可读）。卡片面上只放短标签，这句进悬停详情 */
     message?: string;
     /** 抽帧失败的机器可读原因（服务端 `FrameRow.why`：`no-video` / `no-frame`）。卡面只对 `no-video` 换个词 */
@@ -76,6 +77,9 @@ export interface CoverItem {
     note?: string;
     /** 封面来源站点（成功时）/ 拦下我们的站点（失败时） */
     site?: string;
+    blockedUrl?: string;
+    /** 本次站点抓取曾尝试但失败（即使兜底仍保留了旧抽帧，也允许用户重抓） */
+    siteFailed?: boolean;
 }
 
 /**
@@ -250,17 +254,13 @@ export function buildCoverItems(
             // ② 本地抽帧封面（即使后续抓取为 no-match/error，也安全保留抽帧成果）
             holdFrame(bestFrameHit);
             card.state = 'ok';
-            /**
-             * 抽帧的帧是**系统盘缓存**，不等于已进盘 ⇒ 和站点封面一样报「待写入」。
-             *
-             * ⚠️ 这条正是主人反复提醒的冲突点：帧缓存会留着（下次打开还能看到同一张图），
-             * 所以卡上看起来"已经有封面了"；但盘上其实什么都没有。写「待写入」才说得清，
-             * 写「抽帧 · 30%」只说明图的出处，读者会自动理解成"搞定了"。
-             * 档位和跳过次数都是"这张图怎么来的"，进悬停。
-             */
             card.badge = '待写入';
-            // 右下角那颗常驻小胶囊只放得下短词；"跳过几张纯色"这种细节留给悬停
             card.site = `抽帧 ${bestFrameHit.pct ?? 1}%`;
+            if (latestSiteRow && latestSiteRow.status !== 'ok') {
+                card.siteFailed = true;
+                card.note = latestSiteRow.message;
+                card.blockedUrl = latestSiteRow.blockedUrl;
+            }
         } else if (latestFrameRow && latestFrameRow.status !== 'ok') {
             // ③ 最近一次抽帧尝试失败
             card.state = 'error';
@@ -270,6 +270,8 @@ export function buildCoverItems(
             // ④ 最近一次站点抓取失败或被拦
             card.note = latestSiteRow.message;
             card.site = latestSiteRow.blockedSite ?? latestSiteRow.hitSite ?? undefined;
+            card.blockedUrl = latestSiteRow.blockedUrl;
+            card.siteFailed = true;
             if (latestSiteRow.status === 'blocked') {
                 card.state = 'blocked';
                 card.badge = '被拦';

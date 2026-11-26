@@ -20,13 +20,50 @@
  *   - 窗口登记进 `queue.ts` 的登记处：主窗关闭时一起销毁，否则 `window-all-closed`
  *     永远不触发（应用退不掉）。
  */
-import { BrowserWindow, type Session } from 'electron';
+import { BrowserWindow, session, type Session } from 'electron';
 import { sleep, trackWindow, untrackWindow } from './queue';
 
 export const PARTITION = 'persist:assistant';
+const CHROME_VER = process.versions.chrome || '144.0.0.0';
 export const CHROME_UA =
-    'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 ' +
-    '(KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36';
+    `Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 ` +
+    `(KHTML, like Gecko) Chrome/${CHROME_VER} Safari/537.36`;
+
+/**
+ * 注入轻量反检测补丁：擦除 navigator.webdriver，并补全合理的语言/插件特征，
+ * 与 Chromium 真实内核版本保持一致（避免 UA 与 TLS/userAgentData 指纹撕裂）。
+ */
+const STEALTH_SCRIPT = `(function(){
+  try {
+    if (navigator.webdriver !== undefined) {
+      Object.defineProperty(navigator, 'webdriver', { get: function(){ return undefined; }, configurable: true });
+    }
+    if (!navigator.languages || !navigator.languages.length) {
+      Object.defineProperty(navigator, 'languages', { get: function(){ return ['zh-CN', 'zh', 'en-US', 'en']; }, configurable: true });
+    }
+  } catch(e) {}
+})()`;
+
+export function attachStealth(win: BrowserWindow): void {
+    win.webContents.setUserAgent(CHROME_UA);
+    win.webContents.on('dom-ready', () => {
+        if (!win.isDestroyed()) {
+            void win.webContents.executeJavaScript(STEALTH_SCRIPT).catch(() => undefined);
+        }
+    });
+}
+
+/** 清理指定域名在 persist:assistant 下的站点缓存（Cookie / Storage），用于解决脏 Cookie 死循环 */
+export async function clearSiteSession(targetUrl: string): Promise<boolean> {
+    try {
+        const origin = new URL(targetUrl).origin;
+        const ses = session.fromPartition(PARTITION);
+        await ses.clearStorageData({ origin });
+        return true;
+    } catch {
+        return false;
+    }
+}
 
 export const NAV_TIMEOUT = 25_000;
 export const POLL_INTERVAL = 500;
@@ -45,6 +82,8 @@ const CHALLENGE_TIMEOUT = 300_000;
  * 正常加载真的超过 45 秒（先看底栏 `抓取中 x/y` 的推进节奏再动）。
  */
 export const TARGET_BUDGET_MS = 45_000;
+/** 单站抓取上限（防止第一个站点卡死而饿死后续备用站点） */
+export const SITE_BUDGET_MS = 16_000;
 
 /**
  * 连续判定"卡在挑战页"多久就直接放弃这个站。
@@ -56,7 +95,13 @@ export const TARGET_BUDGET_MS = 45_000;
  *
  * 放弃后仍返回 `err:'cloudflare'`：留给「人工过验证」再重抓，不是把这条路堵死。
  */
-export const WAF_GIVE_UP_MS = 4_000;
+/**
+ * 连续判定"卡在挑战页"多久就直接放弃这个站。
+ * - 自动 JS 盾通常 3~6 秒内跳走，给足 6.5 秒；
+ * - 明确检测到交互式 Turnstile / Captcha 时 3 秒快速放弃，留给人工过验证。
+ */
+export const WAF_GIVE_UP_MS = 6_500;
+export const WAF_INTERACTIVE_GIVE_UP_MS = 3_000;
 
 /** 这些状态码本身就是"被挡在门外"，不靠 DOM 特征也能判（有些 WAF 直接回 403 空页） */
 export const WAF_STATUS = new Set([403, 429, 503]);
@@ -185,11 +230,12 @@ export const WAF_DETECT = `(function(){
     var t = (document.title || '').toLowerCase();
     var u = (location.href || '').toLowerCase();
     var titleHit = /just a moment|checking your browser|verify you are (a )?human|attention required|one more step|ddos-guard|pardon our interruption|checking if the site connection is secure|请稍候|正在验证|人机验证|安全验证/.test(t);
-    var domHit = !!document.querySelector('#cf-challenge-running, .cf-challenge, #challenge-form, form[action*="__cf_chl"], #ddos-guard, #px-captcha, #sec-if-cpt-container, #challenge-body-text, iframe[src*="challenges.cloudflare.com"]');
+    var interactiveDom = !!document.querySelector('iframe[src*="challenges.cloudflare.com"], #px-captcha, #sec-if-cpt-container');
+    var domHit = interactiveDom || !!document.querySelector('#cf-challenge-running, .cf-challenge, #challenge-form, form[action*="__cf_chl"], #ddos-guard, #challenge-body-text');
     var cfOpt = !!window._cf_chl_opt;
     var urlHit = /\\/cdn-cgi\\/challenge-platform|\\/__cf_chl/.test(u);
-    return { cf: titleHit || domHit || cfOpt || urlHit, url: location.href, title: document.title };
-  } catch (e) { return { cf: false, url: '', title: '' }; }
+    return { cf: titleHit || domHit || cfOpt || urlHit, interactive: interactiveDom, url: location.href, title: document.title };
+  } catch (e) { return { cf: false, interactive: false, url: '', title: '' }; }
 })()`;
 
 /** 旧名保留给"只关心 CF"的调用点（人工过验证）。判据是同一份，不要再抄第二份 */
@@ -257,18 +303,21 @@ export interface FetchResult<T> {
     data?: T;
     /**
      * 'cloudflare' = 被挑战拦下（该走 `passChallenge` 人工过）
+     * 'http'       = 主框架返回 404/410/5xx 等明确错误状态（快失败，不重试）
      * 'timeout'    = 超时/取不到
      * 'net'        = 主框架根本连不上（DNS / 连接被掐断 / SSL 握手失败）⇒ **不值得重试**
      * 'aborted'    = 用户取消了（**控制流**，不是失败原因）
      */
-    err?: 'cloudflare' | 'timeout' | 'net' | 'aborted';
+    err?: 'cloudflare' | 'http' | 'timeout' | 'net' | 'aborted';
+    httpStatus?: number;
+    finalUrl?: string;
     /** `err:'net'` 时的底层原因（Chromium 的描述），直接给用户看 */
     netErr?: string;
     /** 失败时的现场快照 —— 让用户能看见"被拦"是真是假，而不是只信一句文案 */
     snapshot?: PageSnapshot;
 }
 
-export interface RunExtractOptions {
+export interface RunExtractOptions<T = unknown> {
     /** 轮询总超时（毫秒）。只在**没给 `deadline`** 时生效 */
     timeoutMs?: number;
     /**
@@ -278,6 +327,8 @@ export interface RunExtractOptions {
     deadline?: number;
     /** 取消信号；abort 会立刻销毁窗口 */
     signal?: AbortSignal;
+    /** 判定抽取结果是否“已命中可退出轮询”（默认仅判 truthy；传它可避免空诊断对象提前退出） */
+    isReady?: (data: T) => boolean;
     /**
      * 拍不拍失败现场快照（URL/标题/整页 HTML，最长 800KB）。
      *
@@ -302,7 +353,7 @@ export interface RunExtractOptions {
 export async function runExtract<T>(
     url: string,
     script: string,
-    opts: RunExtractOptions = {},
+    opts: RunExtractOptions<T> = {},
 ): Promise<FetchResult<T>> {
     const { timeoutMs = POLL_TIMEOUT, signal, captureSnapshot = true } = opts;
     /**
@@ -349,10 +400,8 @@ export async function runExtract<T>(
     try {
         if (signal?.aborted) return aborted;
 
-        // 真实 Chrome UA：抹掉 Electron 指纹（D12）。用 webContents.setUserAgent 而非
-        // webPreferences.userAgent —— 后者不在 Electron 44 的 WebPreferences 类型里；
-        // setUserAgent 还能跨后续导航保持。
-        win.webContents.setUserAgent(CHROME_UA);
+        // 真实 Chrome UA + 反检测补丁：与内核版本对齐（D12）
+        attachStealth(win);
         // 抓取窗也不跟随弹窗（同源才导航）—— 否则站点脚本的 window.open 会漏出未登记窗口
         adoptSameOriginPopups(win);
         /**
@@ -375,15 +424,20 @@ export async function runExtract<T>(
         // 连不上（DNS / 掐连接 / SSL 握手失败）⇒ 注定打不开，别轮询到预算耗尽
         const navFailed = watchNavFailure(win);
 
+        // 初始导航最多等 6 秒：避免被广告/统计脚本拖住 load 事件而吃掉整个站点预算，
+        // 若主文档已就绪但外部资源卡住，6 秒后即进入轮询抽取（仍会等待真实图片或懒加载完成）。
+        const initialNavWait = Math.min(6_000, NAV_TIMEOUT, Math.max(deadline - Date.now(), 0));
         await Promise.race([
             win.loadURL(url).catch(() => undefined),
-            sleep(Math.min(NAV_TIMEOUT, Math.max(deadline - Date.now(), 0)), signal).catch(() => undefined),
+            sleep(initialNavWait, signal).catch(() => undefined),
         ]);
 
         let lastCf = false;
+        let lastInteractive = false;
         /** 连续被判定为挑战页的起点（0 = 当前不是挑战页）。见 `WAF_GIVE_UP_MS` */
         let wafSince = 0;
         let tries = 0;
+        let lastData: T | undefined;
         while (Date.now() < deadline) {
             if (signal?.aborted || win.isDestroyed()) return aborted;
 
@@ -402,14 +456,15 @@ export async function runExtract<T>(
                 };
             }
 
-            let cfInfo: { cf?: boolean } | undefined;
+            let cfInfo: { cf?: boolean; interactive?: boolean } | undefined;
             try {
-                cfInfo = (await win.webContents.executeJavaScript(WAF_DETECT)) as { cf?: boolean };
+                cfInfo = (await win.webContents.executeJavaScript(WAF_DETECT)) as { cf?: boolean; interactive?: boolean };
             } catch {
                 await sleep(POLL_INTERVAL, signal);
                 continue;
             }
             lastCf = !!cfInfo?.cf;
+            lastInteractive = !!cfInfo?.interactive;
             wafSince = lastCf ? (wafSince || Date.now()) : 0;
 
             // ⚠️ 即使判定为挑战页也**先抽一次**：CF 判定可能误伤正常页面，而"抽得到"
@@ -421,25 +476,50 @@ export async function runExtract<T>(
                 await sleep(POLL_INTERVAL, signal);
                 continue;
             }
-            if (data) return { ok: true, cf: false, data: data as T };
+            if (data !== undefined && data !== null) lastData = data as T;
+            const ready = opts.isReady ? (data !== undefined && data !== null && opts.isReady(data as T)) : !!data;
+            let curUrl = url;
+            try { if (!win.isDestroyed()) curUrl = win.webContents.getURL() || url; } catch { /* ignore */ }
+            if (ready) return { ok: true, cf: false, data: data as T, finalUrl: curUrl };
+
+            // 主框架明确返回 HTTP 错误：
+            // - 非 WAF 状态（如 404/410/500）：给 2 轮宽限（~1s，防止 SPA 假 404）后立刻快失败，不重试、不空等 45s
+            // - WAF 状态（403/429/503）且 DOM 无自动挑战特征：2 轮后立刻判 blocked，不空等
+            if (httpStatus >= 400 && !WAF_STATUS.has(httpStatus) && !lastCf && tries >= 1) {
+                return {
+                    ok: false, cf: false, err: 'http', httpStatus, finalUrl: curUrl, data: lastData,
+                    snapshot: captureSnapshot ? ((await snapshotOf(win)) ?? undefined) : undefined,
+                };
+            }
+            if (WAF_STATUS.has(httpStatus) && !lastCf && tries >= 1) {
+                return {
+                    ok: false, cf: true, err: 'cloudflare', httpStatus, finalUrl: curUrl, data: lastData,
+                    snapshot: captureSnapshot ? ((await snapshotOf(win)) ?? undefined) : undefined,
+                };
+            }
+
             /**
-             * 连续 `WAF_GIVE_UP_MS` 都还在挑战页 ⇒ **不等满 20 秒，直接放弃本站**。
-             * 交互式挑战隐藏窗永远过不去，继续等只是白占一个渲染进程 + 吃掉这张卡的超时预算
-             * —— 那正是主人看到的"卡住不动"（2026-11-23）。放弃后返回 cloudflare，
-             * 界面仍可提示"人工过验证后再重抓"。
+             * 连续挑战页超时直接放弃：交互式 Turnstile 给 3 秒快速放弃，自动 JS 盾给 6.5 秒。
              */
-            if (wafSince && Date.now() - wafSince >= WAF_GIVE_UP_MS) break;
+            const wafBudget = lastInteractive ? WAF_INTERACTIVE_GIVE_UP_MS : WAF_GIVE_UP_MS;
+            if (wafSince && Date.now() - wafSince >= wafBudget) break;
             // 抽不到：滚一下看看是不是懒加载还没触发。挑战页滚了也没用，跳过
             if (!lastCf) await lazyNudge(win, ++tries);
+            else tries++;
             await sleep(POLL_INTERVAL, signal);
         }
-        /**
-         * 判"被拦"的两条腿：挑战页特征**或** 403/429/503。
-         * 后者不能算超时 —— 超时意味着"再等等可能就好了"，而 403 再等一万年也一样。
-         */
+        if (signal?.aborted || win.isDestroyed()) return aborted;
+        let endUrl = url;
+        try { if (!win.isDestroyed()) endUrl = win.webContents.getURL() || url; } catch { /* ignore */ }
         const blockedNow = lastCf || WAF_STATUS.has(httpStatus);
+        const isHttpErr = !blockedNow && httpStatus >= 400;
         return {
-            ok: false, cf: blockedNow, err: blockedNow ? 'cloudflare' : 'timeout',
+            ok: false,
+            cf: blockedNow,
+            err: blockedNow ? 'cloudflare' : isHttpErr ? 'http' : 'timeout',
+            httpStatus: httpStatus || undefined,
+            finalUrl: endUrl,
+            data: lastData,
             snapshot: captureSnapshot ? ((await snapshotOf(win)) ?? undefined) : undefined,
         };
     } catch {
@@ -507,7 +587,7 @@ export async function passChallenge(url: string, signal?: AbortSignal): Promise<
     signal?.addEventListener('abort', onAbort, { once: true });
 
     try {
-        win.webContents.setUserAgent(CHROME_UA);
+        attachStealth(win);
         // 验证窗同样要设：不设的话 window.open 会开出未登记窗口，应用关不掉
         adoptSameOriginPopups(win);
         // ⚠️ 这一等也要能被取消：不带 `signal` 时，用户点「终止」还要白等到 25 秒导航超时

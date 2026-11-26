@@ -41,7 +41,9 @@
                     <!-- 0 不占位：一行里塞满「跳过 0」只是噪音 -->
                     <template v-if="scan?.unmatched.length">
                         <i />
-                        认不出番号 {{ scan.unmatched.length }}
+                        <button type="button" class="ffw-meta-link" @click="jumpToUnmatched">
+                            认不出番号 {{ scan.unmatched.length }}
+                        </button>
                     </template>
                     <template v-if="scan?.skippedCategory">
                         <i />
@@ -58,6 +60,42 @@
             </template>
 
             <template #tools>
+                <n-popover
+                    v-if="siteOptions.length"
+                    trigger="click"
+                    placement="bottom-end"
+                    :show-arrow="false"
+                    :disabled="busy"
+                >
+                    <template #trigger>
+                        <button type="button" class="ffw-site-trigger" :disabled="busy">
+                            <span>{{ siteSummaryText }}</span>
+                            <span class="ffw-site-trigger__arr">
+                                <n-icon :component="ChevronDownOutline" :size="12" />
+                            </span>
+                        </button>
+                    </template>
+                    <div class="ctx-menu">
+                        <button
+                            v-for="s in siteOptions"
+                            :key="s.value"
+                            type="button"
+                            class="ctx-item"
+                            @click="toggleSiteId(s.value)"
+                        >
+                            <span class="ffw-site-check" :class="{ 'is-on': selectedSiteIds.includes(s.value) }">
+                                <n-icon :component="CheckmarkOutline" :size="10" />
+                            </span>
+                            <span class="ctx-label">{{ s.label }}</span>
+                            <span v-if="s.enabled" class="ctx-count">默认</span>
+                        </button>
+                        <div class="ctx-sep" />
+                        <div class="ffw-site-foot">
+                            <button type="button" class="ctx-item" @click="selectAllSites">全选</button>
+                            <button type="button" class="ctx-item" @click="resetDefaultSites">恢复默认</button>
+                        </div>
+                    </div>
+                </n-popover>
                 <n-select
                     v-if="diskSelectOptions.length"
                     class="ffw-select"
@@ -97,9 +135,20 @@
             </div>
 
             <template v-else>
+                <div v-if="filterCounts.need > 0 && filterCounts.need < items.length" class="ffw-filter-bar">
+                    <button type="button" class="ffw-filter-chip" :class="{ 'is-on': filterMode === 'all' }"
+                        @click="filterMode = 'all'">全部 {{ items.length }}</button>
+                    <button type="button" class="ffw-filter-chip" :class="{ 'is-on': filterMode === 'need' }"
+                        @click="filterMode = 'need'">缺图/失败 {{ filterCounts.need }}</button>
+                    <button v-if="filterCounts.ready" type="button" class="ffw-filter-chip"
+                        :class="{ 'is-on': filterMode === 'ready' }" @click="filterMode = 'ready'">
+                        待写入 {{ filterCounts.ready }}
+                    </button>
+                </div>
+
                 <div class="ffw-grid">
                     <CoverCard
-                        v-for="(item, i) in items"
+                        v-for="(item, i) in visibleItems"
                         :key="item.key"
                         :item="item"
                         :index="i"
@@ -108,14 +157,16 @@
                         :action="actionOf(item, frameBusy)"
                         :action-disabled="busy || (!!item.frame && item.frame.pct >= FRAME_STOP_PCT)"
                         :extracting="frameBusy.has(item.writeRels[0])"
+                        :can-grab="!busy"
                         :cover-src="srcOf(item)"
                         @toggle="toggleCard(item)"
                         @frame="startFrame(targetsOf(item))"
+                        @grab="startGrab(targetsOf(item), grabJob && !isLiveJob(grabJob) ? grabJob.id : undefined)"
                         @broken="onCoverBroken(item.key)"
                     />
                 </div>
 
-                <details v-if="unmatched.length" class="ffw-details">
+                <details v-if="unmatched.length" ref="unmatchedRef" class="ffw-details">
                     <summary>认不出番号 {{ unmatched.length }} 条（已跳过，不会去搜，也不会写任何东西）</summary>
                     <div v-for="u in unmatched" :key="u.dir + '/' + u.name" class="ffw-details__row">
                         {{ u.dir ? u.dir + ' / ' : '' }}{{ u.name }}
@@ -186,10 +237,12 @@
 
                         <template v-else-if="task.mode === 'frame'">
                             <button type="button" class="ffw-btn" :disabled="!!frameActing" @click="pauseFrame">
-                                <n-icon :component="PauseOutline" :size="13" /> 暂停
+                                <n-icon :component="PauseOutline" :size="13" />
+                                {{ frameActing === 'pause' ? '暂停中…' : '暂停' }}
                             </button>
                             <button type="button" class="ffw-btn ffw-btn--danger" :disabled="!!frameActing" @click="stopFrame">
-                                <n-icon :component="StopOutline" :size="13" /> 终止
+                                <n-icon :component="StopOutline" :size="13" />
+                                {{ frameActing === 'stop' ? '终止中…' : '终止' }}
                             </button>
                         </template>
 
@@ -204,10 +257,12 @@
                                 写入已抽到的 {{ counts.ready }} 部
                             </button>
                             <button type="button" class="ffw-btn ffw-btn--primary" :disabled="!!frameActing" @click="resumeFrame">
-                                <n-icon :component="PlayOutline" :size="13" /> 继续
+                                <n-icon :component="PlayOutline" :size="13" />
+                                {{ frameActing === 'resume' ? '继续中…' : '继续' }}
                             </button>
                             <button type="button" class="ffw-btn ffw-btn--danger" :disabled="!!frameActing" @click="stopFrame">
-                                <n-icon :component="StopOutline" :size="13" /> 终止
+                                <n-icon :component="StopOutline" :size="13" />
+                                {{ frameActing === 'stop' ? '终止中…' : '终止' }}
                             </button>
                         </template>
 
@@ -227,10 +282,12 @@
 
                         <template v-else-if="task.mode === 'grab'">
                             <button type="button" class="ffw-btn" :disabled="!!grabActing" @click="pauseGrab">
-                                <n-icon :component="PauseOutline" :size="13" /> 暂停
+                                <n-icon :component="PauseOutline" :size="13" />
+                                {{ grabActing === 'pause' ? '暂停中…' : '暂停' }}
                             </button>
                             <button type="button" class="ffw-btn ffw-btn--danger" :disabled="!!grabActing" @click="stopGrab">
-                                <n-icon :component="StopOutline" :size="13" /> 终止
+                                <n-icon :component="StopOutline" :size="13" />
+                                {{ grabActing === 'stop' ? '终止中…' : '终止' }}
                             </button>
                         </template>
 
@@ -246,16 +303,19 @@
                                 写入已抓到的 {{ counts.ready }} 部
                             </button>
                             <button type="button" class="ffw-btn ffw-btn--primary" :disabled="!!grabActing" @click="resumeGrab">
-                                <n-icon :component="PlayOutline" :size="13" /> 继续
+                                <n-icon :component="PlayOutline" :size="13" />
+                                {{ grabActing === 'resume' ? '继续中…' : '继续' }}
                             </button>
                             <button type="button" class="ffw-btn ffw-btn--danger" :disabled="!!grabActing" @click="stopGrab">
-                                <n-icon :component="StopOutline" :size="13" /> 终止
+                                <n-icon :component="StopOutline" :size="13" />
+                                {{ grabActing === 'stop' ? '终止中…' : '终止' }}
                             </button>
                         </template>
 
                         <template v-else-if="task.mode === 'apply'">
                             <button type="button" class="ffw-btn ffw-btn--danger" :disabled="!!applyActing" @click="stopApply">
-                                <n-icon :component="StopOutline" :size="13" /> 终止
+                                <n-icon :component="StopOutline" :size="13" />
+                                {{ applyActing === 'stop' ? '终止中…' : '终止' }}
                             </button>
                         </template>
 
@@ -304,13 +364,14 @@
 </template>
 
 <script setup lang="ts">
-import { computed, onBeforeUnmount, ref } from 'vue';
+import { computed, onBeforeUnmount, ref, watch } from 'vue';
 import { useRouter } from 'vue-router';
-import { NModal, NSelect, NIcon } from 'naive-ui';
+import { NModal, NPopover, NSelect, NIcon } from 'naive-ui';
 import useConfirm from '@/hooks/useConfirm';
 import {
     ArrowForwardOutline,
     CheckmarkOutline,
+    ChevronDownOutline,
     PauseOutline,
     PlayOutline,
     RefreshOutline,
@@ -318,6 +379,7 @@ import {
     StopOutline,
     RepeatOutline,
 } from '@vicons/ionicons5';
+import './ctx-menu.css';
 import { API_BASE, apiUrl, getAction, postAction } from '@/utils/request';
 import useNotify from '@/hooks/useNotify';
 import AssistantShell from './assistant/AssistantShell.vue';
@@ -651,6 +713,37 @@ const items = computed<CoverItem[]>(() => {
 
 const counts = computed(() => summarize(items.value, sel.value));
 
+type FilterMode = 'all' | 'need' | 'ready';
+const filterMode = ref<FilterMode>('all');
+const isNeedItem = (i: CoverItem) =>
+    i.state === 'idle' || i.state === 'pending' || i.state === 'blocked'
+    || i.state === 'miss' || i.state === 'error' || i.state === 'writefail';
+
+const filterCounts = computed(() => ({
+    need: items.value.filter(isNeedItem).length,
+    ready: items.value.filter(i => i.state === 'ok').length,
+}));
+
+watch([filterCounts, () => items.value.length], ([counts, total]) => {
+    const barVisible = counts.need > 0 && counts.need < total;
+    if (!barVisible || (filterMode.value === 'need' && counts.need === 0) || (filterMode.value === 'ready' && counts.ready === 0)) {
+        filterMode.value = 'all';
+    }
+});
+
+const visibleItems = computed(() => {
+    if (filterMode.value === 'need') return items.value.filter(isNeedItem);
+    if (filterMode.value === 'ready') return items.value.filter(i => i.state === 'ok');
+    return items.value;
+});
+
+const unmatchedRef = ref<HTMLDetailsElement | null>(null);
+const jumpToUnmatched = () => {
+    if (!unmatchedRef.value) return;
+    unmatchedRef.value.open = true;
+    unmatchedRef.value.scrollIntoView({ behavior: 'smooth', block: 'start' });
+};
+
 /**
  * 队列里还有多少没轮到。**前端算，不加后端字段** ——
  * 三个输入都已经在快照里：`total − processed − 在飞 = 排队`。
@@ -716,6 +809,56 @@ const markBusy = (rels: string[], on: boolean) => {
     frameBusy.value = next;
 };
 
+interface RuleOptionRow { id: string; name?: string; enabled: boolean }
+const siteOptions = ref<{ label: string; value: string; enabled: boolean }[]>([]);
+const selectedSiteIds = ref<string[]>([]);
+
+const siteSummaryText = computed(() => {
+    const n = selectedSiteIds.value.length;
+    if (!n) return '站点：未选';
+    if (n === 1) {
+        const hit = siteOptions.value.find(s => s.value === selectedSiteIds.value[0]);
+        return `站点：${hit?.label || selectedSiteIds.value[0]}`;
+    }
+    return `站点：${n} / ${siteOptions.value.length}`;
+});
+
+const toggleSiteId = (id: string) => {
+    const cur = selectedSiteIds.value;
+    if (cur.includes(id)) {
+        selectedSiteIds.value = cur.filter(x => x !== id);
+    } else {
+        // 保持与规则列表一致的优先级顺序
+        const nextSet = new Set([...cur, id]);
+        selectedSiteIds.value = siteOptions.value.filter(s => nextSet.has(s.value)).map(s => s.value);
+    }
+};
+
+const selectAllSites = () => {
+    selectedSiteIds.value = siteOptions.value.map(s => s.value);
+};
+
+const resetDefaultSites = () => {
+    selectedSiteIds.value = siteOptions.value.filter(s => s.enabled).map(s => s.value);
+};
+
+const loadSites = async () => {
+    try {
+        const res = await getAction(`${API_BASE}/assistant/rules`);
+        const list = (res?.rules ?? []) as RuleOptionRow[];
+        siteOptions.value = list.map(r => ({
+            value: r.id,
+            label: r.name || r.id,
+            enabled: !!r.enabled,
+        }));
+        if (!selectedSiteIds.value.length) {
+            selectedSiteIds.value = list.filter(r => r.enabled).map(r => r.id);
+        }
+    } catch {
+        /* 加载失败时后端仍按 rules.json 启用状态跑 */
+    }
+};
+
 const diskSelectOptions = computed(() => disks.value.map(d => ({
     value: d.serial,
     label: `${d.label || d.drive || '(离线)'} · ${d.online ? '在线' : '离线'} · ${d.folders} 目录`,
@@ -725,10 +868,10 @@ const blockedSites = computed(() => [...new Set(
     grabRows.value.filter(r => r.status === 'blocked' && r.blockedSite).map(r => r.blockedSite!),
 )]);
 
-/** 还没拿到封面的目标：试过但失败/被拦的（认不出番号的除外 —— 再抓还是认不出） */
+/** 还没拿到封面的目标：试过但失败/被拦的（包括站点失败后退回旧抽帧的卡） */
 const retryTargets = computed(() => {
     const rels = new Set(items.value
-        .filter(i => i.state === 'blocked' || i.state === 'miss' || i.state === 'error')
+        .filter(i => i.state === 'blocked' || i.state === 'miss' || i.state === 'error' || i.siteFailed)
         .flatMap(i => i.writeRels));
     return targets.value.filter(t => rels.has(t.writeRel));
 });
@@ -752,16 +895,19 @@ const toggleCard = (item: CoverItem) => {
  * 用 `counts.selected`（按卡算）而不是 `sel.size`（按 writeRel 算）：
  * 一张卡可能压着 8 个分卷，拿 writeRel 比会永远对不上。
  */
-const allSelected = computed(() => items.value.length > 0 && counts.value.selected === items.value.length);
+const allSelected = computed(() =>
+    visibleItems.value.length > 0 && visibleItems.value.every(i => isSelected(i)));
 
-/**
- * 总控勾选的标准行为（checkbox group 那一套，零学习成本）：
- * 已全选 ⇒ 全不选；否则 ⇒ 全选。
- * 全选用 `targets` 全量 —— 与 `applyScanResult` 落盘那一刻的口径一致。
- */
 const toggleAll = () => {
     if (selLocked.value) return;
-    sel.value = allSelected.value ? new Set() : new Set(targets.value.map(t => t.writeRel));
+    const next = new Set(sel.value);
+    const viewRels = visibleItems.value.flatMap(i => i.writeRels);
+    if (allSelected.value) {
+        for (const r of viewRels) next.delete(r);
+    } else {
+        for (const r of viewRels) next.add(r);
+    }
+    sel.value = next;
 };
 
 // ── 扫描 ────────────────────────────────────────────────────
@@ -783,6 +929,7 @@ const applyScanResult = (result: ScanResult) => {
     brokenCovers.value = new Set(); // 新的一批 = 新的一批链接，旧的失败标记不许带过来
     frameIndex.value = [];          // 先清空：回填是异步的，旧盘的帧绝不能挂在新清单上
     frameBusy.value = new Set();    // 在途标记也是"上一批"的：重扫后不清会永久转圈
+    filterMode.value = 'all';
     detachGrab();
     detachApply();
     detachFrame();
@@ -885,6 +1032,10 @@ const startGrab = async (list?: ScanTargetLike[], appendTo?: string) => {
     }
     const picked = list ?? targets.value.filter(t => sel.value.has(t.writeRel));
     if (!picked.length) return;
+    if (siteOptions.value.length && !selectedSiteIds.value.length) {
+        notify('warning', '请先选择站点', '请在顶栏至少勾选一个抓取站点');
+        return;
+    }
 
     brokenCovers.value = new Set(); // 重抓会拿新链接，旧的"取不到"标记一律作废
     if (!appendTo) {
@@ -896,8 +1047,9 @@ const startGrab = async (list?: ScanTargetLike[], appendTo?: string) => {
             kind: 'grab',
             serial: selectedSerial.value,
             targets: picked,
-            // 「换封面」必须绕开命中缓存：否则会拿回同一张图，"已替换"就成了假话
-            ...(faceMode.value ? { force: true } : {}),
+            ...(selectedSiteIds.value.length ? { siteIds: selectedSiteIds.value } : {}),
+            // 「换封面」或单卡显式重抓绕开命中缓存
+            ...(faceMode.value || !!list ? { force: true } : {}),
             ...(appendTo ? { jobId: appendTo } : {}),
         });
         if (!res.jobId) {
@@ -917,7 +1069,14 @@ const passChallenge = async () => {
     challengeRunning.value = true;
     try {
         for (const siteId of blockedSites.value) {
-            const res = await postAction(`${API_BASE}/assistant/jobs`, { kind: 'challenge', siteId });
+            const blockedUrl = grabRows.value.find(
+                r => r.status === 'blocked' && r.blockedSite === siteId && r.blockedUrl,
+            )?.blockedUrl;
+            const res = await postAction(`${API_BASE}/assistant/jobs`, {
+                kind: 'challenge',
+                siteId,
+                ...(blockedUrl ? { url: blockedUrl } : {}),
+            });
             const job = await waitJob(res.jobId);
             if (job.status !== 'done') {
                 notify('warning', '人工过验证', job.message || '验证没通过，可以再试一次');
@@ -1042,7 +1201,8 @@ const onModalShowChange = (v: boolean) => {
 const setShowModal = async (v: boolean, picks?: FacePick[], presetPath?: string) => {
     visible.value = v;
     if (!v) {
-        detachGrab();
+        filterMode.value = 'all';
+    detachGrab();
         detachApply();
         detachFrame();
         // 关面板时任务可能还在跑（job 在主进程）。在途标记必须一起清：
@@ -1051,6 +1211,7 @@ const setShowModal = async (v: boolean, picks?: FacePick[], presetPath?: string)
         facePicks.value = []; // 关面板就清掉挑选，否则下次从「补封面」进来会沿用
         scope.value = '';     // 范围跟着"从哪打开"走，绝不留上一次的
         openScope.value = '';
+        selectedSiteIds.value = [];
         return;
     }
     // 只有显式传了才覆盖（防"回声调用"把选择清掉）
@@ -1059,7 +1220,8 @@ const setShowModal = async (v: boolean, picks?: FacePick[], presetPath?: string)
     scope.value = '';
     openScope.value = '';
 
-    await loadDisks();
+    filterMode.value = 'all';
+    await Promise.all([loadDisks(), loadSites()]);
 
     // 自动带盘：只在「补封面」（没有 picks）时做。
     // ⚠️ 不能加 `&& !selectedSerial` —— 那会让它只在本次会话第一次打开时成立，

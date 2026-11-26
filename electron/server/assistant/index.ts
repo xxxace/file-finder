@@ -31,14 +31,15 @@
 import type http from 'node:http';
 import * as fsp from 'node:fs/promises';
 import path from 'node:path';
-import { applyQueryTransform, buildExtractScript, buildStepScript, deleteRule, loadRules, saveRule } from './rules';
+import { applyQueryTransform, buildExtractScript, buildStepScript, deleteRule, loadRules, reorderRules, saveRule } from './rules';
 import type { ExtractedFields, SiteRule } from './rules';
-import { passChallenge, runExtract } from './siteFetch';
+import { clearSiteSession, passChallenge, runExtract } from './siteFetch';
 import type { PageSnapshot } from './siteFetch';
 import { openVisiblePage, runSteps, visiblePageUrl } from './siteActions';
 import { pickImageOnPage, recordOnPage } from './siteRecord';
 import { deriveTemplate, expandUrl } from './urlTemplate';
 import type { StepOutcome } from './siteActions';
+import { combineSignals } from './queue';
 import { runGrab } from './grab';
 import type { GrabRow } from './grab';
 import { bumpProgress, cancelJob, createJob, finishJob, getJob, listJobs, pauseJob, reopenJob, resumeJob, snapshotJob } from './jobs';
@@ -92,12 +93,21 @@ export function createAssistantRoutes(deps: AssistantDeps): AssistantRoute[] {
             return;
         }
         for (const s of rule.steps ?? []) {
-            if (s.act !== 'wait' && !s.selector) {
+            if ((s.act === 'type' || s.act === 'click') && !s.selector) {
                 sendJson(res, { code: 400, error: '动作步骤缺少 selector' });
                 return;
             }
         }
         sendJson(res, { code: 200, rules: await saveRule(dataDir, rule) });
+    }
+
+    async function reorderRuleList(req: ReqLike, res: http.ServerResponse) {
+        const body = (req.body || {}) as { ids?: string[] };
+        if (!Array.isArray(body.ids)) {
+            sendJson(res, { code: 400, error: '缺少 ids 数组' });
+            return;
+        }
+        sendJson(res, { code: 200, rules: await reorderRules(dataDir, body.ids) });
     }
 
     async function removeRule(req: ReqLike, res: http.ServerResponse) {
@@ -168,8 +178,16 @@ export function createAssistantRoutes(deps: AssistantDeps): AssistantRoute[] {
         // 两条通道不能混：把 click 塞进 runExtract 的轮询循环会反复点击。
         const steps = rule.steps ?? [];
         if (steps.length) {
-            const planned = steps.map(s => ({ act: s.act, script: buildStepScript(s, q) }));
-            const r = await runSteps(url, planned, extract, { show, signal });
+            const planned = steps.map(s => ({
+                act: s.act,
+                script: buildStepScript(s, q, rule.queryTransform),
+                waitSelector: (s.act === 'type' || s.act === 'click' || s.act === 'press') ? s.selector : undefined,
+            }));
+            const r = await runSteps<ExtractedFields>(url, planned, extract, {
+                show,
+                signal,
+                isReady: (f) => !!(f && f.cover),
+            });
             const snap = r.ok ? null : await saveSnapshotFile(r.snapshot);
             if (!res.writableEnded) sendJson(res, {
                 code: 200,
@@ -186,7 +204,11 @@ export function createAssistantRoutes(deps: AssistantDeps): AssistantRoute[] {
             return;
         }
 
-        const result = await runExtract<ExtractedFields>(url, extract, { show, signal });
+        const result = await runExtract<ExtractedFields>(url, extract, {
+            show,
+            signal,
+            isReady: (f) => !!(f && f.cover),
+        });
         const snap = result.ok ? null : await saveSnapshotFile(result.snapshot);
         if (!res.writableEnded) sendJson(res, {
             code: 200,
@@ -196,7 +218,7 @@ export function createAssistantRoutes(deps: AssistantDeps): AssistantRoute[] {
             err: result.err ?? null,
             fields: result.data ?? null,
             steps: [] as StepOutcome[],
-            httpStatus: 0,
+            httpStatus: result.httpStatus ?? 0,
             pageTitle: snap?.title || '',
             snapshot: snap,
         });
@@ -265,14 +287,36 @@ export function createAssistantRoutes(deps: AssistantDeps): AssistantRoute[] {
      * ⚠️ 这两个接口都是**长请求**（用户在窗里操作，最长 10 分钟）—— 不要给它加超时。
      */
     async function pickImage(req: ReqLike, res: http.ServerResponse) {
+        const body = (req.body || {}) as { url?: string; rule?: SiteRule; query?: string; kind?: 'cover' | 'text' | 'link' };
+        const target = targetOf(body);
+        if (!target) {
+            sendJson(res, { code: 400, error: '缺少 url 或 rule' });
+            return;
+        }
+        const r = await pickImageOnPage(target, abortOnClose(res), body.kind || 'cover');
+        if (!res.writableEnded) sendJson(res, { code: 200, ...r });
+    }
+
+    async function challengeRule(req: ReqLike, res: http.ServerResponse) {
         const body = (req.body || {}) as { url?: string; rule?: SiteRule; query?: string };
         const target = targetOf(body);
         if (!target) {
             sendJson(res, { code: 400, error: '缺少 url 或 rule' });
             return;
         }
-        const r = await pickImageOnPage(target, abortOnClose(res));
+        const r = await passChallenge(target, abortOnClose(res));
         if (!res.writableEnded) sendJson(res, { code: 200, ...r });
+    }
+
+    async function clearRuleSession(req: ReqLike, res: http.ServerResponse) {
+        const body = (req.body || {}) as { url?: string; rule?: SiteRule; query?: string };
+        const target = targetOf(body);
+        if (!target) {
+            sendJson(res, { code: 400, error: '缺少 url 或 rule' });
+            return;
+        }
+        const cleared = await clearSiteSession(target);
+        sendJson(res, { code: 200, ok: cleared });
     }
 
     /** 录制动作：用户在可见窗里自己搜一次，我们把他做的「输入 / 点击」记成动作序列 */
@@ -880,8 +924,11 @@ export function createAssistantRoutes(deps: AssistantDeps): AssistantRoute[] {
         }
 
         const timeout = AbortSignal.timeout(20_000);
+        const onClose = abortOnClose(res);
+        const merged = combineSignals(timeout, onClose);
         try {
-            const cover = await getVerifiedCover(raw, timeout);
+            const cover = await getVerifiedCover(raw, merged.signal);
+            if (res.writableEnded) return;
             if (!cover.ok) {
                 sendJson(res, { code: 404, error: cover.why }, 404);
                 return;
@@ -891,7 +938,9 @@ export function createAssistantRoutes(deps: AssistantDeps): AssistantRoute[] {
             res.writeHead(200, { 'Content-Type': 'image/jpeg', 'Content-Length': jpg.length });
             res.end(jpg);
         } catch {
-            sendJson(res, { code: 502, error: '预览图下载失败' }, 502);
+            if (!res.writableEnded) sendJson(res, { code: 502, error: '预览图下载失败' }, 502);
+        } finally {
+            merged.dispose();
         }
     }
 
@@ -980,6 +1029,18 @@ export function createAssistantRoutes(deps: AssistantDeps): AssistantRoute[] {
             if (method === 'GET') return listRules(req, res);
             if (method === 'POST') return upsertRule(req, res);
             if (method === 'DELETE') return removeRule(req, res);
+            return sendJson(res, { code: 405, error: 'method not allowed' }, 405);
+        }],
+        ['/assistant/rules/reorder', (req, res) => {
+            if (req.method?.toUpperCase() === 'POST') return reorderRuleList(req, res);
+            return sendJson(res, { code: 405, error: 'method not allowed' }, 405);
+        }],
+        ['/assistant/rules/challenge', (req, res) => {
+            if (req.method?.toUpperCase() === 'POST') return challengeRule(req, res);
+            return sendJson(res, { code: 405, error: 'method not allowed' }, 405);
+        }],
+        ['/assistant/rules/clear-session', (req, res) => {
+            if (req.method?.toUpperCase() === 'POST') return clearRuleSession(req, res);
             return sendJson(res, { code: 405, error: 'method not allowed' }, 405);
         }],
         ['/assistant/dryrun', (req, res) => {

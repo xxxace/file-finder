@@ -20,14 +20,14 @@ import { applyQueryTransform, expandUrl, type QueryTransform } from './urlTempla
 export { applyQueryTransform };
 export type { QueryTransform };
 
-export type CandidateKind = 'css' | 'meta' | 'regex';
+export type CandidateKind = 'css' | 'meta' | 'xpath' | 'regex' | 'script';
 
 /** 单个字段的一次抽取尝试：按顺序依次试，命中即用 */
 export interface FieldCandidate {
     kind: CandidateKind;
-    /** css: 选择器；meta: meta 的 name/property；regex: 正则字符串 */
+    /** css: 选择器；meta: meta 的 name/property；xpath: XPath 表达式；regex: 正则；script: JS 函数体/表达式 */
     selector: string;
-    /** css: 取哪个属性（默认 src；'text' 取文本）；regex: 不用 */
+    /** css/xpath: 取哪个属性（默认 src；'text' 取文本；'bg' 取背景图 url） */
     attr?: string;
     /** regex: 取第几个捕获组（默认 1） */
     group?: number;
@@ -45,13 +45,15 @@ export interface SiteFields {
 }
 
 /**
- * 动作序列的一步（P3.1）。
+ * 动作序列的一步（P3.1 + 扩展）。
  * ⚠️ **有副作用：每步只允许执行一次** —— 与幂等、可反复重试的抽取脚本不同，
- * 绝不能塞进 `runExtract` 的轮询循环（click 返回 undefined ⇒ 循环不退出 ⇒ 反复点击）。
+ * 绝不能塞进 `runExtract` 的轮询循环。
  */
 export type ActionStep =
     | { act: 'type'; selector: string; value: string }   // value 支持 {q}
     | { act: 'click'; selector: string }
+    | { act: 'press'; selector?: string; key: string }   // 按键（如 Enter）
+    | { act: 'goto'; url: string }                       // 跳转 URL（支持 {q}）
     | { act: 'wait'; selector?: string; ms?: number };
 
 export interface SiteRule {
@@ -64,6 +66,9 @@ export interface SiteRule {
     transport: 'browser';
     needsCookie?: boolean;
     queryTransform?: QueryTransform;
+    /** 最近一次试跑是否已通过（仅作 UI 状态展示，不阻塞草稿保存） */
+    verified?: boolean;
+    verifiedAt?: string;
     /** 动作序列（可空）。缺省 = 行为与现在完全一致（纯 URL 型的站零改动） */
     steps?: ActionStep[];
     fields: SiteFields;
@@ -98,65 +103,127 @@ export function buildExtractScript(fields: SiteFields): string {
         if(s && s.indexOf('//')===0) s = 'https:' + s;
         return s;
       }
-      function tryCss(c){
-        var el = document.querySelector(c.selector);
-        if(!el) return '';
-        var A = c.attr || 'src';
-        if(A === 'text') return (el.textContent||'').trim();
-        if(A === 'html') return (el.innerHTML||'').trim();
-        // 属性回退链：写成 src|data-src|data-original。
-        // 懒加载站的 src 常是占位图、真地址在 data-* 里，而 lazyloaded 这类类名
-        // 只在图**加载完成后**才加上 —— 隐藏窗不滚动（1000×720），页面下方的图可能
-        // 永远不加载 ⇒ 只认一个属性会在"已加载/未加载"两种时机各错一半。
-        var keys = A.split('|');
-        for(var i=0;i<keys.length;i++){
-          var k = keys[i].replace(/^\\s+|\\s+$/g,'');
-          var v = el.getAttribute(k);
-          if(!v) continue;
-          // srcset 形如 "a.jpg 1x, b.jpg 2x"，取第一个候选地址 ——
-          // 与 rawSrc()（sampleSrcs 用的那个）同一套解析，两处不能各写一份
-          if(k === 'srcset') v = v.split(',')[0].replace(/\\s+/g,' ').trim().split(' ')[0];
-          if(v) return v;
-        }
-        return '';
+      function extractBg(el){
+        try {
+          var bg = (el.style && el.style.backgroundImage) || getComputedStyle(el).backgroundImage || '';
+          var m = /url\\(\\s*["']?([^"')]+)["']?\\s*\\)/i.exec(bg);
+          return m ? m[1].trim() : '';
+        } catch(e){ return ''; }
       }
-      // 值是不是 URL 形态。要挡住的不是"像不像"，而是 attr 写 style 时返回的**整串 CSS**
-      // （background: url(...) 0% 0% / cover;）—— 它非空、不含黑名单词，会被当成命中，
-      // 把后面本来能用的 og:image 一起堵死。URL 里不会有空白/分号/花括号。
       function looksUrl(v){
         if(!v) return false;
         if(/^data:/i.test(v)) return true;
         return !/[\\s{};()'"]/.test(v);
       }
-      function tryMeta(c){
-        var el = document.querySelector('meta[name="'+c.selector+'"],meta[property="'+c.selector+'"]');
-        return el ? (el.getAttribute('content')||'').trim() : '';
-      }
-      function tryRegex(c){
-        var m = new RegExp(c.selector, 'i').exec(document.documentElement.outerHTML);
-        if(!m) return '';
-        return (m[c.group||1]||'').trim();
-      }
       function abs(v){
         if(!v) return '';
         if(/^(https?:|data:|blob:)/i.test(v)) return v;
         if(v.indexOf('//')===0) return 'https:' + v;
-        // 根相对（/pics/…）与路径相对都要按页面地址补全 —— javbus 的封面就是 /pics/cover/*.jpg
         try { return new URL(v, document.baseURI).href; } catch(e) { return v; }
       }
-      function runField(fr, opts){
+      function validVal(v, opts){
+        if(!v) return '';
         var isCover = !!(opts && opts.cover), isUrl = !!(opts && opts.url);
+        if(isUrl && !looksUrl(v)) return '';
+        if(isUrl) v = abs(v);
+        if(isCover && BAD.test(v)) return '';
+        return v;
+      }
+      function readElAttr(el, attrSpec, opts){
+        if(!el) return '';
+        var A = attrSpec || 'src';
+        if(A === 'text') return validVal((el.textContent||'').trim(), opts);
+        if(A === 'html') return validVal((el.innerHTML||'').trim(), opts);
+        if(A === 'bg') return validVal(extractBg(el), opts);
+        var keys = A.split('|');
+        for(var i=0;i<keys.length;i++){
+          var k = keys[i].replace(/^\\s+|\\s+$/g,'');
+          var v = '';
+          if(k === 'bg') v = extractBg(el);
+          else if(k === 'style') {
+            var st = el.getAttribute('style') || '';
+            var sm = /url\\(\\s*["']?([^"')]+)["']?\\s*\\)/i.exec(st);
+            v = sm ? sm[1].trim() : st;
+          } else {
+            v = el.getAttribute(k) || '';
+            if(k === 'srcset' && v) v = v.split(',')[0].replace(/\\s+/g,' ').trim().split(' ')[0];
+          }
+          var ok = validVal(v, opts);
+          if(ok) return ok;
+        }
+        return '';
+      }
+      function docsList(){
+        var list = [document];
+        try {
+          var frames = document.querySelectorAll('iframe');
+          for(var i=0;i<frames.length && i<5;i++){
+            try { if(frames[i].contentDocument) list.push(frames[i].contentDocument); } catch(e){}
+          }
+        } catch(e){}
+        return list;
+      }
+      function tryCss(c, opts){
+        var docs = docsList();
+        for(var d=0; d<docs.length; d++){
+          var els = docs[d].querySelectorAll(c.selector);
+          for(var i=0; i<els.length && i<20; i++){
+            var v = readElAttr(els[i], c.attr, opts);
+            if(v) return v;
+          }
+        }
+        return '';
+      }
+      function tryXpath(c, opts){
+        var docs = docsList();
+        for(var d=0; d<docs.length; d++){
+          try {
+            var snap = docs[d].evaluate(c.selector, docs[d], null, XPathResult.ORDERED_NODE_SNAPSHOT_TYPE, null);
+            for(var i=0; i<snap.snapshotLength && i<20; i++){
+              var n = snap.snapshotItem(i);
+              if(!n) continue;
+              var v = '';
+              if(n.nodeType === 1) v = readElAttr(n, c.attr, opts);
+              else v = validVal((n.textContent || n.nodeValue || '').trim(), opts);
+              if(v) return v;
+            }
+          } catch(e){}
+        }
+        return '';
+      }
+      function tryMeta(c, opts){
+        var el = document.querySelector('meta[name="'+c.selector+'"],meta[property="'+c.selector+'"]');
+        return validVal(el ? (el.getAttribute('content')||'').trim() : '', opts);
+      }
+      function tryRegex(c, opts){
+        var m = new RegExp(c.selector, 'i').exec(document.documentElement.outerHTML);
+        if(!m) return '';
+        return validVal((m[c.group||1]||'').trim(), opts);
+      }
+      function tryScript(c, opts){
+        var code = String(c.selector || '').trim();
+        if(!code) return '';
+        var fn;
+        try {
+          fn = /\breturn\b/.test(code) ? new Function('doc', 'win', code) : new Function('doc', 'win', 'return (' + code + ')');
+        } catch(e){
+          try { fn = new Function('doc', 'win', code); } catch(e2){ return ''; }
+        }
+        var r = fn(document, window);
+        return validVal(r == null ? '' : String(r).trim(), opts);
+      }
+      function runField(fr, opts){
         if(!fr || !fr.candidates) return '';
         for(var i=0;i<fr.candidates.length;i++){
           var c = fr.candidates[i], v = '';
           try {
-            v = c.kind==='css' ? tryCss(c) : c.kind==='meta' ? tryMeta(c) : c.kind==='regex' ? tryRegex(c) : '';
+            v = c.kind==='css' ? tryCss(c, opts)
+              : c.kind==='meta' ? tryMeta(c, opts)
+              : c.kind==='xpath' ? tryXpath(c, opts)
+              : c.kind==='regex' ? tryRegex(c, opts)
+              : c.kind==='script' ? tryScript(c, opts) : '';
           } catch(e){ v=''; }
-          if(!v) continue;
-          if(isUrl && !looksUrl(v)) continue;
-          if(isUrl) v = abs(v);
-          if(isCover && BAD.test(v)) continue;
-          return v;
+          if(v) return v;
         }
         return '';
       }
@@ -168,31 +235,18 @@ export function buildExtractScript(fields: SiteFields): string {
         imgCount: document.images.length,
         sampleSrcs: []
       };
-      for(var k=0;k<document.images.length && out.sampleSrcs.length<5;k++){
+      for(var k=0;k<document.images.length && out.sampleSrcs.length<8;k++){
         var s = rawSrc(document.images[k]);
-        if(s) out.sampleSrcs.push(s.slice(0,140));
+        if(s) out.sampleSrcs.push(s.slice(0,200));
       }
       return out;
     })()`;
 }
 
-/**
- * 生成**单步**动作脚本（页面内执行，返回 Promise/对象）。
- *
- * 为什么是单步而不是整串：点击常触发整页导航 ⇒ 脚本上下文被销毁 ⇒ 整串脚本的
- * Promise 永不 resolve。所以调用方（`runSteps`）**每步单独 executeJavaScript 一次**，
- * 并把"导航打断"当作该步已成功。
- *
- * `type` 用 prototype 上的 `value` setter 写值再派发 input/change —— 受控输入
- * （React/Vue）只有这样才会更新内部状态；直接赋 `el.value` 会被框架覆盖。
- */
-export function buildStepScript(step: ActionStep, query = ''): string {
+export function buildStepScript(step: ActionStep, query = '', transform?: QueryTransform): string {
     if (step.act === 'type') {
         const sel = JSON.stringify(step.selector);
-        // ⚠️ 与 URL 用**同一个**引擎（`encode=false`：填进输入框的不该做 URL 编码）——
-        // 录出来的 `{q|noDash}` 这类写法在这里也必须被认出来，否则会被当字面量填进搜索框，
-        // 动作永远搜不到东西（"试跑通了、抓取反而错"的另一半）。
-        const val = JSON.stringify(expandUrl(step.value || '', query, undefined, false));
+        const val = JSON.stringify(expandUrl(step.value || '', query, transform, false));
         return `(function(){
           var el = document.querySelector(${sel});
           if(!el) return { ok:false, why:'not-found' };
@@ -213,9 +267,34 @@ export function buildStepScript(step: ActionStep, query = ''): string {
         return `(function(){
           var el = document.querySelector(${sel});
           if(!el) return { ok:false, why:'not-found' };
+          try { el.scrollIntoView({ block:'center', inline:'center' }); } catch(e){}
           try { el.click(); } catch(e){}
           return { ok:true };
         })()`;
+    }
+    if (step.act === 'press') {
+        const sel = step.selector ? JSON.stringify(step.selector) : 'null';
+        const key = JSON.stringify(step.key || 'Enter');
+        return `(function(){
+          var el = ${sel} ? document.querySelector(${sel}) : document.activeElement;
+          if(!el) return { ok:false, why:'not-found' };
+          try { el.focus(); } catch(e){}
+          var k = ${key};
+          var init = { key: k, code: k === 'Enter' ? 'Enter' : k, keyCode: k === 'Enter' ? 13 : 0, which: k === 'Enter' ? 13 : 0, bubbles: true, cancelable: true };
+          var notCancelled = el.dispatchEvent(new KeyboardEvent('keydown', init));
+          el.dispatchEvent(new KeyboardEvent('keypress', init));
+          el.dispatchEvent(new KeyboardEvent('keyup', init));
+          if(k === 'Enter' && notCancelled && el.form) {
+            try {
+              if(typeof el.form.requestSubmit === 'function') el.form.requestSubmit();
+              else el.form.submit();
+            } catch(e){}
+          }
+          return { ok:true };
+        })()`;
+    }
+    if (step.act === 'goto') {
+        return JSON.stringify(expandUrl(step.url || '', query, transform));
     }
     const sel = step.selector ? JSON.stringify(step.selector) : 'null';
     const ms = Number(step.ms) > 0 ? Number(step.ms) : 8000;
@@ -362,4 +441,18 @@ export async function deleteRule(dataDir: string, id: string): Promise<SiteRule[
     FILE_STORE.set(dataDir, rules);
     await queueWrite(rulesPath(dataDir), () => atomicWrite(rulesPath(dataDir), JSON.stringify(rules, null, 2)));
     return rules;
+}
+
+export async function reorderRules(dataDir: string, ids: string[]): Promise<SiteRule[]> {
+    const rules = await loadRules(dataDir);
+    const byId = new Map(rules.map(r => [r.id, r]));
+    const next: SiteRule[] = [];
+    for (const id of ids) {
+        const r = byId.get(id);
+        if (r) { next.push(r); byId.delete(id); }
+    }
+    for (const r of byId.values()) next.push(r);
+    FILE_STORE.set(dataDir, next);
+    await queueWrite(rulesPath(dataDir), () => atomicWrite(rulesPath(dataDir), JSON.stringify(next, null, 2)));
+    return next;
 }

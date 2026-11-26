@@ -1,35 +1,61 @@
 <template>
     <div>
         <div v-for="(c, i) in candidates" :key="i" class="step-row">
-            <n-select v-model:value="c.kind" :options="KIND_OPTIONS" style="width: 104px" />
-            <n-input v-model:value="c.selector" :placeholder="PH[i % PH.length]" />
-            <n-input v-if="c.kind === 'css'" v-model:value="c.attr"
-                placeholder="属性，可用 | 回退（默认 src|data-src）" style="width: 260px" />
-            <n-button size="tiny" quaternary :disabled="i === 0" @click="move(i, -1)">↑</n-button>
-            <n-button size="tiny" quaternary :disabled="i === candidates.length - 1" @click="move(i, 1)">↓</n-button>
-            <n-button size="tiny" quaternary @click="candidates.splice(i, 1)">删</n-button>
+            <n-select v-model:value="c.kind" :options="KIND_OPTIONS" style="width: 92px; flex: 0 0 92px" />
+            <n-input v-model:value="c.selector" :placeholder="placeholderOf(c.kind, i)" />
+            <n-input v-if="c.kind === 'css' || c.kind === 'xpath'" v-model:value="c.attr"
+                :placeholder="attrPh" style="width: 180px; flex: 0 0 180px">
+                <template #prefix><span class="in-lbl">属性</span></template>
+            </n-input>
+            <div class="row-btns">
+                <n-button size="tiny" quaternary :disabled="i === 0" title="上移（提高优先级）" @click="move(i, -1)">
+                    <template #icon><n-icon><ArrowUpOutline /></n-icon></template>
+                </n-button>
+                <n-button size="tiny" quaternary :disabled="i === candidates.length - 1" title="下移（降低优先级）"
+                    @click="move(i, 1)">
+                    <template #icon><n-icon><ArrowDownOutline /></n-icon></template>
+                </n-button>
+                <n-button size="tiny" quaternary class="del-btn" title="删除此选择器"
+                    @click="candidates.splice(i, 1)">
+                    <template #icon><n-icon><TrashOutline /></n-icon></template>
+                </n-button>
+            </div>
         </div>
-        <n-button size="small" dashed @click="add">添加一个选择器</n-button>
+        <n-button size="small" dashed @click="add">
+            <template #icon><n-icon><AddOutline /></n-icon></template>
+            添加一个选择器
+        </n-button>
     </div>
 </template>
 
 <script setup lang="ts">
-import { NButton, NInput, NSelect } from 'naive-ui';
-import { KIND_OPTIONS, type FieldCandidate } from './ruleDraft';
+import { computed } from 'vue';
+import { NButton, NIcon, NInput, NSelect } from 'naive-ui';
+import { AddOutline, ArrowDownOutline, ArrowUpOutline, TrashOutline } from '@vicons/ionicons5';
+import { KIND_OPTIONS, type CandKind, type FieldCandidate } from './ruleDraft';
 
 /** 契约同 `RuleStepList`：直接改父级草稿里的这个数组 */
-const props = defineProps<{ candidates: FieldCandidate[] }>();
+const props = defineProps<{ candidates: FieldCandidate[]; mode?: 'cover' | 'text' | 'link' }>();
 
-/** 占位提示按"这一条是什么类型"给例子 —— 顺序试候选链，越靠前越优先 */
-const PH = ['.movie .photo-frame img', 'og:image', 'cover.*\\.jpg'];
+const defaultAttr = computed(() =>
+    props.mode === 'text' ? 'text' : props.mode === 'link' ? 'href' : 'src|data-src|data-original'
+);
+const attrPh = computed(() =>
+    props.mode === 'text' ? '默认 text'
+        : props.mode === 'link' ? '默认 href'
+        : 'src|data-src|bg'
+);
 
-/**
- * 默认带**属性回退链**：懒加载站的 `src` 常是占位图、真地址在 `data-src`，
- * 而 `lazyloaded` 这类类名要等图真加载完才加上（隐藏窗不滚动，可能永远不加）。
- * 一条候选覆盖三种时机，比让用户自己猜该写哪个属性稳。
- */
+function placeholderOf(kind: CandKind, i: number): string {
+    if (kind === 'xpath') return '//div[@class="cover"]//img';
+    if (kind === 'meta') return 'og:image';
+    if (kind === 'regex') return 'cover.*\\.jpg';
+    if (kind === 'script') return 'doc.querySelector(".cover img")?.src';
+    return i === 0 ? '.movie .photo-frame img' : 'CSS 选择器';
+}
+
 function add() {
-    props.candidates.push({ kind: 'css', selector: '', attr: 'src|data-src|data-original' });
+    props.candidates.push({ kind: 'css', selector: '', attr: defaultAttr.value });
 }
 
 function move(i: number, d: number) {
@@ -49,4 +75,21 @@ function move(i: number, d: number) {
 }
 
 .step-row .n-input { min-width: 0; }
+
+.in-lbl {
+    font-size: 12px;
+    color: var(--ff-text-2);
+    margin-right: 4px;
+}
+
+.row-btns {
+    display: flex;
+    align-items: center;
+    gap: 2px;
+    flex: 0 0 auto;
+}
+
+.del-btn {
+    color: var(--ff-danger);
+}
 </style>

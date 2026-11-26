@@ -10,8 +10,8 @@
 import { BrowserWindow } from 'electron';
 import { sleep, trackWindow, untrackWindow } from './queue';
 import {
-    adoptSameOriginPopups, CHROME_UA, CF_DETECT, lazyNudge, NAV_TIMEOUT, PARTITION, POLL_INTERVAL,
-    POLL_TIMEOUT, snapshotOf, WAF_GIVE_UP_MS, WAF_STATUS, watchNavFailure,
+    adoptSameOriginPopups, attachStealth, CF_DETECT, lazyNudge, NAV_TIMEOUT, PARTITION, POLL_INTERVAL,
+    POLL_TIMEOUT, snapshotOf, WAF_GIVE_UP_MS, WAF_INTERACTIVE_GIVE_UP_MS, WAF_STATUS, watchNavFailure,
     type PageSnapshot, type RunExtractOptions,
 } from './siteFetch';
 
@@ -26,13 +26,14 @@ export interface StepOutcome {
 export interface StepsResult {
     ok: boolean;
     cf: boolean;
-    err?: 'cloudflare' | 'timeout' | 'net' | 'aborted';
+    err?: 'cloudflare' | 'http' | 'timeout' | 'net' | 'aborted';
     steps: StepOutcome[];
     data?: unknown;
     /** `err:'net'` 时的底层原因（Chromium 描述） */
     netErr?: string;
     /** 主框架最后一次导航的 HTTP 状态 —— 试跑面板靠它区分「番号不存在」与「选择器不对」 */
     httpStatus?: number;
+    finalUrl?: string;
     pageTitle?: string;
     /** 失败时的现场快照（挑战页 / 正常页一眼可分） */
     snapshot?: PageSnapshot;
@@ -53,11 +54,18 @@ const STEP_SETTLE_MS = 600;
  *   ① 开出一个**未登记**的窗口（`window-all-closed` 永不触发、应用关不掉）；
  *   ② 当前窗停在列表页 ⇒ 抽到的是列表页而不是详情页。
  */
-export async function runSteps(
+export interface PlannedStep {
+    act: string;
+    script: string;
+    /** 若有，执行前自动等待该选择器出现（Auto-Wait），避免异步渲染直接报 not-found */
+    waitSelector?: string;
+}
+
+export async function runSteps<T = unknown>(
     url: string,
-    planned: { act: string; script: string }[],
+    planned: PlannedStep[],
     extractScript: string,
-    opts: RunExtractOptions = {},
+    opts: RunExtractOptions<T> = {},
 ): Promise<StepsResult> {
     const { timeoutMs = POLL_TIMEOUT, signal, captureSnapshot = true } = opts;
     /**
@@ -111,48 +119,81 @@ export async function runSteps(
 
     try {
         if (signal?.aborted) return aborted;
-        win.webContents.setUserAgent(CHROME_UA);
-        // 导航也吃同一份预算（理由见 siteFetch 的同名注释）
+        attachStealth(win);
+        // 初始导航最多等 8 秒，避免慢广告拖住 load 事件导致后续动作步骤没有时间执行
+        const initialNavWait = Math.min(8_000, NAV_TIMEOUT, Math.max(deadline - Date.now(), 0));
         await Promise.race([
             win.loadURL(url).catch(() => undefined),
-            sleep(Math.min(NAV_TIMEOUT, Math.max(deadline - Date.now(), 0)), signal).catch(() => undefined),
+            sleep(initialNavWait, signal).catch(() => undefined),
         ]);
 
-        // ① 等脱离挑战（挑战页也会"加载成功"，但拿不到目标 DOM）。
-        // ⚠️ 判定为挑战**不立刻返回**：判据可能误伤正常页面，而"动作执行完 + 抽到值"
-        // 才是页面正常的硬证据。所以继续往下走，最后再按 lastCf 解释失败原因。
-        // ⚠️ 但**等待**本身要有上限：原来拿整个 `timeoutMs`（20 秒）等一道过不去的挑战，
-        //    正是主人看到的"卡住"。交互式挑战隐藏窗永远过不去 ⇒ 只给 4 秒（2026-11-23）。
+        // ① 等脱离挑战
         const wafDeadline = Math.min(deadline, Date.now() + WAF_GIVE_UP_MS);
         let lastCf = false;
+        let lastInteractive = false;
+        let wafSince = 0;
         while (Date.now() < wafDeadline) {
             if (signal?.aborted || win.isDestroyed()) return aborted;
             const dead = deadOnNav();
             if (dead) return dead;
             try {
-                lastCf = !!(await win.webContents.executeJavaScript(CF_DETECT)).cf;
+                const cfInfo = (await win.webContents.executeJavaScript(CF_DETECT)) as { cf?: boolean; interactive?: boolean };
+                lastCf = !!cfInfo?.cf;
+                lastInteractive = !!cfInfo?.interactive;
             } catch {
                 lastCf = true; // 正在跳转 → 当作"还没好"
             }
             if (!lastCf) break;
+            wafSince = wafSince || Date.now();
+            if (lastInteractive && Date.now() - wafSince >= WAF_INTERACTIVE_GIVE_UP_MS) break;
             await sleep(POLL_INTERVAL, signal);
         }
 
-        // ② 逐步执行：每步一次。脚本抛错 = 页面被导航销毁 ⇒ 视为该步已成功
+        // ② 逐步执行（支持 Auto-Wait、goto、press、导航稳定等待）
         for (let i = 0; i < planned.length; i++) {
             if (signal?.aborted || win.isDestroyed()) return aborted;
             const dead = deadOnNav();
             if (dead) return dead;
+
+            const step = planned[i];
+            if (step.act === 'goto') {
+                let targetUrl = '';
+                try { targetUrl = JSON.parse(step.script) as string; } catch { targetUrl = step.script; }
+                await Promise.race([
+                    win.loadURL(targetUrl).catch(() => undefined),
+                    sleep(Math.min(NAV_TIMEOUT, Math.max(deadline - Date.now(), 0)), signal).catch(() => undefined),
+                ]);
+                steps.push({ index: i, act: 'goto', ok: true });
+                await sleep(STEP_SETTLE_MS, signal);
+                continue;
+            }
+
+            // Auto-Wait：执行前等待目标元素出现（最多等 8s 或剩余预算）
+            if (step.waitSelector) {
+                const waitEnd = Math.min(deadline, Date.now() + 8_000);
+                const selJson = JSON.stringify(step.waitSelector);
+                while (Date.now() < waitEnd) {
+                    if (signal?.aborted || win.isDestroyed()) return aborted;
+                    try {
+                        const found = await win.webContents.executeJavaScript(`!!document.querySelector(${selJson})`);
+                        if (found) break;
+                    } catch {
+                        /* 正在导航，继续等 */
+                    }
+                    await sleep(250, signal);
+                }
+            }
+
             let r: { ok?: boolean; why?: string } | undefined;
             try {
-                r = (await win.webContents.executeJavaScript(planned[i].script)) as {
+                r = (await win.webContents.executeJavaScript(step.script)) as {
                     ok?: boolean;
                     why?: string;
                 };
             } catch {
                 r = { ok: true, why: 'navigated' };
             }
-            const rec: StepOutcome = { index: i, act: planned[i].act, ok: r?.ok !== false, why: r?.why };
+            const rec: StepOutcome = { index: i, act: step.act, ok: r?.ok !== false, why: r?.why };
             steps.push(rec);
             if (!rec.ok) {
                 const blockedNow = lastCf || WAF_STATUS.has(httpStatus);
@@ -162,11 +203,19 @@ export async function runSteps(
                 };
             }
             await sleep(STEP_SETTLE_MS, signal);
+            // 若点击/回车触发了主框架加载，等待加载稳定再走下一步
+            if (win.webContents.isLoading()) {
+                const loadWaitEnd = Math.min(deadline, Date.now() + 10_000);
+                while (win.webContents.isLoading() && Date.now() < loadWaitEnd) {
+                    if (signal?.aborted || win.isDestroyed()) return aborted;
+                    await sleep(250, signal);
+                }
+            }
         }
 
-        // ③ 抽取（幂等 ⇒ 允许重试）。抽不到就滚一下 —— 与 runExtract 同一套补救，
-        // 否则"有动作的站"和"纯 URL 的站"在懒加载页面上行为不一致。
+        // ③ 抽取（幂等 ⇒ 允许重试 + 懒加载补滚 + isReady 判据）
         let data: unknown;
+        let lastData: unknown;
         let ok = false;
         let tries = 0;
         while (Date.now() < deadline) {
@@ -178,23 +227,33 @@ export async function runSteps(
             } catch {
                 data = undefined;
             }
-            if (data) {
+            if (data !== undefined && data !== null) lastData = data;
+            const ready = opts.isReady ? (data !== undefined && data !== null && opts.isReady(data as T)) : !!data;
+            if (ready) {
                 ok = true;
+                break;
+            }
+            if (httpStatus >= 400 && !WAF_STATUS.has(httpStatus) && !lastCf && tries >= 1) {
                 break;
             }
             await lazyNudge(win, ++tries);
             await sleep(POLL_INTERVAL, signal);
         }
+        if (signal?.aborted || win.isDestroyed()) return aborted;
         let title = '';
+        let finalUrl = url;
         try {
             title = win.webContents.getTitle();
+            finalUrl = win.webContents.getURL() || url;
         } catch {
             /* ignore */
         }
-        // 抽到了就是好的（cf 只用来解释"为什么没抽到"）；403/429/503 也算被拦，不算超时
         const blockedNow = lastCf || WAF_STATUS.has(httpStatus);
+        const isHttpErr = !ok && !blockedNow && httpStatus >= 400;
         return {
-            ok, cf: ok ? false : blockedNow, steps, data, httpStatus, pageTitle: title,
+            ok, cf: ok ? false : blockedNow,
+            err: ok ? undefined : (blockedNow ? 'cloudflare' : isHttpErr ? 'http' : 'timeout'),
+            steps, data: ok ? data : lastData, httpStatus, finalUrl, pageTitle: title,
             snapshot: ok || !captureSnapshot ? undefined : ((await snapshotOf(win)) ?? undefined),
         };
     } catch {
@@ -247,7 +306,7 @@ export async function openVisiblePage(url: string): Promise<{ ok: boolean; id?: 
         PAGES.delete(id);
         untrackWindow(win);
     });
-    win.webContents.setUserAgent(CHROME_UA);
+    attachStealth(win);
     adoptSameOriginPopups(win);
 
     try {

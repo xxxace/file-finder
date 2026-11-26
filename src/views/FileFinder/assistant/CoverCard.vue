@@ -6,7 +6,7 @@
         :data-state="item.state"
         :style="{ animationDelay: `${Math.min(index, 14) * 24}ms` }"
     >
-        <div class="ffw-card__media">
+        <div class="ffw-card__media" @click="emit('toggle')">
             <div class="ffw-card__ph">{{ item.title }}</div>
             <img
                 v-if="coverSrc"
@@ -22,6 +22,16 @@
                  两个维度都常驻：来源只在悬停里看太不方便（2026-11-14 主人）-->
             <span v-if="item.badge" class="ffw-card__badge" :data-tone="tone">{{ item.badge }}</span>
             <span v-if="item.site" class="ffw-card__src">{{ item.site }}</span>
+            <button
+                v-if="canGrab && !locked && item.state !== 'written' && item.state !== 'pending'"
+                type="button"
+                class="ffw-card__grab"
+                :class="{ 'is-solo': action === 'none' }"
+                v-tip="'仅重抓这一张的站点封面'"
+                @click.stop="emit('grab')"
+            >
+                <n-icon :component="CloudDownloadOutline" :size="13" />
+            </button>
             <button
                 v-if="action !== 'none'"
                 type="button"
@@ -39,7 +49,7 @@
                 class="ffw-card__check"
                 :disabled="locked"
                 v-tip="locked ? '任务进行中，先暂停或终止' : selected ? '取消选择' : '选择'"
-                @click="emit('toggle')"
+                @click.stop="emit('toggle')"
             >
                 <n-icon :component="CheckmarkOutline" :size="12" />
             </button>
@@ -56,7 +66,7 @@
 <script setup lang="ts">
 import { computed, h } from 'vue';
 import { NIcon } from 'naive-ui';
-import { CameraOutline, CheckmarkOutline, RepeatOutline } from '@vicons/ionicons5';
+import { CameraOutline, CheckmarkOutline, CloudDownloadOutline, RepeatOutline } from '@vicons/ionicons5';
 import DotField from '@/components/DotField/DotField.vue';
 import type { TipPayload } from '@/components/FluidTip/fluidTip';
 import type { CoverAction, CoverItem } from './coverModel';
@@ -86,8 +96,10 @@ const props = defineProps<{
     extracting?: boolean;
     /** 动作位禁用（已到阶梯末档）—— 禁用而不是消失，用户才知道为什么点不动 */
     actionDisabled?: boolean;
+    /** 允许单卡重抓站点封面 */
+    canGrab?: boolean;
 }>();
-const emit = defineEmits<{ toggle: []; broken: []; frame: [] }>();
+const emit = defineEmits<{ toggle: []; broken: []; frame: []; grab: [] }>();
 
 /**
  * 角标的语义色 —— **只染字，不换材质**。

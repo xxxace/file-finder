@@ -720,6 +720,145 @@
         opacity var(--ff-dur-hover) ease;
 }
 
+.ffw-card__grab {
+    position: absolute;
+    right: 32px;
+    top: 6px;
+    width: 22px;
+    height: 22px;
+    padding: 0;
+    border-radius: var(--ff-r-pill);
+    border: 1px solid var(--ff-line-strong);
+    background: var(--ff-popover);
+    color: var(--ff-text-2);
+    display: grid;
+    place-items: center;
+    cursor: pointer;
+    opacity: 0.92;
+    transition:
+        background-color var(--ff-dur-hover) ease,
+        color var(--ff-dur-hover) ease,
+        opacity var(--ff-dur-hover) ease;
+}
+
+.ffw-card__grab.is-solo {
+    right: 6px;
+}
+
+.ffw-card__grab:hover {
+    background: var(--ff-ctl-on);
+    color: var(--ff-text-1);
+    opacity: 1;
+}
+
+.ffw-filter-bar {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    margin-bottom: 12px;
+    flex-wrap: wrap;
+}
+
+.ffw-filter-chip {
+    height: 26px;
+    padding: 0 10px;
+    border-radius: 999px;
+    border: 1px solid var(--ff-line-strong);
+    background: var(--ff-panel);
+    color: var(--ff-text-2);
+    font-size: var(--ff-fs-meta);
+    cursor: pointer;
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    transition: background-color var(--ff-dur-hover) ease, color var(--ff-dur-hover) ease, border-color var(--ff-dur-hover) ease;
+}
+
+.ffw-filter-chip:hover {
+    background: var(--ff-ctl-hover);
+    color: var(--ff-text-1);
+}
+
+.ffw-filter-chip.is-on {
+    background: var(--ff-ctl-on);
+    color: var(--ff-text-1);
+    border-color: var(--ff-text-2);
+}
+
+.ffw-site-trigger {
+    flex: none;
+    height: var(--ff-h-ctl);
+    padding: 0 9px 0 10px;
+    border: 1px solid transparent;
+    border-radius: var(--ff-r-ctl);
+    background: var(--ff-field);
+    color: var(--ff-text-1);
+    font: inherit;
+    font-size: var(--ff-fs-meta);
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    cursor: pointer;
+    transition: background-color var(--ff-dur-hover) ease, border-color var(--ff-dur-hover) ease, opacity var(--ff-dur-hover) ease;
+}
+
+.ffw-site-trigger:hover:not(:disabled) {
+    background: var(--ff-ctl-on);
+}
+
+.ffw-site-trigger:focus-visible {
+    outline: none;
+    border-color: var(--ff-highlight);
+}
+
+.ffw-site-trigger:disabled {
+    opacity: 0.45;
+    cursor: default;
+}
+
+.ffw-site-trigger__arr {
+    color: var(--ff-text-2);
+    display: inline-flex;
+}
+
+.ffw-site-check {
+    flex: none;
+    width: 14px;
+    height: 14px;
+    border-radius: 4px;
+    border: 1px solid var(--ff-line-strong);
+    background: transparent;
+    color: transparent;
+    display: grid;
+    place-items: center;
+    transition: background-color var(--ff-dur-hover) ease, border-color var(--ff-dur-hover) ease, color var(--ff-dur-hover) ease;
+}
+
+.ffw-site-check.is-on {
+    background: var(--ff-highlight);
+    border-color: var(--ff-highlight);
+    color: var(--ff-on-highlight);
+}
+
+.ffw-site-foot {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 2px 4px;
+    gap: 8px;
+}
+
+.ffw-site-foot .ctx-item {
+    height: 22px;
+    padding: 0 6px;
+    font-size: var(--ff-fs-eyebrow);
+    color: var(--ff-text-2);
+}
+
+.ffw-site-foot .ctx-item:hover {
+    color: var(--ff-text-1);
+}
+
 .ffw-card__act:hover {
     background: var(--ff-ctl-on);
     color: var(--ff-text-1);

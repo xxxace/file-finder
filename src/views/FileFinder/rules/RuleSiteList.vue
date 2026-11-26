@@ -1,26 +1,53 @@
 <template>
     <aside class="rules-side">
         <div class="side-head">
-            <span class="side-title">站点（{{ rules.length }}）</span>
-            <n-button size="small" @click="emit('create')">新建站点</n-button>
+            <span class="side-title">站点列表（{{ rules.length }}）</span>
+            <n-button size="small" secondary @click="emit('create')">
+                <template #icon><n-icon><AddOutline /></n-icon></template>
+                新建站点
+            </n-button>
         </div>
         <div class="side-list">
-            <div v-for="r in rules" :key="r.id" class="rule-row" :class="{ 'is-active': r.id === activeId }"
+            <div v-for="(r, idx) in rules" :key="r.id" class="rule-row" :class="{ 'is-active': r.id === activeId }"
                 @click="emit('select', r)">
                 <n-checkbox :checked="r.enabled" @update:checked="(v: boolean) => emit('toggle', r, v)"
                     @click.stop />
-                <span class="rule-name">{{ r.name || r.id }}</span>
-                <span class="rule-host">{{ hostOf(r.detailUrl) }}</span>
+                <div class="rule-info">
+                    <div class="rule-top">
+                        <span class="rule-name">{{ r.name || r.id }}</span>
+                        <span v-if="r.verified" class="rule-badge ok">已验</span>
+                    </div>
+                    <span class="rule-host">{{ hostOf(r.detailUrl) }}</span>
+                </div>
+                <span class="row-ops" @click.stop>
+                    <n-button size="tiny" quaternary :disabled="idx === 0" title="上移（提高优先级）"
+                        @click="emit('move', idx, -1)">
+                        <template #icon><n-icon><ArrowUpOutline /></n-icon></template>
+                    </n-button>
+                    <n-button size="tiny" quaternary :disabled="idx === rules.length - 1" title="下移（降低优先级）"
+                        @click="emit('move', idx, 1)">
+                        <template #icon><n-icon><ArrowDownOutline /></n-icon></template>
+                    </n-button>
+                    <n-popconfirm positive-text="确认删除" negative-text="取消" @positive-click="emit('remove', r)">
+                        <template #trigger>
+                            <n-button size="tiny" quaternary class="del-btn" title="删除该站点规则">
+                                <template #icon><n-icon><TrashOutline /></n-icon></template>
+                            </n-button>
+                        </template>
+                        确定删除站点「{{ r.name || r.id }}」吗？删除后不可恢复。
+                    </n-popconfirm>
+                </span>
             </div>
         </div>
         <p class="side-note">
-            勾选 = 参与抓取。改动即时生效 —— 规则存在系统盘，不碰移动硬盘。
+            勾选表示参与批量抓取，列表从上到下即为尝试顺序。规则保存在系统盘，不影响硬盘文件。
         </p>
     </aside>
 </template>
 
 <script setup lang="ts">
-import { NButton, NCheckbox } from 'naive-ui';
+import { NButton, NCheckbox, NIcon, NPopconfirm } from 'naive-ui';
+import { AddOutline, ArrowDownOutline, ArrowUpOutline, TrashOutline } from '@vicons/ionicons5';
 import { hostOf, type SiteRuleDraft } from './ruleDraft';
 
 defineProps<{ rules: SiteRuleDraft[]; activeId: string }>();
@@ -28,6 +55,8 @@ const emit = defineEmits<{
     select: [rule: SiteRuleDraft];
     create: [];
     toggle: [rule: SiteRuleDraft, value: boolean];
+    remove: [rule: SiteRuleDraft];
+    move: [index: number, delta: number];
 }>();
 </script>
 
@@ -46,48 +75,100 @@ const emit = defineEmits<{
     display: flex;
     align-items: center;
     justify-content: space-between;
-    margin-bottom: 10px;
+    margin-bottom: 12px;
 }
 
-.side-title { font-weight: 500; }
+.side-title {
+    font-size: 14px;
+    font-weight: 600;
+    color: var(--ff-text-1);
+}
 
 .side-list {
     flex: 1 1 auto;
     overflow-y: auto;
     min-height: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
 }
 
 .rule-row {
     display: flex;
     align-items: center;
     gap: 8px;
-    padding: 8px 6px;
-    border-radius: 6px;
+    padding: 8px;
+    border-radius: 8px;
     cursor: pointer;
 
     &:hover { background: var(--ff-ctl-hover); }
     &.is-active { background: var(--ff-ctl-on); }
 }
 
-.rule-name {
+.rule-info {
     flex: 1 1 auto;
+    min-width: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+}
+
+.rule-top {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    min-width: 0;
+}
+
+.rule-name {
+    font-size: 13.5px;
+    font-weight: 500;
+    color: var(--ff-text-1);
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
+}
+
+.rule-badge {
+    font-size: 11px;
+    padding: 1px 6px;
+    border-radius: 4px;
+    background: var(--ff-raised);
+    flex: 0 0 auto;
+
+    &.ok { color: var(--ff-ok); }
 }
 
 .rule-host {
     font-size: 12px;
-    opacity: .6;
-    max-width: 110px;
+    color: var(--ff-text-2);
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
 }
 
+.row-ops {
+    display: flex;
+    align-items: center;
+    gap: 2px;
+    flex: 0 0 auto;
+    opacity: 0;
+    transition: opacity .12s;
+}
+
+.rule-row:hover .row-ops,
+.rule-row.is-active .row-ops {
+    opacity: 1;
+}
+
+.del-btn {
+    color: var(--ff-danger);
+}
+
 .side-note {
-    font-size: 12px;
-    opacity: .6;
-    margin-top: 10px;
+    font-size: 12.5px;
+    line-height: 1.5;
+    color: var(--ff-text-2);
+    margin-top: 12px;
 }
 </style>

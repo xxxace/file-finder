@@ -24,7 +24,7 @@
  *     验不过就继续走下一个站点，绝不记命中、也绝不写进命中缓存。
  */
 import { CancelledError, combineSignals, enqueueWithRetry, hostOf } from './queue';
-import { runExtract, TARGET_BUDGET_MS } from './siteFetch';
+import { runExtract, SITE_BUDGET_MS, TARGET_BUDGET_MS } from './siteFetch';
 import type { FetchResult } from './siteFetch';
 import { getVerifiedCover } from './coverImage';
 import { runSteps } from './siteActions';
@@ -75,10 +75,11 @@ export interface GrabRow {
     /** 人类可读的原因（失败时必填） */
     message: string;
     /**
-     * 只对 `status:'blocked'` 有意义：是**哪个站点**把人拦下的。
-     * 人工过验证（`kind:'challenge'`）要按站点开窗 —— 拿不到站点就只能瞎猜。
+     * 只对 `status:'blocked'` 有意义：是**哪个站点**把人拦下的（以及实际被拦的页面 URL）。
+     * 人工过验证（`kind:'challenge'`）优先打开实际被拦的 URL —— 解决“首页无盾、详情页有盾”导致验证弹窗秒退的问题。
      */
     blockedSite?: string;
+    blockedUrl?: string;
     /**
      * 源视频完整相对路径（透传自 ScanTarget.srcRel，只有 `kind:'file'` 目标有）。
      * apply 的「文件夹化搬迁」按它把视频 rename 进番号文件夹。
@@ -144,6 +145,7 @@ interface MatchOutcome {
     match: GrabMatch | null;
     blocked: boolean;
     blockedSite?: string;
+    blockedUrl?: string;
     why: string;
     /** 站点给了链接、但链接取不到真图 —— 与"站点没有这部片"是两件事 */
     badCover?: boolean;
@@ -175,9 +177,38 @@ export async function runGrab(
     }
     const cardList = [...cardGroups.values()];
 
-    bumpProgress(job, {
-        total: append ? job.progress.total + cardList.length : cardList.length,
-    });
+    if (append) {
+        // 追加重抓（单卡重抓 / 补抓失败项 / 过验证重抓）：先撤掉这些卡的旧结果并扣回旧计数，
+        // 避免 total 无限膨胀、hits/total 对不上
+        const retryRels = new Set(targets.map(t => t.writeRel));
+        const prevRows = job.rows.filter(r => retryRels.has(r.writeRel));
+        job.rows = job.rows.filter(r => !retryRels.has(r.writeRel));
+
+        const prevCards = new Map<string, GrabRow[]>();
+        for (const r of prevRows) {
+            const k = cardKeyOf({ kind: r.kind ?? 'file', writeRel: r.writeRel, query: r.query });
+            const arr = prevCards.get(k);
+            if (arr) arr.push(r);
+            else prevCards.set(k, [r]);
+        }
+        let dProc = 0, dHits = 0, dMiss = 0, dBlk = 0;
+        for (const grp of prevCards.values()) {
+            dProc += 1;
+            if (grp.some(r => r.status === 'ok')) dHits += 1;
+            else if (grp.some(r => r.status === 'blocked')) dBlk += 1;
+            else dMiss += 1;
+        }
+        const netNew = Math.max(0, cardList.length - prevCards.size);
+        bumpProgress(job, {
+            total: job.progress.total + netNew,
+            processed: Math.max(0, job.progress.processed - dProc),
+            hits: Math.max(0, job.progress.hits - dHits),
+            misses: Math.max(0, job.progress.misses - dMiss),
+            blocked: Math.max(0, job.progress.blocked - dBlk),
+        });
+    } else {
+        bumpProgress(job, { total: cardList.length });
+    }
 
     if (!active.length) {
         finishJob(job, 'error', '没有启用任何站点规则：先去「站点规则」里启用一个');
@@ -206,33 +237,36 @@ export async function runGrab(
 
     /**
      * 真打站点：按启用站点顺序 fallback 到第一个命中为止。
-     * `deadline` = 这张卡的总预算（用于**分配**，决定还有没有时间试下一站）；
-     * `signal` = 同一份预算的**中断源**，外加用户取消 —— 所有 await 都吃它。
+     * 每个站点受单站预算（`SITE_BUDGET_MS`）限制，防止第一个站卡死饿死所有备用站点。
      */
     async function fetchOnce(id: string, deadline: number, signal: AbortSignal): Promise<MatchOutcome> {
         let blocked = false;
         let blockedSite: string | undefined;
-        let why = '所有站点都没抽到封面';
+        let blockedUrl: string | undefined;
+        const siteLogs: string[] = [];
         let badCover = false;
         let match: GrabMatch | null = null;
 
         for (const rule of active) {
-            if (job.cancelled) return { match, blocked, blockedSite, why, badCover };
+            if (signal.aborted || job.cancelled) throw new CancelledError();
 
-            // ⚠️ 「图坏」必须**每站独立判断**：上一站有图但坏了，不代表这一站没图。
-            // 不重置就会出现「第一站图坏 + 第二站根本抽不到」时报成"封面取不到"，
-            // 用户跑去查图片链接，而真实原因是第二站的规则抽不到（2026-11-14 主人报）。
-            // `blocked` 刻意**不**重置：被拦是累积信号，它决定"能不能人工过验证再试"。
             badCover = false;
-
             const remaining = deadline - Date.now();
             if (remaining <= 0) break;
+
+            // 单站硬上限，避免第 1 站占满整张卡预算导致后续站点零机会
+            const siteDeadline = Math.min(deadline, Date.now() + SITE_BUDGET_MS);
+            const siteName = rule.name || rule.id;
 
             bumpProgress(job, { current: `${id} → ${rule.id}` });
             const url = expandUrl(rule.detailUrl, id, rule.queryTransform);
             const extract = buildExtractScript(rule.fields);
             const steps = rule.steps ?? [];
-            const planned = steps.map((s) => ({ act: s.act, script: buildStepScript(s, id) }));
+            const planned = steps.map((s) => ({
+                act: s.act,
+                script: buildStepScript(s, id, rule.queryTransform),
+                waitSelector: (s.act === 'type' || s.act === 'click' || s.act === 'press') ? s.selector : undefined,
+            }));
 
             let res: FetchResult<ExtractedFields> | StepsResult;
             try {
@@ -240,46 +274,47 @@ export async function runGrab(
                     hostOf(url),
                     () => (steps.length
                         ? runSteps(url, planned, extract, {
-                            signal, deadline, captureSnapshot: false,
+                            signal, deadline: siteDeadline, captureSnapshot: false,
+                            isReady: (f) => !!(f && (f as ExtractedFields).cover),
                         })
                         : runExtract<ExtractedFields>(url, extract, {
-                            signal, deadline, captureSnapshot: false,
+                            signal, deadline: siteDeadline, captureSnapshot: false,
+                            isReady: (f) => !!(f && f.cover),
                         })),
-                    r => !steps.length && !r.ok && r.err === 'timeout',
+                    // 仅在剩余预算充足时对纯粹超时做一次快速重试；404/网络错/被拦绝不重试
+                    r => !steps.length && !r.ok && r.err === 'timeout' && siteDeadline - Date.now() > 3_500,
                     signal,
-                    deadline,
+                    siteDeadline,
                 );
             } catch (e) {
-                if (e instanceof CancelledError) throw e;
-                why = e instanceof Error ? e.message : String(e);
+                if (e instanceof CancelledError || signal.aborted) throw new CancelledError();
+                siteLogs.push(`${siteName}: ${e instanceof Error ? e.message : String(e)}`);
                 continue;
             }
 
-            if (res.err === 'aborted') throw new CancelledError();
+            // 中断信号优先判定（防止暂停/终止瞬间返回了 timeout 而被误记为失败）
+            if (signal.aborted || res.err === 'aborted') throw new CancelledError();
 
             if (!res.ok) {
                 if (res.err === 'cloudflare') {
                     blocked = true;
-                    blockedSite = rule.id;
-                    // 只记"被拦"这一事实供人工过验证，**不做累计/熔断**（理由见上方注释）
-                    why = '被站点拦截（需要人工过验证）';
+                    blockedSite = blockedSite || rule.id;
+                    blockedUrl = blockedUrl || res.finalUrl || url;
+                    siteLogs.push(`${siteName}: 被验证拦截`);
+                } else if (res.err === 'http') {
+                    siteLogs.push(`${siteName}: HTTP ${res.httpStatus || 404}（无此作品）`);
                 } else if (res.err === 'net') {
-                    // 连不上（DNS / 掐连接 / SSL 握手失败）——不重试，如实说原因
-                    why = `打不开页面（${res.netErr || '连接被站点掐断'}）`;
-                } else if (deadline - Date.now() <= 0) {
-                    why = `超时（${Math.round(TARGET_BUDGET_MS / 1000)} 秒内没拿到封面）`;
+                    siteLogs.push(`${siteName}: ${res.netErr || '连接失败'}`);
                 } else {
-                    why = '打不开页面（超时）';
+                    siteLogs.push(`${siteName}: 站点超时`);
                 }
                 continue;
             }
 
             const f = res.data as ExtractedFields | undefined;
             if (f && f.cover) {
-                // ⚠️ 图片验证也要吃同一份 signal：下载 20 秒 + 排队等槽，是这个卡
-                // 唯一能越过 45 秒预算的地方（原来它拿的是 job.controller.signal，
-                // 预算到点根本打不断它）
-                const check = await getVerifiedCover(f.cover, signal);
+                const check = await getVerifiedCover(f.cover, signal, undefined, res.finalUrl || url);
+                if (signal.aborted) throw new CancelledError();
                 if (check.ok) {
                     match = {
                         hitSite: rule.id,
@@ -290,13 +325,20 @@ export async function runGrab(
                     appendHit(dataDir, { id, at: new Date().toISOString(), ...match });
                     break;
                 }
-                why = `抽到的封面不可用：${check.why}`;
+                siteLogs.push(`${siteName}: 封面不可用（${check.why}）`);
                 badCover = true;
                 continue;
             }
-            why = '页面打开了，但没抽到封面（规则可能过期）';
+            siteLogs.push(`${siteName}: 未抽到封面（规则可能过期）`);
         }
-        return { match, blocked, blockedSite, why, badCover };
+        return {
+            match,
+            blocked,
+            blockedSite,
+            blockedUrl,
+            why: siteLogs.join('；') || '所有站点都没抽到封面',
+            badCover,
+        };
     }
 
     /**
@@ -346,80 +388,65 @@ export async function runGrab(
         return p;
     }
 
+    function recordFail(
+        list: ScanTarget[],
+        query: string,
+        status: GrabStatus,
+        message: string,
+        extra?: { blockedSite?: string; blockedUrl?: string },
+    ): void {
+        for (const t of list) {
+            pushRow(job, {
+                writeRel: t.writeRel,
+                query,
+                hitSite: null,
+                coverUrl: null,
+                title: null,
+                actresses: [],
+                status,
+                message,
+                srcRel: t.srcRel,
+                kind: t.kind,
+                name: t.name,
+                ...extra,
+            });
+        }
+        step(job, status === 'blocked' ? 'blocked' : 'miss');
+    }
+
     /** 处理一部片（含这一部的所有分卷，只抓一次）：解析番号 → 取结果 → 给各分卷各记一行 */
     async function grabCard(list: ScanTarget[]): Promise<void> {
         const t0 = list[0];
         const id = t0.query || parseTitle(t0.name).id;
         if (!id) {
-            for (const t of list) {
-                pushRow(job, {
-                    writeRel: t.writeRel,
-                    query: '',
-                    hitSite: null,
-                    coverUrl: null,
-                    title: null,
-                    actresses: [],
-                    status: 'no-id',
-                    message: '认不出番号，已跳过',
-                });
-            }
-            step(job, 'miss');
+            recordFail(list, '', 'no-id', '认不出番号，已跳过');
             return;
         }
 
         let outcome: MatchOutcome;
-        /**
-         * 这张卡的**总预算**：从领取这一刻起算 45 秒，跨站点 fallback、跨重试、跨图片验证。
-         *
-         * ⚠️ 只有 `deadline` 数字是**不够的**（2026-11-23 实测超过 45 秒的根因）：
-         *     那个数字只在"回到循环条件"时被读一次，而 `executeJavaScript` / `loadURL` /
-         *     `download` 正在 await 时，它一点作用都没有。
-         * 所以这里三件套：
-         *   ① `deadline`（数字）—— 负责**分配**：还有没有时间试下一站；
-         *   ② `budget.signal` —— 负责**掐断**：到点 abort，所有接 signal 的 await 立刻收尾；
-         *   ③ `Promise.race` 的 timeout —— 负责**兜底**：万一有哪个 await 漏接 signal，
-         *      worker 也不会被它拖住，45 秒一到就放行到下一张（主人要的"超时熔断"）。
-         */
+        const cardBudgetMs = Math.min(90_000, Math.max(TARGET_BUDGET_MS, active.length * SITE_BUDGET_MS));
         const budget = new AbortController();
-        const deadline = Date.now() + TARGET_BUDGET_MS;
+        const deadline = Date.now() + cardBudgetMs;
         const merged = combineSignals(job.controller.signal, budget.signal);
         let budgetTimer: ReturnType<typeof setTimeout> | undefined;
         const timeout = new Promise<never>((_, reject) => {
             budgetTimer = setTimeout(() => {
                 budget.abort();
                 reject(new BudgetExceeded());
-            }, TARGET_BUDGET_MS);
+            }, cardBudgetMs);
         });
         try {
             outcome = await Promise.race([outcomeOf(id, deadline, merged.signal), timeout]);
         } catch (e) {
-            /**
-             * 预算到点与用户取消都会走到这里。必须分开：
-             * 前者是**这张卡的结果**（记超时，继续下一张），后者是控制流（归还队列）。
-             */
             const overBudget =
                 e instanceof BudgetExceeded ||
                 (e instanceof CancelledError && !job.cancelled && budget.signal.aborted);
             if (overBudget) {
-                for (const t of list) {
-                    pushRow(job, {
-                        writeRel: t.writeRel, query: id, hitSite: null, coverUrl: null, title: null,
-                        actresses: [], status: 'no-match',
-                        message: `超时：${Math.round(TARGET_BUDGET_MS / 1000)} 秒内没拿到封面`,
-                    });
-                }
-                step(job, 'miss');
+                recordFail(list, id, 'no-match', `超时：${Math.round(cardBudgetMs / 1000)} 秒内没拿到封面`);
                 return;
             }
             if (e instanceof CancelledError) throw e;
-            for (const t of list) {
-                pushRow(job, {
-                    writeRel: t.writeRel, query: id, hitSite: null, coverUrl: null, title: null,
-                    actresses: [], status: 'error',
-                    message: e instanceof Error ? e.message : String(e),
-                });
-            }
-            step(job, 'miss');
+            recordFail(list, id, 'error', e instanceof Error ? e.message : String(e));
             return;
         } finally {
             if (budgetTimer) clearTimeout(budgetTimer);
@@ -446,20 +473,11 @@ export async function runGrab(
             }
             step(job, 'hit');
         } else {
-            for (const t of list) {
-                pushRow(job, {
-                    writeRel: t.writeRel,
-                    query: id,
-                    hitSite: null,
-                    coverUrl: null,
-                    title: null,
-                    actresses: [],
-                    status: outcome.blocked ? 'blocked' : outcome.badCover ? 'bad-cover' : 'no-match',
-                    message: outcome.why,
-                    blockedSite: outcome.blockedSite,
-                });
-            }
-            step(job, outcome.blocked ? 'blocked' : 'miss');
+            const status: GrabStatus = outcome.blocked ? 'blocked' : outcome.badCover ? 'bad-cover' : 'no-match';
+            recordFail(list, id, status, outcome.why, {
+                blockedSite: outcome.blockedSite,
+                blockedUrl: outcome.blockedUrl,
+            });
         }
     }
 

@@ -21,6 +21,7 @@ import { net, nativeImage, session } from 'electron';
 import { transcodeImage, COVER_JPEG_QUALITY } from '../../utils/thumbnail';
 import { CappedPreviewCache } from './previewCache';
 import { CancelledError, hostOf } from './queue';
+import { CHROME_UA } from './siteFetch';
 
 /** 写入 JPEG 的质量。封面本来就是有损的再分发，90 是体积与观感的稳态点。定义在 `thumbnail.ts`（唯一定义处，抽帧与下载共用一档） */
 
@@ -104,6 +105,7 @@ export async function getVerifiedCover(
     url: string,
     signal: AbortSignal,
     gate: CoverGate = direct,
+    referer?: string,
 ): Promise<CoverCheck> {
     if (!isUsableCoverUrl(url)) {
         return { ok: false, jpg: null, urlBad: true, why: '封面链接不合法（不是 http/https 绝对地址）' };
@@ -117,7 +119,7 @@ export async function getVerifiedCover(
     try {
         await acquireDownloadSlot(signal);
         try {
-            const r = await gate(hostOf(url), () => download(url, signal), signal);
+            const r = await gate(hostOf(url), () => download(url, signal, COVER_DOWNLOAD_TIMEOUT, referer), signal);
             status = r.status;
             empty = !r.buf.length;
             /**
@@ -176,21 +178,21 @@ export function download(
     url: string,
     signal: AbortSignal,
     timeoutMs = COVER_DOWNLOAD_TIMEOUT,
+    referer?: string,
 ): Promise<{ status: number; buf: Buffer; type: string | null }> {
     return new Promise((resolve, reject) => {
-        // ⚠️ 这两行是**取消/超时不挂死**的保证：Electron 的 ClientRequest 被 abort 之后
-        //    不保证再发 'error' 或 'response' ⇒ 只靠那两个事件，Promise 会永远悬着，
-        //    抓取 worker / 预览请求就卡死在那里。这里自己把 Promise 收掉。
         if (signal.aborted) { reject(new CancelledError()); return; }
         const req = net.request({
             url,
             session: session.fromPartition('persist:assistant'),
             useSessionCookies: true,
         });
-        if (/javbus|buscdn|\/pics\/|dmm/i.test(url)) {
+        if (referer && /^https?:/i.test(referer)) {
+            req.setHeader('Referer', referer);
+        } else if (/javbus|buscdn|\/pics\/|dmm/i.test(url)) {
             req.setHeader('Referer', 'https://www.javbus.com/');
         }
-        req.setHeader('User-Agent', 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36');
+        req.setHeader('User-Agent', CHROME_UA);
         let settled = false;
         let timer: ReturnType<typeof setTimeout> | undefined;
         const done = (fn: () => void) => {
@@ -218,6 +220,7 @@ export function download(
                 buf: Buffer.concat(chunks),
                 type: (res.headers['content-type'] as string | undefined) ?? null,
             })));
+            res.on('aborted', () => done(() => reject(new Error('图片连接被重置'))));
             res.on('error', (e: Error) => done(() => reject(e)));
         });
         req.on('error', (e: Error) => done(() => reject(e)));
