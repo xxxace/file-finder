@@ -260,7 +260,7 @@
                              ⚠️ 必须判 `item.thumb`：`src=""` 会被当成当前页面地址去加载 HTML ⇒ 裂图。 -->
                         <img v-if="(item.type === 'image' || item.type === 'video') && !!item.thumb"
                             class="card-img can-preview" :src="thumbUrl(item.thumb)" :alt="item.dir"
-                            loading="lazy" decoding="async" @load="onCoverLoad" @click="openPreview(item)" />
+                            loading="lazy" decoding="async" @load="onCoverLoad" @click="onPreviewClick(item)" />
                         <!-- 目录的脸：不挑封面时缩到 70%（密网格里 100% 太抢眼），
                              「换封面」模式下放到 100% 才看得清。缩放走 `.card-avatar` 的
                              `transform`（不是内联宽高）—— 理由见样式里那段注释：
@@ -1065,7 +1065,7 @@ const cardAnchorOf = (item: WiredFileInfo) => {
 };
 
 const handleOpen = (e: MouseEvent, item: WiredFileInfo) => {
-    if (loading.value) return;
+    if (loading.value || performance.now() < navClickLockedUntil) return;
     if (item.missing) {
         notify('warning', '文件已失效', '该文件已不在原路径或已被删除');
         return;
@@ -1087,6 +1087,17 @@ const handleOpen = (e: MouseEvent, item: WiredFileInfo) => {
     }
 };
 
+/**
+ * 进文件夹 / 进收藏夹后的防击穿锁（1000ms）：
+ * 双击进目录或从收藏页单击跳转后，紧随其后的惯性连击很容易直接点中下一层同一位置的
+ * 封面图（@click 弹预览）或条目（@dblclick 打开文件）。锁定 1s 拦截鼠标点击/双击，
+ * 避免击穿误触（键盘 Enter 仍走独立的 ENTER_OPEN_MIN_MS）。
+ */
+const NAV_CLICK_LOCK_MS = 1000;
+let navClickLockedUntil = 0;
+const lockNavClickThrough = () => {
+    navClickLockedUntil = performance.now() + NAV_CLICK_LOCK_MS;
+};
 /**
  * 回车打开文件的最小间隔（误触保护，主人 2026-11-09 定 2s）：播放器进程起来要一两秒，
  * 期间再按回车 = 又起一个进程。只锁 open-item，不锁目录 drill（导航不能被 2s 卡住）。
@@ -1181,6 +1192,7 @@ const enterScreen = async (path: string, mode: OpenMode = 'cover', pl?: NavEntry
     // pl = 清单屏标记（2026-10-21）：与 path 上的 `@pl:<id>` 前缀同进同退
     // ⚠️ `push` 内部会先拍上一屏的快照，再砍掉"前进尾巴"（在中间位置进新屏的浏览器语义）
     const entry = nav.push({ path, mode, pl, searchText: '', scrollY: 0, cursorKey: '', noSave });
+    if (path !== HOME_PATH) lockNavClickThrough();
     isFlatView.value = !!keepFlat;
     /**
      * 进新屏不带上一屏的搜索词（原有行为）。
@@ -2017,6 +2029,11 @@ const revealAndFlash = (key: string) => {
     box.classList.add('is-locating');
     window.clearTimeout(locateTimer);
     locateTimer = window.setTimeout(() => box.classList.remove('is-locating'), 600);
+};
+
+const onPreviewClick = (item: WiredFileInfo) => {
+    if (performance.now() < navClickLockedUntil) return;
+    openPreview(item);
 };
 
 const {

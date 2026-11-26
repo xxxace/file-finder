@@ -86,8 +86,12 @@ const ensureIndex = () => {
 onMounted(ensureIndex);
 onActivated(ensureIndex);
 
+let openLockUntil = 0;
 const open = (pl: { id: string; name: string }) => {
     if (editing.value) return;    // 正在改名/新建时不触发进入
+    const now = performance.now();
+    if (now < openLockUntil) return;
+    openLockUntil = now + 1000;
     // 详情是**文件页里的一种屏**（主网格 + 面包屑 + 返回），所以跳回文件页再开
     openInFiles({ kind: 'playlist', id: pl.id, name: pl.name });
     void router.push('/');
