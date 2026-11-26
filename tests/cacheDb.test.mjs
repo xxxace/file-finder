@@ -475,4 +475,44 @@ describe('cacheCodec & cache.sqlite storage layer', () => {
             await fs.rm(dataDir, { recursive: true, force: true }).catch(() => {});
         }
     });
+
+    it('8. restoreCacheFromSnapshot cleanly rolls back an open WAL DB on Windows', async () => {
+        const dataDir = await fs.mkdtemp(path.join(os.tmpdir(), 'ff-db-rollback-'));
+        try {
+            await nedb.initCacheDb(dataDir);
+            await nedb.insertCache({
+                v: nedb.CACHE_VERSION,
+                serial: '77777777',
+                relPath: 'Before',
+                mode: 'cover',
+                count: 1,
+                data: [{ dir: 'Before', name: 'old', ext: 'jpg', isDirectory: false, type: 'image', size: 100 }],
+                create_at: '2026-11-26 12:00:00',
+            });
+            const snapPath = path.join(dataDir, 'snap.sqlite');
+            await nedb.snapshotCacheTo(snapPath);
+
+            // Mutate live DB (still open with WAL)
+            await nedb.replaceAllCacheDocs([
+                {
+                    v: nedb.CACHE_VERSION,
+                    serial: '88888888',
+                    relPath: 'After',
+                    mode: 'cover',
+                    count: 1,
+                    data: [{ dir: 'After', name: 'new', ext: 'jpg', isDirectory: false, type: 'image', size: 200 }],
+                    create_at: '2026-11-26 13:00:00',
+                },
+            ]);
+            assert.equal((await nedb.loadMeta({}))[0].relPath, 'After');
+
+            // Roll back while DB handle is still open
+            await nedb.restoreCacheFromSnapshot(snapPath);
+            const meta = await nedb.loadMeta({});
+            assert.equal(meta.length, 1);
+            assert.equal(meta[0].relPath, 'Before');
+        } finally {
+            await fs.rm(dataDir, { recursive: true, force: true }).catch(() => {});
+        }
+    });
 });

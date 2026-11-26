@@ -9,7 +9,7 @@ import crypto from 'node:crypto';
 import { imageRenditions, videoRenditions } from '../utils/thumbnail';
 import {
     BIN_DIR, hasBin, getBin, putBin, putBinsBatch, putBinEncrypted, listBinNames, binStoreFailed, whenBinReady, binStats,
-    thumbNameOf, previewNameOf, readBinEntryForBackup,
+    thumbNameOf, previewNameOf, readBinEntryForBackup, detectImageFmt,
 } from '../utils/binStore';
 import { listZip, readZipEntry } from '../utils/zip';
 import {
@@ -26,7 +26,8 @@ import {
     BEFORE_RESTORE_PATH, CACHE_DB_PATH, CACHE_VERSION, beginRestore, cacheBackup, endRestore,
     collectReferencedSigsFromCache, exportAllCacheDocs, exportCompactSnapshot, findAllCachedCovers, findCache,
     findSubtreeLeafItems, getCacheDbBytes, insertCache, loadMeta, loadSubtreeBytes,
-    migrateLegacyThumbs, readExternalCache, reloadFromDisk, removeCache, replaceAllCacheDocs, snapshotCacheTo,
+    migrateLegacyThumbs, readExternalCache, reloadFromDisk, removeCache, replaceAllCacheDocs,
+    restoreCacheFromSnapshot, snapshotCacheTo,
 } from './nedb';
 import type { CacheMeta, OpenMode, SearchCache } from './nedb';
 import { diskTops } from './diskTops';
@@ -1352,7 +1353,7 @@ async function previewController(req: Req, res: http.ServerResponse) {
     if (!tooBig) await putBin(name, buf);
 
     res.writeHead(200, {
-        'Content-Type': 'image/jpeg',
+        'Content-Type': detectImageFmt(buf) === 2 ? 'image/webp' : 'image/jpeg',
         'Content-Length': buf.length,
         // 落了盘才敢长缓存；没落盘（源变了/图太大）就只用这一次，别让浏览器把它钉住
         'Cache-Control': tooBig ? 'no-store' : 'private, max-age=31536000, immutable',
@@ -2020,10 +2021,7 @@ export async function runRestoreFromFile(dataDir: string, source: string) {
         beginRestore();
         let note: string;
         try {
-            await fsasync.copyFile(BEFORE_RESTORE_PATH, CACHE_DB_PATH);
-            await fsasync.rm(`${CACHE_DB_PATH}-wal`, { force: true }).catch(() => {});
-            await fsasync.rm(`${CACHE_DB_PATH}-shm`, { force: true }).catch(() => {});
-            await reloadFromDisk();
+            await restoreCacheFromSnapshot(BEFORE_RESTORE_PATH);
             note = '已回滚到还原前的状态。';
         } catch (e2) {
             note = `回滚也失败了（${e2}）。请手动把 ${BEFORE_RESTORE_PATH} 复制成 ${CACHE_DB_PATH}`;

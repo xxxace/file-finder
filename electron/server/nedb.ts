@@ -530,6 +530,15 @@ export async function snapshotCacheTo(destPath: string): Promise<void> {
     await backup(conn, destPath);
 }
 
+/** 安全回滚：先关闭当前 SQLite 句柄并清理 WAL/SHM，再覆盖主库文件并重连 */
+export async function restoreCacheFromSnapshot(snapshotPath: string): Promise<void> {
+    closeDbHandle();
+    await fsasync.rm(`${CACHE_DB_PATH}-wal`, { force: true }).catch(() => {});
+    await fsasync.rm(`${CACHE_DB_PATH}-shm`, { force: true }).catch(() => {});
+    await fsasync.copyFile(snapshotPath, CACHE_DB_PATH);
+    await reloadFromDisk();
+}
+
 export async function cacheBackup(): Promise<void> {
     const dest = CACHE_DB_PATH.replace(/\.sqlite$/, `${dayjs().format('-YYYYMMDD')}.sqlite`);
     await snapshotCacheTo(dest);
