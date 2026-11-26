@@ -537,7 +537,7 @@ import { buildCrumbLayout } from './crumbRows';
 import { useNavStack } from './useNavStack';
 import type { NavEntry } from './useNavStack';
 import { HOME_PATH, homeEntry } from './useNavStack';
-import { dissolveGrid } from './gridDissolve';
+import { dissolveGrid, fadeOutGrid } from './gridDissolve';
 import { decideOpen, isMultiFileCard } from './openDecision';
 import { SearchOutline, RefreshOutline, SyncOutline, ArrowBackOutline, ArrowForwardOutline, CloseOutline, CopyOutline, StarOutline, ChevronForwardOutline, LinkOutline, FolderOpenOutline, CloudDownloadOutline, ImageOutline, PersonOutline, SettingsOutline, ImagesOutline, VideocamOutline, MusicalNotesOutline, DocumentOutline, HomeOutline } from '@vicons/ionicons5';
 import { MoreVertical28Filled } from '@/components/icons/fluent';
@@ -1156,16 +1156,10 @@ const enterScreen = (path: string, mode: OpenMode = 'cover', pl?: NavEntry['pl']
      */
     noteIntent();
     /**
-     * 视口归零 —— **两处，缺一不可**：
-     *① 立刻：否则从第 4000px 进新屏，新屏开头那一大截已经滚过去了
-     * ② 取完之后：内容替换时容器高度变化会让偏移漂移，得再压一次
-     *
-     * ⚠️ **不能塞进 `fetchFolder` 内部**：它有 6 个调用点，其中 `onBack`（恢复旧屏的
-     * scrollY）、`onRefresh`、`refreshAfterApply`、`swapTop`（换盘/拔盘）**都不该归零** ——
-     * 那几处的视口是"这一屏自己的状态"，归零会把用户正在看的位置抹掉。
-     * ⇒ 归零是**导航意图**，属于 `enterScreen` 这一个入口。
+     * 换屏退场：不再在数据到达前把旧目录 `scrollTo(0, 0)`（会看到旧列表瞬间跳顶再消失），
+     * 而是先让旧网格轻柔淡出，等新数据落地、`dissolveGrid` 接管后再在不可见帧里归零视口。
      */
-    imageBox.value?.scrollTo(0, 0);
+    fadeOutGrid(imageBox.value);
 
     // 取数（内部会 `++fetchSeq`）⇒ **之后**才读序号，读到的才是"我这次"的号
     // 经 loadScreen 分派：目录屏 /openFolder，清单屏 /playlistItems（唯一出口，见那边注释）
@@ -1194,7 +1188,12 @@ const enterScreen = (path: string, mode: OpenMode = 'cover', pl?: NavEntry['pl']
          *（取数还在飞、画面还停在旧屏）⇒ 以后前进回来停错高度。理由见 `useNavStack.shown`。
          * 失败时**不许**标记：那时画面仍是上一屏的内容，给它拍快照就是记错人。
          */
-        if (!failKind.value) nav.markShown();
+        if (failKind.value) {
+            // 非 notFound 失败时 dataSource 保留旧列表、不会触发 watch，需手动淡回可见
+            dissolveGrid(imageBox.value);
+        } else {
+            nav.markShown();
+        }
         if (focusKey) {
             void nextTick(() => {
                 revealAndFlash(focusKey);
@@ -1513,11 +1512,18 @@ const goStep = async (delta: 1 | -1) => {
      * ⇒ 判据对着**新屏**成立 ⇒ 把**上一个 `to` 的偏移**滚到**另一屏**上。
      * 序号来源同 `enterScreen`：`getFetchSeq()`，写完 `loadScreen()` 才读。
      */
+    fadeOutGrid(imageBox.value);
     const done = loadScreen(to, { adoptSearch: true });
     const myFetchSeq = getFetchSeq();
     await done;
     // 同上（enterScreen 里那段）：只有数据真的落到这一屏，它的快照才作数
-    if (getFetchSeq() === myFetchSeq && !failKind.value) nav.markShown();
+    if (getFetchSeq() === myFetchSeq) {
+        if (failKind.value) {
+            dissolveGrid(imageBox.value);
+        } else {
+            nav.markShown();
+        }
+    }
     /**
      * 恢复滚动位置 —— **无条件执行**，包括恢复成 0（goStep 绕过 enterScreen，
      * 容器偏移会一直带着上一屏的）。归零不用等 DOM；恢复非 0 必须先等新屏铺好

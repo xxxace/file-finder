@@ -27,6 +27,11 @@
 /** 上一段动画：同一个元素上新的必须掐掉旧的，否则换层连点会叠成几次半透明叠加 */
 let current: Animation | null = null;
 
+const cancelCurrent = () => {
+    current?.cancel();
+    current = null;
+};
+
 /** `200ms` → `200`；读到 `calc(...)` 之类解析不出的东西就用兜底值 */
 const readMs = (raw: string, fallback: number): number => {
     const n = Number.parseFloat(raw);
@@ -34,23 +39,49 @@ const readMs = (raw: string, fallback: number): number => {
 };
 
 /**
- * 让 `el` 从全透明淡到不透明。
+ * 换屏请求发出时，让旧内容先轻柔退场（不阻塞数据请求，也不提前归零滚动）。
+ *
+ * 与 `dissolveGrid` 配对：新数据落地后 `dissolveGrid` 会接管并把透明度淡回 1；
+ * 若请求失败且保留旧列表（未触发 `dataSource` 变更），调用方需补调 `dissolveGrid` 恢复可见。
+ *
+ * ⚠️ 必须纯走 WAAPI、绝不改 `el.style.opacity`：`.image-box` 上有给扫描模糊态准备的
+ *    `transition: opacity 420ms ease`，写 inline opacity 会触发 CSS 过渡导致闪屏。
+ */
+export const fadeOutGrid = (el: HTMLElement | null): void => {
+    if (!el) return;
+    if (window.matchMedia?.('(prefers-reduced-motion: reduce)').matches) return;
+
+    cancelCurrent();
+    const cs = getComputedStyle(el);
+    const duration = readMs(cs.getPropertyValue('--ff-dur-exit'), 90);
+    const easing = cs.getPropertyValue('--ff-ease-exit').trim() || 'ease-out';
+    current = el.animate([{ opacity: 1 }, { opacity: 0 }], { duration, easing, fill: 'forwards' });
+};
+
+/**
+ * 让 `el` 从全透明平滑淡到不透明。
+ *
+ * 用纯 WAAPI 的前段保持帧（`offset: 0 → 0.08` 约 1 帧维持 `opacity: 0`）避开 `v-for`
+ * 批量挂载与首次排版的主线程尖峰，再用柔和的 ease-out 曲线淡入；不写 `el.style.opacity`，
+ * 避免触发 `.image-box` 自身的 `transition: opacity 420ms ease` 造成首帧闪烁。
  *
  * @param el 网格滚动容器（`.image-box`）；还没挂载就传 `null`，这里静默跳过。
  */
 export const dissolveGrid = (el: HTMLElement | null): void => {
     if (!el) return;
+    cancelCurrent();
     if (window.matchMedia?.('(prefers-reduced-motion: reduce)').matches) return;
 
     const cs = getComputedStyle(el);
     const duration = readMs(cs.getPropertyValue('--ff-dur-move'), 200);
-    // 自定义属性读不出值时给 'ease'：宁可曲线不对，也不要让整条动画失效
-    const easing = cs.getPropertyValue('--ff-ease-move').trim() || 'ease';
-
-    current?.cancel();
-    // 实测（`docs/probes/grid-dissolve/`）：`flush: 'post'` 的回调跑完、任何帧被画出之前，
-    // 这个元素的透明度已经是 0（动画一创建就进入 current，不是 pending）。
-    // `fill: 'backwards'` 因此**当前不是必需项** —— 留着是为了把"未开始期间显示什么"钉死成
-    // 首帧（0）而不是自然值（1）；哪天改成带 delay 或用 `requestIdleCallback` 起跑，它就变成必需。
-    current = el.animate([{ opacity: 0 }, { opacity: 1 }], { duration, easing, fill: 'backwards' });
+    // 透明度淡入用柔和的 quad ease-out（--ff-ease-size），避免 --ff-ease-move 起步过冲导致"闪一下"
+    const easing = cs.getPropertyValue('--ff-ease-size').trim() || 'ease-out';
+    current = el.animate(
+        [
+            { opacity: 0, transform: 'translateY(6px)', offset: 0 },
+            { opacity: 0, transform: 'translateY(6px)', offset: 0.08 },
+            { opacity: 1, transform: 'translateY(0)', offset: 1 },
+        ],
+        { duration, easing, fill: 'backwards' },
+    );
 };
