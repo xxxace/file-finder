@@ -6,6 +6,7 @@
  */
 import * as fsasync from 'node:fs/promises';
 import path from 'node:path';
+import * as zlib from 'node:zlib';
 import { parseTitle } from './match';
 
 export interface GfriendsIndex {
@@ -201,30 +202,75 @@ export function flattenFiletree(node: any, currentPath: string, result: Record<s
     }
 }
 
+const ZSTD_LEVEL = 15;
+
+async function writeZstJson(filePath: string, data: GfriendsIndex): Promise<void> {
+    const jsonBuf = Buffer.from(JSON.stringify(data), 'utf8');
+    const compressed = zlib.zstdCompressSync(jsonBuf, {
+        params: { [zlib.constants.ZSTD_c_compressionLevel]: ZSTD_LEVEL },
+    });
+    const tmpPath = `${filePath}.${process.pid}.${Math.random().toString(36).slice(2)}.tmp`;
+    await fsasync.writeFile(tmpPath, compressed);
+    await fsasync.rename(tmpPath, filePath);
+}
+
+async function readZstJson(filePath: string): Promise<GfriendsIndex | null> {
+    const compressed = await fsasync.readFile(filePath);
+    const text = zlib.zstdDecompressSync(compressed).toString('utf8');
+    const raw = JSON.parse(text);
+    if (raw && raw.actors) {
+        return raw as GfriendsIndex;
+    }
+    return null;
+}
+
 /**
  * 确保本地有最新（或可用）的 Gfriends 索引缓存。
- * 缓存文件：`${dataDir}/gfriends/filetree.json`
+ * 缓存文件：`${dataDir}/gfriends/filetree.zst`（兼容并自动迁移旧版 `filetree.json`）
  */
 export async function ensureGfriendsIndex(dataDir: string, forceUpdate = false): Promise<GfriendsIndex> {
     const cacheDir = path.join(dataDir, 'gfriends');
-    const cacheFile = path.join(cacheDir, 'filetree.json');
+    const cacheFile = path.join(cacheDir, 'filetree.zst');
+    const legacyFile = path.join(cacheDir, 'filetree.json');
 
     await fsasync.mkdir(cacheDir, { recursive: true });
 
-    // 检查本地缓存是否存在且未过期（7天）
-    if (!forceUpdate) {
-        try {
-            const stat = await fsasync.stat(cacheFile);
+    // 检查本地 .zst 缓存是否存在且未过期（7天）
+    let hasZst = false;
+    try {
+        const stat = await fsasync.stat(cacheFile);
+        hasZst = true;
+        if (!forceUpdate) {
             const ageDays = (Date.now() - stat.mtimeMs) / (1000 * 60 * 60 * 24);
             if (ageDays < 7) {
-                const text = await fsasync.readFile(cacheFile, 'utf8');
-                const raw = JSON.parse(text);
-                if (raw && raw.actors) {
-                    return raw as GfriendsIndex;
+                const cached = await readZstJson(cacheFile);
+                if (cached) return cached;
+            }
+        }
+    } catch {
+        // 本地无 .zst 缓存或解析失败
+    }
+
+    // 若 .zst 不存在但存在旧版 filetree.json，迁移至 .zst 并删除旧文件
+    if (!hasZst) {
+        try {
+            const legacyStat = await fsasync.stat(legacyFile);
+            const text = await fsasync.readFile(legacyFile, 'utf8');
+            const raw = JSON.parse(text);
+            if (raw && raw.actors) {
+                const migrated = raw as GfriendsIndex;
+                await writeZstJson(cacheFile, migrated);
+                await fsasync.unlink(legacyFile).catch(() => {});
+                hasZst = true;
+                if (!forceUpdate) {
+                    const ageDays = (Date.now() - legacyStat.mtimeMs) / (1000 * 60 * 60 * 24);
+                    if (ageDays < 7) {
+                        return migrated;
+                    }
                 }
             }
         } catch {
-            // 本地无缓存或解析失败，继续在线下载
+            // 无旧缓存或解析失败，继续在线下载
         }
     }
 
@@ -257,23 +303,24 @@ export async function ensureGfriendsIndex(dataDir: string, forceUpdate = false):
                 updatedAt: Date.now(),
                 actors,
             };
-            await fsasync.writeFile(cacheFile, JSON.stringify(index), 'utf8');
+            await writeZstJson(cacheFile, index);
             return index;
         } catch (e) {
             console.error('[Gfriends] 解析 Filetree.json 失败:', e);
         }
     }
 
-    // 下载失败时的兜底：尝试读取过期的本地缓存
+    // 下载失败时的兜底：尝试读取过期的本地 .zst 缓存
     try {
-        const text = await fsasync.readFile(cacheFile, 'utf8');
-        return JSON.parse(text) as GfriendsIndex;
+        const cached = await readZstJson(cacheFile);
+        if (cached) return cached;
     } catch {
         // 全盘失败返回空索引
-        return {
-            version: '1.0',
-            updatedAt: Date.now(),
-            actors: {},
-        };
     }
+
+    return {
+        version: '1.0',
+        updatedAt: Date.now(),
+        actors: {},
+    };
 }

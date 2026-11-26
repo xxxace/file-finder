@@ -32,23 +32,44 @@ export interface HitRecord {
 }
 
 const fileName = 'assistant-hits.jsonl';
+const hitsLocks = new Map<string, Promise<unknown>>();
 
 function filePath(dataDir: string): string {
     return path.join(dataDir, fileName);
 }
 
-/** 读全量命中表。坏行（半截写入）跳过；墓碑行（coverUrl 为空）= 删除该番号 */
-export async function loadHits(dataDir: string): Promise<Map<string, HitRecord>> {
+function withHitsLock<T>(dataDir: string, fn: () => Promise<T>): Promise<T> {
+    const key = path.resolve(dataDir);
+    const prev = hitsLocks.get(key) ?? Promise.resolve();
+    const next = prev.then(fn, fn);
+    hitsLocks.set(key, next);
+    next.finally(() => {
+        if (hitsLocks.get(key) === next) {
+            hitsLocks.delete(key);
+        }
+    });
+    return next;
+}
+
+interface HitsSnapshot {
+    hits: Map<string, HitRecord>;
+    totalLines: number;
+    exists: boolean;
+}
+
+async function readHitsSnapshot(dataDir: string): Promise<HitsSnapshot> {
     const hits = new Map<string, HitRecord>();
     let text: string;
     try {
         text = await fsasync.readFile(filePath(dataDir), 'utf8');
     } catch {
-        return hits; // 文件还不存在 = 还没有任何命中
+        return { hits, totalLines: 0, exists: false }; // 文件还不存在 = 还没有任何命中
     }
+    let totalLines = 0;
     for (const line of text.split('\n')) {
         const s = line.trim();
         if (!s) continue;
+        totalLines++;
         let rec: HitRecord;
         try {
             rec = JSON.parse(s) as HitRecord;
@@ -62,7 +83,98 @@ export async function loadHits(dataDir: string): Promise<Map<string, HitRecord>>
         }
         hits.set(rec.id, rec);
     }
+    return { hits, totalLines, exists: true };
+}
+
+async function writeHitsAtomic(dataDir: string, hits: Map<string, HitRecord>): Promise<void> {
+    const target = filePath(dataDir);
+    await fsasync.mkdir(dataDir, { recursive: true });
+    const lines = Array.from(hits.values()).map(rec => JSON.stringify(rec));
+    const content = lines.length > 0 ? `${lines.join('\n')}\n` : '';
+    const tmp = `${target}.${process.pid}.${Math.random().toString(36).slice(2)}.tmp`;
+    await fsasync.writeFile(tmp, content, 'utf8');
+    await fsasync.rename(tmp, target);
+}
+
+function isIncomingNewer(incomingAt: string | undefined, existingAt: string | undefined): boolean {
+    const incomingMs = incomingAt ? Date.parse(incomingAt) : NaN;
+    if (Number.isNaN(incomingMs)) return false;
+    const existingMs = existingAt ? Date.parse(existingAt) : NaN;
+    return Number.isNaN(existingMs) || incomingMs > existingMs;
+}
+
+/** 读全量命中表。坏行（半截写入）跳过；墓碑行（coverUrl 为空）= 删除该番号 */
+export async function loadHits(dataDir: string): Promise<Map<string, HitRecord>> {
+    const { hits, totalLines } = await readHitsSnapshot(dataDir);
+    if (totalLines > hits.size * 1.2 + 20) {
+        await compactHits(dataDir).catch(e => {
+            console.error('[assistant/hits] 自动压缩命中缓存失败:', e);
+        });
+    }
     return hits;
+}
+
+/** 原子去重压缩：清理重复 id 与墓碑行，仅保留每条番号最新的活跃记录 */
+export async function compactHits(
+    dataDir: string
+): Promise<{ beforeLines: number; afterLines: number }> {
+    return withHitsLock(dataDir, async () => {
+        const { hits, totalLines, exists } = await readHitsSnapshot(dataDir);
+        if (!exists) {
+            return { beforeLines: 0, afterLines: 0 };
+        }
+        const afterLines = hits.size;
+        if (totalLines !== afterLines) {
+            await writeHitsAtomic(dataDir, hits);
+        }
+        return { beforeLines: totalLines, afterLines };
+    });
+}
+
+/** 导出当前所有活跃（非墓碑、已去重）的命中记录 */
+export async function exportActiveHits(dataDir: string): Promise<HitRecord[]> {
+    const { hits } = await readHitsSnapshot(dataDir);
+    return Array.from(hits.values());
+}
+
+/**
+ * 合并外部命中记录：按 id 取 at 较新且非墓碑的记录，不覆盖本机更新的记录。
+ * 写入通过临时文件 + rename 原子替换。
+ */
+export async function mergeHits(
+    dataDir: string,
+    incoming: HitRecord[]
+): Promise<{ added: number; updated: number }> {
+    const dedupedIncoming = new Map<string, HitRecord>();
+    for (const rec of incoming) {
+        if (!rec?.id || !rec.coverUrl) continue;
+        const prev = dedupedIncoming.get(rec.id);
+        if (!prev || isIncomingNewer(rec.at, prev.at)) {
+            dedupedIncoming.set(rec.id, rec);
+        }
+    }
+
+    return withHitsLock(dataDir, async () => {
+        const { hits } = await readHitsSnapshot(dataDir);
+        let added = 0;
+        let updated = 0;
+
+        for (const [id, rec] of dedupedIncoming) {
+            const existing = hits.get(id);
+            if (!existing) {
+                hits.set(id, rec);
+                added++;
+            } else if (isIncomingNewer(rec.at, existing.at)) {
+                hits.set(id, rec);
+                updated++;
+            }
+        }
+
+        if (added > 0 || updated > 0) {
+            await writeHitsAtomic(dataDir, hits);
+        }
+        return { added, updated };
+    });
 }
 
 /** 追加一条命中。fire-and-forget：写缓存失败只打日志，绝不连累抓取本身 */
