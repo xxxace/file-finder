@@ -17,6 +17,9 @@ if (release().startsWith('6.1')) app.disableHardwareAcceleration()
 // Set application name for Windows 10+ notifications
 if (process.platform === 'win32') app.setAppUserModelId(app.getName())
 
+// 隐藏 Chromium 自动化特征，避免 Cloudflare / WAF 拦截抓取与验证窗口
+app.commandLine.appendSwitch('disable-blink-features', 'AutomationControlled')
+
 if (!app.requestSingleInstanceLock()) {
   app.quit()
   process.exit(0)
@@ -244,8 +247,8 @@ ipcMain.handle('pickCacheSavePath', async function () {
     title: '把缓存备份到文件',
     // 2026-10-04：备份不再只是那个 .db —— 图片已经搬到数据目录的 bin/ 里，
     // 所以导出的是一个**包**（zip，资源管理器双击就能打开，里面是库 + 图片）
-    defaultPath: join(config.userBasePath, `file-finder-缓存-${dayjs().format('YYYYMMDD')}.zip`),
-    filters: [{ name: '缓存备份包 (zip)', extensions: ['zip'] }],
+    defaultPath: join(config.userBasePath, `file-finder-缓存-${dayjs().format('YYYYMMDD')}.ffbak`),
+    filters: [{ name: '缓存备份包 (ffbak)', extensions: ['ffbak'] }],
   });
 
   return { canceled, filePath: canceled ? '' : filePath };
@@ -264,7 +267,7 @@ ipcMain.handle('pickCacheOpenPath', async function () {
     title: '选择缓存备份包',
     defaultPath: config.userBasePath,
     properties: ['openFile'],
-    filters: [{ name: '缓存备份包 (zip)', extensions: ['zip'] }],
+    filters: [{ name: '缓存备份包 (ffbak, zip)', extensions: ['ffbak', 'zip'] }],
   });
 
   return { canceled, filePath: canceled ? '' : (filePaths[0] || '') };

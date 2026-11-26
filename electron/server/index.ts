@@ -8,10 +8,14 @@ import dayjs from 'dayjs';
 import crypto from 'node:crypto';
 import { imageRenditions, videoRenditions } from '../utils/thumbnail';
 import {
-    BIN_DIR, hasBin, getBin, putBin, putBinEncrypted, listBinNames, binStoreFailed, whenBinReady, binStats,
-    thumbNameOf, previewNameOf,
+    BIN_DIR, hasBin, getBin, putBin, putBinsBatch, putBinEncrypted, listBinNames, binStoreFailed, whenBinReady, binStats,
+    thumbNameOf, previewNameOf, readBinEntryForBackup,
 } from '../utils/binStore';
-import { writeZip, listZip, readZipEntry } from '../utils/zip';
+import { listZip, readZipEntry } from '../utils/zip';
+import {
+    FFBAK_VERSION, detectBackupFormat, writeFfbak, readFfbakMetaAndVerify, streamFfbakImages,
+} from '../utils/ffbak';
+import type { FfbakImageInput } from '../utils/ffbak';
 import {
     findDriveByLetter, findDuplicatedSerials, getDrives, offlineSerials,
     readRegistry, serialOfDrive, splitPath, syncRegistry, toFullPath, writeRegistry,
@@ -20,9 +24,9 @@ import type { DiskRegistry } from '../utils/driveIdentity';
 import { DIR_COVER_FILES, isDirCover } from './dirCover';
 import {
     BEFORE_RESTORE_PATH, CACHE_DB_PATH, CACHE_VERSION, beginRestore, cacheBackup, endRestore,
-    exportCompactSnapshot, exportSnapshotPlain, findAllCachedCovers, findCache, findSubtreeLeafItems,
-    getCacheDbBytes, insertCache, loadMeta, loadSubtreeBytes,
-    migrateLegacyThumbs, readExternalCache, reloadFromDisk, removeCache,
+    collectReferencedSigsFromCache, exportAllCacheDocs, exportCompactSnapshot, findAllCachedCovers, findCache,
+    findSubtreeLeafItems, getCacheDbBytes, insertCache, loadMeta, loadSubtreeBytes,
+    migrateLegacyThumbs, readExternalCache, reloadFromDisk, removeCache, replaceAllCacheDocs, snapshotCacheTo,
 } from './nedb';
 import type { CacheMeta, OpenMode, SearchCache } from './nedb';
 import { diskTops } from './diskTops';
@@ -30,8 +34,11 @@ import { encryptLine } from '../utils/cacheCrypto';
 import { LOCAL_TOKEN } from './token';
 import config from '../config';
 import { createAssistantRoutes } from './assistant';
+import { exportActiveHits, mergeHits } from './assistant/hits';
+import type { HitRecord } from './assistant/hits';
 import { createPlaylistRoutes } from './playlist';
-import { mergePlaylists } from './playlistStore';
+import { loadPlaylists, mergePlaylists } from './playlistStore';
+import type { Playlist } from './playlistStore';
 import { isVideo, VIDEO_MIME } from './videoExt';
 
 const IMAGE_EXT = ['jpg', 'jpeg', 'png', 'bmp', 'gif', 'svg', 'psd', 'webp'];
@@ -1668,104 +1675,129 @@ function bodyPath(req: Req): string {
  *   ③ 它是**纯文本 JSON**，用户在资源管理器里双击 zip 就能看见自己备份了什么。
  */
 const MANIFEST_NAME = 'manifest.json';
-const BACKUP_FORMAT = 1;
+const LEGACY_ZIP_BACKUP_FORMAT = 1;
+const BIN_IMPORT_BATCH_SIZE = 80;
 
 /**
- * 「备份到文件…」—— 把**整份数据**打成一个 zip 交到用户挑的位置。
- *
- * 2026-10-04 改：数据不再只是 `searchCache.db` 一个文件（图片搬到 `bin/` 了），
- * 所以"拷走那一个文件"不再等于"拷走这份数据"。主人要求"导出尽可能只有一个文件、
- * 用户才没有心理负担" ⇒ 打进一个 `.zip`：**Windows 资源管理器双击就能打开**，
- * 里面有什么一目了然，而不是一个只有本程序认识的容器。
- *
- * 2026-10-05 改（体积 + 完整性）：
- *   - **库有损地压不得、但"解密后"能压 74%**：实测密文库 gzip 只 −26%（base64 是伪随机串），
- *     而把它**解成明文 JSON 再 raw-deflate** 是 442 KB → 81 KB。所以入包前把库解密成明文、
- *     以 `deflate` 方式存；还原时 inflate 回来再加密写回。**内容与主库逐字等价**（只是先压后解）。
- *   - **图片保持 store**：加密后的 JPEG 熵≈8bit/byte，实测 50 样本 gzip 后反而大 0.05%。
- *   - 加入 `manifest.json`（校验 + 版本）与 `disks.json`（盘注册表，见 §完整性）。
- *
- * 包里的结构：
- *   manifest.json           清单（格式版本 / 计数 / 生成时间）
- *   searchCache.db          条目信息（**明文 JSON，deflate**）
- *   disks.json              盘注册表（明文 JSON，deflate；没有则为空对象）
- *   bin/<名字>.enc          图片（密文，store）
- *
- * ⚠️ 库在包里是**明文**（压缩前）。这是有意的：包的定位是"用户自己的完整备份"，
- *    不是"防窥探的容器"——而且它本来就放在用户自己选的路径上。
- *    主库在磁盘上**仍然逐行加密**（防随手打开），只是**包内**为了压缩而解成明文。
+ * 备份到 `.ffbak` 流式单文件容器（纯逻辑，供路由与测试复用）。
+ * - 只导出被 `cache_entries` 或 `playlists.json` 引用的活跃图片，跳过孤儿图；
+ * - `includePreviews = false` 时跳过 `p-` 大图以减小体积。
  */
-async function backupToFile(req: Req, res: http.ServerResponse) {
-    const target = bodyPath(req);
-    // ⚠️ 图片仓没就绪时**必须拒绝打包**：否则 `listBinNames()` 是空的，
-    //   打出来的 zip 只有库、没有一张图，而接口还会回"ok" ——
-    //   用户以为备份完整，真到需要时才发现封面全没了（静默丢数据，最坏的一种）。
+export async function runBackupToFile(
+    dataDir: string,
+    target: string,
+    includePreviews = true,
+): Promise<{
+    code: number;
+    message: string;
+    bytes: number;
+    images: number;
+    manifest: {
+        format: number;
+        app: 'file-finder';
+        createdAt: string;
+        cacheVersion: number;
+        includePreviews: boolean;
+        dbEntries: number;
+        images: number;
+        playlists: number;
+        hits: number;
+    };
+}> {
     if (binStoreFailed()) {
         throw new Error('图片仓（bin 目录）读不出来，拒绝打包：否则会导出一个不含任何图片的备份。先重启应用再试。');
     }
 
-    // 把两份 JSON 落到系统临时目录（不落数据目录：那里是"随时可清"的语义，
-    // 且中转产物不该污染 ~/.file-finder —— 靠 .gitignore 兜底不如根本别落进去）
-    const stage = await fsasync.mkdtemp(path.join(os.tmpdir(), 'ff-backup-'));
-    const dbPlain = path.join(stage, 'searchCache.json');
-    const disksPlain = path.join(stage, 'disks.json');
-    const manifestPlain = path.join(stage, MANIFEST_NAME);
+    const cacheRefs = await collectReferencedSigsFromCache();
+    if (!cacheRefs.ok) {
+        throw new Error('收集缓存图片引用失败，拒绝打包：请先确认缓存库状态正常。');
+    }
 
+    const cacheEntries = await exportAllCacheDocs();
+
+    let disks: Record<string, unknown> = {};
     try {
-        // ① 库：从**内存态**导出明文（顺便天然紧凑 —— 只有活记录，无历史追加残留，见 exportCompactSnapshot）
-        const plain = await exportSnapshotPlain();
-        await fsasync.writeFile(dbPlain, plain, 'utf8');
+        disks = await readRegistry();
+    } catch { /* 保持空对象 */ }
 
-        // ② 盘注册表：读不到就给个空对象（不该因为它让整个备份失败）
-        let registry: unknown = {};
-        try {
-            registry = await readRegistry();
-        } catch { /* 保持空对象 */ }
-        await fsasync.writeFile(disksPlain, JSON.stringify(registry), 'utf8');
+    let playlists: Playlist[] = [];
+    try {
+        playlists = await loadPlaylists(dataDir);
+    } catch { /* 保持空数组 */ }
 
-        const binNames = listBinNames();
+    let hits: HitRecord[] = [];
+    try {
+        hits = await exportActiveHits(dataDir);
+    } catch { /* 保持空数组 */ }
 
-        // ③ 收藏夹（用户配置，明文 JSON）。**单独一条、可选**：
-        //   旧版备份没有它；新版应用读旧包也不受影响（见 restoreFromFile）。
-        //   读不到/不是数组就当作"没有收藏"—— 不该因为一份配置让整包备份失败。
-        let playlistsPlain: string | null = null;
-        let playlistCount = 0;
-        try {
-            const raw = await fsasync.readFile(path.join(config.userBasePath, 'playlists.json'), 'utf8');
-            const parsed = JSON.parse(raw);
-            if (Array.isArray(parsed)) {
-                playlistCount = parsed.length;
-                if (playlistCount) {
-                    playlistsPlain = path.join(stage, 'playlists.json');
-                    await fsasync.writeFile(playlistsPlain, raw, 'utf8');
+    const activeSigs = new Set<string>(cacheRefs.sigs);
+    for (const pl of playlists) {
+        for (const it of pl.items || []) {
+            if (it?.sig) activeSigs.add(it.sig);
+        }
+    }
+
+    let expectedImages = 0;
+    for (const sig of activeSigs) {
+        const tName = thumbNameOf(sig);
+        if (tName && hasBin(tName)) expectedImages += 1;
+        if (includePreviews) {
+            const pName = previewNameOf(sig);
+            if (pName && hasBin(pName)) expectedImages += 1;
+        }
+    }
+
+    const manifest = {
+        format: FFBAK_VERSION,
+        app: 'file-finder' as const,
+        createdAt: dayjs().format('YYYY-MM-DD HH:mm:ss'),
+        cacheVersion: CACHE_VERSION,
+        includePreviews,
+        dbEntries: cacheEntries.length,
+        images: expectedImages,
+        playlists: playlists.length,
+        hits: hits.length,
+    };
+
+    async function* streamActiveImages(): AsyncGenerator<FfbakImageInput> {
+        for (const sig of activeSigs) {
+            const thumb = readBinEntryForBackup('t', sig);
+            if (thumb) {
+                yield { kind: 't', fmt: thumb.fmt === 2 ? 2 : 1, sigHex: sig, data: thumb.data };
+            }
+            if (includePreviews) {
+                const prev = readBinEntryForBackup('p', sig);
+                if (prev) {
+                    yield { kind: 'p', fmt: prev.fmt === 2 ? 2 : 1, sigHex: sig, data: prev.data };
                 }
             }
-        } catch { /* 没有收藏夹文件 = 不放这一条 */ }
-
-        // ④ 清单
-        const manifest = {
-            format: BACKUP_FORMAT,
-            app: 'file-finder',
-            createdAt: dayjs().format('YYYY-MM-DD HH:mm:ss'),
-            cacheVersion: CACHE_VERSION,
-            dbEntries: plain ? plain.split('\n').filter(l => l.trim()).length - 1 : 0,
-            images: binNames.length,
-            playlists: playlistCount,
-        };
-        await fsasync.writeFile(manifestPlain, JSON.stringify(manifest, null, 2), 'utf8');
-
-        const entries = [
-            { name: MANIFEST_NAME, file: manifestPlain, compress: 'deflate' as const },
-            { name: 'searchCache.db', file: dbPlain, compress: 'deflate' as const },
-            { name: 'disks.json', file: disksPlain, compress: 'deflate' as const },
-            ...binNames.map(n => ({ name: `bin/${n}`, file: path.join(BIN_DIR, n) })),
-            ...(playlistsPlain ? [{ name: 'playlists.json', file: playlistsPlain, compress: 'deflate' as const }] : []),
-        ];
-        const bytes = await writeZip(target, entries);
-        sendJson(res, { code: 200, message: 'ok', entries: entries.length, bytes, manifest });
-    } finally {
-        await fsasync.rm(stage, { recursive: true, force: true }).catch(() => undefined);
+        }
     }
+
+    const { bytes, imageCount } = await writeFfbak(target, {
+        includePreviews,
+        meta: {
+            manifest,
+            cacheEntries,
+            disks,
+            playlists,
+            hits,
+        },
+        images: streamActiveImages(),
+    });
+    manifest.images = imageCount;
+
+    return { code: 200, message: 'ok', bytes, images: imageCount, manifest };
+}
+
+/**
+ * 「备份到文件…」—— 把整份数据打成 `.ffbak` 单文件交到用户挑的位置。
+ */
+async function backupToFile(req: Req, res: http.ServerResponse) {
+    const target = bodyPath(req);
+    const includePreviews = (req.body as { includePreviews?: unknown } | undefined)?.includePreviews !== false;
+    const result = await runBackupToFile(config.userBasePath, target, includePreviews);
+    sendJson(res, result);
 }
 
 /** 包里的图片条目（`bin/xxx.enc`）。名字要按形状校验：它会变成磁盘上的文件名 */
@@ -1776,14 +1808,14 @@ function binEntriesOf(entries: { name: string }[]): string[] {
         .map(n => n.slice(4));
 }
 
-/** 把包里的图片**只增不删**地并进本机 bin 仓（已有的跳过，绝不覆盖） */
+/** 把旧版 `.zip` 包里的图片**只增不删**地并进本机 bin 仓（已有的跳过，绝不覆盖） */
 async function importBins(zipPath: string, names: string[]): Promise<number> {
     if (!names.length) return 0;
     const entries = await listZip(zipPath);
     const byName = new Map(entries.map(e => [e.name, e]));
     let added = 0;
     for (const name of names) {
-        if (hasBin(name)) continue;                       // 已有就不动它：本地那份可能更新
+        if (hasBin(name)) continue;
         const e = byName.get(`bin/${name}`);
         if (!e) continue;
         await putBinEncrypted(name, await readZipEntry(zipPath, e));
@@ -1792,30 +1824,73 @@ async function importBins(zipPath: string, names: string[]): Promise<number> {
     return added;
 }
 
-/**
- * 「从文件还原…」—— 整份顶掉主库，然后**就地重新加载**。
- *
- * 三步，缺一不可：
- *
- * 1. **先快照**（独立槽位 `BEFORE_RESTORE_PATH`）—— 还原是不可逆的整体覆盖，
- *    而 `cacheBackup()` 那个名字是按天同名覆盖的，关键时刻靠不住（见 nedb.ts 注释）。
- * 2. **覆盖主库**。
- * 3. **重新加载**（`reloadFromDisk`）—— 这一步是**必须**的：
- *    nedb 启动时把整库读进内存，**运行时内存才是真相源**；而且实测运行中的主库文件
- *    **没有独占锁**（`r+` 能打开），所以光覆盖文件**不会报任何错**，会被内存态静默冲掉。
- *    实测二次 `loadDatabase` 能完整换成新内容、且 executor 不会变僵尸
- *    （探针 `%TEMP%/ff-enc-probe/reload.cjs`，6/6 PASS）→ 因此**不需要重启应用**。
- *
- * 失败就**尽力回滚**：把快照复制回去、再加载一次。回滚也失败时不再挣扎 ——
- * 那时 `loadError` 已经挂着，闸门（`assertUsable`）会让所有请求响亮地报错，
- * 而不是继续拿一份半坏的内存态对外服务。
- */
-async function restoreFromFile(req: Req, res: http.ServerResponse) {
-    const source = bodyPath(req);
+/** 从 `.ffbak` 流式导入缺失图片到 `bin.sqlite`（批量事务写入，已有的跳过） */
+async function importFfbakBins(filePath: string, imagesOffset: number, binCount: number): Promise<number> {
+    let added = 0;
+    let batch: { name: string; buf: Buffer }[] = [];
+    await streamFfbakImages(filePath, imagesOffset, binCount, async (entry) => {
+        const name = entry.kind === 't' ? thumbNameOf(entry.sigHex) : previewNameOf(entry.sigHex);
+        if (!name || hasBin(name)) return;
+        batch.push({ name, buf: entry.data });
+        added += 1;
+        if (batch.length >= BIN_IMPORT_BATCH_SIZE) {
+            await putBinsBatch(batch);
+            batch = [];
+        }
+    });
+    if (batch.length > 0) {
+        await putBinsBatch(batch);
+    }
+    return added;
+}
 
-    // 从包里抽库 + 清单 + 盘注册表。库在包里是**明文 JSON（deflate 压过）**
-    // ⇒ 抽出来后要**重新加密**才能写回主库（主库在磁盘上仍逐行密文）。
-    let dbTmp: string;
+/** 提取旧版 `.zip` 中 v2 记录内嵌的 base64 缩略图并补齐 `sig` */
+async function upgradeZipLegacyThumbs(docs: SearchCache[]): Promise<number> {
+    const batch: { name: string; buf: Buffer }[] = [];
+    for (const doc of docs) {
+        if (!Array.isArray(doc.data)) continue;
+        let touched = false;
+        for (const item of doc.data as unknown as Array<Record<string, unknown>>) {
+            const legacy = (item.thumbData || item.avatarThumbData) as string | undefined;
+            const hadLegacy = 'thumb' in item || 'thumbData' in item || 'avatar' in item
+                || 'avatarThumbData' in item || 'avatarSrc' in item;
+            if (!legacy && !hadLegacy) continue;
+            if (typeof legacy === 'string' && legacy.includes(',')) {
+                const bytes = Buffer.from(legacy.slice(legacy.indexOf(',') + 1), 'base64');
+                if (bytes.length > 0) {
+                    const sig = crypto.createHash('sha1').update(bytes).digest('hex');
+                    const name = thumbNameOf(sig);
+                    if (name && !hasBin(name)) {
+                        batch.push({ name, buf: bytes });
+                    }
+                    item.sig = sig;
+                }
+            }
+            delete item.thumb;
+            delete item.thumbData;
+            delete item.avatar;
+            delete item.avatarThumbData;
+            delete item.avatarSrc;
+            touched = true;
+        }
+        if (touched && doc.v !== CACHE_VERSION) {
+            doc.v = CACHE_VERSION;
+        }
+    }
+    if (batch.length > 0) {
+        await putBinsBatch(batch);
+    }
+    return batch.length;
+}
+
+/** 解析旧版 `.zip` 备份包内容 */
+async function extractZipBackupPayload(source: string): Promise<{
+    incoming: SearchCache[];
+    binNames: string[];
+    registry: DiskRegistry | null;
+    playlistsInPkg: unknown;
+}> {
+    let dbTmp = '';
     let binNames: string[] = [];
     let registry: DiskRegistry | null = null;
     let playlistsInPkg: unknown = null;
@@ -1825,124 +1900,176 @@ async function restoreFromFile(req: Req, res: http.ServerResponse) {
         if (!dbEntry) throw new Error('包里没有 searchCache.db');
         binNames = binEntriesOf(entries);
 
-        // 清单：校验"这是不是一份本程序能认的备份"
         const mfEntry = entries.find(e => e.name === MANIFEST_NAME);
         if (mfEntry) {
             const mf = JSON.parse((await readZipEntry(source, mfEntry)).toString('utf8')) as { format?: number };
-            if (typeof mf.format === 'number' && mf.format > BACKUP_FORMAT) {
+            if (typeof mf.format === 'number' && mf.format > LEGACY_ZIP_BACKUP_FORMAT) {
                 throw new Error(`这份备份是更新版本（format ${mf.format}）生成的，当前版本读不了`);
             }
         }
 
-        // 库：inflate 出明文 → 逐行加密 → 落到临时文件（与主库格式逐字一致）
         const plain = (await readZipEntry(source, dbEntry)).toString('utf8');
-        dbTmp = `${CACHE_DB_PATH}.restoring-${process.pid}-${Date.now().toString(36)}`;
+        dbTmp = `${CACHE_DB_PATH}.unpack-${process.pid}-${Date.now().toString(36)}`;
         await fsasync.writeFile(dbTmp, encryptPlainDb(plain), 'utf8');
 
-        // 盘注册表：有就解出来待用（**无损**：不覆盖本地已有的、只补缺的，见下方落地）
         const dkEntry = entries.find(e => e.name === 'disks.json');
         if (dkEntry) {
             try {
                 const parsed = JSON.parse((await readZipEntry(source, dkEntry)).toString('utf8'));
                 if (parsed && typeof parsed === 'object') registry = parsed as DiskRegistry;
-            } catch { /* 注册表坏了不该挡住库的还原 */ }
+            } catch { /* 注册表坏了不该挡住还原/合并 */ }
         }
 
-        // 收藏夹：**可选**（旧版备份没有）。坏了就跳过，绝不因此挡住缓存库的还原。
         const plEntry = entries.find(e => e.name === 'playlists.json');
         if (plEntry) {
             try {
                 const parsed = JSON.parse((await readZipEntry(source, plEntry)).toString('utf8'));
                 if (Array.isArray(parsed)) playlistsInPkg = parsed;
-            } catch { /* 同上 */ }
+            } catch { /* 收藏夹坏了不该挡住还原/合并 */ }
         }
+
+        const incoming = await readExternalCache(dbTmp);
+        return { incoming, binNames, registry, playlistsInPkg };
     } catch (e) {
         throw new Error(`不是一份可用的备份包：${e}`);
+    } finally {
+        if (dbTmp) await fsasync.unlink(dbTmp).catch(() => {});
+    }
+}
+
+/** 并入附属元数据：盘注册表（只补缺）、收藏夹（只增不删）、命中记录（只增不删） */
+async function mergeAuxiliaryBackupData(
+    dataDir: string,
+    opts: { disks: DiskRegistry | null; playlists: unknown; hits: unknown },
+): Promise<{ playlists: number; playlistItems: number; hitsAdded: number; hitsUpdated: number }> {
+    if (opts.disks) {
+        await mergeRegistryMissing(opts.disks);
     }
 
-    // ⚠️ **快照必须在 `beginRestore()` 之前做**。
-    //
-    // `beginRestore()` 把 `restoring` 打开 ⇒ 之后任何 `assertUsable()` 都会抛
-    // "缓存库正在还原"。而 `exportCompactSnapshot` 要读库（内存态），它过那道闸 ——
-    // 顺序反了就是"还原第一步必然失败"。
-    // 这正是闸门机制想要的语义：`restoring` 是**覆盖主库那段**的保护，
-    // 快照还只是"读内存"，不在保护范围内。
-    //
-    // 快照必须是**内存态序列化**，不能 `copyFile(CACHE_DB_PATH, …)`：
-    // nedb 是 append-only，删除也只追加 `$$deleted`，磁盘文件里躺着"已删记录的历史行"
-    // —— 拷它会**让已删记录在回滚后复活**；若拷贝那一刻恰逢后台扫描在追加写，
-    // 还可能截到半行、回滚出一份损坏库。内存态才是真相源。
+    let playlistMerge = { playlists: 0, items: 0 };
+    if (Array.isArray(opts.playlists)) {
+        try {
+            playlistMerge = await mergePlaylists(dataDir, opts.playlists as Playlist[]);
+        } catch (e) {
+            console.error('[backup] 收藏夹并入失败（缓存库已处理）:', e);
+        }
+    }
+
+    let hitMerge = { added: 0, updated: 0 };
+    if (Array.isArray(opts.hits)) {
+        try {
+            hitMerge = await mergeHits(dataDir, opts.hits as HitRecord[]);
+        } catch (e) {
+            console.error('[backup] 命中记录并入失败（缓存库已处理）:', e);
+        }
+    }
+
+    return {
+        playlists: playlistMerge.playlists,
+        playlistItems: playlistMerge.items,
+        hitsAdded: hitMerge.added,
+        hitsUpdated: hitMerge.updated,
+    };
+}
+
+/**
+ * 「从文件还原…」核心逻辑（支持 `.ffbak` 与旧版 `.zip` 双格式）。
+ */
+export async function runRestoreFromFile(dataDir: string, source: string) {
+    const format = await detectBackupFormat(source);
+    if (format === 'unknown') {
+        throw new Error('不是一份可用的备份包：不支持的文件格式（仅支持 .ffbak 或旧版 .zip）');
+    }
+
+    let cacheEntries: SearchCache[] = [];
+    let disks: DiskRegistry | null = null;
+    let playlistsInPkg: unknown = null;
+    let hitsInPkg: unknown = null;
+    let ffbakVerified: Awaited<ReturnType<typeof readFfbakMetaAndVerify>> | null = null;
+    let zipBinNames: string[] = [];
+
+    if (format === 'ffbak') {
+        ffbakVerified = await readFfbakMetaAndVerify(source);
+        cacheEntries = Array.isArray(ffbakVerified.meta.cacheEntries)
+            ? (ffbakVerified.meta.cacheEntries as SearchCache[])
+            : [];
+        if (ffbakVerified.meta.disks && typeof ffbakVerified.meta.disks === 'object') {
+            disks = ffbakVerified.meta.disks as DiskRegistry;
+        }
+        playlistsInPkg = ffbakVerified.meta.playlists;
+        hitsInPkg = ffbakVerified.meta.hits;
+    } else {
+        const zipPayload = await extractZipBackupPayload(source);
+        cacheEntries = zipPayload.incoming;
+        zipBinNames = zipPayload.binNames;
+        disks = zipPayload.registry;
+        playlistsInPkg = zipPayload.playlistsInPkg;
+        await upgradeZipLegacyThumbs(cacheEntries);
+    }
+
     try {
-        await exportCompactSnapshot(BEFORE_RESTORE_PATH);
+        await snapshotCacheTo(BEFORE_RESTORE_PATH);
     } catch (e) {
-        // 快照失败就**不开始还原** —— 主库一个字节都没动，无需回滚。
         throw new Error(`还原未开始：快照失败（${e}）。主库未被改动。`);
     }
 
-    beginRestore();
-    // 覆盖是否已经开始过 —— 只有它才决定"要不要回滚"。
-    // 快照那一步失败时主库还没被动过，回滚反而是拿一份旧快照去盖好的库。
-    let overwritten = false;
-
     try {
-        await fsasync.copyFile(dbTmp, CACHE_DB_PATH);
-        overwritten = true;
-        await reloadFromDisk();
+        await replaceAllCacheDocs(cacheEntries);
     } catch (e) {
-        if (!overwritten) throw new Error(`还原失败：${e}`);
-
+        beginRestore();
         let note: string;
         try {
             await fsasync.copyFile(BEFORE_RESTORE_PATH, CACHE_DB_PATH);
+            await fsasync.rm(`${CACHE_DB_PATH}-wal`, { force: true }).catch(() => {});
+            await fsasync.rm(`${CACHE_DB_PATH}-shm`, { force: true }).catch(() => {});
             await reloadFromDisk();
             note = '已回滚到还原前的状态。';
         } catch (e2) {
             note = `回滚也失败了（${e2}）。请手动把 ${BEFORE_RESTORE_PATH} 复制成 ${CACHE_DB_PATH}`;
+        } finally {
+            endRestore();
         }
         throw new Error(`还原失败，选中的文件不是一份可用的缓存库。${note}`);
-    } finally {
-        endRestore();
-        fsasync.unlink(dbTmp).catch(() => { });
     }
 
-    // 库换完了再搬图片（**只增不删**：本地多出来的那份，可能正是包里缺的那几张）
-    const added = await importBins(source, binNames);
-    // 旧版备份（v2 库）里图片还是 base64：这里跑一次就地迁移，免得"还原完格子全白"
-    await migrateLegacyThumbs();
-    // 盘注册表：**只补缺、不覆盖**（本地那份记录着真实的 firstSeenAt，比包里的更可信）
-    if (registry) await mergeRegistryMissing(registry);
-
-    // 收藏夹：**只增不删**地并入（备份通常比现在旧，替换会把之后新建的夹子抹掉）。
-    // 失败不该让"库已还原成功"变成一次失败 —— 报告里给 0 即可。
-    let playlistMerge = { playlists: 0, items: 0 };
-    if (Array.isArray(playlistsInPkg)) {
-        try {
-            playlistMerge = await mergePlaylists(config.userBasePath, playlistsInPkg as Parameters<typeof mergePlaylists>[1]);
-        } catch (e) {
-            console.error('[restore] 收藏夹并入失败（缓存库已还原）:', e);
-        }
+    let addedImages = 0;
+    if (format === 'ffbak' && ffbakVerified) {
+        addedImages = await importFfbakBins(source, ffbakVerified.imagesOffset, ffbakVerified.binCount);
+    } else {
+        addedImages = await importBins(source, zipBinNames);
+        await migrateLegacyThumbs();
     }
 
-    sendJson(res, {
-        code: 200, message: 'ok', images: added,
-        playlists: playlistMerge.playlists, playlistItems: playlistMerge.items,
+    const aux = await mergeAuxiliaryBackupData(dataDir, {
+        disks,
+        playlists: playlistsInPkg,
+        hits: hitsInPkg,
     });
+
+    return {
+        code: 200,
+        message: 'ok',
+        images: addedImages,
+        playlists: aux.playlists,
+        playlistItems: aux.playlistItems,
+        hitsAdded: aux.hitsAdded,
+        hitsUpdated: aux.hitsUpdated,
+    };
+}
+
+async function restoreFromFile(req: Req, res: http.ServerResponse) {
+    const source = bodyPath(req);
+    const result = await runRestoreFromFile(config.userBasePath, source);
+    sendJson(res, result);
 }
 
 /**
- * 包里的库是**明文 JSON**（为了压缩，见 backupToFile）。写回主库要重新逐行加密。
- *
- * ⚠️ **兼容旧包（2026-10-04 那版）**：那时库在包里是**密文原样**。
- * 判据用 `decryptLine` 自己的规则：明文行以 `{` 开头，base64 密文行不以 `{` 开头。
- * 所以：
- *   - 第一行以 `{` 开头 ⇒ 新格式（明文）⇒ 逐行加密；
- *   - 否则 ⇒ 旧格式（已是密文）⇒ **原样写回**，绝不能再套一层（套了就解不开）。
- * 这样新旧包都能还原 —— 版本判断落在**内容形态**上，不靠 manifest（旧的压根没有 manifest）。
+ * 包里的库是**明文 JSON**（为了压缩）。写回主库要重新逐行加密。
+ * 兼容旧包（2026-10-04 那版）：首行不以 `{` 开头说明已是密文，原样写回。
  */
 function encryptPlainDb(plain: string): string {
     const lines = plain.split('\n').filter(l => l.trim());
     if (!lines.length) return '';
-    // 首行是索引行 `{"$$indexCreated"...}`（明文）或一串 base64（旧密文）
     const alreadyEncrypted = !lines[0].startsWith('{');
     if (alreadyEncrypted) return plain;
     return lines.map(l => encryptLine(l)).join('\n') + '\n';
@@ -1950,9 +2077,6 @@ function encryptPlainDb(plain: string): string {
 
 /**
  * 把包里的盘注册表**只补缺地**并进本地 `disks.json`。
- *
- * 为什么不整份覆盖：本地那份的 `firstSeenAt` / `lastSeenAt` 是这台机器**真实见过**的时间，
- * 比备份包里的更可信；包里的价值是"补齐本地没有的盘"（跨机器迁移场景）。
  */
 async function mergeRegistryMissing(fromPkg: DiskRegistry): Promise<void> {
     try {
@@ -1969,60 +2093,11 @@ async function mergeRegistryMissing(fromPkg: DiskRegistry): Promise<void> {
     }
 }
 
-/**
- * 「合并缓存…」—— 把用户选中的另一份库**并进来**（不是顶掉）。
- *
- * 与「还原」的分界：还原 = 整份替换（本机独有的记录会消失）；
- * 合并 = 两边都留（适合"两台机器各扫了一半的盘"）。
- *
- * 冲突规则：同一个主键 `(serial, relPath, mode)` 上，**取 `create_at` 新的那份**。
- * 比 `>=` 而不是 `>`：本地与外部时间戳完全相等时没必要白删白插一遍。
- *
- * 只并 `v === CACHE_VERSION` 的记录：版本不同的记录形状就不对（v1 里
- * `files[]` 带整包 fs.Stats、条目用完整路径当键），并进来是污染而不是补充。
- * **不删外部文件**，也不改动它（`readExternalCache` 读的是副本）。
- *
- * 每一步都走 `queueCacheWrite` —— 和 `scanAndCache` **同一条写入链**。
- * 这是必须的：合并可能和后台批量扫描撞在同一个主键上，绕过那条链就等于
- * 在"唯一写入点"之外又开一个口（见 queueCacheWrite 的注释）。
- */
-async function mergeCache(req: Req, res: http.ServerResponse) {
-    const source = bodyPath(req);
-
-    // 来源是"备份包（zip）"：里面那份库要抽成临时**密文**文件才能交给
-    // `readExternalCache`（它按普通文件读、逐行解密）。
-    // 包里是明文（deflate 过）⇒ 这里要**重新加密**（见 encryptPlainDb 的兼容说明）。
-    let dbTmp: string;
-    let binNames: string[] = [];
-    let registry: DiskRegistry | null = null;
-    let playlistsInPkg: unknown = null;
-    try {
-        const entries = await listZip(source);
-        const dbEntry = entries.find(e => e.name === 'searchCache.db');
-        if (!dbEntry) throw new Error('包里没有 searchCache.db');
-        binNames = binEntriesOf(entries);
-        dbTmp = `${CACHE_DB_PATH}.merging-${process.pid}-${Date.now().toString(36)}`;
-        const plain = (await readZipEntry(source, dbEntry)).toString('utf8');
-        await fsasync.writeFile(dbTmp, encryptPlainDb(plain), 'utf8');
-        const dkEntry = entries.find(e => e.name === 'disks.json');
-        if (dkEntry) {
-            try {
-                const parsed = JSON.parse((await readZipEntry(source, dkEntry)).toString('utf8'));
-                if (parsed && typeof parsed === 'object') registry = parsed as DiskRegistry;
-            } catch { /* 注册表坏了不该挡住合并 */ }
-        }
-    } catch (e) {
-        throw new Error(`不是一份可用的备份包：${e}`);
-    }
-
-    let incoming: SearchCache[];
-    try {
-        incoming = await readExternalCache(dbTmp);
-    } finally {
-        fsasync.unlink(dbTmp).catch(() => { });
-    }
-
-    let added = 0, replaced = 0, skipped = 0;
+/** 合并缓存条目列表（按 `(serial, relPath, mode)` 取 `create_at` 较新者） */
+async function mergeCacheDocList(incoming: SearchCache[]): Promise<{ added: number; replaced: number; skipped: number }> {
+    let added = 0;
+    let replaced = 0;
+    let skipped = 0;
 
     for (const doc of incoming) {
         if (doc.v !== CACHE_VERSION) {
@@ -2036,11 +2111,6 @@ async function mergeCache(req: Req, res: http.ServerResponse) {
             continue;
         }
 
-        // 丢掉外来的 _id，让本库自己发一个新的。
-        // 理由：`_id` 是**这一份库**内部的身份，不是数据的一部分；
-        // 带着它插进来，万一和本地某条别的记录撞上（_id 是随机串，理论上会撞），
-        // `insert` 会因 `_id` 唯一索引直接抛错，整个合并就断在半路。
-        // 主键是 `(serial, relPath, mode)`，丢掉 `_id` 不损失任何语义。
         const payload: SearchCache = { ...doc };
         delete payload._id;
 
@@ -2052,14 +2122,78 @@ async function mergeCache(req: Req, res: http.ServerResponse) {
         current ? (replaced += 1) : (added += 1);
     }
 
-    // 并进来的可能是旧版（v2）记录 —— 跑一次就地迁移，把它们的 base64 图片搬进 bin
-    await migrateLegacyThumbs();
-    // 记录并完了再搬图片（只增不删；跨机器迁移时那些清晰的封面就是从这里过来的）
-    const images = await importBins(source, binNames);
-    // 盘注册表只补缺（同还原：合并一个跨机器包时，把本地没有的盘补进来）
-    if (registry) await mergeRegistryMissing(registry);
+    return { added, replaced, skipped };
+}
 
-    sendJson(res, { code: 200, added, replaced, skipped, total: incoming.length, images });
+/**
+ * 「合并缓存…」核心逻辑（支持 `.ffbak` 与旧版 `.zip` 双格式）。
+ */
+export async function runMergeCache(dataDir: string, source: string) {
+    const format = await detectBackupFormat(source);
+    if (format === 'unknown') {
+        throw new Error('不是一份可用的备份包：不支持的文件格式（仅支持 .ffbak 或旧版 .zip）');
+    }
+
+    let incoming: SearchCache[] = [];
+    let disks: DiskRegistry | null = null;
+    let playlistsInPkg: unknown = null;
+    let hitsInPkg: unknown = null;
+    let ffbakVerified: Awaited<ReturnType<typeof readFfbakMetaAndVerify>> | null = null;
+    let zipBinNames: string[] = [];
+
+    if (format === 'ffbak') {
+        ffbakVerified = await readFfbakMetaAndVerify(source);
+        incoming = Array.isArray(ffbakVerified.meta.cacheEntries)
+            ? (ffbakVerified.meta.cacheEntries as SearchCache[])
+            : [];
+        if (ffbakVerified.meta.disks && typeof ffbakVerified.meta.disks === 'object') {
+            disks = ffbakVerified.meta.disks as DiskRegistry;
+        }
+        playlistsInPkg = ffbakVerified.meta.playlists;
+        hitsInPkg = ffbakVerified.meta.hits;
+    } else {
+        const zipPayload = await extractZipBackupPayload(source);
+        incoming = zipPayload.incoming;
+        zipBinNames = zipPayload.binNames;
+        disks = zipPayload.registry;
+        playlistsInPkg = zipPayload.playlistsInPkg;
+        await upgradeZipLegacyThumbs(incoming);
+    }
+
+    const { added, replaced, skipped } = await mergeCacheDocList(incoming);
+
+    let images = 0;
+    if (format === 'ffbak' && ffbakVerified) {
+        images = await importFfbakBins(source, ffbakVerified.imagesOffset, ffbakVerified.binCount);
+    } else {
+        await migrateLegacyThumbs();
+        images = await importBins(source, zipBinNames);
+    }
+
+    const aux = await mergeAuxiliaryBackupData(dataDir, {
+        disks,
+        playlists: playlistsInPkg,
+        hits: hitsInPkg,
+    });
+
+    return {
+        code: 200,
+        added,
+        replaced,
+        skipped,
+        total: incoming.length,
+        images,
+        playlists: aux.playlists,
+        playlistItems: aux.playlistItems,
+        hitsAdded: aux.hitsAdded,
+        hitsUpdated: aux.hitsUpdated,
+    };
+}
+
+async function mergeCache(req: Req, res: http.ServerResponse) {
+    const source = bodyPath(req);
+    const result = await runMergeCache(config.userBasePath, source);
+    sendJson(res, result);
 }
 
 /**
