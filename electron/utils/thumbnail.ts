@@ -1,5 +1,4 @@
-import { nativeImage } from 'electron';
-import type { NativeImage } from 'electron';
+import sharp, { type Sharp } from 'sharp';
 import ffmpeg from 'fluent-ffmpeg';
 import { path as ffmpegPath } from '@ffmpeg-installer/ffmpeg';
 import { path as ffprobePath } from '@ffprobe-installer/ffprobe';
@@ -18,12 +17,12 @@ ffmpeg.setFfmpegPath(FFMPEG_BIN);
 ffmpeg.setFfprobePath(FFPROBE_BIN);
 
 /**
- * 缩略图宽度（网格用）。384/q78 由 `docs/probes/thumb-tier/` 真库取样定档：再大体积收益骤减、再小画质可见下降。
+ * 缩略图宽度（网格用）。384/q78 WebP 异步管线。
  * ⚠️ 与 THUMB_QUALITY 成组，改这个数只触发一层重扫，可随时调。
  */
 export const THUMB_WIDTH = 384;
 
-/** JPEG 质量（网格缩略图用）。与 THUMB_WIDTH 一组，依据同上（`docs/probes/thumb-tier/`） */
+/** WebP 质量（网格缩略图用）。与 THUMB_WIDTH 一组 */
 export const THUMB_QUALITY = 78;
 
 /**
@@ -32,61 +31,76 @@ export const THUMB_QUALITY = 78;
  * 依据：预览最多铺到 `(窗口宽−32) × (窗口高−32)`，本机最大化窗口是 2048×1280 逻辑、
  * dpr 1.25 ⇒ 设备像素约 2520 ⇒ 2048 长边最坏是 **1.23 倍插值**（照片看不出）。
  * 再大一档（2560）只对"超过 2048 的大图"有意义，却要多花约 40% 体积 ⇒ 不值得。
- *
- * ⚠️ 绝大多数源图（中位 800×538）**根本不到这个上限** ⇒ 它们走"原样存"那条路
- * （见 `verbatimPreview`），既不重编码也不损失质量。
  */
 export const PREVIEW_LONG_EDGE = 2048;
 
 /**
- * 预览大图的 JPEG 质量（只在"必须重编码"时才用到：源图超大、或源图是 nativeImage 解不开的格式）。
+ * 预览大图的 WebP 质量（只在"必须重编码"或重编码后体积更小时用到）。
  * 比网格缩略图的 78 高一档 —— 它是给人放大看的"好"那一份。
  */
-export const PREVIEW_QUALITY = 82;
+export const PREVIEW_QUALITY = 86;
 
 /**
  * "原样存"的体积上限。
  *
- * 源图是不超过 2048 长边的 JPEG 时，**直接存源字节**（不重编码）：
- *   ① 质量零损失（JPEG 二次编码必掉画质）；
- *   ② 零 CPU（扫描一张图省一次编码）；
- *   ③ 体积与重编码同量级（实测原图均值 161 KB base64 ⇒ 约 120 KB 裸字节）。
+ * 源图是不超过 2048 长边的合法 JPEG/WebP 时，若重编码 WebP 没有更小，**直接存源字节**（绝不变大兜底闸）。
  * 超过这个上限就重编码 —— 那种是异常大图，压一压更划算。
  */
 export const PREVIEW_VERBATIM_MAX = 1.5 * 1024 * 1024;
 
-/** 一次解码产出的**两个**尺寸。`thumb` 给网格，`preview` 给点开的大图。两者恒为 JPEG */
+/** 一次解码产出的**两个**尺寸。`thumb` 给网格，`preview` 给点开的大图。 */
 export interface Renditions {
     thumb: Buffer | null;
     preview: Buffer | null;
 }
 
-/** 按比例缩到 `THUMB_WIDTH` 宽，输出 JPEG。只在原图更宽时才缩 —— 避免把小图放大糊掉 */
-export function scaleToThumb(img: NativeImage): Buffer {
-    const { width } = img.getSize();
-    const scaled = width > THUMB_WIDTH ? img.resize({ width: THUMB_WIDTH, quality: 'good' }) : img;
-    return scaled.toJPEG(THUMB_QUALITY);
+/** 按比例缩到 `THUMB_WIDTH` 宽，输出 WebP。只在原图更宽时才缩 —— 避免把小图放大糊掉 */
+export async function scaleToThumb(input: Buffer | Sharp): Promise<Buffer> {
+    const pipeline = Buffer.isBuffer(input)
+        ? sharp(input, { failOn: 'none' }).rotate()
+        : input.clone();
+    return pipeline
+        .resize({ width: THUMB_WIDTH, withoutEnlargement: true })
+        .webp({ quality: THUMB_QUALITY, effort: 4 })
+        .toBuffer();
 }
 
-/** 按长边缩到 `PREVIEW_LONG_EDGE`（只缩不放），输出 JPEG */
-function scaleToPreview(img: NativeImage): Buffer {
-    const { width, height } = img.getSize();
-    if (Math.max(width, height) <= PREVIEW_LONG_EDGE) return img.toJPEG(PREVIEW_QUALITY);
-    return (width >= height
-        ? img.resize({ width: PREVIEW_LONG_EDGE, quality: 'good' })
-        : img.resize({ height: PREVIEW_LONG_EDGE, quality: 'good' })
-    ).toJPEG(PREVIEW_QUALITY);
+/** 按长边缩到 `PREVIEW_LONG_EDGE`（只缩不放），输出 WebP；若源 JPEG/WebP 更小则原样返回 */
+async function scaleToPreview(
+    _meta: { width?: number; height?: number },
+    baseSharp: Sharp,
+    verbatimCandidate: Buffer | null,
+): Promise<Buffer> {
+    const webpBuf = await baseSharp
+        .clone()
+        .resize({
+            width: PREVIEW_LONG_EDGE,
+            height: PREVIEW_LONG_EDGE,
+            fit: 'inside',
+            withoutEnlargement: true,
+        })
+        .webp({ quality: PREVIEW_QUALITY, effort: 4 })
+        .toBuffer();
+
+    if (verbatimCandidate && webpBuf.length >= verbatimCandidate.length) {
+        return verbatimCandidate;
+    }
+    return webpBuf;
 }
 
 /**
- * 源字节能不能**原样**当大图用（见 `PREVIEW_VERBATIM_MAX` 的说明）。
- * 只放行 JPEG —— PNG 照片往往比同画质 JPEG 大好几倍，存它不划算。
+ * 源字节能不能作为"绝不变大"候选原样存（见 `PREVIEW_VERBATIM_MAX` 的说明）。
+ * 只放行合法 JPEG / WebP 且长边 ≤ `PREVIEW_LONG_EDGE`、体积 ≤ `PREVIEW_VERBATIM_MAX`。
  */
-function verbatimOf(buf: Buffer, img: NativeImage): Buffer | null {
+function verbatimOf(buf: Buffer, meta: { width?: number; height?: number }): Buffer | null {
     const isJpeg = buf.length > 3 && buf[0] === 0xff && buf[1] === 0xd8 && buf[2] === 0xff;
-    if (!isJpeg || buf.length > PREVIEW_VERBATIM_MAX) return null;
-    const { width, height } = img.getSize();
-    return Math.max(width, height) <= PREVIEW_LONG_EDGE ? buf : null;
+    const isWebp =
+        buf.length >= 12 &&
+        buf.subarray(0, 4).toString('ascii') === 'RIFF' &&
+        buf.subarray(8, 12).toString('ascii') === 'WEBP';
+    if ((!isJpeg && !isWebp) || buf.length > PREVIEW_VERBATIM_MAX) return null;
+    if (!meta.width || !meta.height) return null;
+    return Math.max(meta.width, meta.height) <= PREVIEW_LONG_EDGE ? buf : null;
 }
 
 async function fileExists(filepath: string): Promise<boolean> {
@@ -98,32 +112,32 @@ async function fileExists(filepath: string): Promise<boolean> {
     }
 }
 
-/**
- * nativeImage 解码 + 缩放。解不开返回 null（不区分"文件不存在"和"格式不支持"）。
- *
- * ⚠️ 2026-10-04 从 `createFromPath` 改成"**先读一次字节、再 `createFromBuffer`**"：
- * 因为"原样存大图"需要源字节，而多读一次文件就是多碰一次移动硬盘。
- * 一次 readFile 同时喂给解码和原样存 —— **新增的读盘量是 0**。
- * 快路径解不开时**照旧走 ffmpeg 兜底**（WebP 等），所以换了入口也不会少支持一种格式。
- */
-async function decodeImage(filepath: string): Promise<{ img: NativeImage; verbatim: Buffer | null } | null> {
+/** 图片条目：一次解码 → 网格缩略图 + 预览大图（sharp 异步 WebP 管线 + ffmpeg 兜底） */
+export async function imageRenditions(filepath: string): Promise<Renditions> {
     let buf: Buffer;
     try {
         buf = await fsasync.readFile(filepath);
     } catch {
-        return null;
+        return { thumb: null, preview: null };
     }
 
-    const img = nativeImage.createFromBuffer(buf);
-    if (!img.isEmpty()) return { img, verbatim: verbatimOf(buf, img) };
+    try {
+        const baseSharp = sharp(buf, { failOn: 'none' }).rotate();
+        const meta = await baseSharp.metadata();
+        if (!meta.width || !meta.height) {
+            throw new Error('Missing image dimensions');
+        }
+        const verbatimCandidate = verbatimOf(buf, meta);
+        const [thumb, preview] = await Promise.all([
+            scaleToThumb(baseSharp),
+            scaleToPreview(meta, baseSharp, verbatimCandidate),
+        ]);
+        return { thumb, preview };
+    } catch {
+        // 兜底：sharp 解不开（PSD / BMP / 损坏或特殊编码…）→ 用内置 ffmpeg 转 PNG，再进同一条 sharp 管线
+    }
 
-    // 兜底：nativeImage 解不开（WebP / PSD / 改了后缀的…）→ 用**已经内置**的 ffmpeg 转 PNG，
-    // 再交给**同一条**缩放链路。缩放规则与输出质量仍然只有一处定义。
-    //
-    // ⚠️ 兜底前**必须先确认文件真的存在**。nativeImage 对"文件不存在"同样返回空图，
-    // 而 makeDirCover 是逐个名字盲试的（先 avatar.jpg 再 cover.jpg），
-    // 不挡掉这一档，每个没有 avatar.jpg 的目录都会白起一个 ffmpeg 子进程。
-    if (!(await fileExists(filepath))) return null;
+    if (!(await fileExists(filepath))) return { thumb: null, preview: null };
 
     const out = path.join(
         os.tmpdir(),
@@ -131,24 +145,22 @@ async function decodeImage(filepath: string): Promise<{ img: NativeImage; verbat
     );
 
     try {
-        if (!(await transcodeImage(filepath, out))) return null;
-        // 转出来的 PNG 不原样用（全尺寸 PNG 常常比 JPEG 大一个数量级），交给 scaleToPreview
-        const png = nativeImage.createFromBuffer(await fsasync.readFile(out));
-        return png.isEmpty() ? null : { img: png, verbatim: null };
+        if (!(await transcodeImage(filepath, out))) return { thumb: null, preview: null };
+        const pngBuf = await fsasync.readFile(out);
+        const fallbackSharp = sharp(pngBuf, { failOn: 'none' }).rotate();
+        const meta = await fallbackSharp.metadata();
+        if (!meta.width || !meta.height) return { thumb: null, preview: null };
+        const [thumb, preview] = await Promise.all([
+            scaleToThumb(fallbackSharp),
+            scaleToPreview(meta, fallbackSharp, null),
+        ]);
+        return { thumb, preview };
+    } catch {
+        return { thumb: null, preview: null };
     } finally {
-        // 中转文件写在**系统盘**临时目录（不是移动硬盘），且无论成败立刻删掉
+        // 中转文件写在系统盘临时目录，无论成败立刻删掉
         fsasync.unlink(out).catch(() => { });
     }
-}
-
-/** 图片条目：一次解码 → 网格缩略图 + 预览大图 */
-export async function imageRenditions(filepath: string): Promise<Renditions> {
-    const decoded = await decodeImage(filepath);
-    if (!decoded) return { thumb: null, preview: null };
-    return {
-        thumb: scaleToThumb(decoded.img),
-        preview: decoded.verbatim ?? scaleToPreview(decoded.img),
-    };
 }
 
 /**
@@ -450,17 +462,12 @@ export async function frameJpegAt(
         const raw = await fsasync.readFile(frame).catch(() => null);
         if (!raw?.length) return null;
 
-        const img = nativeImage.createFromBuffer(raw);
-        if (img.isEmpty()) return null;
-
-        const { width, height } = img.getSize();
-        const scaled = Math.max(width, height) <= maxEdge
-            ? img
-            : (width >= height
-                ? img.resize({ width: maxEdge, quality: 'good' })
-                : img.resize({ height: maxEdge, quality: 'good' })
-            );
-        return scaled.toJPEG(COVER_JPEG_QUALITY);
+        return await sharp(raw, { failOn: 'none' })
+            .rotate()
+            .resize({ width: maxEdge, height: maxEdge, fit: 'inside', withoutEnlargement: true })
+            .jpeg({ quality: COVER_JPEG_QUALITY })
+            .toBuffer()
+            .catch(() => null);
     } finally {
         // 中转帧写在系统盘临时目录，无论成败立刻删（一次抽帧可能重试 4 档，不删会堆一地）
         fsasync.unlink(frame).catch(() => { });
