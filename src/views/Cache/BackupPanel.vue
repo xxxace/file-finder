@@ -12,13 +12,14 @@
             </span>
             <span class="mi-text">
                 <span class="mi-title">备份到一个文件…</span>
-                <span class="mi-desc">导出紧凑 .ffbak 单文件（自动剔除孤儿图；关闭右侧开关可导出仅含缩略图的轻量包）</span>
-            </span>
-            <span class="mi-trailing" @click.stop>
-                <span class="mi-opt-label">含预览大图</span>
-                <n-switch v-model:value="includePreviews" size="small" :disabled="backupLoading" />
+                <span class="mi-desc">导出紧凑 .ffbak 单文件（自动剔除孤儿图；关闭下方开关可导出仅含缩略图的轻量包）</span>
             </span>
         </button>
+
+        <div class="mi-opt-row">
+            <span class="mi-opt-label">备份时包含预览大图</span>
+            <n-switch v-model:value="includePreviews" size="small" :disabled="backupLoading" />
+        </div>
 
         <button type="button" class="mi-row mi-row-danger" :disabled="busy" @click="handleRestoreFromFile">
             <span class="mi-icon" aria-hidden="true">
@@ -250,21 +251,22 @@ const openDataDir = async () => {
     min-width: 0;
 }
 
-.mi-trailing {
-    flex: 0 0 auto;
+.mi-opt-row {
     display: flex;
     align-items: center;
-    gap: 6px;
+    justify-content: space-between;
+    gap: 12px;
+    padding: 6px 10px 8px 50px;
 }
 
 .mi-opt-label {
-    font-size: 12px;
+    font-size: var(--ff-fs-meta);
     color: var(--ff-text-2);
     white-space: nowrap;
 }
 
 .mi-title {
-    font-size: 13px;
+    font-size: var(--ff-fs-body);
     font-weight: 500;
     color: var(--ff-text-1);
 }
@@ -272,7 +274,7 @@ const openDataDir = async () => {
 .mi-row-danger .mi-title { color: var(--ff-danger); }
 
 .mi-desc {
-    font-size: 12px;
+    font-size: var(--ff-fs-meta);
     color: var(--ff-text-2);
 }
 </style>

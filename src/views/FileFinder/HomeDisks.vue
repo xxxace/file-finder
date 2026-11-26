@@ -70,9 +70,10 @@
  * 它只负责"长什么样、点了去哪"。这样首页刷新时机（挂载 / 插拔盘 / 回到首页）
  * 只在页面里有一处决定，组件不需要知道。
  */
-import { nextTick, ref, watch } from 'vue';
+import { nextTick, onActivated, onBeforeUnmount, onDeactivated, onMounted, ref, watch } from 'vue';
 import { NIcon, NPopover } from 'naive-ui';
 import { FolderOutline, ChevronDownOutline } from '@vicons/ionicons5';
+import { isGridKeyBlocked } from '@/utils';
 import diskIcon from '@/assets/disk-hdd.svg';
 import type { DiskTop, HomeDisk } from './useHomeDisks';
 // 浮层内容被 n-popover teleport 到 body，scoped 够不到 ⇒ 复用右键菜单那份非 scoped 样式
@@ -308,6 +309,52 @@ const onCardKeydown = (e: KeyboardEvent, d: HomeDisk) => {
     }
 };
 
+/* ── 不按 Tab 也能用方向键：焦点不在盘卡上时，按一下方向键直接「进组」 ──
+ *
+ * 业主 2026-11-26："我有时候不想用 Tab，能不能用方向键直接触发聚焦"。资源管理器就是这样：
+ * 什么都不用点，按一下 ↓ 焦点就落到第一项。
+ *
+ * 三条判据全部复用既有实现，不新发明：
+ *   · `isGridKeyBlocked`（utils）—— 输入框 / 下拉 / contenteditable 里方向键归它们自己；
+ *     文件网格用的是**同一个函数**，"哪些键归列表"全站只有一处定义。
+ *   · 事件必须落在 `body` 或盘卡区内 —— 顶栏 / 左轨 / 弹窗上按方向键归它们，
+ *     被这里抢走会顺手 `preventDefault`，把人卡在原地。
+ *   · 焦点已经在某张卡上 ⇒ **让位**给卡片自己的 `onCardKeydown`，否则一次按键跳两格。
+ *
+ * ⚠️ 第一下只「进组」不跨格（落在当前锚点，初始是第一张可用卡），再按才是移动。
+ * ⚠️ `pageActive` 的存在原因同上页的 `onKeyup`：本组件在 KeepAlive 里，切到别的路由后
+ *    window 上的监听仍然挂着 —— 不挡就会在清单页按 ↓ 去聚焦一张看不见的卡。
+ */
+const pageActive = ref(true);
+onActivated(() => { pageActive.value = true; });
+onDeactivated(() => { pageActive.value = false; });
+
+const onWindowKeydown = (e: KeyboardEvent) => {
+    if (!pageActive.value || menu.value.visible) return;
+    if (e.altKey || e.ctrlKey || e.metaKey) return;      // Alt+←/→ 是后退 / 前进
+    if (isGridKeyBlocked(e)) return;
+    const k = e.key;
+    if (k !== 'ArrowUp' && k !== 'ArrowDown' && k !== 'ArrowLeft' && k !== 'ArrowRight') return;
+
+    const t = e.target as HTMLElement | null;
+    if (t && t !== document.body && !t.closest?.('.home-disks')) return;
+    if ((document.activeElement as HTMLElement | null)?.closest?.('.hd-card')) return;
+
+    const list = props.disks;
+    const i = list[focusIdx.value]?.tops.length
+        ? focusIdx.value
+        : list.findIndex((d) => d.tops.length);          // 跳过没有缓存记录的卡
+    if (i < 0) return;
+
+    e.preventDefault();
+    focusIdx.value = i;
+    selectedKey.value = list[i].key;
+    void nextTick(() => (gridEl.value?.children[i] as HTMLElement | undefined)?.focus());
+};
+
+onMounted(() => window.addEventListener('keydown', onWindowKeydown));
+onBeforeUnmount(() => window.removeEventListener('keydown', onWindowKeydown));
+
 /** 点击多顶层的折角按钮：直接展开/收起菜单 */
 const onCaretClick = (e: MouseEvent, d: HomeDisk) => {
     selectedKey.value = d.key;
@@ -392,34 +439,44 @@ const onMenuKeydown = (e: KeyboardEvent) => {
     padding: 11px 13px;
     border: 1px solid var(--ff-line);
     border-radius: var(--ff-radius-card);
-    background: var(--ff-panel);
+    /* 玻璃板（与设置页卡片同一份材质）：这里保留 CSS 边框、不叠加 --ff-glass-shadow，
+       因为 hover/选中的边框颜色是语义态，换成内阴影就没地方放蓝框了。 */
+    background: var(--ff-glass-bg);
     color: var(--ff-text-1);
     font: inherit;
     text-align: left;
     cursor: pointer;
     user-select: none;
     -webkit-user-select: none;
-    /* 只动底色：位移/缩放会让一排卡片在悬停时互相推挤 */
-    transition: background-color var(--ff-dur-hover) linear, border-color var(--ff-dur-hover) linear;
+    /* 只动底/边色：位移/缩放会让一排卡片在悬停时互相推挤。
+       ⚠️ **不能过渡背景**：CSS 渐变不可插值，写 `transition: background-image` 只会在
+       时长中点硬切一下，比不过渡更难受；两端只差 7 级明度，硬切看不出来。 */
+    transition: border-color var(--ff-dur-hover) linear;
 }
 
 .hd-card:hover {
-    background: var(--ff-raised);
+    background: var(--ff-glass-hover-bg);
     border-color: var(--ff-line-strong);
 }
 
 .hd-card:active {
-    background: var(--ff-ctl-on);
+    background: var(--ff-glass-hi-bg);
 }
 
-/* 选中状态：模拟文件管理器中点击选中的视觉高亮 */
+/* 选中状态：模拟文件管理器中点击选中的视觉高亮。
+   ⚠️ 高亮**叠在玻璃上**（两层 background-image），不是把玻璃换成一片纯蓝 ——
+   否则选中的那张卡会凭空变成另一种材质，跟旁边没选中的不是一套。 */
 .hd-card.is-selected {
-    background: var(--ff-highlight-weak);
+    background-image:
+        linear-gradient(var(--ff-highlight-weak), var(--ff-highlight-weak)),
+        var(--ff-glass-bg);
     border-color: var(--ff-highlight-line);
 }
 
 .hd-card.is-selected:hover {
-    background: var(--ff-highlight-weak);
+    background-image:
+        linear-gradient(var(--ff-highlight-weak), var(--ff-highlight-weak)),
+        var(--ff-glass-hover-bg);
     border-color: var(--ff-highlight);
 }
 

@@ -4,8 +4,14 @@
          判据见 docs/DESIGN-BILIBILI-2026-10-21.md：关掉后要不要回到刚才那一屏。 -->
     <div class="page">
         <header class="page-head">
-            <h1>我的收藏</h1>
-            <span class="page-sub">{{ index.playlists.length }} 个 · 点卡片进入</span>
+            <div class="page-head-left">
+                <h1>我的收藏</h1>
+                <span class="page-sub">{{ index.playlists.length }} 个 · 点卡片进入</span>
+            </div>
+            <n-button size="small" @click="startCreate">
+                <template #icon><n-icon :component="AddOutline" /></template>
+                新建收藏夹
+            </n-button>
         </header>
 
         <div class="pl-shelf">
@@ -166,9 +172,16 @@ const commitEdit = async (id: string) => {
 
 .page-head {
     display: flex;
-    align-items: baseline;
-    gap: 10px;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
     margin-bottom: 16px;
+
+    .page-head-left {
+        display: flex;
+        align-items: baseline;
+        gap: 10px;
+    }
 
     h1 {
         margin: 0;
@@ -273,19 +286,27 @@ const commitEdit = async (id: string) => {
     opacity: .55;
 }
 
-/* 新建：虚线 = 可添加；悬停变高亮色（与左轨选中同一套语义） */
+/* 新建：单层幽灵虚线卡，去掉外层实体底色，悬停微亮并切高亮框 */
+.pl-card-new {
+    background: transparent;
+    border: 1.5px dashed var(--ff-line-strong);
+    box-shadow: none;
+    transition: border-color var(--ff-dur-hover) ease, background-color var(--ff-dur-hover) ease;
+
+    &:hover {
+        background: var(--ff-ctl-hover);
+        border-color: var(--ff-highlight);
+        box-shadow: none;
+    }
+}
+
 .pl-card-new .pl-cover-new {
     background: transparent;
-    border: 1.5px dashed var(--ff-line);
-    transition: border-color .16s ease;
+    border: 0;
 
     :deep(.n-icon) {
         opacity: .7;
     }
-}
-
-.pl-card-new:hover .pl-cover-new {
-    border-color: var(--ff-highlight);
 }
 
 .pl-card-new:hover .pl-name {
@@ -294,8 +315,8 @@ const commitEdit = async (id: string) => {
 
 .pl-name {
     margin-top: 8px;
-    font-size: 14px;
-    font-weight: 400;
+    font-size: var(--ff-fs-body);
+    font-weight: 500;
     line-height: 20px;
     color: var(--ff-text-1);
     transition: color .15s ease;
@@ -318,13 +339,11 @@ const commitEdit = async (id: string) => {
     gap: 6px;
 }
 
-/* 「默认」标签：弱粉底 + 粉字（原来是一块白底，深色主题里像贴了张便签） */
 .pl-sys {
-    font-size: 11px;
+    font-size: var(--ff-fs-eyebrow);
     line-height: 16px;
-    padding: 0 5px;
-    border-radius: 4px;
-    /* "系统"标记是**信息**不是交互 ⇒ 中性胶囊，不占高亮色 */
+    padding: 0 6px;
+    border-radius: var(--ff-r-pill);
     background: var(--ff-raised);
     color: var(--ff-text-2);
 }

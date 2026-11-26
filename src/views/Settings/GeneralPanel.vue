@@ -91,11 +91,12 @@ const version = pkg.version;
     box-sizing: border-box;
 }
 
-/* SettingsCard 模式：panel 底 + 10px 圆角 + 浅色发丝描边（深色靠明度差） */
+/* SettingsCard 模式：玻璃板（半透明 + 顶亮底暗渐变 + 发丝边）。
+   ⚠️ 不挂 backdrop-filter：卡背后是纯色画布，模糊纯色零变化，白付合成成本。见 tokens 的 --ff-glass-* */
 .set-card {
-    background: var(--ff-panel);
+    background: var(--ff-glass-bg);
     border-radius: var(--ff-r-card);
-    box-shadow: inset 0 0 0 1px var(--ff-card-outline);
+    box-shadow: var(--ff-glass-shadow);
     padding: 6px 16px;
     margin-bottom: 16px;
 }

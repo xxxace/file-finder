@@ -75,13 +75,13 @@ const current = computed(() => PANELS.find((p) => p.key === panel.value));
 
     h1 {
         margin: 0;
-        font-size: 16px;
+        font-size: var(--ff-fs-title);
         font-weight: 500;
     }
 }
 
 .page-sub {
-    font-size: 12px;
+    font-size: var(--ff-fs-meta);
     color: var(--ff-text-2);
 }
 
@@ -120,7 +120,12 @@ const current = computed(() => PANELS.find((p) => p.key === panel.value));
 
     &:hover { background: var(--ff-ctl-hover); }
 
-    &.is-active { background: var(--ff-ctl-on); }
+    /* 选中块走玻璃高亮片（同一套材质、同一明度）：原来是实心 `--ff-ctl-on`，
+       在纯色画布上跟旁边的玻璃卡片是两种质感。 */
+    &.is-active {
+        background: var(--ff-glass-hi-bg);
+        box-shadow: var(--ff-glass-hi-shadow);
+    }
 }
 
 .nav-name {

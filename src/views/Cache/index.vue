@@ -4,7 +4,14 @@
              换一层祖先就得全改。它是"这一页的容器"，不再是一张卡。 -->
         <div class="cache-panel">
         <header class="page-head">
-            <h1>缓存记录</h1>
+            <div class="page-head-left">
+                <h1>缓存记录</h1>
+                <span v-if="overviewBrief" class="page-sub">{{ overviewBrief }}</span>
+                <button v-if="overviewTip" type="button" class="overview-info-btn" v-tip="overviewTip"
+                    aria-label="查看缓存统计明细">
+                    <n-icon :component="InformationCircleOutline" :size="14" />
+                </button>
+            </div>
             <!-- G1「找」= 搜索 + 刷新。
                  用户原话是「方便查看，搜索」—— 搜索是第一诉求，所以它占满一行，不再挤在 170px 里。
                  主界面早就是"输入即过滤"（index.vue 的 fileList computed），这里对齐，去掉「查询」按钮。
@@ -52,30 +59,6 @@
                     有 {{ duplicated.length }} 组移动硬盘的卷序列号完全一样（用 Ghost 之类整盘克隆会这样）。
                     序列号是这套缓存区分硬盘的唯一依据，两者会互相串 —— 建议重新格式化其中一块。
                 </Banner>
-
-                <!-- G2「逛」= 总览 + 唯一的安全出口；下一行才是盘筛选。
-                     这一行左边留给总览句（盘数 / 目录数 / 条目数 / 已读到多少 / 库大小 / 最近扫描）——
-                     它的数据来自阶段 B 给 /getDisks 加的只读 stats；**先把结构占好**，B 阶段只往里填内容，
-                     不再动布局（避免同一块地方改两次）。
-                     右边是「打开存放文件夹」：它是**唯一一个不碰任何数据**的出口
-                     （系统文件管理器自带回收站和撤销，比在应用里自建一个没有撤销的版本安全），
-                     所以它**不进**下面的折叠区 —— 折叠区收的是会动数据的动作。
-                     理由见 docs/DESIGN-CONVERGED-2026-09-24.md §三。 -->
-                <!-- 总览句**独占一行**（用户要求）。
-                     它是面板里最长的一句，和任何东西挤在一行都会被压到换行 —— 小窗口下尤其明显
-                     （实测：和按钮同行时 681px 窗口下文本高 40px = 两行）。给它整行就不会再折。 -->
-                <div class="g2-row">
-                    <!-- 总览句：盘数 / 目录数 / 条目数 / 已读到多少 / 库大小 / 最近扫描。
-                         全部来自 /getDisks 的 stats —— **服务端在内存里汇总**，一次盘都不读。
-                         「已读到」这个措辞是刻意的：它是缓存里记录到的字节之和（扫描快照），
-                         不是"硬盘上有多少"。 -->
-                    <!-- 2026-11-08 形态升级为「数据带」（主人裁决）：仍是独占一行、仍是同一句内容，
-                         但装进面板皮；主句允许折两行，扫描时间永远靠右不折。措辞一字未动。 -->
-                    <div v-if="overviewMain" class="overview-band">
-                        <span class="overview">{{ overviewMain }}</span>
-                        <span v-if="overviewScan" class="overview-scan">{{ overviewScan }}</span>
-                    </div>
-                </div>
 
                 <!-- 选盘 = 这套缓存的分组维度：先说清"这些缓存属于哪块盘"，再列那块盘缓存过哪些目录。
                      盘符只是当前挂载点，真正的身份是卷序列号。
@@ -178,7 +161,7 @@ import { ipcRenderer } from 'electron';
 import useNotify from '@/hooks/useNotify';
 import useConfirm from '@/hooks/useConfirm';
 import Banner from '@/components/Overlay/Banner.vue';
-import { Search, RefreshOutline, TrashOutline, CloseCircleOutline } from '@vicons/ionicons5';
+import { Search, RefreshOutline, TrashOutline, CloseCircleOutline, InformationCircleOutline } from '@vicons/ionicons5';
 import {
     NInput, NButton, NPagination, NDataTable, NSpin, NIcon,
 } from 'naive-ui'
@@ -397,31 +380,36 @@ const handleSorterChange = (sorter: DataTableSortState | DataTableSortState[] | 
  * 拆成「主句 + 右侧扫描时间」两段展示（2026-11-08 数据带化）：主句允许折两行，
  * 扫描时间恒靠右。拿不到 stats 时主句为空 ⇒ 带子整个不渲染（不闪半截壳）。
  */
-const overviewStats = computed(() => {
+const overviewBrief = computed(() => {
     const s = stats.value;
-    if (!s) return null;
-    const parts = [
-        `${s.disks} 块盘`,
-        `${s.folders} 个目录`,
-        `${s.entries} 个条目`,
-        // ⚠️「已读到」这三个字不能省、也不能改成"当前"或"硬盘上"：
-        // 它是"缓存里记录到的字节之和"，是**扫描快照**，不是硬盘上的实时占用。
-        `已读到 ${formatBytes(s.bytes)}`,
-    ];
-    if (typeof s.dbBytes === 'number') parts.push(`库 ${formatBytes(s.dbBytes)}`);
-    // 图片单列而不是并进「库」那一句：两者是完全不同的两样东西（一个可再生、一个是耗时扫出来的），
-    // 混成一句会让人以为"把库文件拷走就等于拷走了缓存"（那就错了，图片在 bin/ 里）。
-    if (typeof s.binCount === 'number') {
-        parts.push(`图片 ${s.binCount} 张 · ${formatBytes(s.binBytes ?? 0)}`);
-    }
-    return parts;
+    if (!s) return '';
+    return `${s.disks} 块盘 · ${s.folders} 目录 · 已读到 ${formatBytes(s.bytes)}`;
 });
 
-const overviewMain = computed(() => overviewStats.value?.join(' · ') ?? '');
-
-const overviewScan = computed(() => {
+const overviewTip = computed(() => {
     const s = stats.value;
-    return s?.lastScanAt ? `最近扫描 ${fmtScanTime(s.lastScanAt)}` : '';
+    if (!s) return undefined;
+    const rows: { k: string; v: string }[] = [
+        { k: '盘数', v: `${s.disks} 块` },
+        { k: '目录', v: `${s.folders}` },
+        { k: '条目', v: `${s.entries}` },
+        { k: '已读到', v: formatBytes(s.bytes) },
+    ];
+    if (typeof s.dbBytes === 'number') rows.push({ k: '缓存库', v: formatBytes(s.dbBytes) });
+    if (typeof s.binCount === 'number') {
+        rows.push({ k: '图片仓', v: `${s.binCount} 张 · ${formatBytes(s.binBytes ?? 0)}` });
+    }
+    if (s.lastScanAt) rows.push({ k: '最近扫描', v: fmtScanTime(s.lastScanAt) });
+    return {
+        text: '缓存总览',
+        body: () => h('div', { class: 'disk-chip-tip' }, [
+            h('div', { class: 'tip-head' }, '缓存总览'),
+            ...rows.map(r => h('div', { class: 'tip-row', key: r.k }, [
+                h('span', { class: 'tip-k' }, r.k),
+                h('span', { class: 'tip-v' }, r.v),
+            ])),
+        ]),
+    };
 });
 
 const tableData = ref<RowData[]>([])
@@ -980,63 +968,68 @@ onUnmounted(() => ipcRenderer.off('ff-disks-changed', onDisksChangedIpc));
     margin-bottom: 10px;
 }
 
+.cache-page .page-head-left {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    min-width: 0;
+}
+
 .cache-page .page-head h1 {
     margin: 0;
     font-size: var(--ff-fs-title);
     font-weight: 500;
     color: var(--ff-text-1);
+    white-space: nowrap;
+}
+
+.cache-page .page-sub {
+    font-size: var(--ff-fs-meta);
+    color: var(--ff-text-2);
+    font-variant-numeric: tabular-nums;
+    white-space: nowrap;
+}
+
+.cache-page .overview-info-btn {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 22px;
+    height: 22px;
+    padding: 0;
+    border: 0;
+    border-radius: 50%;
+    background: transparent;
+    color: var(--ff-text-2);
+    cursor: pointer;
+    transition: background-color var(--ff-dur-hover) ease, color var(--ff-dur-hover) ease;
+
+    &:hover {
+        background: var(--ff-ctl-hover);
+        color: var(--ff-text-1);
+    }
 }
 
 .cache-panel .g1-row {
     display: flex;
     align-items: center;
+    justify-content: flex-end;
     gap: var(--ff-sp-2);
-    /* 搜索是第一诉求：页头 44px 化后吃满剩余宽度（对齐主界面地址槽的手感） */
     flex: 1 1 auto;
     min-width: 0;
 }
 
-/* 搜索框外面那层：为了接输入法的 composition 事件（见模板注释），顺带负责占满剩余宽度 */
+/* 搜索框外面那层：为了接输入法的 composition 事件（见模板注释），右侧与刷新按钮一起右对齐 */
 .cache-panel .g1-search {
-    flex: 1 1 auto;
+    flex: 0 1 320px;
+    width: 320px;
+    max-width: 100%;
     display: flex;
     min-width: 0;
 }
 
 .cache-panel .g1-search .n-input {
     flex: 1 1 auto;
-}
-
-/* 总览**独占一行**（神圣，位置不动）；形态升级为数据带（2026-11-08 主人裁决）：
-   装进面板皮、长句可折两行、数字 tabular-nums、扫描时间靠右。 */
-.cache-panel .g2-row {
-    padding-bottom: var(--ff-sp-2);
-}
-
-.cache-panel .overview-band {
-    display: flex;
-    align-items: center;
-    gap: var(--ff-sp-3);
-    background: var(--ff-panel);
-    border: 1px solid var(--ff-card-outline);
-    border-radius: var(--ff-r-ctl);
-    padding: 5px 12px;
-    font-variant-numeric: tabular-nums;
-}
-
-.cache-panel .overview {
-    flex: 1 1 auto;
-    min-width: 0;
-    font-size: var(--ff-fs-meta);
-    line-height: 1.5;
-    color: var(--ff-text-2);
-}
-
-.cache-panel .overview-scan {
-    flex: 0 0 auto;
-    font-size: var(--ff-fs-eyebrow);
-    color: var(--ff-text-2);
-    white-space: nowrap;
 }
 
 /* 盘条那一行。
@@ -1265,16 +1258,14 @@ onUnmounted(() => ipcRenderer.off('ff-disks-changed', onDisksChangedIpc));
 .cache-panel .dir-note {
     flex-shrink: 0;
     margin-left: auto;
-    font-size: 11.5px;
+    font-size: var(--ff-fs-eyebrow);
     color: var(--ff-warn);
 }
 
-/* 素数据列（盘 / 条目 / 大小 / 扫描时间）：Finder 的规矩 —— 主列只有"目录"（蓝字链接），
-   其余列全部降次要档，一眼只有一个视觉入口。数字 tabular-nums 让个位对齐
-   （Geist 自带 tnum，等宽数字是数据表格"产品感"的一半来源）。 */
+/* 盘 / 条目 / 大小 / 扫描时间：主数据保持 text-1 清晰可读，表头与扫描时间用 text-2 区分层次 */
 .cache-panel .disk-cell,
 .cache-panel .num-cell {
-    color: var(--ff-text-2);
+    color: var(--ff-text-1);
     font-variant-numeric: tabular-nums;
 }
 
@@ -1297,13 +1288,13 @@ onUnmounted(() => ipcRenderer.off('ff-disks-changed', onDisksChangedIpc));
 /* 空态：保持"一行浅灰小字"，和主界面 emptyTip 一致（不加图标、不加按钮）。 */
 .cache-panel .empty-tip {
     padding: 18px 4px;
-    font-size: 12.5px;
+    font-size: var(--ff-fs-meta);
     color: var(--ff-text-2);
 }
 
 .cache-panel .empty-sub {
     margin-top: 4px;
-    font-size: 12px;
+    font-size: var(--ff-fs-meta);
     color: var(--ff-text-2);
     opacity: .8;
 }

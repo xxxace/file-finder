@@ -65,9 +65,16 @@ function place() {
     const extraY = tipState.offsetY || 0;
     let y = anchor.bottom + 8 + extraY;
     if (y + h > window.innerHeight - 8) y = anchor.top - h - 8 - extraY;
-    const x = Math.min(Math.max(12, cx - w / 2), window.innerWidth - w - 12);
+    /**
+     * ⚠️ 落点**必须取整**（2026-11-26 逐像素实测）：
+     * `cx - w/2` 常常是半像素（锚点宽/2 + 小数边距），`translate()` 带小数 ⇒ 整层被重采样，
+     * 后果有两个：① 字形发虚（对比旁边按钮一眼可见）② 1px 描边被抗锯齿吃掉一半 ——
+     * 实测同一圈 ring 在右/下是 105、在左/上只有 81，看着像"从右下打光"，根本不像描边。
+     * `offsetWidth/offsetHeight` 本身返回整数，位置取整后四边都落在整数栅格上。
+     */
+    const x = Math.round(Math.min(Math.max(12, cx - w / 2), window.innerWidth - w - 12));
     pos.x = x;
-    pos.y = Math.max(8, y);
+    pos.y = Math.round(Math.max(8, y));
 }
 
 watch(

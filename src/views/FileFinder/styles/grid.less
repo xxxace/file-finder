@@ -1,47 +1,29 @@
 /* 状态条 / 网格 / 定位压暗 / 扫描光雾 / 空状态 */
 
-/* ── 状态条「挂上 / 摘掉」的动画（2026-11-08）───────────────────────────────
-   这条状态条**在文档流里**（`.file-finder` 是 flex 列），所以只做淡入是假动画：
-   卸载那一帧网格就跳 50px，然后条自己再淡出去。**高度必须一起过渡**。
-   `height: auto` 不可过渡，`max-height` 要写魔数（内容一变就剪错高度）⇒
-   用 grid 轨道 `minmax(0,1fr) ↔ minmax(0,0fr)`：零魔数、内容多高都收得干净。
-   Chromium 152 实测可插值：`docs/probes/bar-collapse/`（200ms 一拍下采到 12 帧中间高度，槽 50→0，
-   网格顶边同步上移）。
-   ⚠️ 两个前提**缺一不可**，少一个就"收不起来"（探针第一版就是这么失败的）：
-     ① 轨道写 `minmax(0, …)` —— 裸写 `0fr` 等于 `minmax(auto, 0fr)`，轨道的自动最小尺寸
-        取内容的 min-content，`.scan-bar` 的 `min-height: 40px` 会把它顶死；
-     ② 里层 `.scan-bar` 有 `overflow: hidden` —— 网格项的自动最小尺寸只有非 visible 才归 0。
-   ⚠️ 透明度用 linear、时长走**拍内分带**（2026-11-08 第八轮，同面包屑）：
-   这条曲线是给位移的（前重后轻），拿 `--ff-ease-exit` 淡出会中途就掉到 0.1，
-   肉眼等于"闪一下"（面包屑那边踩过）。进 = 延迟 25% 拍、后用 50% 拍显形；
-   退 = 前 45% 拍内消失，然后才让空间塌下去。 */
+/* ── 底部悬浮状态条 / 换封面操作栏（与 AssistantShell/.ffw-dock 共用毛玻璃材质）── */
 .scan-bar-slot {
-    display: grid;
-    grid-template-rows: minmax(0, 1fr);
-    /* 收起过程中内容仍按自身高度渲染，不裁就会盖到网格上 */
-    overflow: hidden;
-    /* 不参与压缩：该被挤的是网格（`flex: 1`），不是这条 */
-    flex: 0 0 auto;
+    position: absolute;
+    inset: auto 0 0 0;
+    z-index: 4;
+    pointer-events: auto;
 }
 
 .fx-bar-enter-active {
-    transition: grid-template-rows var(--ff-dur-move) var(--ff-ease-move),
+    transition: transform var(--ff-dur-move) var(--ff-ease-move),
         opacity var(--ff-fade-in) linear var(--ff-fade-in-delay);
 }
 
 .fx-bar-leave-active {
-    transition: grid-template-rows var(--ff-dur-move) var(--ff-ease-exit),
+    transition: transform var(--ff-dur-move) var(--ff-ease-exit),
         opacity var(--ff-dur-exit) linear;
 }
 
 .fx-bar-enter-from,
 .fx-bar-leave-to {
-    grid-template-rows: minmax(0, 0fr);
+    transform: translateY(100%);
     opacity: 0;
 }
 
-/* 减少动态效果：直接切终态。轨道过渡必须整体关掉 —— 留个 0ms 的过渡在
-   `grid-template-rows` 上只会让"挂上/摘掉"多算一帧，没有意义。 */
 @media (prefers-reduced-motion: reduce) {
 
     .fx-bar-enter-active,
@@ -50,55 +32,42 @@
     }
 }
 
-/* 扫描状态条：贴着网格下方一条，整条随 scanning 出现/消失 */
 .scan-bar {
     display: flex;
     align-items: center;
-    /* ⚠️ 2026-11-08：这条不是可有可无的 —— 它是 `.scan-bar-slot` 能把高度收到 0 的
-       **第二个前提**（网格项的自动最小尺寸只有非 visible 才归 0）。
-       顺带保证内容不被裁：收起时轨道已经 0，这里裁不裁都看不见。 */
-    overflow: hidden;
-    /* 元素间距统一 8（§4.4）；组的切分交给 `.pick-acts` 内部再分一档 */
     gap: 8px;
-    /* 定高：挑选条 / 扫描条**两种内容**高度一致 —— 扫描过程中途切换文案
-       （`取消` → `正在取消…` 多一行提示）不会让条自己长高、把网格顶一下。
-       ⚠️ 它**管不到**"整条挂上/摘掉"，那件事现在由 `.scan-bar-slot` 的轨道动画负责。 */
-    min-height: 40px;
-    padding: 2px var(--ff-content-inset) 8px;
+    height: 48px;
+    padding: 0 var(--ff-content-inset);
+    box-sizing: border-box;
+    background: var(--ff-tip-bg);
+    backdrop-filter: var(--ff-tip-backdrop);
+    border-top: 1px solid var(--ff-line);
 
     .scan-progress,
     .scan-hint {
-        font-size: 12px;
+        font-size: var(--ff-fs-meta);
         color: var(--ff-text-2);
     }
 
-    /* 模式标签：只用一处淡高亮，说明"你现在在一个模式里"。
-       不给整条加深色底 —— 它贴在网格上方，加深底会和封面抢注意力。 */
     .pick-badge {
         flex: none;
-        font-size: 11px;
+        font-size: var(--ff-fs-eyebrow);
         font-weight: 500;
         line-height: 18px;
         padding: 0 8px;
         border-radius: var(--ff-r-pill);
-        /* 中性胶囊，不占高亮色 —— 高亮色只留给「卡片选中 / 悬浮 / 输入框焦点」三处。
-           模式的存在感由这条状态条本身 + 右端那颗实心主按钮承担。
-           ⚠️ 底色用 `--ff-chrome-active`（左轨选中同一个灰）：原来是 `--ff-raised`，
-           它贴白面板只差 5 级，一块"我在某个模式里"的标签淡到看不出边界。 */
         color: var(--ff-text-1);
         background: var(--ff-chrome-active);
     }
 
-    /* 计数是**状态**不是句子：数字单独加亮，单位退后 */
     .pick-count {
         flex: none;
-        font-size: 13px;
+        font-size: var(--ff-fs-body);
         color: var(--ff-text-2);
 
         b {
             font-weight: 500;
             color: var(--ff-text-1);
-            /* 数字等宽：选到 10 个时行宽不跳 */
             font-variant-numeric: tabular-nums;
         }
     }
@@ -433,6 +402,10 @@
     box-sizing: border-box;
     overflow: hidden auto;
     transition: filter 420ms ease, opacity 420ms ease;
+
+    &.has-bar {
+        padding-bottom: calc(var(--ff-grid-ring-room) + 56px);
+    }
     /* ── 卡片尺寸变量：**按密度档位在这里改，子元素只读** ──────────────────────────
        为什么做成变量而不是给紧凑档另写一套 `.card-title` 规则：
        标题高/字号/行高必须**一起**换（高换了字号没换 = 两行塞不下成省略号；

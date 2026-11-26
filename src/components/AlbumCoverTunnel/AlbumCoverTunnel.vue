@@ -361,7 +361,7 @@ onBeforeUnmount(() => {
     overflow: hidden;
     background: #05060f;
     user-select: none;
-    font-family: var(--ff-font-family, system-ui, sans-serif);
+    font-family: var(--ff-font, system-ui, sans-serif);
 }
 
 .tunnel-container.hide-cursor,
@@ -436,8 +436,15 @@ onBeforeUnmount(() => {
 }
 
 .hud-select {
-    padding: 6px 12px;
-    background: rgba(18, 20, 36, 0.75);
+    /* 原生 select 的箭头固定在边框内侧、padding 推不动 ⇒ 关掉原生外观，自绘 chevron（右侧留 11px，与左侧文字内边距对称） */
+    appearance: none;
+    -webkit-appearance: none;
+    padding: 6px 32px 6px 12px;
+    background-color: rgba(18, 20, 36, 0.75);
+    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23e2e8f0' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M6 9l6 6 6-6'/%3E%3C/svg%3E");
+    background-repeat: no-repeat;
+    background-position: right 11px center;
+    background-size: 14px 14px;
     backdrop-filter: blur(16px);
     border: 1px solid rgba(255, 255, 255, 0.15);
     border-radius: 999px;

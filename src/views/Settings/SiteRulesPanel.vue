@@ -4,37 +4,45 @@
             @toggle="toggleRule" @remove="removeRule" @move="moveRule" />
 
         <section class="rules-main">
-            <!-- 唯一顶部操作栏：调试番号、试跑、看页面、保存收归一处，避免上下重复 -->
-            <div class="debug-bar">
-                <span class="debug-lbl">调试番号</span>
-                <n-input ref="queryInputRef" v-model:value="testQuery" class="query-input"
-                    placeholder="如 SSIS-001" />
-                <n-button v-if="running" size="small" type="warning" @click="cancelTest">取消试跑</n-button>
-                <n-button v-else size="small" secondary :disabled="!draft.detailUrl || !testQuery"
-                    @click="runTest">
-                    <template #icon><n-icon><PlayOutline /></n-icon></template>
-                    试跑
-                </n-button>
-                <n-checkbox v-model:checked="showWindow" class="no-wrap">显示窗口</n-checkbox>
-                <n-button size="small" secondary :disabled="!draft.detailUrl" @click="openTarget">
-                    <template #icon><n-icon><OpenOutline /></n-icon></template>
-                    打开页面
-                </n-button>
-                <n-button v-if="pageId" size="small" secondary @click="useAsTemplate">
-                    <template #icon><n-icon><LinkOutline /></n-icon></template>
-                    提取模板
-                </n-button>
-                <div class="debug-spacer" />
-                <span v-if="isDirty" class="dirty-tag">未保存</span>
-                <n-button v-if="isDirty && !isNew" size="small" quaternary title="放弃未保存修改"
-                    @click="resetDraft">
-                    <template #icon><n-icon><RefreshOutline /></n-icon></template>
-                    还原
-                </n-button>
-                <n-button size="small" type="primary" :disabled="!saveReady" :loading="saving" @click="save">
-                    <template #icon><n-icon><SaveOutline /></n-icon></template>
-                    保存
-                </n-button>
+            <!-- 顶部固定栏：拆分「编辑提交（保存/还原）」与「调试工具条」，避免保存按钮换行掉落 -->
+            <div class="editor-head">
+                <div class="editor-bar">
+                    <div class="editor-id">
+                        <span class="editor-name">{{ draft.name || draft.id || '新建站点' }}</span>
+                        <span v-if="isDirty" class="dirty-tag">未保存</span>
+                    </div>
+                    <div class="editor-acts">
+                        <n-button v-if="isDirty && !isNew" size="small" quaternary title="放弃未保存修改"
+                            @click="resetDraft">
+                            <template #icon><n-icon><RefreshOutline /></n-icon></template>
+                            还原
+                        </n-button>
+                        <n-button size="small" type="primary" :disabled="!saveReady" :loading="saving" @click="save">
+                            <template #icon><n-icon><SaveOutline /></n-icon></template>
+                            保存
+                        </n-button>
+                    </div>
+                </div>
+                <div class="debug-bar">
+                    <span class="debug-lbl">调试番号</span>
+                        <n-input ref="queryInputRef" v-model:value="testQuery" class="query-input"
+                            placeholder="如 TST-001" />
+                    <n-button v-if="running" size="small" type="warning" @click="cancelTest">取消试跑</n-button>
+                    <n-button v-else size="small" secondary :disabled="!draft.detailUrl || !testQuery"
+                        @click="runTest">
+                        <template #icon><n-icon><PlayOutline /></n-icon></template>
+                        试跑
+                    </n-button>
+                    <n-checkbox v-model:checked="showWindow" class="no-wrap">显示窗口</n-checkbox>
+                    <n-button size="small" secondary :disabled="!draft.detailUrl" @click="openTarget">
+                        <template #icon><n-icon><OpenOutline /></n-icon></template>
+                        打开页面
+                    </n-button>
+                    <n-button v-if="pageId" size="small" secondary @click="useAsTemplate">
+                        <template #icon><n-icon><LinkOutline /></n-icon></template>
+                        提取模板
+                    </n-button>
+                </div>
             </div>
 
             <!-- 试跑结果就近回显在工具栏下方，无需上下翻找 -->
@@ -52,8 +60,8 @@
                 <div class="field-grid">
                     <div class="field-col">
                         <label class="field-lbl">站点 ID（唯一标识）</label>
-                        <n-input v-model:value="draft.id" placeholder="英文标识，如 mysite（保存后不可改）"
-                            :disabled="!isNew" />
+                        <n-input v-if="isNew" v-model:value="draft.id" placeholder="英文标识，如 mysite（保存后不可改）" />
+                        <n-input v-else :value="draft.id" readonly />
                     </div>
                     <div class="field-col">
                         <label class="field-lbl">显示名称</label>
@@ -531,51 +539,89 @@ onMounted(init);
     gap: 12px;
 }
 
-.debug-bar {
+/* 顶部固定栏是全页唯一「真的会盖住滚动内容」的面 ⇒ 只有这里吃 backdrop 模糊，
+   所以走 --ff-glass-cover-*（够不透明，字不会从底下渗上来）。 */
+.editor-head {
     position: sticky;
     top: 0;
     z-index: 2;
     display: flex;
+    flex-direction: column;
+    gap: 10px;
+    padding: 12px 16px;
+    border-radius: var(--ff-r-card);
+    background: var(--ff-glass-cover-bg);
+    box-shadow: var(--ff-glass-cover-shadow);
+    backdrop-filter: var(--ff-glass-cover-backdrop);
+}
+
+.editor-bar {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+}
+
+.editor-id {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    min-width: 0;
+}
+
+.editor-name {
+    font-size: var(--ff-fs-title);
+    font-weight: 500;
+    color: var(--ff-text-1);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.editor-acts {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    flex: 0 0 auto;
+}
+
+.debug-bar {
+    display: flex;
     align-items: center;
     flex-wrap: wrap;
     gap: 8px;
-    padding: 10px 14px;
-    border-radius: 10px;
-    background: var(--ff-panel);
-    border: 1px solid var(--ff-line-strong);
+    padding-top: 10px;
+    border-top: 1px solid var(--ff-line);
 }
 
 .debug-lbl {
-    font-size: 13px;
+    font-size: var(--ff-fs-meta);
     font-weight: 500;
-    color: var(--ff-text-1);
+    color: var(--ff-text-2);
     white-space: nowrap;
 }
 
 .query-input {
-    width: 180px;
-    flex: 0 0 180px;
+    width: 170px;
+    flex: 0 0 170px;
 }
 
 .rec-dot {
     color: var(--ff-danger);
 }
 
-.debug-spacer {
-    flex: 1 1 auto;
-}
-
 .dirty-tag {
-    font-size: 12px;
+    font-size: var(--ff-fs-eyebrow);
     color: var(--ff-warn);
     white-space: nowrap;
 }
 
+/* 玻璃板：同 GeneralPanel 的 .set-card（不挂 backdrop，理由见 tokens 的 --ff-glass-*） */
 .rule-card {
     padding: 14px 16px;
-    border-radius: 10px;
-    background: var(--ff-panel);
-    border: 1px solid var(--ff-line);
+    border-radius: var(--ff-r-card);
+    background: var(--ff-glass-bg);
+    box-shadow: var(--ff-glass-shadow);
 }
 
 .step-head {
@@ -592,23 +638,22 @@ onMounted(init);
     justify-content: center;
     width: 22px;
     height: 22px;
-    border-radius: 6px;
+    border-radius: var(--ff-r-pill);
     background: var(--ff-raised);
-    border: 1px solid var(--ff-line-strong);
-    font-size: 13px;
-    font-weight: 600;
+    font-size: var(--ff-fs-meta);
+    font-weight: 500;
     color: var(--ff-text-1);
     flex: 0 0 auto;
 }
 
 .step-title {
-    font-size: 15px;
-    font-weight: 600;
+    font-size: var(--ff-fs-title);
+    font-weight: 500;
     color: var(--ff-text-1);
 }
 
 .step-sub {
-    font-size: 12.5px;
+    font-size: var(--ff-fs-meta);
     color: var(--ff-text-2);
 }
 
@@ -626,13 +671,13 @@ onMounted(init);
 }
 
 .field-lbl {
-    font-size: 12.5px;
+    font-size: var(--ff-fs-meta);
     font-weight: 500;
     color: var(--ff-text-2);
 }
 
 .url-preview {
-    font-size: 12px;
+    font-size: var(--ff-fs-meta);
     color: var(--ff-text-2);
     word-break: break-all;
     padding: 2px 2px 0;
@@ -671,13 +716,13 @@ onMounted(init);
 .mt-sm { margin-top: 6px; }
 
 .lbl {
-    font-size: 13px;
+    font-size: var(--ff-fs-body);
     color: var(--ff-text-1);
     white-space: nowrap;
 }
 
 .note {
-    font-size: 12.5px;
+    font-size: var(--ff-fs-meta);
     line-height: 1.5;
     color: var(--ff-text-2);
 }
@@ -685,12 +730,12 @@ onMounted(init);
 .adv-fields {
     margin-top: 12px;
     padding: 10px 12px;
-    border-radius: 8px;
+    border-radius: var(--ff-r-ctl);
     background: var(--ff-raised);
 
     summary {
         cursor: pointer;
-        font-size: 13px;
+        font-size: var(--ff-fs-body);
         font-weight: 500;
         color: var(--ff-text-1);
     }

@@ -22,13 +22,13 @@
                 </n-input>
             </template>
             <div class="row-btns">
-                <n-button size="tiny" quaternary :disabled="i === 0" title="上移" @click="move(i, -1)">
+                <n-button size="small" quaternary :disabled="i === 0" title="上移" @click="move(i, -1)">
                     <template #icon><n-icon><ArrowUpOutline /></n-icon></template>
                 </n-button>
-                <n-button size="tiny" quaternary :disabled="i === steps.length - 1" title="下移" @click="move(i, 1)">
+                <n-button size="small" quaternary :disabled="i === steps.length - 1" title="下移" @click="move(i, 1)">
                     <template #icon><n-icon><ArrowDownOutline /></n-icon></template>
                 </n-button>
-                <n-button size="tiny" quaternary class="del-btn" title="删除此步骤" @click="steps.splice(i, 1)">
+                <n-button size="small" quaternary class="del-btn" title="删除此步骤" @click="steps.splice(i, 1)">
                     <template #icon><n-icon><TrashOutline /></n-icon></template>
                 </n-button>
             </div>
@@ -87,7 +87,11 @@ function move(i: number, d: number) {
 }
 
 .del-btn {
-    color: var(--ff-danger);
+    /* 同 RuleSiteList：not a `color:` —— naive 的 `:hover` 会把它盖掉 */
+    --n-text-color: var(--ff-danger) !important;
+    --n-text-color-hover: var(--ff-danger) !important;
+    --n-text-color-pressed: var(--ff-danger) !important;
+    --n-text-color-focus: var(--ff-danger) !important;
 }
 
 .empty-hint {

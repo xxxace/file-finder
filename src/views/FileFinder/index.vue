@@ -200,7 +200,7 @@
         <div class="image-box-wrap">
             <div
                 class="image-box"
-                :class="{ 'is-glowing': !!glow }"
+                :class="{ 'is-glowing': !!glow, 'has-bar': (!glow && scanning) || picking }"
                 ref="imageBox"
                 :data-density="density"
                 :style="{ '--ff-grid-cols': gridCols }"
@@ -321,6 +321,33 @@
                 @swept="onScanSwept"
                 @closed="glow = ''"
             />
+            <!-- 状态条 / 换封面底栏：悬浮于 .image-box-wrap 底部，复用全站 --ff-tip-* 毛玻璃材质 -->
+            <Transition name="fx-bar">
+                <div v-if="(!glow && scanning) || picking" class="scan-bar-slot">
+                    <div class="scan-bar">
+                        <template v-if="!scanning">
+                            <span class="pick-badge">换封面</span>
+                            <span class="pick-count">已选 <b>{{ pickedCount }}</b> 处</span>
+                            <span v-if="!pickedCount" class="scan-hint">点有封面的格子；没有封面的那是「补封面」管的事</span>
+                            <span class="pick-spacer"></span>
+                            <div class="pick-acts">
+                                <n-button size="small" :disabled="!pickedCount" @click="clearPicked">清空</n-button>
+                                <n-button size="small" @click="exitPick">退出</n-button>
+                                <n-button class="pick-go" size="small" type="primary" :disabled="!pickedCount" @click="openFaces">
+                                    换封面
+                                </n-button>
+                            </div>
+                        </template>
+                        <template v-else>
+                            <span class="scan-progress">{{ scanVerb }} {{ scanDone }} · 待 {{ scanPending }}</span>
+                            <n-button size="small" :disabled="cancelling" @click="onScanCancel">
+                                {{ cancelling ? '正在取消…' : '取消' }}
+                            </n-button>
+                            <span v-if="cancelling" class="scan-hint">当前这个目录扫完就停</span>
+                        </template>
+                    </div>
+                </div>
+            </Transition>
         </div>
         <!-- 扫描状态条。PC 文件管理器的做法：**进度和「取消」成对待在独立的一条里**，
              不挤进工具条、不顶掉任何按钮（工具条那边只把动作置灰）。
@@ -344,44 +371,7 @@
              被自下而上压扁，同时这条自己向下展开 —— 合起来就是"先上后下"。
              它的两条信息（已扫/待扫、取消）已经搬进光雾面板，功能没有丢。
              `picking` 那条与 glow 不会同时出现（进模式前会等扫描结束）。 -->
-        <Transition name="fx-bar">
-            <div v-if="(!glow && scanning) || picking" class="scan-bar-slot">
-                <div class="scan-bar">
-                    <!-- 「换封面」的挑选中。复用这一条而不动工具条 —— 工具条那条铁律是
-                         "绝不消失、绝不换形、一个字都不随状态变"，所以模式态的信号只能住在这里。
-                         两者不会同时出现（进模式前会等扫描结束）。 -->
-                    <template v-if="!scanning">
-                        <!-- 三段式：模式标签 → 状态 → 动作（右对齐）。
-                             原来的形态是「一句 20 字说明 + 3 个按钮 + 一句帮助文案」全挤在一行，
-                             没有主次、也没有留白，读起来像说明书。
-                             帮助文案只在**一处都还没选**时出现 —— 选过了就不需要教了。 -->
-                        <span class="pick-badge">换封面</span>
-                        <span class="pick-count">已选 <b>{{ pickedCount }}</b> 处</span>
-                        <span v-if="!pickedCount" class="scan-hint">点有封面的格子；没有封面的那是「补封面」管的事</span>
-                        <span class="pick-spacer"></span>
-                        <!-- 动作分**两档**：可逆的次要动作（清空 / 退出）与主操作（换封面）。
-                             三个按钮等距平铺时读成同一档，主操作喊不出来 —— 组内 8、组间 16。
-                             ⚠️ 0 选中时「清空」和「换封面」确实该禁用；它们与可点的「退出」必须**看得出差别**，
-                             那条差异由主题层给（`naive-theme.ts` 的 Button.textColor / textColorDisabled），
-                             不在这里写局部覆盖。 -->
-                        <div class="pick-acts">
-                            <n-button size="small" :disabled="!pickedCount" @click="clearPicked">清空</n-button>
-                            <n-button size="small" @click="exitPick">退出</n-button>
-                            <n-button class="pick-go" size="small" type="primary" :disabled="!pickedCount" @click="openFaces">
-                                换封面
-                            </n-button>
-                        </div>
-                    </template>
-                    <template v-else>
-                        <span class="scan-progress">{{ scanVerb }} {{ scanDone }} · 待 {{ scanPending }}</span>
-                        <n-button size="small" :disabled="cancelling" @click="onScanCancel">
-                            {{ cancelling ? '正在取消…' : '取消' }}
-                        </n-button>
-                        <span v-if="cancelling" class="scan-hint">当前这个目录扫完就停</span>
-                    </template>
-                </div>
-            </div>
-        </Transition>
+        <!-- 状态条已移入 .image-box-wrap 内部实现底部毛玻璃悬浮 -->
         <!-- 「这个封面下有哪几个文件」层：2026-11-11 改成**纵向菜单**（2~5 项里挑一个，不是内容网格）。
              尺度照 `ctx-menu.css`：32 行高、16 线条图标、名字左对齐、大小右对齐。
              ⚠️ 名字拆两段（`fileNameSplit.ts`）不用 `text-overflow: ellipsis`：

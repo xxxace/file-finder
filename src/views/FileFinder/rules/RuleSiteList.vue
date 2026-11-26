@@ -20,17 +20,17 @@
                     <span class="rule-host">{{ hostOf(r.detailUrl) }}</span>
                 </div>
                 <span class="row-ops" @click.stop>
-                    <n-button size="tiny" quaternary :disabled="idx === 0" title="上移（提高优先级）"
+                    <n-button size="small" quaternary :disabled="idx === 0" title="上移（提高优先级）"
                         @click="emit('move', idx, -1)">
                         <template #icon><n-icon><ArrowUpOutline /></n-icon></template>
                     </n-button>
-                    <n-button size="tiny" quaternary :disabled="idx === rules.length - 1" title="下移（降低优先级）"
+                    <n-button size="small" quaternary :disabled="idx === rules.length - 1" title="下移（降低优先级）"
                         @click="emit('move', idx, 1)">
                         <template #icon><n-icon><ArrowDownOutline /></n-icon></template>
                     </n-button>
                     <n-popconfirm positive-text="确认删除" negative-text="取消" @positive-click="emit('remove', r)">
                         <template #trigger>
-                            <n-button size="tiny" quaternary class="del-btn" title="删除该站点规则">
+                            <n-button size="small" quaternary class="del-btn" title="删除该站点规则">
                                 <template #icon><n-icon><TrashOutline /></n-icon></template>
                             </n-button>
                         </template>
@@ -62,11 +62,11 @@ const emit = defineEmits<{
 
 <style lang="less" scoped>
 .rules-side {
-    width: 280px;
-    flex: 0 0 280px;
+    width: 268px;
+    flex: 0 0 268px;
     display: flex;
     flex-direction: column;
-    border-right: 1px solid var(--ff-line-strong);
+    border-right: 1px solid var(--ff-line);
     padding-right: 14px;
     min-height: 0;
 }
@@ -75,12 +75,12 @@ const emit = defineEmits<{
     display: flex;
     align-items: center;
     justify-content: space-between;
-    margin-bottom: 12px;
+    margin-bottom: 10px;
 }
 
 .side-title {
-    font-size: 14px;
-    font-weight: 600;
+    font-size: var(--ff-fs-body);
+    font-weight: 500;
     color: var(--ff-text-1);
 }
 
@@ -98,11 +98,16 @@ const emit = defineEmits<{
     align-items: center;
     gap: 8px;
     padding: 8px;
-    border-radius: 8px;
+    border-radius: var(--ff-r-ctl);
     cursor: pointer;
 
     &:hover { background: var(--ff-ctl-hover); }
-    &.is-active { background: var(--ff-ctl-on); }
+
+    /* 选中行 = 玻璃高亮片（与设置页左导航同一份材质，见 tokens 的 --ff-glass-hi-*） */
+    &.is-active {
+        background: var(--ff-glass-hi-bg);
+        box-shadow: var(--ff-glass-hi-shadow);
+    }
 }
 
 .rule-info {
@@ -121,7 +126,7 @@ const emit = defineEmits<{
 }
 
 .rule-name {
-    font-size: 13.5px;
+    font-size: var(--ff-fs-body);
     font-weight: 500;
     color: var(--ff-text-1);
     overflow: hidden;
@@ -130,9 +135,9 @@ const emit = defineEmits<{
 }
 
 .rule-badge {
-    font-size: 11px;
+    font-size: var(--ff-fs-eyebrow);
     padding: 1px 6px;
-    border-radius: 4px;
+    border-radius: var(--ff-r-pill);
     background: var(--ff-raised);
     flex: 0 0 auto;
 
@@ -140,7 +145,7 @@ const emit = defineEmits<{
 }
 
 .rule-host {
-    font-size: 12px;
+    font-size: var(--ff-fs-meta);
     color: var(--ff-text-2);
     overflow: hidden;
     text-overflow: ellipsis;
@@ -162,7 +167,13 @@ const emit = defineEmits<{
 }
 
 .del-btn {
-    color: var(--ff-danger);
+    /* ⚠️ 不能只写 `color:` —— naive 的 `.n-button:hover{color:var(--n-text-color-hover)}`
+       与我们同权重、且注入更晚，悬停时红图标会被换成默认文字色（"删除按钮 hover 会变色"）。
+       钉住 naive 自己的变量，四个状态一起红，不打 specificity 补丁。 */
+    --n-text-color: var(--ff-danger) !important;
+    --n-text-color-hover: var(--ff-danger) !important;
+    --n-text-color-pressed: var(--ff-danger) !important;
+    --n-text-color-focus: var(--ff-danger) !important;
 }
 
 .side-note {

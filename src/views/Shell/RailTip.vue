@@ -56,8 +56,10 @@ defineProps<{
     height: var(--rail-tip-h);
     overflow: hidden;
     border-radius: 999px;
-    background: var(--ff-tip-bg);
-    /* 磨砂：滑到页面内容上时不会被身后的同色块吃掉（深色主题才开，浅色主题是实心墨块） */
+    background: var(--ff-tip-bg-thin);
+    /* 磨砂：滑到页面内容上时不会被身后的同色块吃掉。
+       ⚠️ 浅色**也开**（2026-11-14 主人改判"浅色也要毛玻璃"），与深色同一档 blur ——
+       原文写的"浅色是实心墨块"是改判前的旧话，已作废，见 tokens 的 `--ff-tip-backdrop`。 */
     backdrop-filter: var(--ff-tip-backdrop);
     color: var(--ff-tip-text);
     /* 深色主题里这圈 1px 发丝内描边就是"边框"本身 —— 任何背景上都能画出边缘 */

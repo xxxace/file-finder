@@ -445,8 +445,13 @@ async function purgeStorage(kind: 'bin' | 'backup' | 'leftover') {
     cursor: default;
 }
 
+/* 危险动作的悬停：只让「字」和「底光」变红，**描边保持中性**。
+   原来是红描边 + 红字 + 灰底三色同上 ⇒ 像换了个控件（2026-11-26 主人："好丑"）。
+   红色本来就没在常态出现，hover 已经是它唯一的警告时机，所以底光用淡危险色而不是中性灰：
+   
+   一句"指到它 = 这是删除"比"指到它 = 按钮变了个样子"有用。 */
 .fc__btn--danger:hover:not(:disabled) {
-    border-color: var(--ff-danger);
+    background: var(--ff-danger-weak);
     color: var(--ff-danger);
 }
 

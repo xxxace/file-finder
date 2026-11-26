@@ -103,8 +103,9 @@ const emit = defineEmits<{
 .result {
     padding: 12px 14px;
     border-radius: 10px;
-    background: var(--ff-panel);
-    border: 1px solid var(--ff-line-strong);
+    /* 与设置页的卡同一材质（试跑结果和规则卡在同一个滚动列里，混两种面色会很脏） */
+    background: var(--ff-glass-bg);
+    box-shadow: var(--ff-glass-shadow);
     font-size: 13px;
     line-height: 1.5;
 }
