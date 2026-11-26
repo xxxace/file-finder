@@ -11,12 +11,21 @@ import { reactive } from 'vue';
 
 export type OverlayKind = 'success' | 'info' | 'warning' | 'error';
 
+export interface ToastAction {
+    label: string;
+    onClick: () => void | Promise<void>;
+}
+
 export interface ToastItem {
     id: number;
     kind: OverlayKind;
     /** 主行。为空时正文独占一行（`notify('error', undefined, msg)` 这种旧写法要能落地）。 */
     title?: string;
     body: string;
+    /** 停留时长（ms），默认由宿主统一控制 */
+    duration?: number;
+    /** 可选操作按钮（如“撤销”），带倒计时圆环 */
+    action?: ToastAction;
 }
 
 export interface ConfirmOptions {
@@ -28,6 +37,8 @@ export interface ConfirmOptions {
     maskClosable?: boolean;
     /** 返回 Promise 时宿主会把按钮切成 pending —— 「点完看不出反应」的按钮比没有按钮更糟。 */
     onPositiveClick?: () => void | Promise<void>;
+    /** 取消 / 关窗（点取消按钮、按 Esc 或点遮罩）时的回调。 */
+    onNegativeClick?: () => void;
 }
 
 export interface ConfirmItem extends ConfirmOptions {
@@ -42,9 +53,14 @@ export const overlayState = reactive({
 
 let seq = 0;
 
-export function pushToast(kind: OverlayKind, title: string | undefined, body: string): number {
+export function pushToast(
+    kind: OverlayKind,
+    title: string | undefined,
+    body: string,
+    opts?: { duration?: number; action?: ToastAction },
+): number {
     const id = ++seq;
-    overlayState.toasts.push({ id, kind, title, body });
+    overlayState.toasts.push({ id, kind, title, body, duration: opts?.duration, action: opts?.action });
     return id;
 }
 

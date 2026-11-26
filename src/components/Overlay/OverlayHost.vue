@@ -18,6 +18,29 @@
                         <div v-if="t.title" class="ffo-toast__title">{{ t.title }}</div>
                         <div v-if="t.body" class="ffo-toast__body">{{ t.body }}</div>
                     </div>
+                    <div v-if="t.action" class="ffo-toast__side">
+                        <span class="ffo-toast__countdown" :title="`剩余 ${secondsLeft(t)} 秒`">
+                            <svg class="ffo-toast__pie" viewBox="0 0 18 18" aria-hidden="true">
+                                <circle class="ffo-toast__pie-track" cx="9" cy="9" r="7.5" />
+                                <circle
+                                    class="ffo-toast__pie-fill"
+                                    cx="9"
+                                    cy="9"
+                                    r="4.5"
+                                    :style="{ animationDuration: `${t.duration ?? TOAST_MS}ms` }"
+                                />
+                            </svg>
+                            <span class="ffo-toast__sec">{{ secondsLeft(t) }}s</span>
+                        </span>
+                        <button
+                            type="button"
+                            class="ffo-toast__action"
+                            :disabled="actingId === t.id"
+                            @click="runAction(t)"
+                        >
+                            {{ t.action.label }}
+                        </button>
+                    </div>
                 </div>
             </TransitionGroup>
         </div>
@@ -73,10 +96,10 @@
  * ⚠️ 滚动锁不用写：浮层 teleport 到 body，页面的滚动容器在遮罩**下面但不是 DOM 祖先**，
  *   滚轮事件到了 body 就没了 —— 这是结构给的保证，不是漏了。
  */
-import { computed, nextTick, onBeforeUnmount, ref, watch } from 'vue';
+import { computed, nextTick, onBeforeUnmount, reactive, ref, watch } from 'vue';
 import { CheckmarkCircleOutline, InformationCircleOutline, WarningOutline, CloseCircleOutline } from '@vicons/ionicons5';
 import { overlayState, popConfirm, removeToast } from './store';
-import type { OverlayKind } from './store';
+import type { OverlayKind, ToastItem } from './store';
 import './overlay.css';
 
 const TOAST_MS = 2500;
@@ -107,13 +130,52 @@ interface TimerRec {
 }
 
 const timers = new Map<number, TimerRec>();
+const leftSec = reactive<Record<number, number>>({});
+const actingId = ref<number | null>(null);
+let tickHandle: ReturnType<typeof setInterval> | null = null;
+
+function syncTick() {
+    const hasActionToast = overlayState.toasts.some(t => t.action);
+    if (hasActionToast && !tickHandle) {
+        tickHandle = setInterval(() => {
+            const now = Date.now();
+            for (const t of overlayState.toasts) {
+                if (!t.action) continue;
+                const rec = timers.get(t.id);
+                if (!rec) continue;
+                const rem = rec.handle ? Math.max(0, rec.left - (now - rec.at)) : rec.left;
+                leftSec[t.id] = Math.max(1, Math.ceil(rem / 1000));
+            }
+        }, 200);
+    } else if (!hasActionToast && tickHandle) {
+        clearInterval(tickHandle);
+        tickHandle = null;
+    }
+}
+
+function secondsLeft(t: ToastItem): number {
+    return leftSec[t.id] ?? Math.max(1, Math.ceil((t.duration ?? TOAST_MS) / 1000));
+}
+
+async function runAction(t: ToastItem) {
+    if (!t.action || actingId.value === t.id) return;
+    actingId.value = t.id;
+    try {
+        await t.action.onClick();
+    } finally {
+        if (actingId.value === t.id) actingId.value = null;
+        removeToast(t.id);
+    }
+}
 
 function arm(id: number, ms: number) {
     const handle = setTimeout(() => {
         timers.delete(id);
+        delete leftSec[id];
         removeToast(id);
     }, ms);
     timers.set(id, { handle, left: ms, at: Date.now() });
+    leftSec[id] = Math.max(1, Math.ceil(ms / 1000));
 }
 
 function hold(id: number) {
@@ -138,10 +200,12 @@ watch(
             if (live.has(id)) continue;
             if (rec.handle) clearTimeout(rec.handle);
             timers.delete(id);
+            delete leftSec[id];
         }
-        for (const id of ids) {
-            if (!timers.has(id)) arm(id, TOAST_MS);
+        for (const t of overlayState.toasts) {
+            if (!timers.has(t.id)) arm(t.id, t.duration ?? TOAST_MS);
         }
+        syncTick();
     },
 );
 
@@ -196,7 +260,9 @@ watch(
 
 function cancel() {
     if (pending.value) return;
+    const c = current.value;
     popConfirm();
+    c?.onNegativeClick?.();
 }
 
 function onMask() {
@@ -226,6 +292,10 @@ async function ok() {
 
 onBeforeUnmount(() => {
     window.removeEventListener('keydown', onKeydown, true);
+    if (tickHandle) {
+        clearInterval(tickHandle);
+        tickHandle = null;
+    }
     for (const rec of timers.values()) {
         if (rec.handle) clearTimeout(rec.handle);
     }

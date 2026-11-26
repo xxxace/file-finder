@@ -12,5 +12,13 @@ import type { ConfirmOptions } from '@/components/Overlay/store';
 export default function useConfirm() {
     return {
         warning: (opts: ConfirmOptions): void => pushConfirm(opts),
+        ask: (opts: Omit<ConfirmOptions, 'onPositiveClick' | 'onNegativeClick'>): Promise<boolean> =>
+            new Promise((resolve) => {
+                pushConfirm({
+                    ...opts,
+                    onPositiveClick: () => resolve(true),
+                    onNegativeClick: () => resolve(false),
+                });
+            }),
     };
 }

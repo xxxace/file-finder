@@ -27,6 +27,8 @@ export interface ScreenTarget {
     pl?: { id: string };
     /** 这一屏自己的过滤词。**只在 `adoptSearch` 时被采用**（见 `ScreenLoadOpts`） */
     searchText?: string;
+    /** 本次打开不写缓存（用户选择了仅打开不缓存） */
+    noSave?: boolean;
 }
 
 /**
@@ -42,6 +44,10 @@ interface SearchAdopt { from: string; to: string }
 export interface FetchOpts {
     /** 真去读盘、不用缓存（F5） */
     noCache?: boolean;
+    /** 仅读盘渲染、不写入 NeDB 缓存（首次打开未缓存目录且用户选择不缓存） */
+    noSave?: boolean;
+    /** F5 刷新专用：仅当该目录原本已缓存时才更新缓存，未缓存目录刷新不偷偷建缓存 */
+    saveIfCached?: boolean;
     /** Flat 平铺视图 */
     flat?: boolean;
     /** 换屏：过滤词与列表**同一拍**换掉。不传 = 同一屏重取（刷新 / apply / 换盘降级），词原样不动 */
@@ -117,6 +123,8 @@ export function useScreenData(deps: ScreenDataDeps) {
         // path 必须编码：中文/空格/&/#/+ 会让 query 被截断或误解析
         let url = `${API_BASE}/openFolder?path=${encodeURIComponent(path)}&mode=${mode}`;
         if (opts.noCache) url += '&noCache=true';
+        if (opts.noSave) url += '&noSave=true';
+        if (opts.saveIfCached) url += '&saveIfCached=true';
         const useFlat = opts.flat ?? deps.isFlatView.value;
         if (useFlat) url += '&flat=true';
 
@@ -220,7 +228,7 @@ export function useScreenData(deps: ScreenDataDeps) {
         // 递增序号让还在飞的那次请求闭嘴（否则它回来会把列表又填上，首页下面冒出上一屏的卡片）
         if (entry.path === HOME_PATH) return showHome(search);
         if (entry.pl) return fetchPlaylistItems(entry.pl.id, search);
-        return fetchFolder(entry.path, entry.mode, { flat: opts.flat, search });
+        return fetchFolder(entry.path, entry.mode, { flat: opts.flat, noSave: entry.noSave, search });
     };
 
 

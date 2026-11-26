@@ -106,6 +106,90 @@
     margin-top: 2px;
 }
 
+.ffo-toast__side {
+    flex: 0 0 auto;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    align-self: center;
+}
+
+.ffo-toast__countdown {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    color: var(--ff-text-2);
+    font-size: var(--ff-fs-meta);
+    font-variant-numeric: tabular-nums;
+    user-select: none;
+}
+
+.ffo-toast__pie {
+    width: 16px;
+    height: 16px;
+    transform: rotate(-90deg);
+}
+
+.ffo-toast__pie-track {
+    fill: none;
+    stroke: var(--ff-line);
+    stroke-width: 1.5;
+}
+
+.ffo-toast__pie-fill {
+    fill: none;
+    stroke: var(--ff-text-2);
+    stroke-width: 9;
+    /* 2 * pi * 4.5 ≈ 28.274：随倒计时把扇形面积逐渐收窄到 0 */
+    stroke-dasharray: 28.274;
+    stroke-dashoffset: 0;
+    animation-name: ffo-pie-drain;
+    animation-timing-function: linear;
+    animation-fill-mode: forwards;
+}
+
+.ffo-toast:hover .ffo-toast__pie-fill {
+    animation-play-state: paused;
+}
+
+@keyframes ffo-pie-drain {
+    from { stroke-dashoffset: 0; }
+    to   { stroke-dashoffset: 28.274; }
+}
+
+.ffo-toast__sec {
+    min-width: 16px;
+    text-align: right;
+}
+
+.ffo-toast__action {
+    height: 24px;
+    padding: 0 10px;
+    border: 1px solid var(--ff-line);
+    border-radius: var(--ff-r-pill);
+    background: var(--ff-raised);
+    color: var(--ff-text-1);
+    font-size: var(--ff-fs-meta);
+    font-weight: 500;
+    font-family: inherit;
+    line-height: 1;
+    cursor: pointer;
+    transition: background-color var(--ff-dur-hover) var(--ff-ease-move);
+}
+
+.ffo-toast__action:hover:not(:disabled) {
+    background: var(--ff-ctl-hover);
+}
+
+.ffo-toast__action:active:not(:disabled) {
+    background: var(--ff-ctl-on);
+}
+
+.ffo-toast__action:disabled {
+    opacity: 0.5;
+    cursor: default;
+}
+
 /* ════ confirm ════ */
 
 .ffo-confirm {

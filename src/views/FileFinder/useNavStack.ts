@@ -55,6 +55,8 @@ export interface NavEntry {
      * 面包屑/返回只认 path（nav 栈里流动的只有 path 一个字符串的既有纪律不变）。
      */
     pl?: { id: string; name: string };
+    /** 本次打开用户选择了"仅打开不缓存"；后退/前进回到该历史条目时沿用，避免重复弹窗。 */
+    noSave?: boolean;
 }
 
 /** 离开一屏时要记下的三样 */

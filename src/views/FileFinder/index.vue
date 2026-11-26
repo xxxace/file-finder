@@ -508,7 +508,7 @@
 import { formatBytes, ancestorsOf, isGridKeyBlocked, ANCHOR_PREFIX } from '@/utils';
 import type { PathCrumb } from '@/utils';
 import type { Component } from 'vue';
-import { API_BASE, apiUrl, getAction } from '@/utils/request';
+import { API_BASE, apiUrl, getAction, postAction } from '@/utils/request';
 import { useContextMenu } from './useContextMenu';
 import { useFileListPopover } from './useFileListPopover';
 import { useScanFlow } from './useScanFlow';
@@ -1131,6 +1131,33 @@ const onCursorConfirm = (item: WiredFileInfo) => {
             return;
     }
 };
+let enterSeq = 0;
+
+/**
+ * 首次打开未缓存的真实文件夹时询问是否缓存；已缓存或不可缓存（首页/清单/平铺/只读锚点/UNC/离线盘）直接放行。
+ * 返回 `{ noSave, prompted }`：`prompted` 为真且 `noSave` 为假表示用户刚确认缓存，打开后可给撤销提示。
+ */
+const askCacheIfNeeded = async (path: string, mode: OpenMode): Promise<{ noSave: boolean; prompted: boolean }> => {
+    try {
+        const res = await getAction(
+            `${API_BASE}/isFolderCached?path=${encodeURIComponent(path)}&mode=${mode}`,
+        ) as { cacheable?: boolean; cached?: boolean } | null;
+        if (!res?.cacheable || res.cached) return { noSave: false, prompted: false };
+    } catch {
+        // 探测失败不阻塞打开，按原行为走
+        return { noSave: false, prompted: false };
+    }
+
+    const yes = await dialog.ask({
+        title: '是否缓存该文件夹？',
+        content: `「${path}」尚未缓存。缓存后下次打开可直接秒开，并支持离线浏览。`,
+        positiveText: '缓存并打开',
+        negativeText: '仅打开（不缓存）',
+        maskClosable: true,
+    });
+    return { noSave: !yes, prompted: true };
+};
+
 /**
  * 进入某一屏：所有导航动作都必须从这里过（记旧屏 → 压新屏 → 归零视口 → 取数 → 词跟着数据落地）。
  * ⚠️ "记旧屏"已不在本函数里：它和后退/前进共用 `useNavStack` 的 `snapshot`（一份实现，两个方向都适用），
@@ -1138,14 +1165,22 @@ const onCursorConfirm = (item: WiredFileInfo) => {
  * ⚠️ 必须显式归零滚动：NavEntry.scrollY=0 只是数字，容器 scrollTop 不会自己归零 ⇒ 进新屏会停在上一屏的偏移（与面包屑矛盾）。
  * ⚠️ 归零要在取数之前（内容没渲染时 scrollTo 会被 clamp 或作用在旧内容上）。
  */
-const enterScreen = (path: string, mode: OpenMode = 'cover', pl?: NavEntry['pl'], keepFlat?: boolean, focusKey?: string) => {
+const enterScreen = async (path: string, mode: OpenMode = 'cover', pl?: NavEntry['pl'], keepFlat?: boolean, focusKey?: string) => {
+    const myEnterSeq = ++enterSeq;
+    let cacheChoice = { noSave: false, prompted: false };
+    if (!pl && path !== HOME_PATH && !keepFlat && !isReadOnlyPath(path)) {
+        cacheChoice = await askCacheIfNeeded(path, mode);
+        if (myEnterSeq !== enterSeq) return;
+    }
+    const { noSave, prompted } = cacheChoice;
+
     // 进任何一屏之前先保证栈底是首页（2026-11-11）：冷启动直接吃一个跨页跳转时，
     // 栈里原本一条都没有 ⇒ 那一屏会变成"第 0 条"，于是它**后面没有首页可回**。
     ensureHome();
     // 新的一屏**从零开始**：选择器不继承上一屏的（它属于那一屏，不属于这一屏）
     // pl = 清单屏标记（2026-10-21）：与 path 上的 `@pl:<id>` 前缀同进同退
     // ⚠️ `push` 内部会先拍上一屏的快照，再砍掉"前进尾巴"（在中间位置进新屏的浏览器语义）
-    const entry = nav.push({ path, mode, pl, searchText: '', scrollY: 0, cursorKey: '' });
+    const entry = nav.push({ path, mode, pl, searchText: '', scrollY: 0, cursorKey: '', noSave });
     isFlatView.value = !!keepFlat;
     /**
      * 进新屏不带上一屏的搜索词（原有行为）。
@@ -1193,6 +1228,23 @@ const enterScreen = (path: string, mode: OpenMode = 'cover', pl?: NavEntry['pl']
             dissolveGrid(imageBox.value);
         } else {
             nav.markShown();
+            if (prompted && !noSave) {
+                notify('success', '已缓存该文件夹', path, {
+                    duration: 5000,
+                    action: {
+                        label: '撤销',
+                        onClick: async () => {
+                            try {
+                                await postAction(`${API_BASE}/unCacheFolder`, { path, mode });
+                                entry.noSave = true;
+                                notify('info', '已撤销缓存', path);
+                            } catch (err) {
+                                notify('error', '撤销缓存失败', String(err));
+                            }
+                        },
+                    },
+                });
+            }
         }
         if (focusKey) {
             void nextTick(() => {
@@ -1599,7 +1651,7 @@ const toggleFlatView = async () => {
     playSfx(isFlatView.value ? 'switch-on' : 'switch-off');
     const cur = nav.current.value;
     if (cur) {
-        await fetchFolder(cur.path, cur.mode, { flat: isFlatView.value });
+        await fetchFolder(cur.path, cur.mode, { flat: isFlatView.value, noSave: cur.noSave });
     }
 };
 
@@ -1611,10 +1663,10 @@ const onRefresh = () => {
     if (loading.value || readOnlyLevel.value || playlistLevel.value || atHome.value) return;
     const cur = nav.current.value;
     if (!cur) return;
-    // F5 = 重新扫盘，要带 noCache 让服务端把这条缓存删掉真去读盘，
-    // 不然"刷新"只是把同一份缓存又发了一遍。
+    // F5 = 重新扫盘，要带 noCache 让服务端真去读盘；
+    // saveIfCached 守住边界：原本已缓存的目录刷新后同步更新缓存，未缓存的目录刷新不偷偷建缓存。
     // 搜索词不用管：不带 `search` 就是"同一屏重取" ⇒ 词原样不动（见 useScreenData.commit）
-    fetchFolder(cur.path, cur.mode, { noCache: true });
+    fetchFolder(cur.path, cur.mode, { noCache: true, saveIfCached: true });
 }
 
 /**
@@ -2208,7 +2260,7 @@ const onDisksChanged = async (disks: { serial: string; drive: string }[]) => {
         // 替换**当前这一屏**的地址，不新增历史（用户眼里还是同一层）⇒ 走模型的 replaceCurrent，
         // 别在这里手写 splice：游标一旦和数组长度分开，任何"按下标改数组"的代码都会让 index 失步。
         nav.replaceCurrent({ path });
-        await fetchFolder(path, top.mode);
+        await fetchFolder(path, top.mode, { noSave: top.noSave });
     };
 
     if (!isReadOnlyPath(top.path)) {

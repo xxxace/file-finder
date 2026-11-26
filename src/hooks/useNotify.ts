@@ -8,11 +8,16 @@
  *   （插拔盘：Plug/Unplug 已经响过，toast 再叠一条 Nudge 就是一次动作两个音）。
  */
 import { pushToast } from '@/components/Overlay/store';
-import type { OverlayKind } from '@/components/Overlay/store';
+import type { OverlayKind, ToastAction } from '@/components/Overlay/store';
 import { playSfx } from '@/utils/sfx';
 
 export default function useNotify() {
-    return function (type: OverlayKind, title?: string, message?: string, opts?: { silent?: boolean }): void {
+    return function (
+        type: OverlayKind,
+        title?: string,
+        message?: string,
+        opts?: { silent?: boolean; duration?: number; action?: ToastAction },
+    ): void {
         // toast 的唯一出口 ⇒ 音效也只在这里挂一次，6 个页面自动全覆盖。
         // ⚠️ 三档音色按**官方语义**分开（不是同一条音压不同音量）：
         //    success = Bloom（成功完成）、warning = Nudge（注意一下）、error = Shrug（没成）。
@@ -22,6 +27,6 @@ export default function useNotify() {
             else if (type === 'warning') playSfx('warn');
             else if (type === 'error') playSfx('fail');
         }
-        pushToast(type, title, message ?? '');
+        pushToast(type, title, message ?? '', { duration: opts?.duration, action: opts?.action });
     };
 }

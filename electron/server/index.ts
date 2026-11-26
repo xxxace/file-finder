@@ -954,6 +954,29 @@ async function verifyAndEvictIfDeleted(drive: string, serial: string, relPath: s
         throw e;
     }
 }
+async function readFolderChecked(
+    drive: string,
+    serial: string,
+    relPath: string,
+    mode: OpenMode,
+    prevData?: FileInfo[],
+): Promise<FileInfo[]> {
+    try {
+        return await readFolder(toFullPath(drive, relPath), mode, serial, relPath, prevData);
+    } catch (e: any) {
+        if (relPath && (e?.code === 'ENOENT' || e?.code === 'ENOTDIR' || String(e?.message).includes('ENOENT'))) {
+            const diskNow = await findDriveByLetter(drive);
+            if (diskNow?.serial === serial) {
+                await evictDeletedCache(serial, relPath);
+                const notFoundErr = new Error(`文件夹已不存在（ENOENT）`) as Error & { kind?: string };
+                notFoundErr.kind = 'notFound';
+                throw notFoundErr;
+            }
+        }
+        throw e;
+    }
+}
+
 async function scanAndCache(serial: string, drive: string, relPath: string, mode: OpenMode): Promise<SearchCache> {
     const fullPath = toFullPath(drive, relPath);
     let canonicalRelPath = relPath;
@@ -978,21 +1001,7 @@ async function scanAndCache(serial: string, drive: string, relPath: string, mode
     //   它自己保证"读旧 → 读盘 → 写新"是一件事，比要求每个调用方记得传 prev 更漏不掉。
     //   代价只是一次 `findCache` —— **纯内存查询、零读盘**（nedb 启动时整库已载入内存）。
     const prevDoc = await findCache(serial, canonicalRelPath, mode);
-    let data: FileInfo[];
-    try {
-        data = await readFolder(toFullPath(drive, canonicalRelPath), mode, serial, canonicalRelPath, prevDoc?.data);
-    } catch (e: any) {
-        if (relPath && (e?.code === 'ENOENT' || e?.code === 'ENOTDIR' || String(e?.message).includes('ENOENT'))) {
-            const diskNow = await findDriveByLetter(drive);
-            if (diskNow?.serial === serial) {
-                await evictDeletedCache(serial, relPath);
-                const notFoundErr = new Error(`文件夹已不存在（ENOENT）`) as Error & { kind?: string };
-                notFoundErr.kind = 'notFound';
-                throw notFoundErr;
-            }
-        }
-        throw e;
-    }
+    const data = await readFolderChecked(drive, serial, canonicalRelPath, mode, prevDoc?.data);
 
     const doc: SearchCache = {
         v: CACHE_VERSION,
@@ -1084,10 +1093,55 @@ export async function probeLayersController(req: Req, res: http.ServerResponse) 
     return sendJson(res, out);
 }
 
+/**
+ * 轻量探测某个文件夹地址是否已缓存（纯内存查 NeDB，不读目录内容）。
+ * 只读锚点 / UNC / 离线盘返回 `cacheable: false`，交由正常打开流程处理。
+ */
+export async function isFolderCachedController(req: Req, res: http.ServerResponse) {
+    const raw = req.params?.get('path') || '';
+    const mode = (req.params?.get('mode') || 'cover') as OpenMode;
+    if (!raw || parseAnchor(raw)) {
+        return sendJson(res, { cacheable: false, cached: false });
+    }
+    const parts = splitPath(raw);
+    if (!parts) {
+        return sendJson(res, { cacheable: false, cached: false });
+    }
+    const disk = await findDriveByLetter(parts.drive);
+    if (!disk) {
+        return sendJson(res, { cacheable: false, cached: false });
+    }
+    const cached = Boolean(await findCache(disk.serial, parts.relPath, mode));
+    return sendJson(res, { cacheable: true, cached });
+}
+
+/**
+ * 撤销单层目录缓存（浏览器式"撤销"toast 调用）。
+ * 通过 `queueCacheWrite` 与 `scanAndCache` 串行在同一主键队列上，避免并发写完又留下一条记录。
+ */
+export async function unCacheFolderController(req: Req, res: http.ServerResponse) {
+    const body = (req.body || {}) as { path?: string; mode?: OpenMode };
+    const raw = body.path || '';
+    const mode = (body.mode || 'cover') as OpenMode;
+    const parts = splitPath(raw);
+    if (!parts) return sendJson(res, { removed: false });
+    const disk = await findDriveByLetter(parts.drive);
+    if (!disk) return sendJson(res, { removed: false });
+
+    const { serial } = disk;
+    const relPath = parts.relPath;
+    await queueCacheWrite(serial, relPath, mode, async () => {
+        await removeCache(serial, relPath, mode);
+    });
+    return sendJson(res, { removed: true });
+}
+
 export async function openFolderController(req: Req, res: http.ServerResponse) {
     const raw = req.params?.get('path');
     const mode = (req.params?.get('mode') || 'folder') as OpenMode;
     const noCache = req.params?.get('noCache') === 'true';
+    const noSave = req.params?.get('noSave') === 'true';
+    const saveIfCached = req.params?.get('saveIfCached') === 'true';
     const verifyRequested = req.params?.get('verify') === 'true';
     const flat = req.params?.get('flat') === 'true';
 
@@ -1161,14 +1215,26 @@ export async function openFolderController(req: Req, res: http.ServerResponse) {
     // 又开一个写同一主键的口，那两步就不再是一个整体了（见 queueCacheWrite）。
     // 顺带修掉一个更隐蔽的形态：原来那句会在**真读盘之前**就把旧缓存删掉，
     // 读盘期间并发进来的读者会看到"这个目录没缓存"。
-    const cached = noCache ? null : await findCache(serial, relPath, mode);
-    const doc = cached ?? (await scanAndCache(serial, drive, relPath, mode));
+    const existing = await findCache(serial, relPath, mode);
+    const cached = noCache ? null : existing;
+    // noSave：用户明确选择"仅打开不缓存"；
+    // saveIfCached：F5 刷新专用，已缓存目录才更新缓存，未缓存目录刷新不偷偷建缓存。
+    const shouldWriteCache = !noSave && (!saveIfCached || Boolean(existing));
 
-    if (cached && verifyRequested) {
-        await verifyAndEvictIfDeleted(drive, serial, relPath);
+    let data: FileInfo[];
+    if (cached) {
+        data = cached.data;
+        if (verifyRequested) {
+            await verifyAndEvictIfDeleted(drive, serial, relPath);
+        }
+    } else if (shouldWriteCache) {
+        const doc = await scanAndCache(serial, drive, relPath, mode);
+        data = doc.data;
+    } else {
+        data = await readFolderChecked(drive, serial, relPath, mode, existing?.data);
     }
 
-    sendJson(res, await toWire(doc.data, drive, serial, relPath));
+    sendJson(res, await toWire(data, drive, serial, relPath));
 }
 
 /**
@@ -2065,6 +2131,8 @@ function route(path: string, handler: (req: Req, res: http.ServerResponse) => un
 }
 
 route('/getHistory', getHistory);
+route('/isFolderCached', isFolderCachedController);
+route('/unCacheFolder', unCacheFolderController);
 route('/openFolder', openFolderController);
 route('/probeLayers', probeLayersController);
 route('/thumb', thumbController);
