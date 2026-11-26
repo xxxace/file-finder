@@ -22,6 +22,12 @@ export interface BinEntryMeta extends BinKey {
     name: string;
 }
 
+export interface BinStatsRow extends BinEntryMeta {
+    fmt: number;
+    size: number;
+    createdAt: number;
+}
+
 const MIGRATION_BATCH_SIZE = 80;
 
 export let BIN_DIR = path.join(config.userBasePath, 'bin');
@@ -483,6 +489,51 @@ export function listBinEntries(): BinEntryMeta[] {
     return out;
 }
 
+/** 含尺寸与写入时间戳的轻量图片元数据列表（供设置页盘点孤儿与保护窗判断，不读取 BLOB） */
+export function listBinStatsRows(): BinStatsRow[] {
+    const out: BinStatsRow[] = [];
+    const seen = new Set<string>();
+
+    if (db) {
+        const stmt = db.prepare('SELECT kind, sig, fmt, size, created_at FROM bins');
+        for (const raw of stmt.iterate()) {
+            const row = raw as { kind: BinKind; sig: Uint8Array; fmt: number; size: number; created_at: number };
+            const sigHex = Buffer.from(row.sig).toString('hex').toLowerCase();
+            const canonical = `${row.kind}-${sigHex}.enc`;
+            seen.add(canonical);
+            out.push({
+                kind: row.kind,
+                sig: sigHex,
+                name: canonical,
+                fmt: Number(row.fmt) || 1,
+                size: Number(row.size) || 0,
+                createdAt: Number(row.created_at) || 0,
+            });
+        }
+    }
+
+    for (const [canonical, filename] of legacyPending.entries()) {
+        if (seen.has(canonical)) continue;
+        const parsed = parseBinName(canonical);
+        if (!parsed) continue;
+        try {
+            const st = fs.statSync(path.join(BIN_DIR, filename));
+            out.push({
+                kind: parsed.kind,
+                sig: parsed.sigHex,
+                name: canonical,
+                fmt: 1,
+                size: st.size,
+                createdAt: Math.round(st.mtimeMs),
+            });
+        } catch {
+            // 文件可能刚被迁移或删除
+        }
+    }
+
+    return out;
+}
+
 /** 供备份打包读取单条原始图片数据与格式标记 */
 export function readBinEntryForBackup(kind: BinKind, sigHex: string): { fmt: number; data: Buffer } | null {
     const normalized = sigHex.toLowerCase();
@@ -633,4 +684,27 @@ export function getLegacyBinPendingCount(): number {
 
 export function waitForLegacyMigration(): Promise<void> {
     return migrationPromise;
+}
+
+export async function closeBinStoreForTest(): Promise<void> {
+    generation++;
+    await migrationPromise.catch(() => {});
+    if (db) {
+        try {
+            db.close();
+        } catch {
+            // ignore
+        }
+        db = null;
+    }
+    stmtGet = null;
+    stmtPut = null;
+    stmtSize = null;
+    stmtDel = null;
+    stmtStats = null;
+    readyPromise = null;
+    activeDataDir = null;
+    dbNames.clear();
+    legacyPending.clear();
+    legacyBytesCache = null;
 }

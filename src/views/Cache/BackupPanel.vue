@@ -12,7 +12,11 @@
             </span>
             <span class="mi-text">
                 <span class="mi-title">备份到一个文件…</span>
-                <span class="mi-desc">默认文件名带你今天的日期，位置自己挑 —— 不会被任何东西覆盖</span>
+                <span class="mi-desc">导出紧凑 .ffbak 单文件（自动剔除孤儿图；关闭右侧开关可导出仅含缩略图的轻量包）</span>
+            </span>
+            <span class="mi-trailing" @click.stop>
+                <span class="mi-opt-label">含预览大图</span>
+                <n-switch v-model:value="includePreviews" size="small" :disabled="backupLoading" />
             </span>
         </button>
 
@@ -62,7 +66,7 @@
  */
 import { ref } from 'vue';
 import { ipcRenderer } from 'electron';
-import { NIcon, NSpin } from 'naive-ui';
+import { NIcon, NSpin, NSwitch } from 'naive-ui';
 import { ArchiveOutline, CloudDownloadOutline, FolderOpenOutline, GitMergeOutline } from '@vicons/ionicons5';
 import useNotify from '@/hooks/useNotify';
 import useConfirm from '@/hooks/useConfirm';
@@ -76,6 +80,7 @@ const dialog = useConfirm();
 
 const backupLoading = ref(false);
 const bulkLoading = ref(false);
+const includePreviews = ref(true);
 /** 还原/合并期间的本地忙碌位（原来点亮宿主页的整页 spin，抽离后自己管自己） */
 const busy = ref(false);
 
@@ -102,7 +107,7 @@ const handleBackupToFile = async () => {
     // n-button 的 `loading` 自带禁用 ⇒ 不用另写 `:disabled`，也就不会出现「转着圈还能再点一次」
     backupLoading.value = true;
     try {
-        await postAction(API_BASE + '/backupToFile', { path: file });
+        await postAction(API_BASE + '/backupToFile', { path: file, includePreviews: includePreviews.value });
         notify('success', '成功', `已备份到 ${file}`)
     } catch (err) {
         notify('error', '错误', `备份失败：${err}`)
@@ -124,10 +129,10 @@ const handleBackupToFile = async () => {
  */
 const handleRestoreFromFile = () => {
     dialog.warning({
-        title: '从文件还原（选那个 .zip 备份包）',
-        content: '会用你选中的文件整体替换当前缓存。替换后，本机独有的记录要重新读一遍移动硬盘才能回来。'
-            + '还原前会自动留一份快照（数据目录里的 searchCache-before-restore.db），还原后立即生效、不用重启。'
-            + '备份包里的图片会**只增不删**地并进来（本地已有的不动）。',
+        title: '从文件还原（支持 .ffbak / 旧版 .zip）',
+        content: '会用你选中的备份文件整体替换当前缓存库。替换后，本机独有的目录记录要重新读一遍移动硬盘才能回来。'
+            + '还原前会自动留一份快照（数据目录里的 cache-before-restore.sqlite），还原后立即生效、不用重启。'
+            + '备份包里的图片、收藏夹与刮削命中记录会只增不删地并进来（本地已有的不动）。',
         positiveText: '选择文件并还原',
         negativeText: '取消',
         maskClosable: false,
@@ -238,10 +243,24 @@ const openDataDir = async () => {
 }
 
 .mi-text {
+    flex: 1 1 auto;
     display: flex;
     flex-direction: column;
     gap: 2px;
     min-width: 0;
+}
+
+.mi-trailing {
+    flex: 0 0 auto;
+    display: flex;
+    align-items: center;
+    gap: 6px;
+}
+
+.mi-opt-label {
+    font-size: 12px;
+    color: var(--ff-text-2);
+    white-space: nowrap;
 }
 
 .mi-title {

@@ -39,6 +39,7 @@ import type { HitRecord } from './assistant/hits';
 import { createPlaylistRoutes } from './playlist';
 import { loadPlaylists, mergePlaylists } from './playlistStore';
 import type { Playlist } from './playlistStore';
+import { inventoryRedundantStorage, purgeRedundantStorage, readCleanupAsset } from './storageCleanup';
 import { isVideo, VIDEO_MIME } from './videoExt';
 
 const IMAGE_EXT = ['jpg', 'jpeg', 'png', 'bmp', 'gif', 'svg', 'psd', 'webp'];
@@ -2275,6 +2276,34 @@ route('/backup', backup);
 route('/backupToFile', backupToFile);
 route('/restoreFromFile', restoreFromFile);
 route('/mergeCache', mergeCache);
+route('/storage/inventory', async (_req: Req, res: http.ServerResponse) => {
+    const inv = await inventoryRedundantStorage(config.userBasePath);
+    sendJson(res, { code: 200, ...inv });
+});
+route('/storage/asset', async (req: Req, res: http.ServerResponse) => {
+    const cat = req.params?.get('cat');
+    const key = req.params?.get('k') || '';
+    if (cat !== 'bin' && cat !== 'backup') {
+        res.writeHead(400, { 'Content-Type': 'text/plain' });
+        return res.end('bad category');
+    }
+    const asset = await readCleanupAsset(config.userBasePath, cat, key);
+    if (!asset) {
+        res.writeHead(404, { 'Content-Type': 'text/plain' });
+        return res.end('not found');
+    }
+    res.writeHead(200, {
+        'Content-Type': asset.contentType,
+        'Content-Length': asset.buf.length,
+        'Cache-Control': 'no-store',
+    });
+    res.end(asset.buf);
+});
+route('/storage/purge', async (req: Req, res: http.ServerResponse) => {
+    const body = (req.body || {}) as { orphanBins?: string[]; coverBackups?: string[]; leftovers?: string[] };
+    const result = await purgeRedundantStorage(config.userBasePath, body);
+    sendJson(res, { code: 200, ...result });
+});
 route('/getAllCovers', async (req: Req, res: http.ServerResponse) => {
     const serial = req.params?.get('serial') || undefined;
     const items = await findAllCachedCovers(serial);

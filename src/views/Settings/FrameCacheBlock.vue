@@ -58,7 +58,7 @@
         </p>
 
         <details v-if="inv.orphans.length" class="fc__box" open>
-            <summary class="fc__sum">查看无引用的 {{ shown.length }} 张</summary>
+            <summary class="fc__sum">查看无引用的抽帧 {{ shown.length }} 张</summary>
             <div class="fc__grid">
                 <label v-for="o in shown" :key="o.file" class="fc__item" :class="{ 'is-sel': sel.has(o.file) }">
                     <input type="checkbox" :checked="sel.has(o.file)" @change="toggle(o.file)" />
@@ -73,6 +73,80 @@
                 <span class="fc__hint">只删系统盘的缓存，盘上的文件一个不动</span>
             </div>
         </details>
+
+        <!-- 冗余图片仓孤儿、旧封面备份与残留文件 -->
+        <div class="fc__sep"></div>
+        <div class="fc__head">
+            <span class="fc__stat">
+                图片仓 <b>{{ storageInv.binTotal.count }}</b> 张 · {{ mb(storageInv.binTotal.bytes) }}
+            </span>
+            <span v-if="storageInv.blockedReason" class="fc__warn">{{ storageInv.blockedReason }}</span>
+            <span v-else-if="storageTotalCount" class="fc__warn">
+                发现 {{ storageTotalCount }} 项可清理（{{ mb(storageTotalBytes) }}）
+            </span>
+            <span v-else class="fc__hint">无孤儿与冗余残留</span>
+            <span class="fc__ops">
+                <button type="button" class="fc__btn" :disabled="!!busy || storageBusy" @click="loadStorage">
+                    {{ storageBusy ? '盘点中…' : '扫描冗余' }}
+                </button>
+            </span>
+        </div>
+
+        <details v-if="storageInv.orphanBins.length" class="fc__box" open>
+            <summary class="fc__sum">
+                无引用图片仓孤儿 {{ storageInv.orphanBins.length }} 张（已排除近 1 小时新图）
+            </summary>
+            <div class="fc__grid">
+                <label v-for="o in storageInv.orphanBins" :key="o.name" class="fc__item" :class="{ 'is-sel': selBins.has(o.name) }">
+                    <input type="checkbox" :checked="selBins.has(o.name)" @change="toggleSet(selBins, o.name, v => (selBins = v))" />
+                    <img class="fc__img" :src="binAssetUrl(o.name)" alt="" loading="lazy" />
+                    <span class="fc__meta">{{ o.kind === 't' ? '缩略图' : '预览大图' }} · {{ mb(o.bytes) }}</span>
+                </label>
+            </div>
+            <div class="fc__foot">
+                <button type="button" class="fc__btn" @click="selBins = selBins.size === storageInv.orphanBins.length ? new Set() : new Set(storageInv.orphanBins.map(x => x.name))">
+                    {{ selBins.size === storageInv.orphanBins.length ? '取消全选' : '全选' }}
+                </button>
+                <button type="button" class="fc__btn fc__btn--danger" :disabled="!selBins.size || storageBusy" @click="purgeStorage('bin')">
+                    清除选中 {{ selBins.size }} 张（释放 {{ mb(selBinsBytes) }}）
+                </button>
+            </div>
+        </details>
+
+        <details v-if="storageInv.coverBackups.length" class="fc__box" open>
+            <summary class="fc__sum">旧封面与头像替换备份 {{ storageInv.coverBackups.length }} 张</summary>
+            <div class="fc__grid">
+                <label v-for="b in storageInv.coverBackups" :key="b.key" class="fc__item" :class="{ 'is-sel': selBackups.has(b.key) }">
+                    <input type="checkbox" :checked="selBackups.has(b.key)" @change="toggleSet(selBackups, b.key, v => (selBackups = v))" />
+                    <img class="fc__img" :src="backupAssetUrl(b.key)" alt="" loading="lazy" />
+                    <span class="fc__meta" :title="b.key">{{ b.label }} · {{ mb(b.bytes) }}</span>
+                </label>
+            </div>
+            <div class="fc__foot">
+                <button type="button" class="fc__btn" @click="selBackups = selBackups.size === storageInv.coverBackups.length ? new Set() : new Set(storageInv.coverBackups.map(x => x.key))">
+                    {{ selBackups.size === storageInv.coverBackups.length ? '取消全选' : '全选' }}
+                </button>
+                <button type="button" class="fc__btn fc__btn--danger" :disabled="!selBackups.size || storageBusy" @click="purgeStorage('backup')">
+                    清除选中 {{ selBackups.size }} 张（释放 {{ mb(selBackupsBytes) }}）
+                </button>
+            </div>
+        </details>
+
+        <details v-if="storageInv.leftovers.length" class="fc__box" open>
+            <summary class="fc__sum">旧版迁移与还原残留 {{ storageInv.leftovers.length }} 项</summary>
+            <div class="fc__list">
+                <label v-for="l in storageInv.leftovers" :key="l.name" class="fc__row">
+                    <input type="checkbox" :checked="selLeftovers.has(l.name)" @change="toggleSet(selLeftovers, l.name, v => (selLeftovers = v))" />
+                    <span class="fc__row-name">{{ l.name }}</span>
+                    <span class="fc__hint">{{ l.kind === 'dir' ? '空目录' : mb(l.bytes) }}</span>
+                </label>
+            </div>
+            <div class="fc__foot">
+                <button type="button" class="fc__btn fc__btn--danger" :disabled="!selLeftovers.size || storageBusy" @click="purgeStorage('leftover')">
+                    清除选中 {{ selLeftovers.size }} 项（释放 {{ mb(selLeftoversBytes) }}）
+                </button>
+            </div>
+        </details>
     </div>
 </template>
 
@@ -84,10 +158,30 @@ import useNotify from '@/hooks/useNotify';
 
 interface Item { file: string; serial: string; bytes: number; mtime: number; pct: number; attempt: number }
 interface Inv { total: number; bytes: number; orphans: Item[]; live: number; offlineSkipped: number; checked: number }
+interface OrphanBinItem { kind: 't' | 'p'; sig: string; name: string; bytes: number; createdAt: number; fmt: number }
+interface BackupImageItem { key: string; label: string; bytes: number; mtime: number }
+interface LeftoverFileItem { name: string; bytes: number; mtime: number; kind: 'file' | 'dir' }
+interface StorageInv {
+    orphanBins: OrphanBinItem[];
+    coverBackups: BackupImageItem[];
+    leftovers: LeftoverFileItem[];
+    binTotal: { count: number; bytes: number };
+    blockedReason?: string;
+}
 
 const notify = useNotify();
 
 const inv = ref<Inv>({ total: 0, bytes: 0, orphans: [], live: 0, offlineSkipped: 0, checked: 0 });
+const storageInv = ref<StorageInv>({
+    orphanBins: [],
+    coverBackups: [],
+    leftovers: [],
+    binTotal: { count: 0, bytes: 0 },
+});
+const storageBusy = ref(false);
+const selBins = ref(new Set<string>());
+const selBackups = ref(new Set<string>());
+const selLeftovers = ref(new Set<string>());
 /** 在途状态：'' = 空闲。两个按钮共用这一个 —— 谁在跑，谁的文案就变成"…中" */
 const busy = ref<'' | 'inv' | 'ver' | 'purge'>('');
 /** 上次跑完的时刻。用户点了按钮却看不到任何数字变化时，这是唯一的"我确实跑过" */
@@ -206,8 +300,73 @@ onMounted(async () => {
     } catch {
         disks.value = [];
     }
-    await load(false);
+    await Promise.all([load(false), loadStorage()]);
 });
+
+const binAssetUrl = (name: string) =>
+    apiUrl(`${API_BASE}/storage/asset?cat=bin&k=${encodeURIComponent(name)}`);
+const backupAssetUrl = (key: string) =>
+    apiUrl(`${API_BASE}/storage/asset?cat=backup&k=${encodeURIComponent(key)}`);
+
+const toggleSet = (cur: Set<string>, key: string, assign: (next: Set<string>) => void) => {
+    const next = new Set(cur);
+    if (next.has(key)) next.delete(key);
+    else next.add(key);
+    assign(next);
+};
+
+const selBinsBytes = computed(() =>
+    storageInv.value.orphanBins.filter(o => selBins.value.has(o.name)).reduce((n, o) => n + o.bytes, 0));
+const selBackupsBytes = computed(() =>
+    storageInv.value.coverBackups.filter(b => selBackups.value.has(b.key)).reduce((n, b) => n + b.bytes, 0));
+const selLeftoversBytes = computed(() =>
+    storageInv.value.leftovers.filter(l => selLeftovers.value.has(l.name)).reduce((n, l) => n + l.bytes, 0));
+const storageTotalCount = computed(() =>
+    storageInv.value.orphanBins.length + storageInv.value.coverBackups.length + storageInv.value.leftovers.length);
+const storageTotalBytes = computed(() =>
+    storageInv.value.orphanBins.reduce((n, o) => n + o.bytes, 0)
+    + storageInv.value.coverBackups.reduce((n, b) => n + b.bytes, 0)
+    + storageInv.value.leftovers.reduce((n, l) => n + l.bytes, 0));
+
+async function loadStorage() {
+    if (storageBusy.value) return;
+    storageBusy.value = true;
+    try {
+        const res = await postAction(`${API_BASE}/storage/inventory`, {});
+        storageInv.value = {
+            orphanBins: (res.orphanBins ?? []) as OrphanBinItem[],
+            coverBackups: (res.coverBackups ?? []) as BackupImageItem[],
+            leftovers: (res.leftovers ?? []) as LeftoverFileItem[],
+            binTotal: res.binTotal ?? { count: 0, bytes: 0 },
+            blockedReason: res.blockedReason,
+        };
+        selBins.value = new Set(storageInv.value.orphanBins.map(o => o.name));
+        selBackups.value = new Set(storageInv.value.coverBackups.map(b => b.key));
+        selLeftovers.value = new Set(storageInv.value.leftovers.map(l => l.name));
+    } catch (e) {
+        notify('error', '盘点冗余缓存失败', String(e));
+    } finally {
+        storageBusy.value = false;
+    }
+}
+
+async function purgeStorage(kind: 'bin' | 'backup' | 'leftover') {
+    const payload = kind === 'bin'
+        ? { orphanBins: [...selBins.value] }
+        : kind === 'backup'
+            ? { coverBackups: [...selBackups.value] }
+            : { leftovers: [...selLeftovers.value] };
+    storageBusy.value = true;
+    try {
+        const res = await postAction(`${API_BASE}/storage/purge`, payload);
+        notify('success', `已清理 ${res.removed ?? 0} 项`, `释放 ${mb(res.freed ?? 0)}`);
+    } catch (e) {
+        notify('error', '清理失败', String(e));
+    } finally {
+        storageBusy.value = false;
+    }
+    await loadStorage();
+}
 </script>
 
 <style lang="less" scoped>
@@ -351,5 +510,40 @@ onMounted(async () => {
     align-items: center;
     gap: 10px;
     margin-top: 10px;
+}
+
+.fc__sep {
+    border-top: 1px solid var(--ff-line);
+    margin-top: 4px;
+}
+
+.fc__list {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+}
+
+.fc__row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 6px 8px;
+    border: 1px solid var(--ff-line);
+    border-radius: var(--ff-r-ctl);
+    font-size: 12px;
+    cursor: pointer;
+}
+
+.fc__row input {
+    accent-color: var(--ff-highlight);
+}
+
+.fc__row-name {
+    flex: 1 1 auto;
+    min-width: 0;
+    color: var(--ff-text-1);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
 }
 </style>

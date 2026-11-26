@@ -43,14 +43,12 @@
             <BackupPanel />
         </section>
 
-        <!-- 卡 · 抽帧缓存：补封面抽出来的关键帧是可重建的中间产物。
-             作品补上正式封面 / 改名 / 换盘之后它们就没人引用了 ⇒ 这里负责找出来、看过再清。
-             ⚠️ 不自动删：删之前一定有一个列表给用户看（回收站语义）。 -->
+        <!-- 卡 · 缓存与冗余清理：抽帧原件、无引用图片仓孤儿、旧封面备份与迁移残留均可在此预览后按需清除。 -->
         <section class="set-card">
             <div class="set-row set-row-head">
                 <div class="set-text">
-                    <span class="set-title">抽帧缓存</span>
-                    <span class="set-desc">抽帧封面的原件，放在系统盘；已补上正式封面的那些可以清掉</span>
+                    <span class="set-title">缓存与冗余清理</span>
+                    <span class="set-desc">抽帧原件、无引用图片仓孤儿、旧封面备份与迁移残留均可在此预览后按需清除</span>
                 </div>
             </div>
             <FrameCacheBlock />
