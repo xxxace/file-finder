@@ -1,104 +1,374 @@
+import { DatabaseSync } from 'node:sqlite';
 import fs from 'node:fs';
 import * as fsasync from 'node:fs/promises';
 import path from 'node:path';
 import config from '../config';
-import { encryptBlob, decryptBlob } from './cacheCrypto';
+import { decryptBlob } from './cacheCrypto';
 
-/**
- * 图片仓（bin）—— 缩略图与预览大图的**统一落盘点**，内容加密、按内容指纹命名。
- *
- * 为什么图片不再放库（`thumbData` 那种 base64 字段）：
- *   ① **base64 白交 +33%**（实测：39 KB 的 JPEG 存成 base64 是 52 KB；
- *      `gzip(base64)` 只能把这 33% 捞回来、对 JPEG 本身 0 收益 ⇒ 搬出来比 gzip 更彻底）；
- *   ② 库是**整库载入内存 + 每次启动整库重写**（`nedb.ts` 注释）⇒ 图片留在库里等于
- *      每次启动都搬运几十 MB，内存里也常驻着几十 MB 字符串；
- *   ③ 图片本来就不需要"每行一行 JSON"这种形态，它是二进制。
- *
- * 命名：`<kind>-<sig>.enc`
- *   kind = `t`（缩略图，网格用）/ `p`（预览大图）。两者**恒为 JPEG**，所以没有扩展名，
- *          下发时的 `Content-Type` 也恒为 `image/jpeg`（不做内容嗅探 —— 见 thumbnail.ts）。
- *   sig  = **这一张源图的标识**，取自**缩略图字节**的 sha1（⚠️ 不是大图的指纹，
- *          理由与实测证据见 server/index.ts 的 makeRenditions）。
- *          换封面 ⇒ 缩略图变 ⇒ sig 变 ⇒ **两个 URL 都变** ⇒ 浏览器缓存不会拿旧图挡着。
- * `t-<sig>` 与 `p-<sig>` 是**同一源的两个尺寸**（对称）：`p-` 可能暂时不存在
- * （老记录只有缩略图），扫到那一层时会补齐。内容相同的两张图共用一个文件（天然去重）。
- *
- * ⚠️ **永不自动删**（缓存层铁律）：换图/改名会留下孤儿文件；要清只能靠一条**显式**命令。
- */
-export const BIN_DIR = path.join(config.userBasePath, 'bin');
+export type BinKind = 't' | 'p';
+export type BinContentType = 'image/webp' | 'image/jpeg';
 
-/** 已存在的图片名集合。启动时 `readdir` 一次（≈千级条目、几十字节/条），之后 O(1) 判断 */
-const names = new Set<string>();
+export interface BinEntry {
+    buf: Buffer;
+    contentType: BinContentType;
+}
+
+export interface BinKey {
+    kind: BinKind;
+    sig: string;
+}
+
+export interface BinEntryMeta extends BinKey {
+    name: string;
+}
+
+const MIGRATION_BATCH_SIZE = 80;
+
+export let BIN_DIR = path.join(config.userBasePath, 'bin');
+export let BIN_DB_PATH = path.join(config.userBasePath, 'bin.sqlite');
+
+let activeDataDir: string | null = null;
+let db: DatabaseSync | null = null;
+let stmtGet: ReturnType<DatabaseSync['prepare']> | null = null;
+let stmtPut: ReturnType<DatabaseSync['prepare']> | null = null;
+let stmtSize: ReturnType<DatabaseSync['prepare']> | null = null;
+let stmtDel: ReturnType<DatabaseSync['prepare']> | null = null;
+let stmtStats: ReturnType<DatabaseSync['prepare']> | null = null;
+
 let loadError: unknown = null;
+let readyPromise: Promise<void> | null = null;
+let migrationPromise: Promise<void> = Promise.resolve();
+let generation = 0;
 
-/**
- * 启动时调一次，**只调一次**（重复 readdir 只是白费）。
- * **失败不抛**：bin 读不到只该表现成"图片没有"，不该让整个 app 起不来。
- *
- * 返回的 Promise 就是"图片仓就绪"的信号 —— 服务端要 **await 它再 listen**，
- * 否则启动那零点几秒里 `names` 还是空集，首屏会是一排白格子（见 server/index.ts 的 listen）。
- */
-export function initBinStore(): Promise<void> {
-    return ready;
+/** 内存索引：已入库的图片规范名（`<kind>-<lowerHex>.enc`） */
+const dbNames = new Set<string>();
+/** 待迁移的旧版 `.enc` 文件（canonical name -> 磁盘实际文件名） */
+const legacyPending = new Map<string, string>();
+let legacyBytesCache: number | null = null;
+
+interface PendingWrite {
+    name: string;
+    plain: Buffer;
+    resolve: () => void;
+}
+let writeQueue: PendingWrite[] = [];
+let flushScheduled = false;
+
+function parseBinName(name?: string): { kind: BinKind; sigHex: string; sigBuf: Buffer; canonical: string } | null {
+    const m = /^([tp])-([0-9a-f]+)\.enc$/i.exec(name || '');
+    if (!m) return null;
+    const kind = m[1].toLowerCase() as BinKind;
+    const sigHex = m[2].toLowerCase();
+    if (sigHex.length % 2 !== 0) return null;
+    return {
+        kind,
+        sigHex,
+        sigBuf: Buffer.from(sigHex, 'hex'),
+        canonical: `${kind}-${sigHex}.enc`,
+    };
 }
 
-const ready = (async () => {
-    try {
-        await fsasync.mkdir(BIN_DIR, { recursive: true });
-        for (const name of await fsasync.readdir(BIN_DIR)) {
-            if (name.endsWith('.enc')) names.add(name);
+export function detectImageFmt(buf: Buffer): 1 | 2 {
+    if (
+        buf.length >= 12 &&
+        buf.subarray(0, 4).toString('ascii') === 'RIFF' &&
+        buf.subarray(8, 12).toString('ascii') === 'WEBP'
+    ) {
+        return 2;
+    }
+    return 1;
+}
+
+function fmtToContentType(fmt: number): BinContentType {
+    return fmt === 2 ? 'image/webp' : 'image/jpeg';
+}
+
+function closeDbHandle(): void {
+    stmtGet = null;
+    stmtPut = null;
+    stmtSize = null;
+    stmtDel = null;
+    stmtStats = null;
+    if (db) {
+        try {
+            db.close();
+        } catch {
+            // ignore close errors during reset
         }
+        db = null;
+    }
+}
+
+function openBinSqlite(dbPath: string): DatabaseSync {
+    const database = new DatabaseSync(dbPath);
+    database.exec(`
+        PRAGMA auto_vacuum = INCREMENTAL;
+        PRAGMA journal_mode = WAL;
+        PRAGMA synchronous = NORMAL;
+        CREATE TABLE IF NOT EXISTS bins (
+            kind TEXT NOT NULL,
+            sig BLOB NOT NULL,
+            fmt INTEGER NOT NULL,
+            size INTEGER NOT NULL,
+            created_at INTEGER NOT NULL,
+            data BLOB NOT NULL,
+            PRIMARY KEY (kind, sig)
+        ) WITHOUT ROWID;
+    `);
+    stmtGet = database.prepare('SELECT fmt, data FROM bins WHERE kind = ? AND sig = ?');
+    stmtPut = database.prepare(
+        'INSERT OR REPLACE INTO bins (kind, sig, fmt, size, created_at, data) VALUES (?, ?, ?, ?, ?, ?)',
+    );
+    stmtSize = database.prepare('SELECT size FROM bins WHERE kind = ? AND sig = ?');
+    stmtDel = database.prepare('DELETE FROM bins WHERE kind = ? AND sig = ?');
+    stmtStats = database.prepare('SELECT COUNT(*) AS cnt, COALESCE(SUM(size), 0) AS total FROM bins');
+    return database;
+}
+
+function putBinsBatchSync(items: { name: string; buf: Buffer }[]): void {
+    if (!db || !stmtPut || loadError || items.length === 0) return;
+
+    const valid: {
+        canonical: string;
+        kind: BinKind;
+        sigBuf: Buffer;
+        fmt: number;
+        size: number;
+        buf: Buffer;
+    }[] = [];
+
+    for (const item of items) {
+        const parsed = parseBinName(item.name);
+        if (!parsed) continue;
+        valid.push({
+            canonical: parsed.canonical,
+            kind: parsed.kind,
+            sigBuf: parsed.sigBuf,
+            fmt: detectImageFmt(item.buf),
+            size: item.buf.length,
+            buf: item.buf,
+        });
+    }
+    if (valid.length === 0) return;
+
+    const now = Date.now();
+    db.exec('BEGIN');
+    try {
+        for (const row of valid) {
+            stmtPut.run(row.kind, row.sigBuf, row.fmt, row.size, now, row.buf);
+        }
+        db.exec('COMMIT');
+    } catch (err) {
+        try {
+            db.exec('ROLLBACK');
+        } catch {
+            // ignore rollback error
+        }
+        throw err;
+    }
+
+    for (const row of valid) {
+        dbNames.add(row.canonical);
+    }
+}
+
+function flushWriteQueue(): void {
+    flushScheduled = false;
+    const batch = writeQueue;
+    writeQueue = [];
+    if (batch.length === 0) return;
+
+    try {
+        putBinsBatchSync(batch.map((w) => ({ name: w.name, buf: w.plain })));
     } catch (e) {
-        loadError = e;
-        console.error('[bin] 图片仓初始化失败（图片将不可用，其余功能不受影响）:', e);
+        console.error('[bin] 批量写入失败:', e);
+    } finally {
+        for (const w of batch) w.resolve();
     }
-})();
-
-/**
- * 全部图片的总字节数 —— **启动后后台算一次，之后增量维护**。
- *
- * 以前 `binStats()` 每次调用都对每个文件 `await stat`（千级串行 ⇒ 约 300ms），
- * 而它挂在 `/getDisks` 上 ⇒ 每次首屏都要白等一次。现在 readdir 之后在后台把总字节
- * 算一遍（**不阻塞 listen**），`binStats` 直接读这个数。
- *
- * ⚠️ 增量维护的代价：**任何一条新增/删除路径漏记，这个数就永远偏到下次重启**。
- * 所以名字与字节只能在 `registerBin` / `unregisterBin` 里改（见下），别在别处动 `names`。
- */
-let totalBytes = 0;
-/** 后台扫描用的是**快照**：扫描期间写进来的新图不在 `sum` 里，先记在这里，最后一起并入 */
-let pendingBytes = 0;
-let scanDone = false;
-const bytesReady = ready.then(async () => {
-    const snapshot = [...names];
-    let sum = 0;
-    for (const name of snapshot) {
-        try { sum += (await fsasync.stat(path.join(BIN_DIR, name))).size; } catch { /* 文件可能刚被删 */ }
-    }
-    totalBytes = sum + pendingBytes;
-    scanDone = true;
-});
-
-/**
- * 登记一个图片名 —— **字节数的唯一记账入口**（写入/还原都必须走它）。
- * 已存在 ⇒ 同 sig 同内容被重写了一次，不能再累加，否则 totalBytes 会翻倍。
- */
-function registerBin(name: string, size: number): void {
-    if (names.has(name)) return;
-    names.add(name);
-    if (scanDone) totalBytes += size; else pendingBytes += size;
 }
 
-/** 注销（读坏 / 确认不存在）—— 必须同步减账，否则面板永远多算一份 */
-function unregisterBin(name: string): void {
-    if (!names.delete(name)) return;
-    let size = 0;
-    try { size = fs.statSync(path.join(BIN_DIR, name)).size; } catch { /* 文件已不在 */ }
-    if (scanDone) totalBytes -= size; else pendingBytes -= size;
+async function runLegacyMigration(gen: number): Promise<void> {
+    if (gen !== generation || !db || legacyPending.size === 0) return;
+
+    let migratedCount = 0;
+    while (legacyPending.size > 0) {
+        if (gen !== generation || !db) return;
+
+        const batch: [string, string][] = [];
+        for (const entry of legacyPending.entries()) {
+            batch.push(entry);
+            if (batch.length >= MIGRATION_BATCH_SIZE) break;
+        }
+
+        const decoded: {
+            canonical: string;
+            filename: string;
+            kind: BinKind;
+            sigBuf: Buffer;
+            fmt: number;
+            plain: Buffer;
+        }[] = [];
+        const failed: string[] = [];
+
+        for (const [canonical, filename] of batch) {
+            if (gen !== generation || !db) return;
+            const parsed = parseBinName(canonical);
+            if (!parsed) {
+                failed.push(canonical);
+                continue;
+            }
+            try {
+                const enc = await fsasync.readFile(path.join(BIN_DIR, filename));
+                const plain = decryptBlob(enc);
+                decoded.push({
+                    canonical,
+                    filename,
+                    kind: parsed.kind,
+                    sigBuf: parsed.sigBuf,
+                    fmt: detectImageFmt(plain),
+                    plain,
+                });
+            } catch (e) {
+                console.error('[bin] 旧文件迁移读取/解密失败，跳过:', filename, e);
+                failed.push(canonical);
+            }
+        }
+
+        if (gen !== generation || !db || !stmtPut) return;
+
+        if (decoded.length > 0) {
+            const now = Date.now();
+            db.exec('BEGIN');
+            try {
+                for (const item of decoded) {
+                    stmtPut.run(item.kind, item.sigBuf, item.fmt, item.plain.length, now, item.plain);
+                }
+                db.exec('COMMIT');
+            } catch (e) {
+                try {
+                    db.exec('ROLLBACK');
+                } catch {
+                    // ignore
+                }
+                console.error('[bin] 旧文件批量写入 bin.sqlite 失败，中止本次后台迁移:', e);
+                return;
+            }
+
+            for (const item of decoded) {
+                dbNames.add(item.canonical);
+                legacyPending.delete(item.canonical);
+                await fsasync.unlink(path.join(BIN_DIR, item.filename)).catch(() => {});
+            }
+            migratedCount += decoded.length;
+            legacyBytesCache = null;
+        }
+
+        for (const canonical of failed) {
+            legacyPending.delete(canonical);
+        }
+
+        if (legacyPending.size > 0) {
+            await new Promise<void>((r) => setImmediate(r));
+        }
+    }
+
+    if (gen !== generation) return;
+
+    try {
+        const remaining = await fsasync.readdir(BIN_DIR);
+        if (remaining.length === 0) {
+            await fsasync.rmdir(BIN_DIR).catch(() => {});
+        }
+    } catch {
+        // BIN_DIR may not exist
+    }
+
+    if (migratedCount > 0) {
+        console.log(`[bin] 后台迁移完成：已将 ${migratedCount} 张旧 .enc 图片迁入 bin.sqlite`);
+    }
 }
 
-/** 等图片仓就绪（已就绪则立即 resolve）。**服务端的 listen 必须挂在它后面** */
+/**
+ * 初始化（或切换）图片仓。
+ * - 默认使用 `config.userBasePath`
+ * - 仅打开 `bin.sqlite` 并扫描待迁 `bin/*.enc` 文件名后即 resolve（< 10ms，绝不阻塞 listen）
+ * - 后台按 80 张/批渐进迁移旧 `.enc` 文件，每批让出事件循环
+ */
+export function initBinStore(dataDir?: string): Promise<void> {
+    const targetDir = dataDir ?? config.userBasePath;
+    if (readyPromise && activeDataDir === targetDir && !loadError) {
+        return readyPromise;
+    }
+
+    generation++;
+    const gen = generation;
+
+    // 清理上一轮未冲刷的写队列
+    if (writeQueue.length > 0) {
+        const stale = writeQueue;
+        writeQueue = [];
+        for (const w of stale) w.resolve();
+    }
+    flushScheduled = false;
+
+    closeDbHandle();
+    dbNames.clear();
+    legacyPending.clear();
+    legacyBytesCache = null;
+    loadError = null;
+
+    activeDataDir = targetDir;
+    BIN_DIR = path.join(targetDir, 'bin');
+    BIN_DB_PATH = path.join(targetDir, 'bin.sqlite');
+
+    readyPromise = (async () => {
+        try {
+            await fsasync.mkdir(targetDir, { recursive: true });
+            const database = openBinSqlite(BIN_DB_PATH);
+            if (gen !== generation) {
+                database.close();
+                return;
+            }
+            db = database;
+
+            const rows = database.prepare('SELECT kind, hex(sig) AS sigHex FROM bins').iterate() as IterableIterator<{
+                kind: string;
+                sigHex: string;
+            }>;
+            for (const row of rows) {
+                dbNames.add(`${row.kind}-${row.sigHex.toLowerCase()}.enc`);
+            }
+
+            try {
+                const files = await fsasync.readdir(BIN_DIR);
+                for (const file of files) {
+                    const parsed = parseBinName(file);
+                    if (parsed) {
+                        legacyPending.set(parsed.canonical, file);
+                    }
+                }
+            } catch {
+                // 旧 bin/ 目录不存在是正常新库态
+            }
+
+            migrationPromise = runLegacyMigration(gen);
+        } catch (e) {
+            loadError = e;
+            closeDbHandle();
+            console.error('[bin] 图片仓初始化失败（图片将不可用，其余功能不受影响）:', e);
+        }
+    })();
+
+    return readyPromise;
+}
+
+if (process.env.NODE_ENV !== 'test') {
+    void initBinStore().catch(() => {});
+}
+
+/** 等图片仓就绪（仅等打开 bin.sqlite + 扫描待迁文件名，绝不等后台迁移完成） */
 export function whenBinReady(): Promise<void> {
-    return ready;
+    return readyPromise ?? initBinStore();
 }
 
 /** 图片仓是不是没就绪（只用在下发态：没就绪就不给前端 key，免得满屏 404 白框） */
@@ -107,90 +377,260 @@ export function binStoreFailed(): boolean {
 }
 
 export function hasBin(name?: string): boolean {
-    return !!name && names.has(name);
+    const parsed = parseBinName(name);
+    if (!parsed) return false;
+    return dbNames.has(parsed.canonical) || legacyPending.has(parsed.canonical);
 }
 
-/**
- * 图片在 bin 里的文件名。**唯一构造点** —— 写的时候和下发的时候必须拼出同一个名字，
- * 所以前缀与后缀只写在这里一处（2026-10-21 从 server/index.ts 搬来：
- * 清单功能也要拼这两个名字，搬去公用模块才不会是"各拼一份、迟早对不上"）。
- * `t-` = 网格缩略图、`p-` = 预览大图；两者恒为 JPEG（详见 thumbnail.ts）。
- */
 export const thumbNameOf = (sig?: string): string | undefined => (sig ? `t-${sig}.enc` : undefined);
 
 export const previewNameOf = (sig?: string): string | undefined => (sig ? `p-${sig}.enc` : undefined);
 
-/**
- * `t-<sig>.enc` 的**逆运算**：图片名 → sig。
- *
- * 为什么需要：加入清单时前端手上只有卡片下发的 `thumb`/`avatar` **图片名**，
- * 没有指纹（`sig` 只在服务端流转，不下发 —— 下发态白名单故意不含它）。
- * 服务端认自己的命名格式，所以逆运算放这里（唯一真相源），
- * 而不是让前端把名字拆了传上来——那是把服务端的格式知识泄露给调用方。
- */
 export function sigOfThumbName(name?: string): string | undefined {
     const m = /^t-([0-9a-f]+)\.enc$/i.exec(name || '');
     return m ? m[1] : undefined;
 }
 
-export function getBin(name: string): Buffer | null {
-    if (!names.has(name)) return null;
-    try {
-        return decryptBlob(fs.readFileSync(path.join(BIN_DIR, name)));
-    } catch (e) {
-        // 单个文件坏掉不该拖垮这一屏；删掉它的登记，下次扫描会重建
-        console.error('[bin] 读取/解密失败:', name, e);
-        unregisterBin(name);
-        return null;
+export function getBin(name: string): BinEntry | null {
+    const parsed = parseBinName(name);
+    if (!parsed) return null;
+
+    if (db && stmtGet && dbNames.has(parsed.canonical)) {
+        try {
+            const row = stmtGet.get(parsed.kind, parsed.sigBuf) as { fmt: number; data: Uint8Array } | undefined;
+            if (row) {
+                return {
+                    buf: Buffer.from(row.data),
+                    contentType: fmtToContentType(row.fmt),
+                };
+            }
+        } catch (e) {
+            console.error('[bin] SQLite 读取失败:', name, e);
+        }
     }
+
+    const legacyFile = legacyPending.get(parsed.canonical);
+    if (legacyFile) {
+        try {
+            const plain = decryptBlob(fs.readFileSync(path.join(BIN_DIR, legacyFile)));
+            return {
+                buf: plain,
+                contentType: fmtToContentType(detectImageFmt(plain)),
+            };
+        } catch (e) {
+            console.error('[bin] 旧文件读取/解密失败:', name, e);
+            legacyPending.delete(parsed.canonical);
+            return null;
+        }
+    }
+
+    return null;
 }
 
 /**
- * 写一张图。**原子写**（先写 `.tmp-*` 再 rename）+ 失败只记日志（扫描不能被它拖死）。
- *
- * rename 在同一卷上是原子的 ⇒ 浏览侧永远看不到半个文件（那种"半截 JPEG"会让
- * 浏览器拿到一张画到一半的图，且会被 `immutable` 缓存钉住一年）。
+ * 写一张图。同 tick 并发调用经由微任务合并入单事务写入 `bin.sqlite`。
  */
-export async function putBin(name: string, plain: Buffer): Promise<void> {
-    if (loadError || !name) return;
-    const target = path.join(BIN_DIR, name);
-    const tmp = `${target}.tmp-${process.pid}-${Date.now().toString(36)}`;
+export function putBin(name: string, plain: Buffer): Promise<void> {
+    if (loadError || !name) return Promise.resolve();
+    return new Promise<void>((resolve) => {
+        writeQueue.push({ name, plain, resolve });
+        if (!flushScheduled) {
+            flushScheduled = true;
+            queueMicrotask(flushWriteQueue);
+        }
+    });
+}
+
+/** 批量写入多张图（单事务落盘） */
+export async function putBinsBatch(items: { name: string; buf: Buffer }[]): Promise<void> {
+    if (loadError || items.length === 0) return;
     try {
-        const encrypted = encryptBlob(plain);
-        await fsasync.writeFile(tmp, encrypted);
-        await fsasync.rename(tmp, target);
-        registerBin(name, encrypted.length);
+        putBinsBatchSync(items);
     } catch (e) {
-        console.error('[bin] 写入失败:', name, e);
-        fsasync.unlink(tmp).catch(() => { });
+        console.error('[bin] putBinsBatch 写入失败:', e);
     }
 }
 
-/** 全部图片名（备份打包时用） */
-export function listBinNames(): string[] {
-    return [...names];
-}
-
 /**
- * 直接落一份**已经加密**的字节（迁移/还原/合并时从别的包里搬过来用）。
- * 不重复加密 —— 包里那份本来就是密文，再套一层会解不开。
+ * 解密旧版 `.enc` 密文并写入 `bin.sqlite`（供兼容还原路径使用）。
  */
 export async function putBinEncrypted(name: string, encrypted: Buffer): Promise<void> {
     if (loadError || !name) return;
-    const target = path.join(BIN_DIR, name);
-    const tmp = `${target}.tmp-${process.pid}-${Date.now().toString(36)}`;
     try {
-        await fsasync.writeFile(tmp, encrypted);
-        await fsasync.rename(tmp, target);
-        registerBin(name, encrypted.length);
+        const plain = decryptBlob(encrypted);
+        await putBin(name, plain);
     } catch (e) {
-        console.error('[bin] 落盘失败（来自包）:', name, e);
-        fsasync.unlink(tmp).catch(() => { });
+        console.error('[bin] 解密并落盘失败（来自包）:', name, e);
     }
 }
 
-/** 仓库概况（面板/探针用）：条数与总字节。**全读内存，不碰磁盘** */
+/** 全部图片名（内存索引） */
+export function listBinNames(): string[] {
+    if (legacyPending.size === 0) return [...dbNames];
+    const all = new Set<string>(dbNames);
+    for (const k of legacyPending.keys()) all.add(k);
+    return [...all];
+}
+
+/** 全部图片元数据列表 */
+export function listBinEntries(): BinEntryMeta[] {
+    const out: BinEntryMeta[] = [];
+    for (const name of listBinNames()) {
+        const parsed = parseBinName(name);
+        if (!parsed) continue;
+        out.push({ kind: parsed.kind, sig: parsed.sigHex, name: parsed.canonical });
+    }
+    return out;
+}
+
+/** 供备份打包读取单条原始图片数据与格式标记 */
+export function readBinEntryForBackup(kind: BinKind, sigHex: string): { fmt: number; data: Buffer } | null {
+    const normalized = sigHex.toLowerCase();
+    if (!/^[0-9a-f]+$/.test(normalized) || normalized.length % 2 !== 0) return null;
+    const sigBuf = Buffer.from(normalized, 'hex');
+
+    if (db && stmtGet) {
+        try {
+            const row = stmtGet.get(kind, sigBuf) as { fmt: number; data: Uint8Array } | undefined;
+            if (row) {
+                return { fmt: row.fmt, data: Buffer.from(row.data) };
+            }
+        } catch (e) {
+            console.error('[bin] 备份读取 SQLite 失败:', kind, normalized, e);
+        }
+    }
+
+    const canonical = `${kind}-${normalized}.enc`;
+    const legacyFile = legacyPending.get(canonical);
+    if (legacyFile) {
+        try {
+            const plain = decryptBlob(fs.readFileSync(path.join(BIN_DIR, legacyFile)));
+            return { fmt: detectImageFmt(plain), data: plain };
+        } catch (e) {
+            console.error('[bin] 备份读取旧文件失败:', canonical, e);
+        }
+    }
+
+    return null;
+}
+
+/** 批量删除指定图片，并在事务提交后执行 `PRAGMA incremental_vacuum` 归还磁盘空间 */
+export async function deleteBinsBatch(keys: BinKey[]): Promise<{ removed: number; freed: number }> {
+    if (!db || !stmtSize || !stmtDel || keys.length === 0) {
+        return { removed: 0, freed: 0 };
+    }
+
+    let removed = 0;
+    let freed = 0;
+    const removedCanonicals: string[] = [];
+
+    db.exec('BEGIN');
+    try {
+        for (const key of keys) {
+            const normalized = key.sig.toLowerCase();
+            if (!/^[0-9a-f]+$/.test(normalized) || normalized.length % 2 !== 0) continue;
+            const sigBuf = Buffer.from(normalized, 'hex');
+            const canonical = `${key.kind}-${normalized}.enc`;
+
+            const sizeRow = stmtSize.get(key.kind, sigBuf) as { size: number } | undefined;
+            const delInfo = stmtDel.run(key.kind, sigBuf);
+            if (Number(delInfo.changes) > 0) {
+                removed++;
+                freed += sizeRow?.size ?? 0;
+                removedCanonicals.push(canonical);
+            }
+        }
+        db.exec('COMMIT');
+    } catch (err) {
+        try {
+            db.exec('ROLLBACK');
+        } catch {
+            // ignore
+        }
+        throw err;
+    }
+
+    for (const canonical of removedCanonicals) {
+        dbNames.delete(canonical);
+    }
+
+    for (const key of keys) {
+        const canonical = `${key.kind}-${key.sig.toLowerCase()}.enc`;
+        const legacyFile = legacyPending.get(canonical);
+        if (legacyFile) {
+            legacyPending.delete(canonical);
+            await fsasync.unlink(path.join(BIN_DIR, legacyFile)).catch(() => {});
+            legacyBytesCache = null;
+        }
+    }
+
+    if (removed > 0) {
+        db.exec('PRAGMA incremental_vacuum;');
+        db.exec('PRAGMA wal_checkpoint(TRUNCATE);');
+    }
+
+    return { removed, freed };
+}
+
+/** 仓库概况（面板/探针用）：条数与总字节 */
 export async function binStats(): Promise<{ count: number; bytes: number }> {
-    await bytesReady;
-    return { count: names.size, bytes: totalBytes };
+    let count = 0;
+    let bytes = 0;
+
+    if (db && stmtStats) {
+        const row = stmtStats.get() as { cnt: number; total: number } | undefined;
+        if (row) {
+            count = Number(row.cnt) || 0;
+            bytes = Number(row.total) || 0;
+        }
+    }
+
+    if (legacyPending.size > 0) {
+        let extraCount = 0;
+        for (const canonical of legacyPending.keys()) {
+            if (!dbNames.has(canonical)) extraCount++;
+        }
+        count += extraCount;
+
+        if (legacyBytesCache === null) {
+            let sum = 0;
+            for (const [canonical, filename] of legacyPending.entries()) {
+                if (dbNames.has(canonical)) continue;
+                try {
+                    sum += (await fsasync.stat(path.join(BIN_DIR, filename))).size;
+                } catch {
+                    // ignore missing
+                }
+            }
+            legacyBytesCache = sum;
+        }
+        bytes += legacyBytesCache;
+    }
+
+    return { count, bytes };
+}
+
+/** 获取 `bin.sqlite`（含 WAL）占用磁盘字节数 */
+export async function getBinDbBytes(): Promise<number | undefined> {
+    try {
+        const st = await fsasync.stat(BIN_DB_PATH);
+        let total = st.size;
+        try {
+            const walSt = await fsasync.stat(`${BIN_DB_PATH}-wal`);
+            total += walSt.size;
+        } catch {
+            // WAL file may not exist
+        }
+        return total;
+    } catch {
+        return undefined;
+    }
+}
+
+export function getLegacyBinPendingCount(): number {
+    return legacyPending.size;
+}
+
+export function waitForLegacyMigration(): Promise<void> {
+    return migrationPromise;
 }

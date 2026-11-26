@@ -20,7 +20,8 @@ import type { DiskRegistry } from '../utils/driveIdentity';
 import { DIR_COVER_FILES, isDirCover } from './dirCover';
 import {
     BEFORE_RESTORE_PATH, CACHE_DB_PATH, CACHE_VERSION, beginRestore, cacheBackup, endRestore,
-    exportCompactSnapshot, exportSnapshotPlain, findAllCachedCovers, findCache, findSubtreeLeafItems, insertCache, loadMeta, loadSubtreeBytes,
+    exportCompactSnapshot, exportSnapshotPlain, findAllCachedCovers, findCache, findSubtreeLeafItems,
+    getCacheDbBytes, insertCache, loadMeta, loadSubtreeBytes,
     migrateLegacyThumbs, readExternalCache, reloadFromDisk, removeCache,
 } from './nedb';
 import type { CacheMeta, OpenMode, SearchCache } from './nedb';
@@ -1248,20 +1249,20 @@ async function thumbController(req: Req, res: http.ServerResponse) {
         res.writeHead(400, { 'Content-Type': 'text/plain' });
         return res.end('bad key');
     }
-    const buf = getBin(name);
-    if (!buf) {
+    const entry = getBin(name);
+    if (!entry) {
         res.writeHead(404, { 'Content-Type': 'text/plain' });
         return res.end('thumb not found');
     }
 
     res.writeHead(200, {
-        'Content-Type': 'image/jpeg',
-        'Content-Length': buf.length,
+        'Content-Type': entry.contentType,
+        'Content-Length': entry.buf.length,
         // 名字里带**内容指纹** ⇒ 同名必同内容 ⇒ 可以永久缓存。
         // 图换了就有新指纹、新 URL，**不会**出现"改了文件还显示旧图"。
         'Cache-Control': 'private, max-age=31536000, immutable',
     });
-    res.end(buf);
+    res.end(entry.buf);
 }
 
 /**
@@ -1286,11 +1287,11 @@ async function previewController(req: Req, res: http.ServerResponse) {
     const cached = getBin(name);
     if (cached) {
         res.writeHead(200, {
-            'Content-Type': 'image/jpeg',
-            'Content-Length': cached.length,
+            'Content-Type': cached.contentType,
+            'Content-Length': cached.buf.length,
             'Cache-Control': 'private, max-age=31536000, immutable',
         });
-        return res.end(cached);
+        return res.end(cached.buf);
     }
 
     const filepath = req.params?.get('p') || '';
@@ -1440,14 +1441,9 @@ async function listDisksController(req: Req, res: http.ServerResponse) {
     const known = new Set([...Object.keys(registry), ...metas.map(m => m.serial)]);
     const offline = offlineSerials(known, drives);
 
-    // 库文件大小：读的是**本地数据文件**的 metadata（`~/.file-finder/searchCache.db`），
+    // 库文件大小：读的是**本地数据文件**的 metadata（`~/.file-finder/cache.sqlite`），
     // **不碰任何移动硬盘**。拿不到就不显示（前端按 undefined 处理），不因此报错。
-    let dbBytes: number | undefined;
-    try {
-        dbBytes = (await fsasync.stat(CACHE_DB_PATH)).size;
-    } catch {
-        dbBytes = undefined;
-    }
+    const dbBytes = await getCacheDbBytes();
 
     const bin = await binStats();
 
