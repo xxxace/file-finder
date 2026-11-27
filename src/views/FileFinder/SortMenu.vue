@@ -14,14 +14,15 @@ import { computed, h } from 'vue';
 import type { Component } from 'vue';
 import { NButton, NDropdown, NIcon } from 'naive-ui';
 import type { DropdownMenuProps, DropdownOption } from 'naive-ui';
+import { SwapVerticalOutline } from '@vicons/ionicons5';
 import {
-    ArrowDownOutline,
-    ArrowUpOutline,
-    DiscOutline,
-    StatsChartOutline,
-    SwapVerticalOutline,
-    TextOutline,
-} from '@vicons/ionicons5';
+    SortDiskAsc24,
+    SortDiskDesc24,
+    SortNameAsc24,
+    SortNameDesc24,
+    SortSizeAsc24,
+    SortSizeDesc24,
+} from '@/components/icons/sort';
 import { playSfx } from '@/utils/sfx';
 
 export type SortMode =
@@ -37,18 +38,17 @@ interface SortItem {
     key: SortMode;
     label: string;
     icon: Component;
-    btnIcon: Component;
     globalOnly?: boolean;
 }
 
 const SORT_ITEMS: ReadonlyArray<SortItem> = [
-    { key: 'default', label: '默认顺序', icon: SwapVerticalOutline, btnIcon: SwapVerticalOutline },
-    { key: 'name-asc', label: '名称 A → Z', icon: ArrowUpOutline, btnIcon: TextOutline },
-    { key: 'name-desc', label: '名称 Z → A', icon: ArrowDownOutline, btnIcon: TextOutline },
-    { key: 'size-desc', label: '大小 从大到小', icon: StatsChartOutline, btnIcon: StatsChartOutline },
-    { key: 'size-asc', label: '大小 从小到大', icon: StatsChartOutline, btnIcon: StatsChartOutline },
-    { key: 'disk-asc', label: '盘符 在线优先', icon: DiscOutline, btnIcon: DiscOutline, globalOnly: true },
-    { key: 'disk-desc', label: '盘符 逆序', icon: DiscOutline, btnIcon: DiscOutline, globalOnly: true },
+    { key: 'default', label: '默认顺序', icon: SwapVerticalOutline },
+    { key: 'name-asc', label: '名称 A → Z', icon: SortNameAsc24 },
+    { key: 'name-desc', label: '名称 Z → A', icon: SortNameDesc24 },
+    { key: 'size-desc', label: '大小 从大到小', icon: SortSizeDesc24 },
+    { key: 'size-asc', label: '大小 从小到大', icon: SortSizeAsc24 },
+    { key: 'disk-asc', label: '盘符 在线优先', icon: SortDiskAsc24, globalOnly: true },
+    { key: 'disk-desc', label: '盘符 逆序', icon: SortDiskDesc24, globalOnly: true },
 ];
 
 const props = defineProps<{
@@ -71,7 +71,7 @@ const currentItem = computed(() =>
 );
 
 const currentLabel = computed(() => currentItem.value.label);
-const buttonIcon = computed(() => currentItem.value.btnIcon);
+const buttonIcon = computed(() => currentItem.value.icon);
 const isCustom = computed(() => props.modelValue !== 'default');
 
 const options = computed<DropdownOption[]>(() =>
