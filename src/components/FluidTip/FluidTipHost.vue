@@ -137,7 +137,7 @@ onBeforeUnmount(() => {
     color: var(--ff-tooltip-text);
     backdrop-filter: var(--ff-tooltip-backdrop);
     font-size: 12.5px;
-    font-weight: 500;
+    font-weight: var(--ff-tooltip-weight);
     line-height: 1.2;
     letter-spacing: -0.01em;
     white-space: nowrap;
@@ -163,6 +163,7 @@ onBeforeUnmount(() => {
     &.is-rich {
         display: block;
         padding: 8px 10px;
+        font-weight: 500;
         /**
          * 宽度策略：**最小 = 锚点宽度 + 20（模板里按 rect 算），上限 300**。
          *
@@ -212,8 +213,8 @@ onBeforeUnmount(() => {
     box-sizing: border-box;
     border-radius: 0.4em;
     background: var(--ff-tooltip-kbd-bg);
-    /* 键帽的下沿：一条 1px 暗线读作"键盘键的侧面"，没有它就只是一块圆角芯片 */
-    box-shadow: inset 0 -1px 0 var(--ff-tooltip-kbd-line);
+    /* 键帽的描边与下沿：由主题 token 控制，浅色呈实体白键帽、暗色保持原样 */
+    box-shadow: var(--ff-tooltip-kbd-shadow);
     color: var(--ff-tooltip-kbd-text);
     font-family: var(--ff-font);
     font-size: 0.86em;

@@ -556,28 +556,38 @@
      深色主题**不受影响**：那边仍是深片 + 亮边（填充 30 / 背景 14 / 边 57，他自己说"暗色就很好"）。
      ⇒ 这不是"分裂两套语言"，而是**跟随主题**：浅界面用浅浮层、深界面用深浮层。
      ⚠️ 连带：naive tooltip 与右键菜单共用这组 token（`ctx-menu.css`），浅色下会一起变浅 —— 那正是应有的行为。 */
-  --ff-tooltip-bg: rgba(255, 255, 255, 0.97);
+  /* ════════ 2026-11-27 光学与色彩优化（浅色 Tooltip） ════════
+     前版问题（2026-11-26 纯白方案）：
+       1. 0.97 近乎实心纯白，backdrop-filter 模糊完全失效，压在白顶栏上失去图底分离，只能靠重黑边硬撑；
+       2. `inset 0 0 0 1px rgba(0,0,0,0.15)` 内黑边违反光学直觉 —— 浅底抬升物内缘应是受光高光，
+          内黑描边会让白胶囊视觉塌陷成"扁平输入框 / 廉价贴纸"；
+       3. `-6px / -16px` 负扩展把 ~27px 高胶囊的投影从左右和远距截断，只剩底部一团死灰斑；
+       4. 光渗效应（Helmholtz Irradiation）使白底黑字在 500 字重下显得比暗底白字更细弱；
+       5. 键帽仅靠底缘一条暗线、无四周轮廓，在浅色玻璃上糊成一块灰斑。
+     解法（对齐 macOS Sequoia / Linear / Raycast 浅色光学浮层）：
+       · 84% 透光冷白玻璃 + blur(20px) saturate(180%)：既透出微弱环境色泽，最坏黑底上仍有 11.9:1 AAA 对比；
+       · 光影分离描边：内缘用白色高光棱（inset 0 1px 0 + 淡白内环，镜像暗色的高光边），外缘用 6.5% 极细发丝压边；
+       · 零上沿溢出的双层自然落影：2px 接触影 + 8px 空气漫射影，保持上沿绝对干净无灰雾。 */
+  --ff-tooltip-bg: rgba(255, 255, 255, 0.84);
   --ff-tooltip-text: var(--ff-text-1);
-  /* 键帽反过来：深片上是白键帽，浅片上就是"压下去的浅槽"（0.05 黑底 + 0.12 黑下缘线）。 */
-  --ff-tooltip-kbd-bg: rgba(0, 0, 0, 0.05);
+  --ff-tooltip-weight: 540;
+  /* 键帽：受光微渐变白片 + 四周 8% 轮廓 + 1px 实体键裙底边，呈真实实体键帽质感 */
+  --ff-tooltip-kbd-bg: linear-gradient(180deg, rgba(255, 255, 255, 0.95), rgba(241, 242, 244, 0.92));
   --ff-tooltip-kbd-line: rgba(0, 0, 0, 0.12);
   --ff-tooltip-kbd-text: var(--ff-text-1);
-  /* 浅片上的悬停底（多文件弹层的行）：比键帽底再淡一档，同一条"只是指到了"的纪律。 */
-  --ff-tooltip-hover: rgba(0, 0, 0, 0.05);
-  /* ⚠️ 「脏」的根因是**影从四边都渗出来**（2026-11-26 逐像素实测，改这里先读完）：
-     上一版 `0 1px 2px .16` + `0 5px 14px -6px .22`，实测胶囊外圈：
-       上方 y−2 → 220、左右 → 222、下方 → 200（背景 241）。
-     四个方向都压出一圈灰 ⇒ 等于给白片围了条灰围巾，白再白也脏。
-     ⚠️ 判据：`box-shadow` 的**侧向渗出 ≈ spread + blur/2**，要它 ≤0 就必须
-        `spread ≤ -blur/2`；只留下方就得靠 y 偏移把影"推"出去。
-     ⇒ 现配方：侧向渗出 -1 与 -4（**全干净**），只有下方 3px / 8px 两道：
-        `0 4px 10px -6px` 负责接触 + `0 12px 24px -16px` 负责悬空。
-     轮廓 1px 保留：它是"线"，不产生雾 —— 干净和"有形"不冲突，冲突的是"雾包边"。 */
+  --ff-tooltip-kbd-shadow:
+      inset 0 0 0 1px rgba(0, 0, 0, 0.08),
+      inset 0 -1px 0 var(--ff-tooltip-kbd-line),
+      0 1px 1px rgba(0, 0, 0, 0.04);
+  /* 浅片上的悬停底（多文件弹层的行） */
+  --ff-tooltip-hover: rgba(0, 0, 0, 0.065);
   --ff-tooltip-shadow:
-      inset 0 0 0 1px rgba(0, 0, 0, 0.15),
-      0 4px 10px -6px rgba(0, 0, 0, 0.18),
-      0 12px 24px -16px rgba(0, 0, 0, 0.22);
-  --ff-tooltip-backdrop: blur(16px) saturate(160%);
+      inset 0 1px 0 rgba(255, 255, 255, 0.95),
+      inset 0 0 0 1px rgba(255, 255, 255, 0.45),
+      0 0 0 1px rgba(0, 0, 0, 0.065),
+      0 2px 6px -1px rgba(0, 0, 0, 0.07),
+      0 8px 20px -4px rgba(0, 0, 0, 0.10);
+  --ff-tooltip-backdrop: blur(20px) saturate(180%);
 
   /* ════════ 常用别名 ════════ */
   --ff-bg: var(--ff-canvas);
@@ -771,6 +781,12 @@
      微透深底 + 玻璃 + 白发丝内描边 + 更沉的落影，边缘从照片里"剥"出来。 */
   --ff-tooltip-bg: rgba(30, 30, 32, 0.92);
   --ff-tooltip-text: var(--ff-text-1);
+  --ff-tooltip-weight: 500;
+  --ff-tooltip-kbd-bg: rgba(0, 0, 0, 0.05);
+  --ff-tooltip-kbd-line: rgba(0, 0, 0, 0.12);
+  --ff-tooltip-kbd-text: var(--ff-text-1);
+  --ff-tooltip-kbd-shadow: inset 0 -1px 0 var(--ff-tooltip-kbd-line);
+  --ff-tooltip-hover: rgba(0, 0, 0, 0.05);
   --ff-tooltip-backdrop: blur(16px) saturate(140%);
   --ff-tooltip-shadow:
       inset 0 0 0 1px rgba(255, 255, 255, 0.12),
