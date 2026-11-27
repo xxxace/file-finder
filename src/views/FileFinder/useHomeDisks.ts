@@ -13,6 +13,7 @@
  * 同一块盘在两个页面里"算不算有缓存"给出不同答案，是最难解释的那类不一致。
  */
 import { computed, ref } from 'vue';
+import { formatDiskDisplay } from '@/utils';
 import { API_BASE, getAction } from '@/utils/request';
 
 /** 服务端 `/getDisks` 里每块盘的一条落点（缓存记录里**最上层**的那几条之一） */
@@ -44,7 +45,11 @@ export interface HomeDisk {
     /** `serial|drive`：克隆盘会有一对同 serial 的盘符，key 不带盘符就重复了 */
     key: string;
     serial: string;
-    /** 在线：`H:`；离线：`序列号 后四位` */
+    /** 在线盘符（如 `'H'`），离线为空串 */
+    drive: string;
+    /** 用户自定义的硬盘别名，未设置时为空串 */
+    label: string;
+    /** 在线：`别名 (H:)` 或 `H:`；离线：`别名` 或 `序列号 后四位` */
     name: string;
     online: boolean;
     folders: number;
@@ -124,16 +129,28 @@ export function useHomeDisks() {
                     const kb = b.online ? b.drive : b.serial;
                     return String(ka).localeCompare(String(kb));
                 })
-                .map(d => ({
-                    key: `${d.serial}|${d.drive || ''}`,
-                    serial: d.serial,
-                    name: d.online && d.drive ? `${d.drive}:` : `序列号 ${d.serial.slice(-4)}`,
-                    online: d.online,
-                    folders: d.folders || 0,
-                    entries: d.covers || 0,
-                    timeLine: timeLineOf(d),
-                    tops: d.tops ?? [],
-                }));
+                .map(d => {
+                    const label = (d.label || '').trim();
+                    const drive = d.drive || '';
+                    const name = formatDiskDisplay({
+                        serial: d.serial,
+                        drive,
+                        label,
+                        online: d.online,
+                    });
+                    return {
+                        key: `${d.serial}|${drive}`,
+                        serial: d.serial,
+                        drive,
+                        label,
+                        name,
+                        online: d.online,
+                        folders: d.folders || 0,
+                        entries: d.covers || 0,
+                        timeLine: timeLineOf(d),
+                        tops: d.tops ?? [],
+                    };
+                });
         } catch (e) {
             // 首页取不到盘列表**不弹通知**：它不是用户主动发起的动作，
             // 而且此时界面上还有"还没选文件夹"那条灰字兜底，弹窗只会更吵。

@@ -28,6 +28,8 @@ export interface ContextMenuDeps {
     currentPlaylistId: () => string;
     /** 清单变更后重取当前屏（走页面唯一出口，不在这里本地摘条目） */
     reloadCurrent: () => void;
+    /** 跨盘全局搜索结果：定位到条目所在的缓存目录并聚焦 */
+    locateItemDir?: (item: WiredFileInfo) => void;
 }
 
 export function useContextMenu(deps: ContextMenuDeps) {
@@ -79,6 +81,7 @@ export function useContextMenu(deps: ContextMenuDeps) {
 
     /** 卡片右键：全部组 */
     const onContextMenu = (e: MouseEvent, item: WiredFileInfo) => {
+        plPicker.value.visible = false;
         ctxMenu.value.visible = true;
         ctxMenu.value.x = e.clientX;
         ctxMenu.value.y = e.clientY;
@@ -86,16 +89,19 @@ export function useContextMenu(deps: ContextMenuDeps) {
         ctxMenu.value.stem = item.name;
         ctxMenu.value.mode = 'card';
         ctxMenu.value.item = item;
+        ctxMenu.value.crumbPath = '';
     };
 
-    /** 空白右键：只有目录工具组。卡片自己的右键会冒泡上来，用 closest 判掉。 */
+    /** 空白右键：只有目录工具组。卡片自己的右键已 stopPropagation，这里仍保留 closest 兜底。 */
     const onBlankContextMenu = (e: MouseEvent) => {
-        if ((e.target as HTMLElement).closest('.image-box-item')) return;
+        if ((e.target as HTMLElement | null)?.closest?.('.image-box-item, .home-disks, .scan-bar-slot')) return;
+        plPicker.value.visible = false;
         ctxMenu.value.visible = true;
         ctxMenu.value.x = e.clientX;
         ctxMenu.value.y = e.clientY;
         ctxMenu.value.mode = 'blank';
         ctxMenu.value.item = null;
+        ctxMenu.value.crumbPath = '';
     };
 
     /**
@@ -137,6 +143,14 @@ export function useContextMenu(deps: ContextMenuDeps) {
         if (!item) return;
         const err = await ipcRenderer.invoke('ff-reveal-item', deps.fullPathOf(item));
         if (err) deps.notify('error', '打开失败', String(err));
+    };
+
+    /** 「定位到所在目录」：从跨盘全局搜索结果跳转到该条目的缓存父目录并聚焦。 */
+    const locateDir = () => {
+        const item = ctxMenu.value.item;
+        closeCtxMenu();
+        if (!item) return;
+        deps.locateItemDir?.(item);
     };
 
     /** 「加入收藏」：一键入默认清单。高频路径，不为它多弹一层。 */
@@ -203,7 +217,7 @@ export function useContextMenu(deps: ContextMenuDeps) {
     return {
         ctxMenu, plPicker,
         onContextMenu, onBlankContextMenu, onCtxMenuKeydown, closeCtxMenu,
-        copyNameStem, copyPath, revealInFolder,
+        copyNameStem, copyPath, revealInFolder, locateDir,
         addToFavorite, openPlPicker, onPickerAdded, onPickerFailed,
         removeFromCurrentPlaylist,
     };

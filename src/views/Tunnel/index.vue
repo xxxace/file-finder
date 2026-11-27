@@ -70,6 +70,7 @@ import { NSpin } from 'naive-ui';
 import AlbumCoverTunnel from '@/components/AlbumCoverTunnel/AlbumCoverTunnel.vue';
 import { dedupeCovers } from '@/components/AlbumCoverTunnel/types';
 import type { TunnelCover } from '@/components/AlbumCoverTunnel/types';
+import { formatDiskDisplay } from '@/utils';
 import { API_BASE, getAction } from '@/utils/request';
 import { assetUrl } from '@/utils/thumb';
 import { openInFiles } from '@/views/FileFinder/target';
@@ -126,13 +127,16 @@ async function loadDisks() {
          * 判据只认 `Array.isArray(res?.disks)`：`assertOk` 已经保证非 200 会抛，不必再看 code。
          */
         if (Array.isArray(res?.disks)) {
-            disks.value = res.disks.map((d: { serial: string; letter?: string; drive?: string; name?: string }) => ({
+            disks.value = res.disks.map((d: { serial: string; letter?: string; drive?: string; label?: string; name?: string; online?: boolean }) => ({
                 serial: d.serial,
-                // ⚠️ 服务端给的是 `drive`（`C:`），不是 `letter` —— 原来这里读 d.letter 恒 undefined，
-                // 所以每一项都显示成"(离线)"。两个都兜一下，将来服务端补字段也不用再改。
-                name: d.letter || d.drive
-                    ? `${(d.letter || d.drive || '').replace(/:$/, '')}盘 (${d.name || d.serial})`
-                    : `${d.name || d.serial} (离线)`,
+                name: formatDiskDisplay({
+                    serial: d.serial,
+                    drive: d.letter || d.drive,
+                    label: d.label || d.name,
+                    online: d.online !== false && !!(d.letter || d.drive),
+                    offlinePrefix: '离线 · ',
+                    offlineFallback: `${d.serial} (离线)`,
+                }),
             }));
         }
     } catch {

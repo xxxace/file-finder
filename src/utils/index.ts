@@ -236,3 +236,28 @@ export function isGridKeyBlocked(e: KeyboardEvent): boolean {
     // 方向键现在能直接用了，不需要用户去点网格把焦点"洗"回 body。
     return false;
 }
+
+/**
+ * 格式化硬盘展示名：
+ * - 在线：`别名 (D:)` 或 `D:`
+ * - 离线：`[offlinePrefix]别名` 或 `offlineFallback`（默认 `序列号 后四位`）
+ */
+export function formatDiskDisplay(opts: {
+    serial: string;
+    drive?: string;
+    label?: string;
+    online?: boolean;
+    offlinePrefix?: string;
+    offlineFallback?: string;
+}): string {
+    const label = (opts.label || '').trim();
+    const drive = (opts.drive || '').replace(/:$/, '').trim();
+    const online = opts.online !== false && !!drive;
+    if (online) {
+        return label ? `${label} (${drive}:)` : `${drive}:`;
+    }
+    if (label) {
+        return opts.offlinePrefix ? `${opts.offlinePrefix}${label}` : label;
+    }
+    return opts.offlineFallback ?? `序列号 ${opts.serial.slice(-4)}`;
+}

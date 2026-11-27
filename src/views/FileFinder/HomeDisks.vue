@@ -18,10 +18,11 @@
                 :class="{ 'is-off': !d.online, 'has-multi': d.tops.length > 1, 'is-selected': selectedKey === d.key }"
                 :disabled="!d.tops.length"
                 :tabindex="i === focusIdx ? 0 : -1"
-                :aria-label="ariaOf(d)" v-tip="d.online ? '' : `序列号 ${d.serial}`"
+                :aria-label="ariaOf(d)" v-tip="d.label || !d.online ? `序列号 ${d.serial}` : ''"
                 @focus="onCardFocus(i)"
                 @click="onCardClick($event, d)"
                 @dblclick="onCardDblClick($event, d)"
+                @contextmenu.prevent.stop="onCardContextMenu($event, d)"
                 @keydown="onCardKeydown($event, d)">
                 <img class="hd-icon" :src="diskIcon" alt="" draggable="false" />
                 <span class="hd-text">
@@ -50,16 +51,47 @@
          同一个界面里两套浮层语言只会让人多学一遍。 -->
     <n-popover :show="menu.visible" :x="menu.x" :y="menu.y" trigger="manual" placement="bottom-start"
         :show-arrow="false" @clickoutside="onOutside">
-        <div class="ctx-menu ctx-menu--tops" tabindex="-1" ref="menuBox" @keydown.stop="onMenuKeydown">
-            <button v-for="(t, i) in menu.tops" :key="t.relPath || '__root__'" type="button" class="ctx-item"
-                :class="{ 'is-cursor': cursorOn && i === cursor }"
-                @mouseenter="hoverItem(i)" @click="pick(t)">
-                <n-icon :size="16" :component="FolderOutline" />
-                <span class="ctx-label">{{ t.relPath || '盘根' }}</span>
-                <span class="ctx-count">{{ t.count }}</span>
-            </button>
+        <div class="ctx-menu" :class="{ 'ctx-menu--tops': menu.mode === 'tops' }" tabindex="-1" ref="menuBox" @keydown.stop="onMenuKeydown">
+            <template v-if="menu.mode === 'tops'">
+                <button v-for="(t, i) in menu.tops" :key="t.relPath || '__root__'" type="button" class="ctx-item"
+                    :class="{ 'is-cursor': cursorOn && i === cursor }"
+                    @mouseenter="hoverItem(i)" @click="pick(t)">
+                    <n-icon :size="16" :component="FolderOutline" />
+                    <span class="ctx-label">{{ t.relPath || '盘根' }}</span>
+                    <span class="ctx-count">{{ t.count }}</span>
+                </button>
+            </template>
+            <template v-else>
+                <button v-for="(item, i) in ctxItems" :key="item.key" type="button" class="ctx-item"
+                    :class="{ 'is-cursor': cursorOn && i === cursor }" :disabled="item.disabled"
+                    @mouseenter="hoverItem(i)" @click="onCtxAction(item.key)">
+                    <n-icon :size="16" :component="item.icon" />
+                    <span class="ctx-label">{{ item.label }}</span>
+                </button>
+            </template>
         </div>
     </n-popover>
+
+    <n-modal v-model:show="aliasModal.visible" preset="card" :title="aliasModal.disk?.label ? '修改硬盘别名' : '设置硬盘别名'"
+        :bordered="false" class="hd-alias-modal" style="width: 360px">
+        <div class="hd-alias-body">
+            <div class="hd-alias-meta">
+                <span>{{ aliasModal.disk?.online && aliasModal.disk?.drive ? `当前盘符 ${aliasModal.disk.drive}:` : '当前离线' }}</span>
+                <span>序列号 {{ aliasModal.disk?.serial }}</span>
+            </div>
+            <n-input ref="aliasInputEl" v-model:value="aliasModal.draft" placeholder="输入硬盘别名（留空则恢复默认）"
+                :maxlength="40" clearable @keydown.enter.prevent="saveAlias" />
+        </div>
+        <template #footer>
+            <div class="hd-alias-footer">
+                <n-button v-if="aliasModal.disk?.label" size="small" tertiary :disabled="aliasModal.saving"
+                    @click="clearAlias">清空别名</n-button>
+                <div class="hd-alias-spacer" />
+                <n-button size="small" :disabled="aliasModal.saving" @click="aliasModal.visible = false">取消</n-button>
+                <n-button size="small" type="primary" :loading="aliasModal.saving" @click="saveAlias">保存</n-button>
+            </div>
+        </template>
+    </n-modal>
 </template>
 
 <script setup lang="ts">
@@ -70,17 +102,23 @@
  * 它只负责"长什么样、点了去哪"。这样首页刷新时机（挂载 / 插拔盘 / 回到首页）
  * 只在页面里有一处决定，组件不需要知道。
  */
-import { nextTick, onActivated, onBeforeUnmount, onDeactivated, onMounted, ref, watch } from 'vue';
-import { NIcon, NPopover } from 'naive-ui';
-import { FolderOutline, ChevronDownOutline } from '@vicons/ionicons5';
+import { computed, nextTick, onActivated, onBeforeUnmount, onDeactivated, onMounted, ref, watch, type Component } from 'vue';
+import { NButton, NIcon, NInput, NModal, NPopover } from 'naive-ui';
+import { ChevronDownOutline, CloseCircleOutline, CreateOutline, FolderOpenOutline, FolderOutline } from '@vicons/ionicons5';
+import useNotify from '@/hooks/useNotify';
 import { isGridKeyBlocked } from '@/utils';
+import { API_BASE, postAction } from '@/utils/request';
 import diskIcon from '@/assets/disk-hdd.svg';
 import type { DiskTop, HomeDisk } from './useHomeDisks';
 // 浮层内容被 n-popover teleport 到 body，scoped 够不到 ⇒ 复用右键菜单那份非 scoped 样式
 import './ctx-menu.css';
 
 const props = defineProps<{ disks: HomeDisk[] }>();
-const emit = defineEmits<{ (e: 'open', path: string): void }>();
+const emit = defineEmits<{
+    (e: 'open', path: string): void;
+    (e: 'renamed'): void;
+}>();
+const notify = useNotify();
 
 const ariaOf = (d: HomeDisk) =>
     `${d.name}：${d.folders} 个缓存目录、${d.entries} 个条目${d.online ? '' : '（这块盘未插入）'}`;
@@ -149,9 +187,43 @@ watch(
     { immediate: true },
 );
 
-const menu = ref<{ visible: boolean; x: number; y: number; tops: DiskTop[]; key: string }>({
-    visible: false, x: 0, y: 0, tops: [], key: '',
+type MenuAction = 'open' | 'rename' | 'clear';
+interface CtxMenuItem {
+    key: MenuAction;
+    label: string;
+    icon: Component;
+    disabled?: boolean;
+}
+
+const menu = ref<{
+    visible: boolean;
+    mode: 'tops' | 'ctx';
+    x: number;
+    y: number;
+    tops: DiskTop[];
+    disk: HomeDisk | null;
+    key: string;
+}>({
+    visible: false, mode: 'tops', x: 0, y: 0, tops: [], disk: null, key: '',
 });
+
+const ctxItems = computed<CtxMenuItem[]>(() => {
+    const d = menu.value.disk;
+    if (!d) return [];
+    const items: CtxMenuItem[] = [
+        { key: 'open', label: '打开', icon: FolderOpenOutline, disabled: !d.tops.length },
+        { key: 'rename', label: d.label ? '修改别名' : '设置别名', icon: CreateOutline },
+    ];
+    if (d.label) {
+        items.push({ key: 'clear', label: '清空别名', icon: CloseCircleOutline });
+    }
+    return items;
+});
+
+const aliasModal = ref<{ visible: boolean; disk: HomeDisk | null; draft: string; saving: boolean }>({
+    visible: false, disk: null, draft: '', saving: false,
+});
+const aliasInputEl = ref<{ focus?: () => void } | null>(null);
 const cursor = ref(0);
 /**
  * 高亮**只在实际交互之后出现**（业主 2026-11-11：浅色下这层的配色不对，参考右键菜单）。
@@ -194,7 +266,7 @@ const clampIntoViewport = () => {
     if (dx > 0) menu.value.x = Math.max(GAP, menu.value.x - dx);
 };
 
-const openMenu = (e: MouseEvent | KeyboardEvent, d: HomeDisk) => {
+const openMenu = (e: MouseEvent | KeyboardEvent, d: HomeDisk, mode: 'tops' | 'ctx' = 'tops') => {
     /**
      * 键盘触发的 click（Tab 到卡片后按回车/空格）或 keydown **没有指针坐标**：`clientX/Y` 都是 0，
      * 菜单会跑到窗口左上角（clamp 之后是 8,8）。
@@ -205,14 +277,16 @@ const openMenu = (e: MouseEvent | KeyboardEvent, d: HomeDisk) => {
     const rect = cardEl?.getBoundingClientRect?.();
     const isMouse = 'clientX' in e && typeof (e as MouseEvent).clientX === 'number'
         && ('detail' in e ? (e as MouseEvent).detail > 0 : true);
-    const useRect = !isMouse && !!rect;
+    const useRect = mode === 'tops' && !isMouse && !!rect;
     const me = e as MouseEvent;
 
     menu.value = {
         visible: true,
-        x: useRect ? Math.round(rect!.left) : (me.clientX ?? Math.round(rect?.left ?? 0)),
-        y: useRect ? Math.round(rect!.bottom + 4) : (me.clientY ?? Math.round(rect?.bottom ?? 0) + 4),
+        mode,
+        x: useRect ? Math.round(rect!.left) : (me.clientX || Math.round(rect?.left ?? 0)),
+        y: useRect ? Math.round(rect!.bottom + 4) : (me.clientY || Math.round(rect?.bottom ?? 0) + 4),
         tops: d.tops,
+        disk: d,
         key: d.key,
     };
     cursor.value = 0;
@@ -221,6 +295,96 @@ const openMenu = (e: MouseEvent | KeyboardEvent, d: HomeDisk) => {
         menuBox.value?.focus();
         requestAnimationFrame(clampIntoViewport);
     });
+};
+
+const onCardContextMenu = (e: MouseEvent, d: HomeDisk) => {
+    selectedKey.value = d.key;
+    openMenu(e, d, 'ctx');
+};
+
+const openAliasModal = (d: HomeDisk) => {
+    closeMenu();
+    aliasModal.value = {
+        visible: true,
+        disk: d,
+        draft: d.label,
+        saving: false,
+    };
+    void nextTick(() => {
+        aliasInputEl.value?.focus?.();
+    });
+};
+
+const submitDiskLabel = async (d: HomeDisk, nextLabel: string) => {
+    if (aliasModal.value.saving) return;
+    aliasModal.value.saving = true;
+    try {
+        const clean = nextLabel.trim();
+        await postAction(`${API_BASE}/setDiskLabel`, {
+            serial: d.serial,
+            label: clean,
+        });
+        aliasModal.value.visible = false;
+        notify('success', clean ? '已保存硬盘别名' : '已清空硬盘别名', clean ? `${d.serial} → ${clean}` : `序列号 ${d.serial}`);
+        emit('renamed');
+    } catch (err) {
+        notify('error', '保存别名失败', String(err));
+    } finally {
+        aliasModal.value.saving = false;
+    }
+};
+
+const saveAlias = () => {
+    const d = aliasModal.value.disk;
+    if (!d) return;
+    void submitDiskLabel(d, aliasModal.value.draft);
+};
+
+const clearAlias = () => {
+    const d = aliasModal.value.disk;
+    if (!d) return;
+    void submitDiskLabel(d, '');
+};
+
+const onCtxAction = (action: MenuAction) => {
+    const d = menu.value.disk;
+    if (!d) {
+        closeMenu();
+        return;
+    }
+    if (action === 'open') {
+        closeMenu();
+        if (d.tops.length === 1) {
+            pick(d.tops[0]);
+        } else if (d.tops.length > 1) {
+            const cardEl = gridEl.value?.children[props.disks.findIndex(x => x.key === d.key)] as HTMLElement | undefined;
+            const rect = cardEl?.getBoundingClientRect();
+            menu.value = {
+                visible: true,
+                mode: 'tops',
+                x: Math.round(rect?.left ?? menu.value.x),
+                y: Math.round((rect?.bottom ?? menu.value.y) + 4),
+                tops: d.tops,
+                disk: d,
+                key: d.key,
+            };
+            cursor.value = 0;
+            cursorOn.value = false;
+            void nextTick(() => {
+                menuBox.value?.focus();
+                requestAnimationFrame(clampIntoViewport);
+            });
+        }
+        return;
+    }
+    if (action === 'rename') {
+        openAliasModal(d);
+        return;
+    }
+    if (action === 'clear') {
+        closeMenu();
+        void submitDiskLabel(d, '');
+    }
 };
 
 const pick = (t: DiskTop) => {
@@ -330,7 +494,7 @@ onActivated(() => { pageActive.value = true; });
 onDeactivated(() => { pageActive.value = false; });
 
 const onWindowKeydown = (e: KeyboardEvent) => {
-    if (!pageActive.value || menu.value.visible) return;
+    if (!pageActive.value || menu.value.visible || aliasModal.value.visible) return;
     if (e.altKey || e.ctrlKey || e.metaKey) return;      // Alt+←/→ 是后退 / 前进
     if (isGridKeyBlocked(e)) return;
     const k = e.key;
@@ -384,7 +548,7 @@ const onOutside = (e?: MouseEvent) => {
  * ⚠️ 到头不环绕 —— 这是"选哪个目录"的短列表，环绕会点错。
  */
 const onMenuKeydown = (e: KeyboardEvent) => {
-    const n = menu.value.tops.length;
+    const n = menu.value.mode === 'tops' ? menu.value.tops.length : ctxItems.value.length;
     if (!n) return;
     if (e.key === 'ArrowDown' || e.key === 'ArrowRight') {
         e.preventDefault();
@@ -397,8 +561,13 @@ const onMenuKeydown = (e: KeyboardEvent) => {
     } else if (e.key === 'Enter') {
         // 长按回车会连开同一个目录（fileList 那边实测 1 秒 33 次）
         if (e.repeat) return;
-        const t = menu.value.tops[cursor.value];
-        if (t) pick(t);
+        if (menu.value.mode === 'tops') {
+            const t = menu.value.tops[cursor.value];
+            if (t) pick(t);
+        } else {
+            const item = ctxItems.value[cursor.value];
+            if (item && !item.disabled) onCtxAction(item.key);
+        }
         e.preventDefault();
     } else if (e.key === 'Escape') {
         closeMenu();
@@ -596,6 +765,29 @@ const onMenuKeydown = (e: KeyboardEvent) => {
 
 .hd-caret {
     pointer-events: none;
+}
+
+.hd-alias-body {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+}
+
+.hd-alias-meta {
+    display: flex;
+    justify-content: space-between;
+    font-size: 12px;
+    color: var(--ff-text-2);
+}
+
+.hd-alias-footer {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+
+.hd-alias-spacer {
+    flex: 1;
 }
 
 </style>

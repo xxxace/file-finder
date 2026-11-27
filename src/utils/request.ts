@@ -14,6 +14,7 @@ import { ipcRenderer } from 'electron';
  * 只在模块加载时发生一次。
  */
 const TOKEN = ipcRenderer.sendSync('ff-token') as string | undefined;
+const SERVER_PORT = ipcRenderer.sendSync('ff-server-port') as number | undefined;
 
 // 拿不到口令 = 每个请求都会被服务端 403，而界面上只会显示"请求失败"。
 // 那种断裂必须是**响的**：频道名在 electron/main/index.ts 里也写了一份，
@@ -31,7 +32,7 @@ if (!TOKEN) {
  * 统一写 127.0.0.1 而不是 localhost：个别机器会把 localhost 解析到 ::1，
  * 而服务端只绑 IPv4 ⇒ 每个请求都要先失败一次再回落。
  */
-export const API_BASE = 'http://127.0.0.1:3060';
+export const API_BASE = `http://127.0.0.1:${SERVER_PORT || 3060}`;
 
 /**
  * 拼一个带口令的接口地址。

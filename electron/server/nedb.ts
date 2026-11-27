@@ -73,6 +73,21 @@ export async function closeCacheDbForTest(): Promise<void> {
     closeDbHandle();
 }
 
+/** 迁移/退出前安全落盘并关闭 SQLite 句柄 */
+export async function closeCacheDb(): Promise<void> {
+    if (initPromise) {
+        await initPromise.catch(() => {});
+    }
+    if (db) {
+        try {
+            db.exec('PRAGMA wal_checkpoint(TRUNCATE)');
+        } catch {
+            // ignore
+        }
+    }
+    closeDbHandle();
+}
+
 function closeDbHandle(): void {
     if (db) {
         try {
@@ -999,6 +1014,305 @@ export async function collectReferencedSigsFromCache(): Promise<{ ok: boolean; c
     }
 }
 
+export interface GlobalSearchHit {
+    serial: string;
+    docRelPath: string;
+    item: FileInfo;
+}
+
+export interface GlobalSearchResult {
+    hits: GlobalSearchHit[];
+    total: number;
+    truncated: boolean;
+}
+
+export type GlobalSearchSort = 'relevance' | 'name' | 'disk' | 'size';
+export type SortOrder = 'asc' | 'desc';
+
+const searchCollator = new Intl.Collator('zh-CN', { numeric: true, sensitivity: 'base' });
+
+/**
+ * 跨盘全局搜索：遍历所有 `mode = 'cover'` 缓存条目，按关键词匹配条目名或内部文件名。
+ * 支持按综合相关度、名称、盘符、大小排序，排序后再截取前 `limit` 条。
+ */
+export async function searchAllCachedItems(
+    keyword: string,
+    limit = 200,
+    driveMap?: Map<string, string>,
+    sort: GlobalSearchSort = 'relevance',
+    order: SortOrder = 'asc',
+): Promise<GlobalSearchResult> {
+    const kw = keyword.trim().toLowerCase();
+    if (!kw || limit <= 0) {
+        return { hits: [], total: 0, truncated: false };
+    }
+    const conn = await ensureReady();
+    const iter = conn.prepare(`
+        SELECT serial, rel_path, data_zstd
+        FROM cache_entries
+        WHERE mode = 'cover'
+    `).iterate() as IterableIterator<{
+        serial: string;
+        rel_path: string;
+        data_zstd: Uint8Array;
+    }>;
+
+    const seen = new Set<string>();
+    const matches: Array<GlobalSearchHit & { onlineRank: number; matchRank: number; diskKey: string }> = [];
+
+    for (const row of iter) {
+        const drive = driveMap?.get(row.serial.toUpperCase());
+        const onlineRank = drive ? 0 : 1;
+        const diskKey = drive || row.serial;
+        const items = decodeRowData(row.rel_path, row.data_zstd);
+        for (const item of items) {
+            const nameLower = (item.name || '').toLowerCase();
+            let matchRank = -1;
+            if (nameLower === kw) {
+                matchRank = 0;
+            } else if (nameLower.startsWith(kw)) {
+                matchRank = 1;
+            } else if (nameLower.includes(kw)) {
+                matchRank = 2;
+            } else if (Array.isArray(item.files) && item.files.some(f => (f.name || '').toLowerCase().includes(kw))) {
+                matchRank = 3;
+            }
+            if (matchRank < 0) continue;
+
+            const dedupKey = `${row.serial}\0${(item.dir || '').toLowerCase()}\0${nameLower}\0${item.type}`;
+            if (seen.has(dedupKey)) continue;
+            seen.add(dedupKey);
+
+            matches.push({
+                serial: row.serial,
+                docRelPath: row.rel_path || '',
+                item,
+                onlineRank,
+                matchRank,
+                diskKey,
+            });
+        }
+    }
+
+    const dir = order === 'desc' ? -1 : 1;
+    matches.sort((a, b) => {
+        if (sort === 'name') {
+            return (
+                dir * searchCollator.compare(a.item.name || '', b.item.name || '')
+                || a.onlineRank - b.onlineRank
+                || a.diskKey.localeCompare(b.diskKey)
+            );
+        }
+        if (sort === 'disk') {
+            return (
+                dir * (a.onlineRank - b.onlineRank)
+                || dir * a.diskKey.localeCompare(b.diskKey)
+                || searchCollator.compare(a.item.name || '', b.item.name || '')
+            );
+        }
+        if (sort === 'size') {
+            return (
+                dir * ((a.item.size || 0) - (b.item.size || 0))
+                || searchCollator.compare(a.item.name || '', b.item.name || '')
+            );
+        }
+        return (
+            a.onlineRank - b.onlineRank
+            || a.matchRank - b.matchRank
+            || searchCollator.compare(a.item.name || '', b.item.name || '')
+            || a.diskKey.localeCompare(b.diskKey)
+        );
+    });
+
+    const total = matches.length;
+    const truncated = total > limit;
+    const hits: GlobalSearchHit[] = matches.slice(0, limit).map(({ serial, docRelPath, item }) => ({
+        serial,
+        docRelPath,
+        item,
+    }));
+
+    return { hits, total, truncated };
+}
+
+function splitDiskName(diskName: string): { name: string; ext: string } {
+    const i = diskName.lastIndexOf('.');
+    return i === -1 ? { name: diskName, ext: '' } : { name: diskName.substring(0, i), ext: diskName.substring(i + 1) };
+}
+
+function joinDiskName(item: { name: string; ext?: string }): string {
+    return item.ext ? `${item.name}.${item.ext}` : item.name;
+}
+
+function rewriteRelPrefix(dir: string, oldPrefix: string, newPrefix: string): { changed: boolean; dir: string } {
+    const dirLower = dir.toLowerCase();
+    const oldLower = oldPrefix.toLowerCase();
+    if (dirLower === oldLower) return { changed: true, dir: newPrefix };
+    if (dirLower.startsWith(`${oldLower}/`)) {
+        return { changed: true, dir: `${newPrefix}${dir.slice(oldPrefix.length)}` };
+    }
+    return { changed: false, dir };
+}
+
+/**
+ * 磁盘重命名后同步更新 SQLite `cache_entries`：
+ * 1) 更新父目录缓存中对应条目的 name/ext（及 cover 模式收敛卡的 dir/files）；
+ * 2) 若重命名对象是文件夹，同步迁移该文件夹及其所有子目录的缓存键与内部 dir。
+ */
+export async function renameCacheEntries(params: {
+    serial: string;
+    parentRelPath: string;
+    oldDiskName: string;
+    newDiskName: string;
+    isDirectory: boolean;
+    parentDirMtime?: number;
+    /** 目录内部同步改名的文件映射（key 为小写旧文件名，value 为新文件名） */
+    innerRenames?: Map<string, string>;
+}): Promise<void> {
+    const { serial, parentRelPath, oldDiskName, newDiskName, isDirectory, parentDirMtime, innerRenames } = params;
+    if (!serial) return;
+    const conn = await ensureReady();
+
+    const parentLower = (parentRelPath || '').toLowerCase();
+    const oldLower = oldDiskName.toLowerCase();
+    const { name: newName, ext: newExt } = splitDiskName(newDiskName);
+    const oldChildRel = parentRelPath ? `${parentRelPath}/${oldDiskName}` : oldDiskName;
+    const newChildRel = parentRelPath ? `${parentRelPath}/${newDiskName}` : newDiskName;
+    const oldChildLower = oldChildRel.toLowerCase();
+
+    conn.exec('BEGIN IMMEDIATE');
+    try {
+        const parentRows = conn.prepare(`
+            SELECT serial, rel_path_lower, mode, rel_path, v, count, create_at, dir_mtime, data_zstd
+            FROM cache_entries
+            WHERE serial = ? AND rel_path_lower = ?
+        `).all(serial, parentLower) as unknown as CacheBlobRow[];
+
+        const updateParentStmt = conn.prepare(`
+            UPDATE cache_entries
+            SET data_zstd = ?, dir_mtime = COALESCE(?, dir_mtime)
+            WHERE serial = ? AND rel_path_lower = ? AND mode = ?
+        `);
+
+        for (const row of parentRows) {
+            const items = decodeRowData(row.rel_path, row.data_zstd);
+            let modified = false;
+
+            for (const it of items) {
+                if (it.dir.toLowerCase() === parentLower && joinDiskName(it).toLowerCase() === oldLower) {
+                    it.name = newName;
+                    it.ext = newExt;
+                    modified = true;
+                }
+                if (isDirectory) {
+                    const rw = rewriteRelPrefix(it.dir, oldChildRel, newChildRel);
+                    if (rw.changed) {
+                        it.dir = rw.dir;
+                        modified = true;
+                    }
+                    // 合体文件卡片（dir === oldChildRel）内部同步改名时，同步更新封面名与 files 清单
+                    if (innerRenames && innerRenames.size > 0 && it.dir.toLowerCase() === newChildRel.toLowerCase()) {
+                        const coverOld = joinDiskName(it).toLowerCase();
+                        const coverNew = innerRenames.get(coverOld);
+                        if (coverNew) {
+                            const sp = splitDiskName(coverNew);
+                            it.name = sp.name;
+                            it.ext = sp.ext;
+                            modified = true;
+                        }
+                        if (Array.isArray(it.files)) {
+                            for (const f of it.files) {
+                                const fNew = innerRenames.get(f.name.toLowerCase());
+                                if (fNew) {
+                                    f.name = fNew;
+                                    modified = true;
+                                }
+                            }
+                        }
+                    }
+                } else if (Array.isArray(it.files) && it.dir.toLowerCase() === parentLower) {
+                    for (const f of it.files) {
+                        if (f.name.toLowerCase() === oldLower) {
+                            f.name = newDiskName;
+                            modified = true;
+                        }
+                    }
+                }
+            }
+
+            if (modified) {
+                const nextBlob = encodeCacheData(row.rel_path, items);
+                updateParentStmt.run(
+                    nextBlob,
+                    parentDirMtime ?? null,
+                    row.serial,
+                    row.rel_path_lower,
+                    row.mode,
+                );
+            }
+        }
+
+        if (isDirectory) {
+            const allRows = conn.prepare(`
+                SELECT serial, rel_path_lower, mode, rel_path, v, count, bytes, create_at, dir_mtime, data_zstd
+                FROM cache_entries
+                WHERE serial = ?
+            `).all(serial) as unknown as (CacheBlobRow & { bytes: number })[];
+
+            const deleteStmt = conn.prepare(`
+                DELETE FROM cache_entries
+                WHERE serial = ? AND rel_path_lower = ? AND mode = ?
+            `);
+            const insertStmt = conn.prepare(`
+                INSERT OR REPLACE INTO cache_entries
+                (serial, rel_path_lower, mode, rel_path, v, count, bytes, create_at, dir_mtime, data_zstd)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            `);
+
+            for (const row of allRows) {
+                if (row.rel_path_lower !== oldChildLower && !row.rel_path_lower.startsWith(`${oldChildLower}/`)) {
+                    continue;
+                }
+                const nextRelPath = `${newChildRel}${row.rel_path.slice(oldChildRel.length)}`;
+                const nextRelLower = nextRelPath.toLowerCase();
+                const items = decodeRowData(row.rel_path, row.data_zstd);
+                for (const it of items) {
+                    const rw = rewriteRelPrefix(it.dir, oldChildRel, newChildRel);
+                    if (rw.changed) it.dir = rw.dir;
+                    if (innerRenames && innerRenames.size > 0 && row.rel_path_lower === oldChildLower
+                        && it.dir.toLowerCase() === newChildRel.toLowerCase()) {
+                        const fNew = innerRenames.get(joinDiskName(it).toLowerCase());
+                        if (fNew) {
+                            const sp = splitDiskName(fNew);
+                            it.name = sp.name;
+                            it.ext = sp.ext;
+                        }
+                    }
+                }
+                const nextBlob = encodeCacheData(nextRelPath, items);
+                deleteStmt.run(row.serial, row.rel_path_lower, row.mode);
+                insertStmt.run(
+                    row.serial,
+                    nextRelLower,
+                    row.mode,
+                    nextRelPath,
+                    row.v,
+                    row.count,
+                    row.bytes,
+                    row.create_at,
+                    row.dir_mtime,
+                    nextBlob,
+                );
+            }
+        }
+
+        conn.exec('COMMIT');
+    } catch (e) {
+        conn.exec('ROLLBACK');
+        throw e;
+    }
+}
+
 export default {
     initCacheDb,
     reloadFromDisk,
@@ -1009,6 +1323,7 @@ export default {
     loadSubtreeBytes,
     findSubtreeLeafItems,
     findAllCachedCovers,
+    searchAllCachedItems,
     exportAllCacheDocs,
     replaceAllCacheDocs,
     snapshotCacheTo,

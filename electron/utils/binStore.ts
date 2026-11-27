@@ -686,6 +686,28 @@ export function waitForLegacyMigration(): Promise<void> {
     return migrationPromise;
 }
 
+/** 迁移/退出前安全冲刷队列、落盘并关闭 bin.sqlite 句柄 */
+export async function closeBinStore(): Promise<void> {
+    if (readyPromise) {
+        await readyPromise.catch(() => {});
+    }
+    await migrationPromise.catch(() => {});
+    if (writeQueue.length > 0) {
+        flushWriteQueue();
+    }
+    if (db) {
+        try {
+            db.exec('PRAGMA wal_checkpoint(TRUNCATE)');
+        } catch {
+            // ignore
+        }
+    }
+    closeDbHandle();
+    dbNames.clear();
+    legacyPending.clear();
+    legacyBytesCache = null;
+}
+
 export async function closeBinStoreForTest(): Promise<void> {
     generation++;
     await migrationPromise.catch(() => {});

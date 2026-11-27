@@ -121,8 +121,10 @@
                      ⚠️ 输入框**常驻**、不 `v-if`：换节点就丢了上一帧，宽度动画只能从 0 开始。
                      收起态它 `opacity:0` + `pointer-events:none`，点击由上面那颗图标按钮接住。 -->
                 <div ref="searchSlot" class="search-slot" :class="{ 'is-open': searchOpen }">
-                    <n-input ref="searchInput" v-model:value="searchText" placeholder="搜索" size="small" clearable
-                        @keydown.esc="blurSearch" @blur="onSearchBlur" @focus="onSearchFocus">
+                    <n-input ref="searchInput" v-model:value="searchText"
+                        :placeholder="inGlobalSearch || atHome ? '全盘搜索' : '搜索'" size="small" clearable
+                        @keydown.esc="blurSearch" @blur="onSearchBlur" @focus="onSearchFocus"
+                        @compositionstart="onSearchCompositionStart" @compositionend="onSearchCompositionEnd">
                         <template #prefix>
                             <n-icon :component="SearchOutline" />
                         </template>
@@ -136,6 +138,14 @@
                         </template>
                     </n-button>
                 </div>
+                <button v-if="!atHome && !playlistLevel && searchOpen" type="button"
+                    class="search-scope-pill" :class="{ 'is-global': globalSearchScope }"
+                    @mousedown.prevent @click="toggleGlobalSearchScope"
+                    v-tip="{ text: globalSearchScope ? '当前：全盘缓存搜索（点击切回当前目录）' : '当前：仅过滤当前目录（点击切换全盘搜索）' }">
+                    {{ globalSearchScope ? '全盘' : '当前' }}
+                </button>
+                <SortMenu v-model="sortMode" :show-disk="inGlobalSearch"
+                    :disabled="scanning || (atHome && !inGlobalSearch)" :menu-props="moreMenuProps" />
                 <!-- 视图密度：与下面「平铺」同属视图类动作，紧挨着放。
                      常驻（任何目录都能切），与 flat 互不影响 —— flat 决定"摊开哪些条目"，
                      密度决定"一屏铺几列"，两者正交。 -->
@@ -197,20 +207,19 @@
         <!-- 只包一层：给扫描动效一个"铺满网格可视区"的定位祖先。
              动效必须只作用于这一块（不是整窗），而下面的 `.image-box` 自己是滚动容器，
              把遮罩放它里面会跟着内容一起滚走。 -->
-        <div class="image-box-wrap">
+        <div class="image-box-wrap" @contextmenu.prevent="onBlankCtx">
             <div
                 class="image-box"
                 :class="{ 'is-glowing': !!glow && scanning, 'has-bar': (!glow && scanning) || picking }"
                 ref="imageBox"
                 :data-density="density"
                 :style="{ '--ff-grid-cols': gridCols }"
-                @contextmenu.prevent="onBlankCtx"
             >
                 <!-- 首页（空白区，2026-11-11）：没有当前这一屏的时候，把"有缓存的盘"直接列出来，
                      点一块盘就进它缓存记录里**最上层**的那一屏 —— 省掉"先去缓存记录找一行"。
                      ⚠️ 它**不是** `.image-box-item`：内容网格的分行算法与方向键不认它（见组件头注释）。
                      ⚠️ 与 `.empty-tip` 互斥：有盘时那句灰字必须让位（判据在 `emptyTip` 里）。 -->
-                <HomeDisks v-if="showHome" :disks="homeDisks" @open="openHomeTop" />
+                <HomeDisks v-if="showHome" :disks="homeDisks" @open="openHomeTop" @renamed="reloadHome" />
                 <!-- key 不能只用 item.name：封面条目的 name 取的是**封面图文件名**，
                      同一层的两个文件夹若都叫 cover.jpg，就会生成两个 key="cover"。
                      Vue 遇到重复 key 会复用错的组件实例，封面会串到别的格子里。
@@ -232,7 +241,7 @@
                         // `[data-cursor]`），由 `useGridCursor` 命令式打标。见上方 v-memo 那段。
                         opening: opening !== '' && opening === keyOf(item),
                     }" :data-key="keyOf(item)" @click="onItemClick(item)" @dblclick="handleOpen($event, item)"
-                    @contextmenu.prevent="onContextMenu($event, item)" :title="item.name + ' ' + getSize(item.size)">
+                    @contextmenu.prevent.stop="onContextMenu($event, item)" :title="item.name + ' ' + getSize(item.size)">
                     <!-- `pointer-events:none` 保住连点两张；`v-if` 而非 `v-show`（只转零点几秒，不值得留 DOM） -->
                     <div v-if="opening !== '' && opening === keyOf(item)" class="opening-mask">
                         <n-spin :size="20" />
@@ -288,10 +297,11 @@
                             <span v-if="(item.size || 0) > 0" class="badge badge-size">{{ getSize(item.size) }}</span>
                         </div>
                     </div>
-                    <!-- 标题：**永远占两行的高度**（单行也留白）。
+                    <!-- 标题：**永远占两行的高度**（单行也留白）；跨盘全局搜索时收缩为 1 行 + 1 行盘符，总高不变。
                          理由同上 —— 行高成了内容的函数，一行两行的格子就会矮一截，
                          `groupRows` 会把它单独判成一行，方向键从此横着跳。 -->
-                    <div class="card-title" :title="item.name">{{ item.name }}</div>
+                    <div class="card-title" :class="{ 'is-single': !!item.diskLabel }" :title="item.name">{{ item.name }}</div>
+                    <div v-if="item.diskLabel" class="card-disk" :title="`${item.diskLabel} · ${item.dir}`"><i class="disk-dot" :class="{ 'is-off': item.dir.startsWith('#') }" aria-hidden="true" /><span class="disk-text">{{ item.diskLabel }}</span></div>
                     <!-- 选中角标。⚠️ 用 `<i>` 而**不是** `<span>` —— `.image-box-item span` 那条
                          （1681 行）里有 `width:100%` + `height:38px !important`，会把角标拉成长条、
                          圆直接变形。换个元素最省事，也不用跟 `!important` 打架。
@@ -424,13 +434,23 @@
                         <n-icon :size="16" :component="CopyOutline" />
                         <span class="ctx-label">复制文件名</span>
                     </button>
-                    <button type="button" class="ctx-item" :disabled="!!readOnlyLevel" @click="copyPath">
+                    <button type="button" class="ctx-item" :disabled="!!readOnlyLevel || !!ctxMenu.item?.dir?.startsWith(ANCHOR_PREFIX)" @click="copyPath">
                         <n-icon :size="16" :component="LinkOutline" />
                         <span class="ctx-label">复制文件地址</span>
                     </button>
-                    <button type="button" class="ctx-item" :disabled="!!readOnlyLevel" @click="revealInFolder">
+                    <button type="button" class="ctx-item" :disabled="!!readOnlyLevel || !!ctxMenu.item?.dir?.startsWith(ANCHOR_PREFIX)" @click="revealInFolder">
                         <n-icon :size="16" :component="FolderOpenOutline" />
                         <span class="ctx-label">打开所在文件夹</span>
+                    </button>
+                    <button type="button" class="ctx-item" :disabled="isCtxRenameDisabled"
+                        :title="isCtxRenameDisabled ? '离线或只读条目不可重命名' : undefined" @click="openRenameModal">
+                        <n-icon :size="16" :component="CreateOutline" />
+                        <span class="ctx-label">重命名</span>
+                    </button>
+                    <button v-if="ctxMenu.item && ctxMenu.item.cacheRelPath !== undefined" type="button" class="ctx-item"
+                        @click="locateDir">
+                        <n-icon :size="16" :component="LocateOutline" />
+                        <span class="ctx-label">定位到所在目录</span>
                     </button>
                     <div class="ctx-sep" aria-hidden="true"></div>
                     <!-- 收录组：同一个菜单位置，两种模式——清单屏 = 移除；目录屏 = 加入。
@@ -492,6 +512,26 @@
              ⚠️ 别再往这个文件里塞页级弹窗 —— 判据见 docs/DESIGN-BILIBILI-2026-10-21.md： -->
         <AssistantCoverModal ref="assistantModal" @refresh="refreshAfterApply" />
         <AssistantAvatarModal v-model:show="showAvatarModal" :current-path="currentPath" @applied="refreshAfterApply" />
+        <n-modal v-model:show="renameModal.visible" preset="card"
+            :title="renameModal.kind === 'bundle' ? '重命名合体目录' : renameModal.kind === 'folder' ? '重命名文件夹' : '重命名文件'"
+            :bordered="false" style="width: 400px" @keydown.stop>
+            <div class="ff-rename-body">
+                <n-input ref="renameInputRef" v-model:value="renameModal.draft" placeholder="输入新名称"
+                    :disabled="renameModal.saving" clearable @keydown.enter.prevent="submitRename" />
+                <n-checkbox v-if="renameModal.kind === 'bundle'" v-model:checked="renameModal.syncInner"
+                    :disabled="renameModal.saving">
+                    同步重命名内部匹配文件（封面与视频）
+                </n-checkbox>
+                <div v-if="renameModal.extHint" class="ff-rename-hint">{{ renameModal.extHint }}</div>
+            </div>
+            <template #footer>
+                <div class="ff-rename-footer">
+                    <n-button size="small" :disabled="renameModal.saving" @click="renameModal.visible = false">取消</n-button>
+                    <n-button size="small" type="primary" :loading="renameModal.saving"
+                        :disabled="!renameModal.draft.trim()" @click="submitRename">确定</n-button>
+                </div>
+            </template>
+        </n-modal>
     </div>
 </template>
 
@@ -507,6 +547,9 @@ import { usePickMode } from './usePickMode';
 import { useSearchSlot } from './useSearchSlot';
 import { useScreenData } from './useScreenData';
 import { filterByName } from './filterByName';
+import { compareFileName } from './fileNameSort';
+import SortMenu from './SortMenu.vue';
+import type { SortMode } from './SortMenu.vue';
 import { displaySrcOf, fileNameOf, fullPathOf, isReadOnlyPath, keyOf, previewUrlOf, thumbUrl } from './file-meta';
 import { buildMemberMap, playlistIndex, refreshIndex } from './playlist';
 import type { CardSnapshot } from '../../../electron/server/playlist';
@@ -529,12 +572,12 @@ import { useNavStack } from './useNavStack';
 import type { NavEntry } from './useNavStack';
 import { HOME_PATH, homeEntry } from './useNavStack';
 import { dissolveGrid, fadeOutGrid } from './gridDissolve';
-import { decideOpen, isMultiFileCard } from './openDecision';
-import { SearchOutline, RefreshOutline, SyncOutline, ArrowBackOutline, ArrowForwardOutline, CloseOutline, CopyOutline, StarOutline, ChevronForwardOutline, LinkOutline, FolderOpenOutline, CloudDownloadOutline, ImageOutline, PersonOutline, SettingsOutline, ImagesOutline, VideocamOutline, MusicalNotesOutline, DocumentOutline, HomeOutline } from '@vicons/ionicons5';
+import { decideOpen, isDirCard, isMultiFileCard } from './openDecision';
+import { SearchOutline, RefreshOutline, SyncOutline, ArrowBackOutline, ArrowForwardOutline, CloseOutline, CopyOutline, StarOutline, ChevronForwardOutline, LinkOutline, FolderOpenOutline, LocateOutline, CloudDownloadOutline, ImageOutline, PersonOutline, SettingsOutline, ImagesOutline, VideocamOutline, MusicalNotesOutline, DocumentOutline, HomeOutline, CreateOutline } from '@vicons/ionicons5';
 import { MoreVertical28Filled } from '@/components/icons/fluent';
 import { FlatCards24 } from '@/components/icons/grid';
 import { playSfx } from '@/utils/sfx';
-import { NButton, NInput, NIcon, NImage, NImageGroup, NTag, NPopover, NSpin, NDropdown } from 'naive-ui';
+import { NButton, NCheckbox, NInput, NIcon, NImage, NImageGroup, NTag, NPopover, NSpin, NDropdown, NModal } from 'naive-ui';
 import FolderSelector from '@/components/FolderSelector/index.vue';
 import ScanGlow from './ScanGlow.vue';
 import AssistantCoverModal from './AssistantCoverModal.vue';
@@ -547,7 +590,7 @@ import { useRouter } from 'vue-router';
 import { ipcRenderer } from 'electron';
 import { computed, nextTick, onActivated, onDeactivated, onMounted, onUnmounted, provide, ref, watch } from 'vue';
 import type { WiredFileInfo } from '../../../electron/server/index';
-import type { OpenMode } from 'electron/server/nedb';
+import type { GlobalSearchSort, OpenMode, SortOrder } from 'electron/server/nedb';
 /**
  * ⚠️ naive-ui 内部路径（深导入）。为什么非要用它：预览层由 `n-image-group` 渲染，
  * 而 `previewedImgProps`（"铺满视口" + "双击穿透给下面那张卡片"）**只从 `imageContext` 取**，
@@ -602,6 +645,21 @@ const { searchText, searchOpen, searchSlot, searchInput, openSearch, onSearchFoc
 const imageBox = ref<HTMLDivElement | null>(null)
 const folderSelector = ref<typeof FolderSelector | null>(null);
 const dataSource = ref<WiredFileInfo[]>([]);
+const globalSearchScope = ref(false);
+const globalSearchTruncated = ref(false);
+const isSearchComposing = ref(false);
+let globalSearchSeq = 0;
+let globalSearchTimer: number | null = null;
+let savedFolderData: WiredFileInfo[] | null = null;
+let savedFolderPath = '';
+
+const clearGlobalSearchTimer = () => {
+    if (globalSearchTimer !== null) {
+        window.clearTimeout(globalSearchTimer);
+        globalSearchTimer = null;
+    }
+};
+
 /**
  * 过滤视图。**派生**出来，不给任何人写权限。
  *
@@ -609,8 +667,41 @@ const dataSource = ref<WiredFileInfo[]>([]);
  * `handleFilter`（同步，写过滤结果）。导航时的顺序是"先 handleFilter 再等响应"，
  * 响应回来 `fileList = data` 会把过滤结果冲掉 —— 搜索框里还留着词，列表已经变成全部了。
  * 改成 computed 之后它没有任何写入口，这类时序 bug 在结构上就不可能存在。
+ *
+ * 跨盘全局搜索模式下服务端已完成关键词匹配（含 `item.files[].name`），不再二次过滤。
  */
-const fileList = computed(() => filterByName(dataSource.value, searchText.value));
+const sortMode = ref<SortMode>('default');
+
+const toSearchSortParams = (mode: SortMode): { sort: GlobalSearchSort; order: SortOrder } => {
+    switch (mode) {
+        case 'name-asc': return { sort: 'name', order: 'asc' };
+        case 'name-desc': return { sort: 'name', order: 'desc' };
+        case 'size-desc': return { sort: 'size', order: 'desc' };
+        case 'size-asc': return { sort: 'size', order: 'asc' };
+        case 'disk-asc': return { sort: 'disk', order: 'asc' };
+        case 'disk-desc': return { sort: 'disk', order: 'desc' };
+        default: return { sort: 'relevance', order: 'asc' };
+    }
+};
+
+const fileList = computed(() => {
+    if (inGlobalSearch.value) return dataSource.value;
+    const base = filterByName(dataSource.value, searchText.value);
+    if (sortMode.value === 'default') return base;
+    const list = [...base];
+    switch (sortMode.value) {
+        case 'name-asc':
+            return list.sort((a, b) => compareFileName(a.name, b.name));
+        case 'name-desc':
+            return list.sort((a, b) => compareFileName(b.name, a.name));
+        case 'size-desc':
+            return list.sort((a, b) => ((b.size || 0) - (a.size || 0)) || compareFileName(a.name, b.name));
+        case 'size-asc':
+            return list.sort((a, b) => ((a.size || 0) - (b.size || 0)) || compareFileName(a.name, b.name));
+        default:
+            return base;
+    }
+});
 /**
  * 导航的**唯一状态**：历史（去过哪些屏）+ 游标。模型在 `useNavStack.ts`，本页只消费。
  * 为什么不留 `name`：面包屑的文字由 `ancestorsOf(currentPath)` 给（见 utils），
@@ -689,7 +780,27 @@ const crumbs = computed(() => {
             { name: top.pl.name, path: top.path, kind: 'dir' as const },
         ];
     }
-    return [HOME_CRUMB, ...ancestorsOf(currentPath.value)];
+    const rawCrumbs = ancestorsOf(currentPath.value);
+    if (rawCrumbs.length && rawCrumbs[0].kind === 'root') {
+        const root = rawCrumbs[0];
+        if (root.path.startsWith(ANCHOR_PREFIX)) {
+            const serial = root.path.slice(ANCHOR_PREFIX.length).toUpperCase();
+            const hit = homeDisks.value.find(d => d.serial.toUpperCase() === serial);
+            if (hit?.label) {
+                rawCrumbs[0] = { ...root, name: `离线 · ${hit.label}` };
+            }
+        } else {
+            const m = /^([A-Za-z]):/.exec(root.path);
+            if (m) {
+                const drive = m[1].toUpperCase();
+                const hit = homeDisks.value.find(d => d.online && d.drive.toUpperCase() === drive);
+                if (hit?.label) {
+                    rawCrumbs[0] = { ...root, name: `${hit.label} (${drive}:)` };
+                }
+            }
+        }
+    }
+    return [HOME_CRUMB, ...rawCrumbs];
 });
 /**
  * 平铺视图（Flat 模式）：**从当前这一层向下**摊开所有作品，跳过中间的女优/分类目录。
@@ -859,6 +970,123 @@ const readOnlyLevel = computed(() => isReadOnlyPath(currentPath.value));
 const playlistLevel = computed(() => !!nav.current.value?.pl);
 
 /**
+ * 是否处于跨盘全局搜索模式：
+ * - 首页（此电脑）输入任意非空词即进入；
+ * - 普通目录内需同时开启「全盘」范围开关且输入非空词。
+ */
+const inGlobalSearch = computed(() => {
+    if (!searchText.value.trim()) return false;
+    if (atHome.value) return true;
+    return !playlistLevel.value && globalSearchScope.value;
+});
+
+const runGlobalSearch = async (q: string, silent = false) => {
+    const seq = ++globalSearchSeq;
+    if (!silent) loading.value = true;
+    failKind.value = '';
+    try {
+        const { sort, order } = toSearchSortParams(sortMode.value);
+        const res = await getAction(
+            `${API_BASE}/searchAll?q=${encodeURIComponent(q)}&limit=200&sort=${sort}&order=${order}`,
+        ) as {
+            items?: WiredFileInfo[];
+            total?: number;
+            truncated?: boolean;
+        };
+        if (seq !== globalSearchSeq || !inGlobalSearch.value) return;
+        globalSearchTruncated.value = !!res?.truncated;
+        dataSource.value = Array.isArray(res?.items) ? res.items : [];
+    } catch (err) {
+        if (seq !== globalSearchSeq) return;
+        notify('error', '全局搜索失败', String(err));
+    } finally {
+        if (seq === globalSearchSeq) loading.value = false;
+    }
+};
+
+watch(sortMode, () => {
+    if (!inGlobalSearch.value) return;
+    const q = searchText.value.trim();
+    if (q) void runGlobalSearch(q, true);
+});
+
+watch(inGlobalSearch, (v) => {
+    if (!v && sortMode.value.startsWith('disk')) {
+        sortMode.value = 'default';
+    }
+});
+
+const scheduleGlobalSearch = () => {
+    clearGlobalSearchTimer();
+    const q = searchText.value.trim();
+    if (!q || !inGlobalSearch.value || isSearchComposing.value) return;
+    globalSearchTimer = window.setTimeout(() => {
+        globalSearchTimer = null;
+        if (!inGlobalSearch.value || isSearchComposing.value) return;
+        const latestQ = searchText.value.trim();
+        if (latestQ) void runGlobalSearch(latestQ);
+    }, 250);
+};
+
+const onSearchCompositionStart = () => {
+    isSearchComposing.value = true;
+};
+
+const onSearchCompositionEnd = () => {
+    isSearchComposing.value = false;
+    if (inGlobalSearch.value) scheduleGlobalSearch();
+};
+
+const toggleGlobalSearchScope = () => {
+    globalSearchScope.value = !globalSearchScope.value;
+};
+
+const resetGlobalSearchState = (restoreFolder = false) => {
+    clearGlobalSearchTimer();
+    ++globalSearchSeq;
+    globalSearchTruncated.value = false;
+    if (restoreFolder && savedFolderData !== null && savedFolderPath === currentPath.value) {
+        dataSource.value = savedFolderData;
+    }
+    savedFolderData = null;
+    savedFolderPath = '';
+};
+
+watch([inGlobalSearch, () => searchText.value], ([active, text], [prevActive]) => {
+    const trimmed = text.trim();
+    if (active) {
+        if (!atHome.value && savedFolderData === null) {
+            savedFolderData = dataSource.value;
+            savedFolderPath = currentPath.value;
+        }
+        scheduleGlobalSearch();
+        return;
+    }
+    // 离开全局搜索（清空词 / 切回「当前」）
+    if (prevActive || savedFolderData !== null || (atHome.value && !trimmed)) {
+        clearGlobalSearchTimer();
+        ++globalSearchSeq;
+        globalSearchTruncated.value = false;
+        loading.value = false;
+        if (atHome.value) {
+            dataSource.value = [];
+            savedFolderData = null;
+            savedFolderPath = '';
+        } else if (savedFolderData !== null && savedFolderPath === currentPath.value) {
+            dataSource.value = savedFolderData;
+            savedFolderData = null;
+            savedFolderPath = '';
+        }
+    }
+});
+
+watch(searchOpen, (open) => {
+    if (!open && globalSearchScope.value) {
+        globalSearchScope.value = false;
+    }
+});
+
+/**
  * 已收录进**任意**清单的卡片 key 集合 —— 网格左上角星标用。
  * 由收录索引（playlist.ts 的模块级单一状态源）派生：插拔盘时索引随
  * `ff-disks-changed` 刷新，星标自动跟着翻，不需要任何同步代码。
@@ -883,6 +1111,9 @@ const banner = computed(() => {
     // 只读层才会出现：当时没扫到过这一层。只读视图不会为了它去碰盘 —— 那是"只读"的定义
     if (failKind.value === 'notCached') {
         return { type: 'warning' as const, text: '这一层当时没缓存过 —— 只读视图不去读盘。插上盘按 F5 重新扫这一片' };
+    }
+    if (inGlobalSearch.value && globalSearchTruncated.value) {
+        return { type: 'info' as const, text: '找到超过 200 条结果，仅显示前 200 条，请输入更精确的关键词' };
     }
     if (readOnlyLevel.value) {
         // ⚠️ 文案跟着 openFile 的修复一起改了：原来写"打不开原文件"，那是**修复前**的行为。
@@ -997,10 +1228,37 @@ const reloadCurrentScreen = () => {
     if (cur) loadScreen(cur);
 };
 
+const locateItemDir = (item: WiredFileInfo) => {
+    if (item.cacheRelPath === undefined) return;
+    const rel = item.cacheRelPath;
+    let targetPath = '';
+    if (item.dir.startsWith(ANCHOR_PREFIX)) {
+        const rest = item.dir.slice(ANCHOR_PREFIX.length);
+        const cut = rest.indexOf('/');
+        const serial = cut === -1 ? rest : rest.slice(0, cut);
+        targetPath = rel ? `${ANCHOR_PREFIX}${serial}/${rel}` : `${ANCHOR_PREFIX}${serial}`;
+    } else {
+        const m = item.dir.match(/^([A-Za-z]:)/);
+        if (m) {
+            const driveRoot = m[1];
+            targetPath = rel ? `${driveRoot}/${rel}` : driveRoot;
+        }
+    }
+    if (!targetPath) return;
+
+    const norm = (p: string) => (p || '').replace(/\\/g, '/').replace(/\/+$/, '').toLowerCase();
+    if (norm(currentPath.value) === norm(targetPath)) {
+        globalSearchScope.value = false;
+        resetGlobalSearchState(true);
+        searchText.value = '';
+    }
+    openHistory(targetPath, keyOf(item));
+};
+
 const {
     ctxMenu, plPicker,
     onContextMenu, onBlankContextMenu, onCtxMenuKeydown, closeCtxMenu,
-    copyNameStem, copyPath, revealInFolder,
+    copyNameStem, copyPath, revealInFolder, locateDir,
     addToFavorite, openPlPicker, onPickerAdded, onPickerFailed,
     removeFromCurrentPlaylist,
 } = useContextMenu({
@@ -1012,6 +1270,7 @@ const {
     // 清单屏才有 pl（NavEntry 派生），非清单屏返回空串 ⇒ 菜单里不出「移除」
     currentPlaylistId: () => nav.current.value?.pl?.id ?? '',
     reloadCurrent: reloadCurrentScreen,
+    locateItemDir,
 });
 
 /**
@@ -1022,8 +1281,178 @@ const {
  * （卡片自己的右键由 `HomeDisks` 根节点吞掉，见组件头注释。）
  */
 const onBlankCtx = (e: MouseEvent) => {
-    if (atHome.value) return;
+    if (showHome.value) return;
     onBlankContextMenu(e);
+};
+
+/** 离线锚点、只读层或已失效条目一律禁止重命名 */
+const isCtxRenameDisabled = computed(() => {
+    const item = ctxMenu.value.item;
+    if (!item || readOnlyLevel.value) return true;
+    return item.dir.startsWith(ANCHOR_PREFIX) || !!item.missing;
+});
+
+const renameInputRef = ref<{ focus: () => void; select: () => void; inputElRef?: HTMLInputElement | null } | null>(null);
+const renameModal = ref<{
+    visible: boolean;
+    saving: boolean;
+    item: WiredFileInfo | null;
+    draft: string;
+    kind: 'file' | 'folder' | 'bundle';
+    syncInner: boolean;
+    oldTargetName: string;
+    extHint: string;
+}>({
+    visible: false,
+    saving: false,
+    item: null,
+    draft: '',
+    kind: 'file',
+    syncInner: true,
+    oldTargetName: '',
+    extHint: '',
+});
+
+const splitNameAndExt = (filename: string) => {
+    const i = filename.lastIndexOf('.');
+    return i === -1 ? { name: filename, ext: '' } : { name: filename.substring(0, i), ext: filename.substring(i + 1) };
+};
+
+const openRenameModal = () => {
+    const item = ctxMenu.value.item;
+    closeCtxMenu();
+    if (!item || readOnlyLevel.value || item.dir.startsWith(ANCHOR_PREFIX) || item.missing) {
+        notify('warning', '无法重命名', '离线盘或只读条目不支持重命名');
+        return;
+    }
+
+    const kind: 'file' | 'folder' | 'bundle' = isDirCard(item)
+        ? 'bundle'
+        : (item.isDirectory || item.type === 'folder')
+            ? 'folder'
+            : 'file';
+
+    const normDir = item.dir.replace(/\\/g, '/').replace(/\/+$/, '');
+    const bundleFolderName = normDir.slice(normDir.lastIndexOf('/') + 1);
+    const fullName = kind === 'bundle' ? bundleFolderName : fileNameOf(item);
+    if (!fullName) {
+        notify('warning', '无法重命名', '无法识别目标目录名称');
+        return;
+    }
+
+    renameModal.value = {
+        visible: true,
+        saving: false,
+        item,
+        draft: fullName,
+        kind,
+        syncInner: true,
+        oldTargetName: fullName,
+        extHint: kind === 'bundle'
+            ? `将重命名文件夹（共含 ${item.files?.length ?? 0} 个内容文件）；通用封面名（如 cover.jpg）与不匹配的多集文件保持不变`
+            : (kind === 'file' && item.ext ? `当前扩展名：.${item.ext}（修改扩展名可能影响文件打开方式）` : ''),
+    };
+    void nextTick(() => {
+        const inst = renameInputRef.value;
+        inst?.focus();
+        const inputEl = inst?.inputElRef;
+        if (inputEl && kind === 'file' && item.ext && fullName.endsWith(`.${item.ext}`)) {
+            inputEl.setSelectionRange(0, item.name.length);
+        } else {
+            inst?.select();
+        }
+    });
+};
+
+const submitRename = async () => {
+    const { item, draft, saving, kind, syncInner, oldTargetName } = renameModal.value;
+    if (!item || saving) return;
+    // 二次守卫：防止弹窗期间盘被拔出或状态变为离线/只读
+    if (readOnlyLevel.value || item.dir.startsWith(ANCHOR_PREFIX) || item.missing) {
+        notify('warning', '无法重命名', '离线盘或只读条目不支持重命名');
+        renameModal.value.visible = false;
+        return;
+    }
+    const nextName = draft.trim();
+    if (!nextName) return;
+    if (kind !== 'bundle' && nextName === oldTargetName) {
+        renameModal.value.visible = false;
+        return;
+    }
+
+    const oldCoverDiskName = fileNameOf(item);
+    const targetPath = kind === 'bundle' ? item.dir : fullPathOf(item);
+
+    renameModal.value.saving = true;
+    try {
+        const res = await postAction(`${API_BASE}/renameItem`, {
+            path: targetPath,
+            newName: nextName,
+            kind,
+            syncInner,
+            coverName: oldCoverDiskName,
+        }) as {
+            dir: string;
+            name: string;
+            ext: string;
+            newName: string;
+            unchanged?: boolean;
+            innerRenames?: Record<string, string>;
+        };
+
+        if (!res?.unchanged) {
+            const oldKey = keyOf(item);
+            const idx = dataSource.value.findIndex((it) => keyOf(it) === oldKey);
+            let updated: WiredFileInfo;
+
+            if (kind === 'bundle') {
+                const map = res.innerRenames ?? {};
+                const nextCover = map[oldCoverDiskName] ?? oldCoverDiskName;
+                const coverParts = splitNameAndExt(nextCover);
+                updated = {
+                    ...item,
+                    dir: res.dir,
+                    name: coverParts.name,
+                    ext: coverParts.ext,
+                    ...(Array.isArray(item.files)
+                        ? {
+                            files: item.files.map((f) => (map[f.name] ? { ...f, name: map[f.name] } : f)),
+                        }
+                        : {}),
+                };
+            } else {
+                updated = {
+                    ...item,
+                    name: res.name,
+                    ext: res.ext,
+                    ...(Array.isArray(item.files)
+                        ? {
+                            files: item.files.map((f) => (f.name === oldCoverDiskName ? { ...f, name: res.newName } : f)),
+                        }
+                        : {}),
+                };
+            }
+
+            if (idx !== -1) {
+                const nextList = [...dataSource.value];
+                nextList[idx] = updated;
+                dataSource.value = nextList;
+            }
+            const nextKey = keyOf(updated);
+            if (cursorKey.value === oldKey) {
+                setCursorKey(nextKey);
+            }
+            if (playlistLevel.value || plMember.value.has(oldKey)) {
+                void refreshIndex();
+            }
+            notify('success', '重命名成功', res.newName);
+        }
+        renameModal.value.visible = false;
+    } catch (e) {
+        notify('error', '重命名失败', e instanceof Error ? e.message : String(e));
+    } finally {
+        renameModal.value.saving = false;
+    }
 };
 
 /**
@@ -1169,6 +1598,8 @@ const askCacheIfNeeded = async (path: string, mode: OpenMode): Promise<{ noSave:
  */
 const enterScreen = async (path: string, mode: OpenMode = 'cover', pl?: NavEntry['pl'], keepFlat?: boolean, focusKey?: string) => {
     const myEnterSeq = ++enterSeq;
+    globalSearchScope.value = false;
+    resetGlobalSearchState(false);
     let cacheChoice = { noSave: false, prompted: false };
     if (!pl && path !== HOME_PATH && !keepFlat && !isReadOnlyPath(path)) {
         cacheChoice = await askCacheIfNeeded(path, mode);
@@ -1514,6 +1945,8 @@ const openFile = async (item: WiredFileInfo | string) => {
 const goStep = async (delta: 1 | -1) => {
     const to = nav.step(delta);
     if (!to) return;
+    globalSearchScope.value = false;
+    resetGlobalSearchState(false);
     /**
      * 回到**首页**（2026-11-11 业主："可以通过上一屏回到空白页"）。
      *
@@ -1679,6 +2112,8 @@ const onRefresh = () => {
  */
 const setRoot = (value: string) => {
     isFlatView.value = false;
+    globalSearchScope.value = false;
+    resetGlobalSearchState(false);
     if (!value) {
         dir.value = '';
         nav.reset();
@@ -2307,3 +2742,21 @@ const onDisksChangedIpc = (_e: unknown, disks: { serial: string; drive: string }
 <style lang="less" scoped src="./styles/header.less"></style>
 <style lang="less" scoped src="./styles/grid.less"></style>
 <style lang="less" scoped src="./styles/list.less"></style>
+<style lang="less" scoped>
+.ff-rename-body {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+}
+
+.ff-rename-hint {
+    font-size: var(--ff-fs-meta);
+    color: var(--ff-text-2);
+}
+
+.ff-rename-footer {
+    display: flex;
+    justify-content: flex-end;
+    gap: 8px;
+}
+</style>

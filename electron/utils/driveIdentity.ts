@@ -223,6 +223,52 @@ export async function syncRegistry(drives: DriveInfo[], now: string): Promise<Di
 }
 
 /**
+ * 设置或清空指定序列号硬盘的自定义别名，并同步更新进程内缓存。
+ * serial 统一按大写存储；label 为空串时视为清空别名。
+ */
+export async function setDiskLabel(serial: string, label: string): Promise<{ serial: Serial; label: string }> {
+    const key = String(serial || '').trim().toUpperCase();
+    if (!key) {
+        throw new Error('参数 serial 不能为空');
+    }
+    const clean = String(label ?? '').trim();
+    const registry = await readRegistry();
+
+    // 兼容历史可能存在的大小写不一致键：迁移到统一大写键
+    const legacyKey = Object.keys(registry).find(k => k !== key && k.toUpperCase() === key);
+    if (legacyKey) {
+        if (!registry[key]) {
+            registry[key] = registry[legacyKey];
+        }
+        delete registry[legacyKey];
+    }
+
+    if (registry[key]) {
+        registry[key].label = clean;
+    } else {
+        const now = new Date();
+        const pad = (n: number) => String(n).padStart(2, '0');
+        const firstSeenAt = `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())} ${pad(now.getHours())}:${pad(now.getMinutes())}:${pad(now.getSeconds())}`;
+        registry[key] = { label: clean, firstSeenAt, lastSeenAt: '' };
+    }
+
+    const ok = await writeRegistry(registry);
+    if (!ok) {
+        throw new Error('写入盘注册表失败');
+    }
+
+    if (cached) {
+        for (const d of cached) {
+            if (d.serial.toUpperCase() === key) {
+                d.label = clean;
+            }
+        }
+    }
+
+    return { serial: key, label: clean };
+}
+
+/**
  * 「已知盘」里、当前没插的 —— 缓存界面上把"离线盘"也列出来用。
  *
  * ⚠️ `known` 必须是**缓存库里出现过的 serial ∪ 注册表**，**不能只传注册表的键**。

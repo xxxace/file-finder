@@ -214,6 +214,43 @@
         font-weight: 500;
         color: var(--ff-text-1);
         transition: color .15s ease;
+
+        &.is-single {
+            height: var(--item-title-lh);
+            -webkit-line-clamp: 1;
+        }
+    }
+
+    /* 跨盘全局搜索时，标题收缩为 1 行，第二行展示所属盘符，总高仍为 2 * --item-title-lh === --item-title-h */
+    .card-disk {
+        height: var(--item-title-lh);
+        line-height: var(--item-title-lh);
+        display: flex;
+        align-items: center;
+        gap: 5px;
+        font-size: var(--ff-fs-meta);
+        color: var(--ff-text-2);
+        overflow: hidden;
+        white-space: nowrap;
+
+        .disk-text {
+            min-width: 0;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+        }
+
+        .disk-dot {
+            flex: none;
+            width: 6px;
+            height: 6px;
+            border-radius: 50%;
+            background: var(--ff-status-ok);
+
+            &.is-off {
+                background: var(--ff-text-2);
+            }
+        }
     }
 
     /* hover：图轻微放大 + 标题变蓝，**不加边框不加底色** */

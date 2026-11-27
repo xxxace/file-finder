@@ -1,4 +1,5 @@
 import http from 'node:http';
+import type { AddressInfo } from 'node:net';
 import path from 'node:path';
 import os from 'node:os';
 import events from 'node:events';
@@ -9,7 +10,7 @@ import crypto from 'node:crypto';
 import { imageRenditions, videoRenditions } from '../utils/thumbnail';
 import {
     hasBin, getBin, putBin, putBinsBatch, binStoreFailed, whenBinReady, binStats,
-    thumbNameOf, previewNameOf, readBinEntryForBackup, detectImageFmt,
+    thumbNameOf, previewNameOf, readBinEntryForBackup, detectImageFmt, closeBinStore, initBinStore,
 } from '../utils/binStore';
 import {
     FFBAK_VERSION, detectBackupFormat, writeFfbak, readFfbakMetaAndVerify, streamFfbakImages,
@@ -17,7 +18,7 @@ import {
 import type { FfbakImageInput } from '../utils/ffbak';
 import {
     findDriveByLetter, findDuplicatedSerials, getDrives, offlineSerials,
-    readRegistry, serialOfDrive, splitPath, syncRegistry, toFullPath, writeRegistry,
+    readRegistry, serialOfDrive, setDiskLabel, splitPath, syncRegistry, toFullPath, writeRegistry,
 } from '../utils/driveIdentity';
 import type { DiskRegistry } from '../utils/driveIdentity';
 import { DIR_COVER_FILES, isDirCover } from './dirCover';
@@ -25,19 +26,22 @@ import {
     BEFORE_RESTORE_PATH, CACHE_DB_PATH, CACHE_VERSION, beginRestore, cacheBackup, endRestore,
     collectReferencedSigsFromCache, exportAllCacheDocs, exportCompactSnapshot, findAllCachedCovers, findCache,
     findSubtreeLeafItems, getCacheDbBytes, insertCache, loadMeta, loadSubtreeBytes,
-    removeCache, replaceAllCacheDocs, restoreCacheFromSnapshot, snapshotCacheTo,
+    removeCache, renameCacheEntries, replaceAllCacheDocs, restoreCacheFromSnapshot, searchAllCachedItems, snapshotCacheTo,
+    type GlobalSearchSort, type SortOrder,
+    closeCacheDb, initCacheDb,
 } from './nedb';
 import type { CacheMeta, OpenMode, SearchCache } from './nedb';
 import { diskTops } from './diskTops';
 import { LOCAL_TOKEN } from './token';
-import config from '../config';
+import config, { DATA_DIR_POINTER_FILE, DEFAULT_USER_BASE_PATH } from '../config';
 import { createAssistantRoutes } from './assistant';
+import { listJobs } from './assistant/jobs';
 import { exportActiveHits, mergeHits } from './assistant/hits';
 import type { HitRecord } from './assistant/hits';
 import { loadRules, mergeRules } from './assistant/rules';
 import type { SiteRule } from './assistant/rules';
 import { createPlaylistRoutes } from './playlist';
-import { loadPlaylists, mergePlaylists } from './playlistStore';
+import { loadPlaylists, mergePlaylists, reconcileItemSnapshots } from './playlistStore';
 import type { Playlist } from './playlistStore';
 import { inventoryRedundantStorage, purgeRedundantStorage, readCleanupAsset } from './storageCleanup';
 import { isVideo, VIDEO_MIME } from './videoExt';
@@ -651,6 +655,10 @@ export type WiredFileInfo = WiredBase & {
     previewReady?: boolean;
     /** 收藏夹条目专属：所属移动硬盘在线，但缓存与磁盘中已确认不存在（已失效） */
     missing?: boolean;
+    /** 跨盘全局搜索结果专属：所属盘标签（如 `D:` 或 `离线 · A1B2`） */
+    diskLabel?: string;
+    /** 跨盘全局搜索结果专属：所在缓存文档的盘内相对路径（用于「定位到所在目录」） */
+    cacheRelPath?: string;
 };
 
 type WiredBase = Omit<FileInfo, 'sig' | 'srcMtime' | 'srcBytes' | 'thumb' | 'avatar' | 'preview' | 'previewReady'>;
@@ -1459,6 +1467,7 @@ async function listDisksController(req: Req, res: http.ServerResponse) {
         disks: [
             ...drives.map(d => ({
                 ...d,
+                label: registry[d.serial.toUpperCase()]?.label ?? registry[d.serial]?.label ?? d.label ?? '',
                 online: true,
                 // 首页（主界面空白区）的落点 = **缓存路径森林的根**（祖先缓存过的不算入口）。
                 // 计算在 `diskTops.ts`（纯函数、有探针），这里只喂"这块盘的记录 + 怎么拼地址"。
@@ -1478,7 +1487,7 @@ async function listDisksController(req: Req, res: http.ServerResponse) {
                 // 从没进过注册表**的盘（这正是上面 `known` 要修的形态）。少了可选链，
                 // 一处 `undefined.label` 就让整个 `/getDisks` 变成 500 —— 下拉框直接空掉，
                 // 比原来的"少一个选项"严重得多。
-                label: registry[serial]?.label || '',
+                label: registry[serial.toUpperCase()]?.label ?? registry[serial]?.label ?? '',
                 online: false,
                 // 上次「真的探到这块盘」的时间（只在 `?refresh=true` 时登记）。
                 // 首页离线卡片拿它当"上次插入日期"，见 `useHomeDisks` 的 timeLine。
@@ -1952,7 +1961,13 @@ async function mergeRegistryMissing(fromPkg: DiskRegistry): Promise<void> {
         const local = await readRegistry();
         let changed = false;
         for (const [serial, rec] of Object.entries(fromPkg)) {
-            if (local[serial]) continue;
+            if (local[serial]) {
+                if (!local[serial].label && rec?.label) {
+                    local[serial].label = rec.label;
+                    changed = true;
+                }
+                continue;
+            }
             local[serial] = rec;
             changed = true;
         }
@@ -2110,7 +2125,372 @@ function route(path: string, handler: (req: Req, res: http.ServerResponse) => un
     });
 }
 
+async function searchAllController(req: Req, res: http.ServerResponse) {
+    const q = (req.params?.get('q') || '').trim();
+    const rawLimit = Number(req.params?.get('limit') || 200);
+    const limit = Number.isFinite(rawLimit) && rawLimit > 0 ? Math.min(Math.floor(rawLimit), 1000) : 200;
+    const rawSort = req.params?.get('sort') || 'relevance';
+    const sort: GlobalSearchSort = (rawSort === 'name' || rawSort === 'disk' || rawSort === 'size') ? rawSort : 'relevance';
+    const rawOrder = req.params?.get('order');
+    const order: SortOrder = (rawOrder === 'asc' || rawOrder === 'desc') ? rawOrder : (sort === 'size' ? 'desc' : 'asc');
+    if (!q) {
+        return sendJson(res, { code: 200, items: [], total: 0, truncated: false });
+    }
+
+    const [drives, registry] = await Promise.all([getDrives(), readRegistry()]);
+    const driveMap = new Map<string, string>();
+    for (const d of drives) {
+        if (d.serial && d.drive) {
+            driveMap.set(d.serial.toUpperCase(), d.drive);
+        }
+    }
+    const labelMap = new Map<string, string>();
+    for (const [serial, rec] of Object.entries(registry)) {
+        const alias = typeof rec?.label === 'string' ? rec.label.trim() : '';
+        if (alias) {
+            labelMap.set(serial.toUpperCase(), alias);
+        }
+    }
+
+    const { hits, total, truncated } = await searchAllCachedItems(q, limit, driveMap, sort, order);
+
+    const items: WiredFileInfo[] = hits.map(({ serial, docRelPath, item }) => {
+        const key = serial.toUpperCase();
+        const drive = driveMap.get(key);
+        const alias = labelMap.get(key) || '';
+        const live = !!drive;
+        const base = pickFileInfo(item);
+        const thumbName = thumbNameOf(item.sig);
+        const exists = hasBin(thumbName);
+        const isFolder = item.type === 'folder';
+        const previewName = previewNameOf(item.sig);
+        const dir = live ? toFullPath(drive, item.dir) : toAnchorPath(serial, item.dir);
+        const diskLabel = live
+            ? (alias ? `${alias} (${drive}:)` : `${drive}:`)
+            : (alias ? `离线 · ${alias}` : `离线 · ${serial.slice(-4)}`);
+        return {
+            ...base,
+            dir,
+            thumb: exists && !isFolder ? thumbName : undefined,
+            avatar: exists && isFolder ? thumbName : undefined,
+            preview: (hasBin(previewName) || (live && item.type === 'image')) ? previewName : undefined,
+            previewReady: hasBin(previewName),
+            diskLabel,
+            cacheRelPath: docRelPath,
+        };
+    });
+
+    sendJson(res, { code: 200, items, total, truncated });
+}
+
+async function setDiskLabelController(req: Req, res: http.ServerResponse) {
+    const body = (req.body ?? {}) as { serial?: unknown; label?: unknown };
+    const serial = typeof body.serial === 'string' ? body.serial.trim().toUpperCase() : '';
+    if (!serial) {
+        return sendJson(res, { code: 400, error: '参数 serial 不能为空' });
+    }
+    const label = typeof body.label === 'string' ? body.label : '';
+    const saved = await setDiskLabel(serial, label);
+    sendJson(res, { code: 200, ...saved });
+}
+
+const ILLEGAL_FILENAME_RE = /[<>:"/\\|?*\x00-\x1f]/;
+const GENERIC_COVER_STEMS = new Set([
+    'cover', 'folder', 'front', 'avatar', 'thumb', 'thumbnail',
+    'poster', 'default', 'preview', 'fanart', 'back', 'cd', 'disc',
+]);
+const BUNDLE_SEP_RE = /^[-_. \[(]/;
+
+function replaceStemWithFolder(stem: string, oldFolderName: string, newFolderName: string): string | null {
+    const stemLower = stem.toLowerCase();
+    const oldLower = oldFolderName.toLowerCase();
+    if (stemLower === oldLower) return newFolderName;
+    if (stemLower.startsWith(oldLower)) {
+        const rest = stem.slice(oldFolderName.length);
+        if (BUNDLE_SEP_RE.test(rest)) return `${newFolderName}${rest}`;
+    }
+    return null;
+}
+
+/**
+ * 规划合体文件夹内部文件的联动重命名（只改匹配旧目录名或唯一非封面文件，绝不把多集视频改成同名），
+ * 并预先校验目标目录下是否存在任何同名冲突。
+ */
+async function planBundleInnerRenames(
+    dirPath: string,
+    oldFolderName: string,
+    newFolderName: string,
+    coverDiskName: string,
+): Promise<{ pairs: { oldName: string; newName: string }[]; conflict?: string }> {
+    const entries = await fsasync.readdir(dirPath);
+    const nonCoverFiles: string[] = [];
+    let hasCover = false;
+
+    for (const entry of entries) {
+        if (entry.startsWith('.') || excludedFiles.includes(entry) || isDirCover(entry)) continue;
+        const st = await fsasync.stat(`${dirPath}/${entry}`).catch(() => null);
+        if (!st || st.isDirectory()) continue;
+        if (coverDiskName && entry.toLowerCase() === coverDiskName.toLowerCase()) {
+            hasCover = true;
+        } else {
+            nonCoverFiles.push(entry);
+        }
+    }
+
+    const planned = new Map<string, string>();
+
+    if (hasCover && coverDiskName) {
+        const cStem = getFilename(coverDiskName);
+        const cExt = getExt(coverDiskName);
+        if (!GENERIC_COVER_STEMS.has(cStem.toLowerCase())) {
+            const nextStem = replaceStemWithFolder(cStem, oldFolderName, newFolderName);
+            if (nextStem) {
+                const nextName = cExt ? `${nextStem}.${cExt}` : nextStem;
+                if (nextName !== coverDiskName) planned.set(coverDiskName, nextName);
+            }
+        }
+    }
+
+    for (const file of nonCoverFiles) {
+        const fStem = getFilename(file);
+        const fExt = getExt(file);
+        let nextStem = replaceStemWithFolder(fStem, oldFolderName, newFolderName);
+        if (!nextStem && nonCoverFiles.length === 1) {
+            nextStem = newFolderName;
+        }
+        if (nextStem) {
+            const nextName = fExt ? `${nextStem}.${fExt}` : nextStem;
+            if (nextName !== file) planned.set(file, nextName);
+        }
+    }
+
+    // 冲突预检：未改名文件 + 所有目标新名不能发生任何碰撞
+    const untouchedLower = new Set<string>();
+    for (const entry of entries) {
+        if (!planned.has(entry)) untouchedLower.add(entry.toLowerCase());
+    }
+    const claimedLower = new Set<string>();
+    const pairs: { oldName: string; newName: string }[] = [];
+
+    for (const [oldName, newName] of planned.entries()) {
+        const targetLower = newName.toLowerCase();
+        const isCaseOnly = oldName.toLowerCase() === targetLower;
+        if (!isCaseOnly && untouchedLower.has(targetLower)) {
+            return { pairs: [], conflict: `目录内已存在「${newName}」，无法同步重命名` };
+        }
+        if (claimedLower.has(targetLower)) {
+            return { pairs: [], conflict: `多个内部文件将重命名为相同的「${newName}」，已中止` };
+        }
+        claimedLower.add(targetLower);
+        pairs.push({ oldName, newName });
+    }
+
+    return { pairs };
+}
+
+/**
+ * 重命名在线盘上的单文件 / 文件夹 / 合体文件目录，并同步更新 `cache_entries` 与 `playlists.json`。
+ * 离线 `#serial/...` 锚点及未连接磁盘一律拒绝。
+ */
+async function renameItemController(req: Req, res: http.ServerResponse) {
+    const body = (req.body ?? {}) as {
+        path?: unknown;
+        newName?: unknown;
+        kind?: unknown;
+        syncInner?: unknown;
+        coverName?: unknown;
+    };
+    const rawPath = typeof body.path === 'string' ? body.path.trim() : '';
+    const newName = typeof body.newName === 'string' ? body.newName.trim() : '';
+    const kind = body.kind === 'bundle' || body.kind === 'folder' ? body.kind : 'file';
+    const syncInner = body.syncInner !== false;
+    const coverDiskName = typeof body.coverName === 'string' ? body.coverName.trim() : '';
+
+    if (!rawPath) {
+        return sendJson(res, { code: 400, error: '缺少目标路径' }, 400);
+    }
+    if (parseAnchor(rawPath)) {
+        return sendJson(res, { code: 400, error: '离线盘条目不可重命名' }, 400);
+    }
+    if (!newName || newName === '.' || newName === '..' || ILLEGAL_FILENAME_RE.test(newName) || /[ .]$/.test(newName)) {
+        return sendJson(res, { code: 400, error: '名称不合法（不能包含 \\ / : * ? " < > | 或以空格/点结尾）' }, 400);
+    }
+
+    const parts = splitPath(rawPath);
+    if (!parts || !parts.relPath) {
+        return sendJson(res, { code: 400, error: '无法重命名磁盘根目录或无效路径' }, 400);
+    }
+
+    const disk = await findDriveByLetter(parts.drive);
+    if (!disk) {
+        return sendJson(res, { code: 400, error: '目标磁盘未连接，无法重命名' }, 400);
+    }
+
+    const slashIdx = parts.relPath.lastIndexOf('/');
+    const parentRelPath = slashIdx === -1 ? '' : parts.relPath.slice(0, slashIdx);
+    const oldDiskName = slashIdx === -1 ? parts.relPath : parts.relPath.slice(slashIdx + 1);
+    const newRelPath = joinRel(parentRelPath, newName);
+
+    const oldFullPath = toFullPath(disk.drive, parts.relPath);
+    const newFullPath = toFullPath(disk.drive, newRelPath);
+
+    const oldStat = await fsasync.stat(oldFullPath).catch(() => null);
+    if (!oldStat) {
+        return sendJson(res, { code: 404, error: '原文件或文件夹不存在' }, 404);
+    }
+
+    const isDirectory = oldStat.isDirectory();
+    if (kind === 'bundle' && !isDirectory) {
+        return sendJson(res, { code: 400, error: '合体目标不是有效目录' }, 400);
+    }
+
+    const folderChanged = oldDiskName !== newName;
+    if (folderChanged && oldFullPath.toLowerCase() !== newFullPath.toLowerCase()) {
+        const targetExists = await fsasync.access(newFullPath).then(() => true).catch(() => false);
+        if (targetExists) {
+            return sendJson(res, { code: 409, error: `「${newName}」已存在` }, 409);
+        }
+    }
+
+    // 若为合体目录且开启内部同步：先做冲突预检，零写盘风险
+    let innerPairs: { oldName: string; newName: string }[] = [];
+    if (kind === 'bundle' && syncInner) {
+        const plan = await planBundleInnerRenames(oldFullPath, oldDiskName, newName, coverDiskName);
+        if (plan.conflict) {
+            return sendJson(res, { code: 409, error: plan.conflict }, 409);
+        }
+        innerPairs = plan.pairs;
+    }
+
+    if (!folderChanged && innerPairs.length === 0) {
+        return sendJson(res, {
+            code: 200,
+            unchanged: true,
+            kind,
+            dir: toFullPath(disk.drive, parentRelPath),
+            name: getFilename(newName),
+            ext: getExt(newName),
+            newName,
+        });
+    }
+
+    // 1) 重命名外层目录或单文件
+    if (folderChanged) {
+        await fsasync.rename(oldFullPath, newFullPath);
+    }
+
+    // 2) 合体内部文件联动重命名（失败时完整回滚已改文件及外层目录）
+    const doneInner: { oldName: string; newName: string }[] = [];
+    try {
+        for (const pair of innerPairs) {
+            await fsasync.rename(`${newFullPath}/${pair.oldName}`, `${newFullPath}/${pair.newName}`);
+            doneInner.push(pair);
+        }
+    } catch (err) {
+        for (let i = doneInner.length - 1; i >= 0; i--) {
+            const p = doneInner[i];
+            await fsasync.rename(`${newFullPath}/${p.newName}`, `${newFullPath}/${p.oldName}`).catch(() => undefined);
+        }
+        if (folderChanged) {
+            await fsasync.rename(newFullPath, oldFullPath).catch(() => undefined);
+        }
+        throw err;
+    }
+
+    const innerRenames = new Map<string, string>();
+    for (const p of doneInner) {
+        innerRenames.set(p.oldName.toLowerCase(), p.newName);
+    }
+
+    const parentFullPath = toFullPath(disk.drive, parentRelPath);
+    const parentStat = await fsasync.stat(parentFullPath).catch(() => null);
+
+    await renameCacheEntries({
+        serial: disk.serial,
+        parentRelPath,
+        oldDiskName,
+        newDiskName: newName,
+        isDirectory,
+        parentDirMtime: parentStat?.mtimeMs,
+        innerRenames,
+    });
+
+    const parentLower = parentRelPath.toLowerCase();
+    const oldDiskLower = oldDiskName.toLowerCase();
+    const newStem = getFilename(newName);
+    const newExt = getExt(newName);
+    const oldChildLower = parts.relPath.toLowerCase();
+
+    await reconcileItemSnapshots(config.userBasePath, (plItem) => {
+        if (plItem.serial.toUpperCase() !== disk.serial.toUpperCase()) {
+            return { changed: false, item: plItem };
+        }
+        const curDiskName = (plItem.ext ? `${plItem.name}.${plItem.ext}` : plItem.name).toLowerCase();
+        if (plItem.relPath.toLowerCase() === parentLower && curDiskName === oldDiskLower) {
+            return {
+                changed: true,
+                item: {
+                    ...plItem,
+                    name: newStem,
+                    ...(newExt ? { ext: newExt } : { ext: undefined }),
+                },
+            };
+        }
+        if (isDirectory) {
+            const relLower = plItem.relPath.toLowerCase();
+            if (relLower === oldChildLower || relLower.startsWith(`${oldChildLower}/`)) {
+                let nextItem = {
+                    ...plItem,
+                    relPath: `${newRelPath}${plItem.relPath.slice(parts.relPath.length)}`,
+                };
+                if (relLower === oldChildLower && innerRenames.size > 0) {
+                    const coverNew = innerRenames.get(curDiskName);
+                    if (coverNew) {
+                        const cExt = getExt(coverNew);
+                        nextItem = {
+                            ...nextItem,
+                            name: getFilename(coverNew),
+                            ...(cExt ? { ext: cExt } : { ext: undefined }),
+                        };
+                    }
+                    if (Array.isArray(nextItem.files)) {
+                        nextItem = {
+                            ...nextItem,
+                            files: nextItem.files.map((f) => {
+                                const fNew = innerRenames.get(f.name.toLowerCase());
+                                return fNew ? { ...f, name: fNew } : f;
+                            }),
+                        };
+                    }
+                }
+                return { changed: true, item: nextItem };
+            }
+        }
+        return { changed: false, item: plItem };
+    });
+
+    const renamedMapObj: Record<string, string> = {};
+    for (const p of doneInner) {
+        renamedMapObj[p.oldName] = p.newName;
+    }
+
+    return sendJson(res, {
+        code: 200,
+        unchanged: false,
+        kind,
+        dir: kind === 'bundle' ? newFullPath : parentFullPath,
+        name: newStem,
+        ext: newExt,
+        newName,
+        isDirectory,
+        innerRenames: renamedMapObj,
+    });
+}
+
 route('/getHistory', getHistory);
+route('/searchAll', searchAllController);
+route('/setDiskLabel', setDiskLabelController);
+route('/renameItem', renameItemController);
 route('/isFolderCached', isFolderCachedController);
 route('/unCacheFolder', unCacheFolderController);
 route('/openFolder', openFolderController);
@@ -2119,6 +2499,9 @@ route('/thumb', thumbController);
 route('/preview', previewController);
 route('/raw', rawController);
 route('/getDisks', listDisksController);
+route('/serverPort', serverPortController);
+route('/dataDir', dataDirController);
+route('/migrateDataDir', migrateDataDirController);
 route('/getFileTree', getFileTree);
 route('/removeHistoryBatch', removeHistoryBatch);
 route('/backup', backup);
@@ -2267,29 +2650,231 @@ const app = http.createServer((req: Req, res) => {
     res.end('405 Method Not Allowed\n');
 });
 
+const SERVER_PORT_FILE = path.join(config.userBasePath, 'server-port.json');
+let activePort = 3060;
+let configuredPort: number | null = null;
+let fallbackFromPort: number | null = null;
+let serverReadyPromise: Promise<number> | null = null;
+
+function normalizePort(raw: unknown): number | null {
+    if (raw === null || raw === undefined || raw === '' || raw === 0) return null;
+    const n = Number(raw);
+    if (!Number.isInteger(n) || n < 1024 || n > 65535) return null;
+    return n;
+}
+
+async function readConfiguredPort(): Promise<number | null> {
+    try {
+        const text = await fsasync.readFile(SERVER_PORT_FILE, 'utf8');
+        const parsed = JSON.parse(text) as { port?: unknown };
+        return normalizePort(parsed?.port);
+    } catch {
+        return null;
+    }
+}
+
+async function writeConfiguredPort(port: number | null): Promise<void> {
+    await fsasync.mkdir(config.userBasePath, { recursive: true });
+    const tmp = `${SERVER_PORT_FILE}.tmp`;
+    await fsasync.writeFile(tmp, JSON.stringify({ port }, null, 2), 'utf8');
+    await fsasync.rename(tmp, SERVER_PORT_FILE);
+}
+
+async function serverPortController(req: Req, res: http.ServerResponse) {
+    if (req.method?.toUpperCase() === 'POST') {
+        const raw = (req.body as { port?: unknown } | undefined)?.port;
+        const isAuto = raw === null || raw === undefined || raw === '' || raw === 0;
+        const nextPort = normalizePort(raw);
+        if (!isAuto && nextPort === null) {
+            return sendJson(res, { code: 400, error: '端口号必须是 1024 ~ 65535 之间的整数，或留空自动分配' }, 400);
+        }
+        await writeConfiguredPort(nextPort);
+        configuredPort = nextPort;
+        return sendJson(res, {
+            code: 200,
+            configuredPort,
+            activePort,
+            fallbackFrom: fallbackFromPort,
+            restartRequired: nextPort !== null ? nextPort !== activePort : false,
+        });
+    }
+
+    return sendJson(res, {
+        code: 200,
+        configuredPort,
+        activePort,
+        fallbackFrom: fallbackFromPort,
+    });
+}
+
+function sameFsPath(a: string, b: string): boolean {
+    const na = path.resolve(a);
+    const nb = path.resolve(b);
+    return process.platform === 'win32' ? na.toLowerCase() === nb.toLowerCase() : na === nb;
+}
+
+function isNestedPath(parent: string, child: string): boolean {
+    const p = process.platform === 'win32' ? path.resolve(parent).toLowerCase() : path.resolve(parent);
+    const c = process.platform === 'win32' ? path.resolve(child).toLowerCase() : path.resolve(child);
+    const prefix = p.endsWith(path.sep) ? p : p + path.sep;
+    return c.startsWith(prefix);
+}
+
+function dataDirController(_req: Req, res: http.ServerResponse) {
+    const currentDir = path.resolve(config.userBasePath);
+    const defaultDir = path.resolve(DEFAULT_USER_BASE_PATH);
+    return sendJson(res, {
+        code: 200,
+        currentDir,
+        defaultDir,
+        isDefault: sameFsPath(currentDir, defaultDir),
+    });
+}
+
+async function migrateDataDirController(req: Req, res: http.ServerResponse) {
+    const rawTarget = (req.body as { path?: unknown } | undefined)?.path;
+    if (typeof rawTarget !== 'string' || !rawTarget.trim()) {
+        return sendJson(res, { code: 400, error: '请选择有效的目标文件夹' }, 400);
+    }
+
+    const src = path.resolve(config.userBasePath);
+    const dest = path.resolve(rawTarget.trim());
+    const defaultDir = path.resolve(DEFAULT_USER_BASE_PATH);
+
+    if (sameFsPath(src, dest)) {
+        return sendJson(res, { code: 400, error: '目标文件夹与当前目录相同' }, 400);
+    }
+    if (isNestedPath(src, dest) || isNestedPath(dest, src)) {
+        return sendJson(res, { code: 400, error: '目标文件夹不能与当前目录存在包含关系' }, 400);
+    }
+    if (listJobs().some(j => j.status === 'running')) {
+        return sendJson(res, { code: 409, error: '还有后台抓取/写入任务正在运行，请先暂停或完成后再迁移' }, 409);
+    }
+
+    try {
+        await fsasync.mkdir(dest, { recursive: true });
+        const probeFile = path.join(dest, `.ff-write-test-${process.pid}.tmp`);
+        await fsasync.writeFile(probeFile, 'ok', 'utf8');
+        await fsasync.unlink(probeFile);
+    } catch (e) {
+        return sendJson(res, { code: 400, error: `目标文件夹不可写：${e instanceof Error ? e.message : e}` }, 400);
+    }
+
+    await closeCacheDb();
+    await closeBinStore();
+
+    const skipName = (name: string) => {
+        if (name === 'data-dir.json') return true;
+        if (name.endsWith('.tmp') || name.endsWith('-wal') || name.endsWith('-shm')) return true;
+        return false;
+    };
+
+    const migratedNames: string[] = [];
+    try {
+        const entries = await fsasync.readdir(src, { withFileTypes: true }).catch(() => []);
+        for (const ent of entries) {
+            if (skipName(ent.name)) continue;
+            const sPath = path.join(src, ent.name);
+            const dPath = path.join(dest, ent.name);
+            await fsasync.cp(sPath, dPath, { recursive: true, force: true });
+            migratedNames.push(ent.name);
+        }
+
+        if (sameFsPath(dest, defaultDir)) {
+            await fsasync.rm(DATA_DIR_POINTER_FILE, { force: true }).catch(() => {});
+        } else {
+            await fsasync.mkdir(defaultDir, { recursive: true });
+            const tmpPtr = `${DATA_DIR_POINTER_FILE}.tmp`;
+            await fsasync.writeFile(tmpPtr, JSON.stringify({ dataDir: dest }, null, 2), 'utf8');
+            await fsasync.rename(tmpPtr, DATA_DIR_POINTER_FILE);
+        }
+    } catch (e) {
+        await initBinStore(src).catch(() => {});
+        await initCacheDb(src).catch(() => {});
+        return sendJson(res, { code: 500, error: `迁移失败（原数据未丢失）：${e instanceof Error ? e.message : e}` }, 500);
+    }
+
+    let cleanupWarnings = 0;
+    for (const name of migratedNames) {
+        try {
+            await fsasync.rm(path.join(src, name), { recursive: true, force: true });
+        } catch {
+            cleanupWarnings++;
+        }
+    }
+    if (!sameFsPath(src, defaultDir)) {
+        await fsasync.rmdir(src).catch(() => {});
+    }
+
+    return sendJson(res, {
+        code: 200,
+        targetDir: dest,
+        cleanupWarnings,
+    });
+}
+
+function listenOnPort(port: number): Promise<number> {
+    return new Promise((resolve, reject) => {
+        const onError = (err: NodeJS.ErrnoException) => {
+            app.off('error', onError);
+            reject(err);
+        };
+        app.once('error', onError);
+        app.listen(port, '127.0.0.1', () => {
+            app.off('error', onError);
+            const addr = app.address() as AddressInfo | null;
+            resolve(addr?.port || port);
+        });
+    });
+}
+
+export function getServerPort(): number {
+    return activePort;
+}
+
+export function whenServerReady(): Promise<number> {
+    if (serverReadyPromise) return serverReadyPromise;
+    serverReadyPromise = (async () => {
+        await whenBinReady();
+        configuredPort = await readConfiguredPort();
+        fallbackFromPort = null;
+
+        if (configuredPort !== null) {
+            try {
+                activePort = await listenOnPort(configuredPort);
+                console.log(`Local Server: http://127.0.0.1:${activePort}/`);
+                return activePort;
+            } catch (err) {
+                const code = (err as NodeJS.ErrnoException)?.code;
+                console.warn(`[server] 配置端口 ${configuredPort} 启动失败 (${code || err})，自动回退到空闲端口`);
+                fallbackFromPort = configuredPort;
+            }
+        }
+
+        activePort = await listenOnPort(0);
+        console.log(`Local Server (auto): http://127.0.0.1:${activePort}/`);
+        return activePort;
+    })();
+    return serverReadyPromise;
+}
+
 /**
  * 必须显式绑 127.0.0.1。
- * `app.listen(3060)` 不写 host 会绑到所有网卡上 —— 同一个 Wi-Fi 下别人直接就能
+ * `app.listen(...)` 不写 host 会绑到所有网卡上 —— 同一个 Wi-Fi 下别人直接就能
  * 访问这个服务，而它能读你任何路径的目录列表。
  *
  * ⚠️ 还要等**图片仓就绪**再 listen（2026-10-04 补）：`initBinStore()` 是模块加载时
  * 发起的异步动作（mkdir + readdir），而本文件是 **import 即 listen**（渲染层 bundle
  * 一加载就起服务）。原先直接 listen 的后果：端口可能先就绪、`names` 还是空集 ⇒
  * 那零点几秒内进来的请求，`wire()` 会判定"这一层没有图" ⇒ **首屏一排白格子**（刷新才恢复）。
- * 窗口很窄（readdir 千级条目几毫秒），但它是**启动必现的竞态**，而修法只有一行 await。
  */
 app.on('error', function (err: NodeJS.ErrnoException) {
-    // 没有 error 监听时，端口被占会让整个 Electron 主进程直接崩掉
-    if (err.code === 'EADDRINUSE') {
-        console.error('[server] 端口 3060 已被占用。请先结束残留的 file-finder 进程再启动。');
-    } else {
-        console.error('[server] 本地服务启动失败:', err);
-    }
+    console.error('[server] 本地服务异常:', err);
 });
 if (process.env.NODE_ENV !== 'test') {
-    whenBinReady().then(() => app.listen(3060, '127.0.0.1', function () {
-        console.log('Local Server: http://127.0.0.1:3060/');
-    }));
+    void whenServerReady().catch((err) => {
+        console.error('[server] 本地服务启动失败:', err);
+    });
 }
 
 // 这里原来有一句「启动时清理旧格式缓存」（dropLegacyRecords）—— 已删除。

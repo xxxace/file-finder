@@ -166,7 +166,7 @@ import {
     NInput, NButton, NPagination, NDataTable, NSpin, NIcon,
 } from 'naive-ui'
 import type { DataTableColumns, DataTableRowKey, DataTableSortState, InputInst } from 'naive-ui'
-import { formatBytes, serialTail } from '@/utils';
+import { formatBytes, formatDiskDisplay, serialTail } from '@/utils';
 import { vTip } from '@/components/FluidTip/directive';
 import type { BrowseHistoryWithPagination } from 'electron/server/nedb';
 import { API_BASE, getAction, postAction } from '@/utils/request';
@@ -562,15 +562,23 @@ const diskChips = computed<DiskChip[]>(() => {
 
     const disks: DiskChip[] = list.map(d => {
         const letter = d.online && d.drive ? `${d.drive}:` : '';
-        // 离线盘的名字位用序列号后 4 位；工具提示里给**完整**序列号，核对时能看全。
+        const alias = (d.label || '').trim();
+        // 离线盘无别名时用序列号后 4 位；工具提示里给**完整**序列号，核对时能看全。
         const ident = letter || `序列号 ${d.serial}`;
+        const name = formatDiskDisplay({
+            serial: d.serial,
+            drive: d.drive,
+            label: alias,
+            online: d.online,
+            offlineFallback: serialTail(d.serial),
+        });
         return {
             value: d.serial,
             // 克隆盘会有两条同 serial 的记录（盘符不同），所以 key 必须带上盘符。
             key: `${d.serial}|${d.drive || ''}`,
-            name: letter || serialTail(d.serial),
+            name,
             count: d.folders,
-            tipTitle: ident,
+            tipTitle: alias ? `${alias} (${ident})` : ident,
             tipDot: d.online ? 'on' : 'off',
             tipRows: [
                 // 「离线」这两个字的正式解释只出现在这里（用户 2026-10-04 明确：chip 上不写，
@@ -581,7 +589,7 @@ const diskChips = computed<DiskChip[]>(() => {
                 { k: '条目', v: `${d.covers}` },
                 ...(d.lastScanAt ? [{ k: '最近扫描', v: fmtScanTime(d.lastScanAt) }] : []),
             ],
-            ariaLabel: `${ident} 的缓存记录${d.online ? '' : '（这块盘未插入）'}`,
+            ariaLabel: `${name} 的缓存记录${d.online ? '' : '（这块盘未插入）'}`,
         };
     });
 

@@ -153,6 +153,7 @@
 <script setup lang="ts">
 import { computed, onMounted, ref } from 'vue';
 import { NSelect } from 'naive-ui';
+import { formatDiskDisplay } from '@/utils';
 import { API_BASE, apiUrl, getAction, postAction } from '@/utils/request';
 import useNotify from '@/hooks/useNotify';
 
@@ -295,7 +296,16 @@ onMounted(async () => {
     try {
         const res = await getAction(`${API_BASE}/getDisks`);
         disks.value = (res.disks ?? []).map((d: { serial: string; label?: string; drive?: string; online?: boolean }) => ({
-            serial: d.serial, label: d.label || d.drive || d.serial.slice(0, 6), online: d.online !== false,
+            serial: d.serial,
+            label: formatDiskDisplay({
+                serial: d.serial,
+                drive: d.drive,
+                label: d.label,
+                online: d.online,
+                offlinePrefix: '离线 · ',
+                offlineFallback: d.serial.slice(0, 6),
+            }),
+            online: d.online !== false,
         }));
     } catch {
         disks.value = [];

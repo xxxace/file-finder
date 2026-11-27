@@ -5,6 +5,7 @@ import { join, win32 } from 'path'
 import '../server';
 // ⚠️ fluent-ffmpeg 的全局路径只能由 server → utils/thumbnail 的 realBin() 设置：
 // @ffmpeg-installer 给的路径在 app.asar 内，spawn 不走 asar 补丁 ⇒ 打包版 ENOENT。
+import { getServerPort, whenServerReady } from '../server';
 import { LOCAL_TOKEN } from '../server/token';
 import { destroyTrackedWindows } from '../server/assistant/queue';
 import { watchDiskChanges } from './diskWatch'
@@ -44,6 +45,7 @@ const url = process.env.VITE_DEV_SERVER_URL as string
 const indexHtml = join(ROOT_PATH.dist, 'index.html')
 
 async function createWindow() {
+  await whenServerReady()
   /**
    * 初始尺寸 = 基准值，但**不超出主屏可用区**（扣掉标题栏与任务栏）。
    *
@@ -144,6 +146,15 @@ app.on('activate', () => {
  */
 ipcMain.on('ff-token', function (e) {
   e.returnValue = LOCAL_TOKEN;
+});
+
+ipcMain.on('ff-server-port', function (e) {
+  e.returnValue = getServerPort();
+});
+
+ipcMain.handle('ff-relaunch', function () {
+  app.relaunch();
+  app.exit(0);
 });
 
 /**
@@ -268,6 +279,19 @@ ipcMain.handle('pickCacheOpenPath', async function () {
     defaultPath: config.userBasePath,
     properties: ['openFile'],
     filters: [{ name: '缓存备份包 (ffbak)', extensions: ['ffbak'] }],
+  });
+
+  return { canceled, filePath: canceled ? '' : (filePaths[0] || '') };
+});
+
+ipcMain.handle('pickDataDir', async function () {
+  const target = win;
+  if (!target) return { canceled: true, filePath: '' };
+
+  const { canceled, filePaths } = await dialog.showOpenDialog(target, {
+    title: '选择数据与缓存存放文件夹',
+    defaultPath: config.userBasePath,
+    properties: ['openDirectory', 'createDirectory'],
   });
 
   return { canceled, filePath: canceled ? '' : (filePaths[0] || '') };

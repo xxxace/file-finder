@@ -402,6 +402,35 @@
         transition: opacity var(--ff-dur-exit) linear;
     }
 
+    /* 目录内搜索范围切换胶囊（当前 ⇄ 全盘），仅在非首页且搜索框展开时出现 */
+    .search-scope-pill {
+        flex: 0 0 auto;
+        height: 24px;
+        padding: 0 8px;
+        border: 1px solid var(--ff-line);
+        border-radius: var(--ff-radius-ctl);
+        background: var(--ff-raised);
+        color: var(--ff-text-2);
+        font-family: inherit;
+        font-size: var(--ff-fs-meta);
+        line-height: 22px;
+        cursor: pointer;
+        user-select: none;
+        transition: background-color var(--ff-dur-exit) ease, color var(--ff-dur-exit) ease, border-color var(--ff-dur-exit) ease;
+
+        &:hover {
+            background: var(--ff-ctl-hover);
+            color: var(--ff-text-1);
+        }
+
+        &.is-global {
+            background: var(--ff-ctl-on);
+            color: var(--ff-text-1);
+            border-color: var(--ff-line-strong);
+            font-weight: 500;
+        }
+    }
+
     /* 「更多」与视图组之间那道竖线：它是兜底入口，不属于视图组。 */
     .toolbar-sep {
         flex: 0 0 auto;
