@@ -16,7 +16,7 @@ import type { OverlayKind } from '@/components/Overlay/store';
 
 export interface ScanFlowDeps {
     currentPath: { readonly value: string };
-    notify: (type: OverlayKind, title?: string, message?: string) => void;
+    notify: (type: OverlayKind, title?: string, message?: string, opts?: { silent?: boolean }) => void;
     /** 扫描改了内容之后重取当前屏（页面实现：走 loadScreen 唯一出口） */
     refreshScreen: () => void;
     /** 条目的磁盘全路径（"name + ext" 那条规则归页面，不在这里再写一份） */
@@ -440,6 +440,7 @@ export function useScanFlow(deps: ScanFlowDeps) {
                     deps.notify('info', '已终止',
                         `${isReload ? '重读' : '核对'}了 ${scanDone.value} 个目录，剩下的没动`);
                 } else if (scanOk.value) {
+                    // 动画扫到顶时 `@swept` 会统一播放完成音，这里静音免得先响一声叠音
                     deps.notify(
                         !isReload && !updatedLayers ? 'info' : 'success',
                         isReload
@@ -448,6 +449,7 @@ export function useScanFlow(deps: ScanFlowDeps) {
                         isReload
                             ? `整片共 ${scanDone.value} 个目录，已按盘上实况重写`
                             : `核对了 ${scanDone.value} 个目录${updatedLayers ? `，重读 ${updatedLayers} 个` : ''}`,
+                        { silent: true },
                     );
                 }
             }

@@ -200,7 +200,7 @@
         <div class="image-box-wrap">
             <div
                 class="image-box"
-                :class="{ 'is-glowing': !!glow, 'has-bar': (!glow && scanning) || picking }"
+                :class="{ 'is-glowing': !!glow && scanning, 'has-bar': (!glow && scanning) || picking }"
                 ref="imageBox"
                 :data-density="density"
                 :style="{ '--ff-grid-cols': gridCols }"
@@ -317,6 +317,7 @@
                 :cancelling="cancelling"
                 :done="scanDone"
                 :pending="scanPending"
+                :capture-target="imageBox"
                 @cancel="onScanCancel"
                 @swept="onScanSwept"
                 @closed="glow = ''"
