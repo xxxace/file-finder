@@ -456,3 +456,37 @@ export async function reorderRules(dataDir: string, ids: string[]): Promise<Site
     await queueWrite(rulesPath(dataDir), () => atomicWrite(rulesPath(dataDir), JSON.stringify(next, null, 2)));
     return next;
 }
+
+/**
+ * 并入外部导入的站点规则（只增不删：本地已有同 id 规则保持不动，缺失的追加）。
+ */
+export async function mergeRules(dataDir: string, incoming: unknown[]): Promise<number> {
+    if (!Array.isArray(incoming) || incoming.length === 0) return 0;
+
+    const rules = await loadRules(dataDir);
+    const existingIds = new Set(rules.map(r => r.id));
+    let added = 0;
+
+    for (const item of incoming) {
+        if (!item || typeof item !== 'object') continue;
+        const rule = item as Partial<SiteRule>;
+        if (
+            typeof rule.id !== 'string' || !rule.id.trim()
+            || typeof rule.name !== 'string'
+            || typeof rule.detailUrl !== 'string'
+            || !rule.fields || typeof rule.fields !== 'object'
+        ) {
+            continue;
+        }
+        if (existingIds.has(rule.id)) continue;
+        existingIds.add(rule.id);
+        rules.push(rule as SiteRule);
+        added += 1;
+    }
+
+    if (added > 0) {
+        FILE_STORE.set(dataDir, rules);
+        await queueWrite(rulesPath(dataDir), () => atomicWrite(rulesPath(dataDir), JSON.stringify(rules, null, 2)));
+    }
+    return added;
+}

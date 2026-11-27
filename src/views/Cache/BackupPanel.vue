@@ -133,7 +133,7 @@ const handleRestoreFromFile = () => {
         title: '从文件还原（选那个 .ffbak 备份包）',
         content: '会用你选中的备份文件整体替换当前缓存库。替换后，本机独有的目录记录要重新读一遍移动硬盘才能回来。'
             + '还原前会自动留一份快照（数据目录里的 cache-before-restore.sqlite），还原后立即生效、不用重启。'
-            + '备份包里的图片、收藏夹与刮削命中记录会只增不删地并进来（本地已有的不动）。',
+            + '备份包里的图片、收藏夹、刮削命中记录与站点规则会只增不删地并进来（本地已有的不动）。',
         positiveText: '选择文件并还原',
         negativeText: '取消',
         maskClosable: false,
@@ -155,9 +155,16 @@ const onRestoreFromFile = async () => {
     let merged = '';
     try {
         const r = await postAction(API_BASE + '/restoreFromFile', { path: file }) as {
-            playlists?: number; playlistItems?: number;
+            playlists?: number; playlistItems?: number; siteRules?: number;
         };
-        merged = r?.playlists || r?.playlistItems ? `；并入 ${r.playlists ?? 0} 个收藏夹 / ${r.playlistItems ?? 0} 个条目` : '';
+        const parts: string[] = [];
+        if (r?.playlists || r?.playlistItems) {
+            parts.push(`并入 ${r.playlists ?? 0} 个收藏夹 / ${r.playlistItems ?? 0} 个条目`);
+        }
+        if (r?.siteRules) {
+            parts.push(`并入 ${r.siteRules} 条站点规则`);
+        }
+        merged = parts.length ? `；${parts.join('，')}` : '';
         ok = true;
     } catch (err) {
         // 服务端在还原失败时已经尽力回滚过了，错误文案里会写明"已回滚"还是"回滚也失败"
@@ -184,7 +191,7 @@ const handleMergeCache = async () => {
 
     busy.value = true;
     bulkLoading.value = true;
-    let result: { added: number; replaced: number; skipped: number } | null = null;
+    let result: { added: number; replaced: number; skipped: number; siteRules?: number } | null = null;
     try {
         result = await postAction(API_BASE + '/mergeCache', { path: file });
     } catch (err) {
@@ -195,8 +202,9 @@ const handleMergeCache = async () => {
     }
 
     if (!result) return;
+    const ruleTip = result.siteRules ? `，并入 ${result.siteRules} 条站点规则` : '';
     notify('success', '合并完成',
-        `新增 ${result.added} 条、覆盖 ${result.replaced} 条、跳过 ${result.skipped} 条`)
+        `新增 ${result.added} 条、覆盖 ${result.replaced} 条、跳过 ${result.skipped} 条${ruleTip}`)
     emit('migrated');
 }
 

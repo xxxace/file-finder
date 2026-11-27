@@ -34,6 +34,8 @@ import config from '../config';
 import { createAssistantRoutes } from './assistant';
 import { exportActiveHits, mergeHits } from './assistant/hits';
 import type { HitRecord } from './assistant/hits';
+import { loadRules, mergeRules } from './assistant/rules';
+import type { SiteRule } from './assistant/rules';
 import { createPlaylistRoutes } from './playlist';
 import { loadPlaylists, mergePlaylists } from './playlistStore';
 import type { Playlist } from './playlistStore';
@@ -1701,6 +1703,7 @@ export async function runBackupToFile(
         images: number;
         playlists: number;
         hits: number;
+        siteRules: number;
     };
 }> {
     if (binStoreFailed()) {
@@ -1727,6 +1730,11 @@ export async function runBackupToFile(
     let hits: HitRecord[] = [];
     try {
         hits = await exportActiveHits(dataDir);
+    } catch { /* 保持空数组 */ }
+
+    let siteRules: SiteRule[] = [];
+    try {
+        siteRules = await loadRules(dataDir);
     } catch { /* 保持空数组 */ }
 
     const activeSigs = new Set<string>(cacheRefs.sigs);
@@ -1756,6 +1764,7 @@ export async function runBackupToFile(
         images: expectedImages,
         playlists: playlists.length,
         hits: hits.length,
+        siteRules: siteRules.length,
     };
 
     async function* streamActiveImages(): AsyncGenerator<FfbakImageInput> {
@@ -1781,6 +1790,7 @@ export async function runBackupToFile(
             disks,
             playlists,
             hits,
+            siteRules,
         },
         images: streamActiveImages(),
     });
@@ -1819,11 +1829,11 @@ async function importFfbakBins(filePath: string, imagesOffset: number, binCount:
     return added;
 }
 
-/** 并入附属元数据：盘注册表（只补缺）、收藏夹（只增不删）、命中记录（只增不删） */
+/** 并入附属元数据：盘注册表（只补缺）、收藏夹（只增不删）、命中记录（只增不删）、站点规则（只增不删） */
 async function mergeAuxiliaryBackupData(
     dataDir: string,
-    opts: { disks: DiskRegistry | null; playlists: unknown; hits: unknown },
-): Promise<{ playlists: number; playlistItems: number; hitsAdded: number; hitsUpdated: number }> {
+    opts: { disks: DiskRegistry | null; playlists: unknown; hits: unknown; siteRules: unknown },
+): Promise<{ playlists: number; playlistItems: number; hitsAdded: number; hitsUpdated: number; siteRules: number }> {
     if (opts.disks) {
         await mergeRegistryMissing(opts.disks);
     }
@@ -1846,11 +1856,21 @@ async function mergeAuxiliaryBackupData(
         }
     }
 
+    let siteRulesAdded = 0;
+    if (Array.isArray(opts.siteRules)) {
+        try {
+            siteRulesAdded = await mergeRules(dataDir, opts.siteRules);
+        } catch (e) {
+            console.error('[backup] 站点规则并入失败（缓存库已处理）:', e);
+        }
+    }
+
     return {
         playlists: playlistMerge.playlists,
         playlistItems: playlistMerge.items,
         hitsAdded: hitMerge.added,
         hitsUpdated: hitMerge.updated,
+        siteRules: siteRulesAdded,
     };
 }
 
@@ -1873,6 +1893,7 @@ export async function runRestoreFromFile(dataDir: string, source: string) {
             : null;
     const playlistsInPkg = ffbakVerified.meta.playlists;
     const hitsInPkg = ffbakVerified.meta.hits;
+    const siteRulesInPkg = ffbakVerified.meta.siteRules;
 
     try {
         await snapshotCacheTo(BEFORE_RESTORE_PATH);
@@ -1902,6 +1923,7 @@ export async function runRestoreFromFile(dataDir: string, source: string) {
         disks,
         playlists: playlistsInPkg,
         hits: hitsInPkg,
+        siteRules: siteRulesInPkg,
     });
 
     return {
@@ -1912,6 +1934,7 @@ export async function runRestoreFromFile(dataDir: string, source: string) {
         playlistItems: aux.playlistItems,
         hitsAdded: aux.hitsAdded,
         hitsUpdated: aux.hitsUpdated,
+        siteRules: aux.siteRules,
     };
 }
 
@@ -1990,6 +2013,7 @@ export async function runMergeCache(dataDir: string, source: string) {
             : null;
     const playlistsInPkg = ffbakVerified.meta.playlists;
     const hitsInPkg = ffbakVerified.meta.hits;
+    const siteRulesInPkg = ffbakVerified.meta.siteRules;
 
     const { added, replaced, skipped } = await mergeCacheDocList(incoming);
     const images = await importFfbakBins(source, ffbakVerified.imagesOffset, ffbakVerified.binCount);
@@ -1998,6 +2022,7 @@ export async function runMergeCache(dataDir: string, source: string) {
         disks,
         playlists: playlistsInPkg,
         hits: hitsInPkg,
+        siteRules: siteRulesInPkg,
     });
 
     return {
@@ -2011,6 +2036,7 @@ export async function runMergeCache(dataDir: string, source: string) {
         playlistItems: aux.playlistItems,
         hitsAdded: aux.hitsAdded,
         hitsUpdated: aux.hitsUpdated,
+        siteRules: aux.siteRules,
     };
 }
 

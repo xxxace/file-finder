@@ -14,9 +14,34 @@
                         <path fill="currentColor" d="M19 3H5c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h14c1.1 0 2-.9 2-2V5c0-1.1-.9-2-2-2zm0 16H5V5h14v14zm-5-7l-3 3.72L9 13l-3 4h12l-4-5z" />
                     </svg>
                 </div>
-                <div class="empty-title">暂无已缓存的封面</div>
-                <div class="empty-desc">请先在「文件」中浏览移动硬盘或本地磁盘，扫描包含作品封面的目录。</div>
-                <button type="button" class="empty-btn" @click="goHome">
+                <div class="empty-title">{{ selectedSerial ? '当前磁盘暂无已缓存封面' : '暂无已缓存的封面' }}</div>
+                <div class="empty-desc">
+                    <template v-if="selectedSerial">
+                        「{{ selectedDiskName }}」下还没有已缓存的作品封面，可切换回全部磁盘、改选其他磁盘，或前往「文件」扫描该磁盘目录。
+                    </template>
+                    <template v-else>
+                        请先在「文件」中浏览移动硬盘或本地磁盘，扫描包含作品封面的目录。
+                    </template>
+                </div>
+                <div v-if="selectedSerial" class="empty-actions">
+                    <button type="button" class="empty-btn" @click="handleSerialChange('')">
+                        返回全部磁盘
+                    </button>
+                    <select
+                        v-if="disks.length > 1"
+                        class="empty-select"
+                        aria-label="切换磁盘"
+                        :value="selectedSerial"
+                        @change="handleSerialChange(($event.target as HTMLSelectElement).value)"
+                    >
+                        <option value="">全部磁盘</option>
+                        <option v-for="d in disks" :key="d.serial" :value="d.serial">{{ d.name }}</option>
+                    </select>
+                    <button type="button" class="empty-btn-secondary" @click="goHome">
+                        前往文件浏览
+                    </button>
+                </div>
+                <button v-else type="button" class="empty-btn" @click="goHome">
                     前往文件浏览
                 </button>
             </div>
@@ -39,7 +64,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, onMounted, onActivated, onDeactivated, onBeforeUnmount } from 'vue';
+import { computed, ref, onMounted, onActivated, onDeactivated, onBeforeUnmount } from 'vue';
 import { useRouter } from 'vue-router';
 import { NSpin } from 'naive-ui';
 import AlbumCoverTunnel from '@/components/AlbumCoverTunnel/AlbumCoverTunnel.vue';
@@ -60,6 +85,10 @@ const loading = ref(true);
 const covers = ref<TunnelCover[]>([]);
 const disks = ref<Array<{ serial: string; name: string }>>([]);
 const selectedSerial = ref('');
+const selectedDiskName = computed(() => {
+    const hit = disks.value.find(d => d.serial === selectedSerial.value);
+    return hit ? hit.name : selectedSerial.value;
+});
 
 /**
  * 离开本页多久后把 3D 引擎**连同封面数据一起注销**。
@@ -328,5 +357,42 @@ onBeforeUnmount(() => {
 .empty-btn:hover {
     filter: brightness(1.15);
     transform: translateY(-1px);
+}
+
+.empty-actions {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    justify-content: center;
+    gap: 10px;
+}
+
+.empty-select,
+.empty-btn-secondary {
+    height: 38px;
+    padding: 0 16px;
+    border-radius: 999px;
+    border: 1px solid var(--ff-raw-line-strong);
+    background: var(--ff-raised);
+    color: var(--ff-text-primary);
+    font-size: 13px;
+    font-weight: 500;
+    cursor: pointer;
+    transition: background-color var(--ff-dur-hover) ease, transform 0.2s cubic-bezier(0.2, 0, 0, 1);
+}
+
+.empty-select {
+    padding-right: 12px;
+    outline: none;
+}
+
+.empty-select:hover,
+.empty-btn-secondary:hover {
+    background: var(--ff-raised-hover);
+    transform: translateY(-1px);
+}
+
+.empty-select:focus-visible {
+    border-color: var(--ff-highlight);
 }
 </style>

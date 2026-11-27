@@ -24,6 +24,7 @@ export interface FfbakManifest {
     images: number;
     playlists: number;
     hits: number;
+    siteRules?: number;
 }
 
 export interface FfbakMetaBundle {
@@ -32,6 +33,7 @@ export interface FfbakMetaBundle {
     disks: Record<string, unknown>;
     playlists: unknown[];
     hits: unknown[];
+    siteRules?: unknown[];
 }
 
 export interface FfbakImageInput {
